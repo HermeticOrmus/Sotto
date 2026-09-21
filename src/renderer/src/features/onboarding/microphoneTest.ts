@@ -1,3 +1,4 @@
+import { ensureMicrophoneAccess } from '../../audio/ensureMicrophoneAccess'
 import { microphoneConstraints, type MicrophoneConstraints } from '../../audio/microphoneConstraints'
 
 export type MicrophoneTestState =
@@ -43,6 +44,7 @@ interface AudioContextLike {
 }
 
 export interface MicrophoneTestDependencies {
+  readonly ensureAccess?: () => Promise<boolean>
   readonly getUserMedia: (constraints: MicrophoneTestConstraints) => Promise<MediaStreamLike>
   readonly createAudioContext: () => AudioContextLike
   readonly requestFrame: (callback: () => void) => number
@@ -68,6 +70,7 @@ function productionDependencies(): MicrophoneTestDependencies {
     cancelAnimationFrame(handle: number): void
   }
   return {
+    ensureAccess: () => ensureMicrophoneAccess(),
     getUserMedia: (constraints) => {
       const mediaDevices = browser.navigator.mediaDevices
       return mediaDevices === undefined
@@ -118,6 +121,17 @@ export class BrowserMicrophoneTest implements MicrophoneTestController {
       if (generation !== this.generation) {
         await this.abandon(context)
         return 'error'
+      }
+      // Chromium's check handler cannot prompt: false is a denial. Ask the OS
+      // here so getUserMedia runs only after a grant.
+      const allowed = await (this.dependencies.ensureAccess?.() ?? Promise.resolve(true))
+      if (generation !== this.generation) {
+        await this.abandon(context)
+        return 'error'
+      }
+      if (!allowed) {
+        await this.abandon(context)
+        return 'denied'
       }
       stream = await this.dependencies.getUserMedia(microphoneConstraints(selectedDeviceId))
       if (generation !== this.generation) {
