@@ -43,7 +43,7 @@ import { GitSettings } from './GitSettings'
 import { ProjectThreadDefaults } from './ProjectThreadDefaults'
 import { VoiceWave } from '../../components/VoiceWave'
 import {
-  BrowserMicrophoneTest,
+  WorkletMicrophoneTest,
   type MicrophoneTestController,
   type MicrophoneTestState,
 } from '../onboarding/microphoneTest'
@@ -132,7 +132,7 @@ export function SettingsView({
   statusText,
   updateStatus,
   mediaDevices = typeof navigator === 'undefined' ? undefined : navigator.mediaDevices,
-  createMicrophoneTest = () => new BrowserMicrophoneTest(),
+  createMicrophoneTest = () => new WorkletMicrophoneTest(),
   onUpdateSettings,
   onReplaceHotkey,
   onSetStartup,
@@ -407,7 +407,7 @@ export function SettingsView({
                       <VoiceWave stage={microphoneState === 'requesting' || microphoneState === 'ready' ? 'listening' : 'idle'} value={microphoneLevel} label="Microphone level" size="deck" />
                       <p role="status">
                         {microphoneState === 'ready' ? 'Microphone ready.' : null}
-                        {microphoneState === 'requesting' ? 'Waiting for microphone permission...' : null}
+                        {microphoneState === 'requesting' ? 'Checking the microphone...' : null}
                         {microphoneState === 'idle' ? (settings.microphoneSkipped ? 'No microphone is set up. Run this test to set one up.' : 'Run a quick input-level test.') : null}
                         {microphoneState === 'denied' ? copy.settingsMicrophoneUnavailable : null}
                         {microphoneState === 'missing' ? 'No microphone was found.' : null}
