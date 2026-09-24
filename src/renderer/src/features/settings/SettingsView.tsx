@@ -372,7 +372,7 @@ export function SettingsView({
                   <Field label="Microphone test" description="Check that Sotto can hear you. Access is asked for only while the test runs.">
                     <div className="settings-microphone-test" data-state={microphoneState}>
                       {/* The wave the widget and the Dictate room show; it listens for as long as the test's stream runs. */}
-                      <VoiceWave stage={microphoneState === 'requesting' || microphoneState === 'ready' ? 'listening' : 'idle'} value={microphoneLevel} label="Microphone level" size="deck" />
+                      <VoiceWave stage={microphoneState === 'requesting' || microphoneState === 'ready' ? 'listening' : 'idle'} value={microphoneLevel} label="Microphone level" size="deck" holdSpeaking />
                       <p role="status">
                         {microphoneState === 'ready' ? 'Microphone ready.' : null}
                         {microphoneState === 'requesting' ? 'Checking the microphone...' : null}
