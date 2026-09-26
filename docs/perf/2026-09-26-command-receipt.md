@@ -70,7 +70,8 @@ The window's copy of the reply back across `contextBridge` into the page is not 
 benchmark calls the preload's bridge directly. Before, that crossing copied the 609-model catalog a second
 time; after, it copies two markers, so the saving in the app is larger than the table shows. Nothing a user
 sees changes. The built app was run through the Playwright specs that drive commands through the bridge
-(listed in the pull request); no timing was taken there.
+(listed in the pull request); no timing was taken there. The hand tests in the running app are in
+`docs/verification/command-receipt.md`.
 
 ## Tests
 
