@@ -1,14 +1,22 @@
 import React, { useRef, useState, type ReactNode } from 'react'
 import type { BrowserBridge, BrowserCapture, BrowserPage } from '../../../shared/browser'
 import { agentAttachmentsSchema } from '../../../shared/agents'
+import { prepareScreenshotDataUrl } from '../agents/screenshotResize'
 import type { ThreadDraftStore } from '../agents/threadDraftStore'
 
-/** Append to the latest draft, preserving typing that happened while the page was captured. */
-export function appendBrowserFeedback(store: ThreadDraftStore, threadId: string, capture: BrowserCapture, comment: string, imagesSupported: boolean): string | null {
-  const current = store.draft(threadId)
-  if (current.requestId !== null) return 'This draft answers a question. Finish that answer before adding browser feedback.'
+const ANSWERING = 'This draft answers a question. Finish that answer before adding browser feedback.'
+
+/**
+ * Append to the latest draft, preserving typing that happened while the page was captured or its screenshot
+ * prepared. The screenshot is scaled down to the screenshot bound the way the composer scales a pasted one.
+ */
+export async function appendBrowserFeedback(store: ThreadDraftStore, threadId: string, capture: BrowserCapture, comment: string, imagesSupported: boolean, prepare = prepareScreenshotDataUrl): Promise<string | null> {
+  if (store.draft(threadId).requestId !== null) return ANSWERING
   if (!imagesSupported) return 'Choose a model with image support before adding a browser screenshot.'
-  const attachments = agentAttachmentsSchema.safeParse([...current.attachments, { id: crypto.randomUUID(), name: 'Browser feedback.png', mimeType: 'image/png', dataUrl: capture.image }])
+  const { dataUrl, dimensions } = await prepare(capture.image)
+  const current = store.draft(threadId)
+  if (current.requestId !== null) return ANSWERING
+  const attachments = agentAttachmentsSchema.safeParse([...current.attachments, { id: crypto.randomUUID(), name: 'Browser feedback.png', mimeType: 'image/png', dataUrl, ...(dimensions ? { dimensions } : {}) }])
   if (!attachments.success) return 'This screenshot does not fit in the draft. Remove an attachment or capture a smaller region.'
   const element = capture.element
   const context = [`Browser feedback: ${capture.url}`, `Screenshot size: ${capture.width} x ${capture.height}`,
@@ -20,7 +28,7 @@ export function appendBrowserFeedback(store: ThreadDraftStore, threadId: string,
 
 export function BrowserFeedback({ page, initial, bridge, onAdd, onClose }: {
   readonly page: BrowserPage; readonly initial: BrowserCapture; readonly bridge: BrowserBridge;
-  readonly onAdd: (capture: BrowserCapture, comment: string) => string | null; readonly onClose: () => void
+  readonly onAdd: (capture: BrowserCapture, comment: string) => Promise<string | null> | string | null; readonly onClose: () => void
 }): ReactNode {
   const [capture, setCapture] = useState(initial)
   const [comment, setComment] = useState('')
@@ -83,7 +91,11 @@ export function BrowserFeedback({ page, initial, bridge, onAdd, onClose }: {
     </button>
     {capture.element ? <p>Selected: {capture.element.name || capture.element.text || capture.element.tag}</p> : box ? <p>Region selected</p> : null}
     <textarea autoFocus className="tt-focusable" aria-label="Browser feedback comment" placeholder="What should change?" value={comment} maxLength={8000} onChange={event => setComment(event.currentTarget.value)} />
-    <div className="browser-feedback__actions"><button type="button" className="tt-button tt-button--primary tt-focusable" disabled={busy || !selectionValid || !comment.trim()} onClick={() => { const error = onAdd(capture, comment); if (error) setProblem(error); else onClose() }}>Add to draft</button>
+    <div className="browser-feedback__actions"><button type="button" className="tt-button tt-button--primary tt-focusable" disabled={busy || !selectionValid || !comment.trim()} onClick={() => {
+      setBusy(true); setProblem(null)
+      void Promise.resolve().then(() => onAdd(capture, comment)).catch(() => 'Could not add this screenshot to the draft. Try again.')
+        .then(error => { if (error) { setProblem(error); setBusy(false) } else onClose() })
+    }}>Add to draft</button>
       <button type="button" className="tt-button tt-focusable" onClick={onClose}>Cancel</button></div>
     {problem ? <p className="browser-review-problem" role="alert">{problem}</p> : null}
   </section>
