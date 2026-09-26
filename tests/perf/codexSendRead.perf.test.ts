@@ -9,8 +9,9 @@
  * after the last one's turn has finished: the whole send to `accepted`, `refreshThread` inside it, and within that
  * the `thread/read` and `thread/turns/list` round trips and the applying and saving done inside them. It counts
  * both requests per send and weighs the replies the fake sent, and, for comparison, the newest turn and its user
- * message alone: the only part of the transcript the `expectedLastUserMessageId` check compares. Counters, sizes
- * and timers only; every seeded text is filler. It asserts no time, so it runs only under `SOTTO_PERF_BENCH=1`
+ * message alone: the only part of the transcript the `expectedLastUserMessageId` check compares. It then sends the
+ * way the Threads page does, through the coordinator over the wrapped adapter, and counts the whole reads each send
+ * made before `turn/start` and after it. Counters, sizes and timers only; every seeded text is filler. It asserts no time, so it runs only under `SOTTO_PERF_BENCH=1`
  * (`tests/fixtures/perfBench.ts`):
  *
  *   SOTTO_PERF_BENCH=1 npx vitest run tests/perf/codexSendRead.perf.test.ts --maxWorkers=1 --disable-console-intercept
@@ -20,8 +21,11 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { CodexAppServerHost } from '../../src/main/agents/codex'
+import { AgentControl } from '../../src/main/agents/control'
+import { AgentCredentials } from '../../src/main/agents/credentials'
 import { codexFixture } from '../fixtures/codexFixture'
 import { median, PERF_BENCH, round } from '../fixtures/perfBench'
+import { immediatePublishScheduler } from '../fixtures/publishScheduler'
 
 const SENDS = 5
 const SIZES = [50, 500, 2000] as const
@@ -83,9 +87,12 @@ async function replies(root: string): Promise<{ method: string; bytes: number }[
   return (await readFile(join(root, 'replies.jsonl'), 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line) as { method: string; bytes: number })
 }
 
-/** A thread with `turns` completed turns, opened the way the Threads page opens it. */
-async function seeded(turns: number): Promise<{ f: Fixture; id: string; openMs: number }> {
-  const first = await codexFixture(undefined, false, 60_000)
+/**
+ * A fixture whose Codex holds a thread with `turns` completed turns, not yet connected. `wrapped` puts the adapter
+ * behind the Sotto thread IDs the coordinator uses, as the app composes it.
+ */
+async function seededFixture(turns: number, wrapped = false): Promise<{ f: Fixture; id: string }> {
+  const first = await codexFixture(undefined, wrapped, 60_000)
   await first.host.connect()
   await first.host.execute({ type: 'create-project', commandId: randomUUID(), projectId: first.projectId, title: 'Bench', path: first.root })
   const id = randomUUID()
@@ -98,11 +105,36 @@ async function seeded(turns: number): Promise<{ f: Fixture; id: string; openMs: 
   await writeFile(statePath, JSON.stringify(state))
   const f = await first.driver.restart() as Fixture
   await f.script({ recordReplyBytes: true })
+  return { f, id }
+}
+/** Wait for the adapter's own read of a thread it was told to show, and say how long that took from `startedAt`. */
+async function opened(f: Fixture, sessionId: string, startedAt: number): Promise<number> {
+  await (f.adapter as unknown as { open(id: string): Promise<void> }).open(sessionId)
+  return performance.now() - startedAt
+}
+/** A seeded thread opened the way the Threads page opens it, on the adapter alone. */
+async function seeded(turns: number): Promise<{ f: Fixture; id: string; openMs: number }> {
+  const { f, id } = await seededFixture(turns)
   await f.host.connect()
   const startedAt = performance.now()
   f.host.observeThreads?.([id])
-  await (f.adapter as unknown as { open(id: string): Promise<void> }).open(id)
-  return { f, id, openMs: performance.now() - startedAt }
+  return { f, id, openMs: await opened(f, id, startedAt) }
+}
+
+/** A coordinator over the fixture's host with no reasoning and no membership, which a manual send needs neither of. */
+async function coordinator(f: Fixture): Promise<AgentControl> {
+  const credentials = new AgentCredentials(join(f.root, 'vault'), { isEncryptionAvailable: () => false, encryptString: value => Buffer.from(value), decryptString: value => value.toString() })
+  await credentials.load()
+  return new AgentControl({ schedule: immediatePublishScheduler, directory: f.root, host: f.host, credentials,
+    reasoner: { intent: async () => ({ type: 'clarify', text: 'Choose a thread' }), decide: async () => ({ decision: 'human', text: 'Review' }) },
+    membership: { status: async () => ({ status: 'beta', label: 'Fixture', expiresAt: null }), action: async () => ({ status: 'beta', label: 'Fixture', expiresAt: null }) } })
+}
+/** The whole reads a send made before its `turn/start` and after it. */
+async function wholeReads(f: Fixture, from: number): Promise<{ before: number; after: number }> {
+  const sent = (await f.driver.requests()).slice(from)
+  const start = sent.findIndex(request => request.method === 'turn/start')
+  const whole = (requests: typeof sent) => requests.filter(request => request.method === 'thread/read' && request.params?.includeTurns === true).length
+  return { before: whole(sent.slice(0, start)), after: whole(sent.slice(start)) }
 }
 
 const lastUser = (f: Fixture, id: string): string | null =>
@@ -145,6 +177,38 @@ describe.skipIf(!PERF_BENCH)('Codex send-time read on a long thread', () => {
           ...Object.fromEntries(STAGES.map(stage => [`${stage}MedianMs`, round(median(samples[stage]))])),
           threadRead: weighed('thread/read'), turnsList: weighed('thread/turns/list'), newestTurnBytes: lastTurnBytes, newestUserMessageBytes: lastUserBytes })}`)
       } finally { await f.cleanup() }
+    }, 600_000)
+  }
+
+  // What a user sees: a send from the Threads page goes through the coordinator, which reads the thread before
+  // dispatching and again after Codex accepts when its echo has not already settled the send.
+  for (const turns of SIZES) {
+    it(`from the Threads page at ${turns} turns`, async () => {
+      const { f, id } = await seededFixture(turns, true)
+      const control = await coordinator(f)
+      try {
+        await control.start(); await control.command({ type: 'connect' })
+        const startedAt = performance.now()
+        await control.command({ type: 'observe-threads', threadIds: [id] })
+        const openMs = await opened(f, f.registry.byThread(id)!.sessionId, startedAt)
+        const samples: Record<Stage | 'send', number[]> = { send: [], refreshThread: [], read: [], newestTurn: [], applyThread: [], persist: [] }
+        const reads: { before: number; after: number }[] = []
+        for (let index = 0; index < SENDS; index++) {
+          const from = (await f.driver.requests()).length
+          spent.clear()
+          const startedAt = performance.now()
+          await control.command({ type: 'manual-send', threadId: id, text: 'Synthetic prompt' })
+          samples.send.push(performance.now() - startedAt)
+          for (const stage of STAGES) samples[stage].push(spent.get(stage) ?? 0)
+          reads.push(await wholeReads(f, from))
+          await f.driver.completeTurn(id, 'Synthetic reply')
+          await expect.poll(async () => { await control.command({ type: 'refresh' }); return control.get().host.threads.find(thread => thread.id === id)?.status },
+            { timeout: 60_000, interval: 50 }).toBe('idle')
+        }
+        console.info(`codex send read, Threads page: ${JSON.stringify({ turns, sends: SENDS, openMs: round(openMs), sendMedianMs: round(median(samples.send)),
+          ...Object.fromEntries(STAGES.map(stage => [`${stage}MedianMs`, round(median(samples[stage]))])),
+          wholeReadsBeforeTurnStart: reads.map(read => read.before), wholeReadsAfterTurnStart: reads.map(read => read.after) })}`)
+      } finally { control.dispose(); await control.privacyChanged(); await f.cleanup() }
     }, 600_000)
   }
 })

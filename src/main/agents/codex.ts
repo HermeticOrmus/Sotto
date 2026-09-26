@@ -17,7 +17,7 @@ import type { AgentSkillCatalog, AgentSkillReference } from '../../shared/agentS
 import { codexSkillInput, parseCodexSkillCatalog } from './codexSkills'
 import type { AgentFileReference } from '../../shared/agentFiles'
 import { verifyFileMentions } from './promptFiles'
-import type { AgentHost, AgentHostCommand, AgentHostResult, AgentSkillScope, ShortTextPrompt, ThreadHistorySource, ThreadHostEvent } from './host'
+import type { AgentHost, AgentHostCommand, AgentHostResult, AgentSkillScope, ShortTextPrompt, ThreadHistorySource, ThreadHostEvent, ThreadRead } from './host'
 import { SIDE_WRITING_TIMEOUT_MS, sideWritingEffort } from './sideWriting'
 import { ThreadMessageLog } from './threadMessageLog'
 import { cloneHostSnapshot } from './cloneHostSnapshot'
@@ -393,7 +393,7 @@ export class CodexAppServerHost implements AgentHost {
   async sendPersonalConversation(command: Extract<AgentHostCommand, { type: 'send' }>, memories: readonly { id: string; content: string }[]): Promise<AgentHostResult> {
     const alias = this.aliases[command.threadId]
     if (alias?.kind !== 'personal') throw new Error('This is not an owned personal conversation.')
-    await this.refreshThread(command.threadId, true)
+    await this.refreshThread(command.threadId, { beforeSend: true })
     const thread = this.ensureThread(command.threadId)
     if (thread.status === 'running' || thread.requests.length) throw new Error('Wait for the current turn and answer its requests first.')
     // ThreadResumeParams.developerInstructions is verified against installed 0.154.
@@ -456,10 +456,10 @@ export class CodexAppServerHost implements AgentHost {
       model: alias.modelId, ...(effort ? { effort } : {}), workingDirectory: await existingWorkingDirectory(alias.cwd), timeoutMs: SIDE_WRITING_TIMEOUT_MS, ...(signal ? { signal } : {}) })
   }
   /**
-   * Read the thread back from Codex. A read for a dispatch (`dispatch`) first asks only for the newest turn
+   * Read the thread back from Codex. The read before a send first asks only for the newest turn
    * (`confirmNewestTurn`) and reads the whole transcript when that cannot show nothing changed.
    */
-  async refreshThread(id: string, dispatch = false): Promise<AgentHostSnapshot> {
+  async refreshThread(id: string, purpose: ThreadRead = {}): Promise<AgentHostSnapshot> {
     if (!this.aliases[id]) throw new Error('That Codex thread is unavailable.')
     const generation = this.generation
     const work = (this.threadReads.get(id) ?? Promise.resolve()).catch(() => undefined).then(async () => {
@@ -469,7 +469,7 @@ export class CodexAppServerHost implements AgentHost {
       await this.watcher?.pollThread(alias.codexThreadId)
       // Read an uncertain settings save without replaying its overrides.
       if (alias.pendingSettings) await this.rpc('thread/resume', { threadId: alias.codexThreadId, excludeTurns: true }, value => this.applySettings(id, value))
-      let applied = dispatch && await this.confirmNewestTurn(id, generation)
+      let applied = purpose.beforeSend === true && await this.confirmNewestTurn(id, generation)
       for (let attempt = 0; attempt < 3 && !applied; attempt++) {
         const revision = this.revisions.get(id)
         let current = true
@@ -1015,7 +1015,7 @@ export class CodexAppServerHost implements AgentHost {
           })
         } else {
           validatePromptAttachments(this.state, alias.modelId, command.attachments)
-          try { await this.refreshThread(id, true) }
+          try { await this.refreshThread(id, { beforeSend: true }) }
           catch (error) { throw error instanceof Uncertain ? new Error('Codex history could not be verified before sending the prompt.', { cause: error }) : error }
           if (command.expectedLastUserMessageId !== undefined && command.expectedLastUserMessageId !== (this.log.lastUserMessageId(id) ?? null)) {
             throw new Error('The thread changed in Codex before Sotto could reply. Review its manual control state.')

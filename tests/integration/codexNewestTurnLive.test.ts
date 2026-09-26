@@ -8,7 +8,7 @@
  * writes one. Then it prints, for 50, 500 and 2,000 turns, the round trip and reply size of each: counters, sizes
  * and timers only. It reads nothing from the user's own Codex home and never runs in CI:
  *
- *   SOTTO_CODEX_TURNS_LIVE=1 npx vitest run tests/integration/codexNewestTurnNative.test.ts --maxWorkers=1 --disable-console-intercept
+ *   SOTTO_CODEX_TURNS_LIVE=1 npx vitest run tests/integration/codexNewestTurnLive.test.ts --maxWorkers=1 --disable-console-intercept
  */
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
@@ -104,7 +104,9 @@ describe.skipIf(!LIVE)('Codex thread/turns/list against the installed app-server
       }
       const before = await newest()
       expect(before.list).toBe(before.read)
-      expect((await newest()).read).toBe(before.read)
+      const again = await newest()
+      expect(again.read).toBe(before.read)
+      expect(again.list).toBe(before.list)
       expect((await server.rpc('thread/resume', { threadId, cwd, excludeTurns: true })).error).toBeUndefined()
       await appendFile(path, turnLines(cwd, 20))
       const after = await newest()

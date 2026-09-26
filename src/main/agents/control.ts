@@ -2069,6 +2069,14 @@ export class AgentControl {
     const host = this.dependencies.host
     return threadId && host.refreshThread ? host.refreshThread(threadId) : provider ? host.snapshot(provider) : host.snapshot()
   }
+  /**
+   * The read immediately before a send, which an adapter may make lighter than a whole read when it can show
+   * nothing changed (Codex's newest-turn check, ADR-0005). What the send then checks is the same.
+   */
+  private readBeforeSend(threadId?: string): Promise<AgentHostSnapshot> {
+    const host = this.dependencies.host
+    return threadId && host.refreshThread ? host.refreshThread(threadId, { beforeSend: true }) : host.snapshot()
+  }
   private async dispatch(command: AgentHostCommand, turn?: ActiveTurn, validate?: () => void, draftId?: string,
     client: ClientIdentity = this.localClient): Promise<void> {
     if (turn) this.dispatchTurns.set(command.commandId, turn)
@@ -2234,7 +2242,7 @@ export class AgentControl {
     }
     this.canAct()
     this.observe(threadId)
-    this.acceptSnapshot(await this.readThread(threadId))
+    this.acceptSnapshot(await this.readBeforeSend(threadId))
     const validate = (): void => {
       this.canAct()
       const latest = this.thread(threadId)
@@ -2272,7 +2280,7 @@ export class AgentControl {
     }
     this.canAct()
     this.observe()
-    this.acceptSnapshot(await this.readThread(this.state.draftThreadId ?? undefined))
+    this.acceptSnapshot(await this.readBeforeSend(this.state.draftThreadId ?? undefined))
     const thread = this.thread(this.state.draftThreadId)
     if (!this.hasDraft()) throw new Error('There is no prompt to send.')
     const attachments = validatePromptAttachments(this.state.host, thread.modelId, this.state.draftAttachments)
@@ -2629,7 +2637,7 @@ export class AgentControl {
       assignment.lastFailure = failureFingerprint; assignment.followups += 1
       await this.persist()
       // Refresh immediately before dispatch, so a direct host send revokes this queued reply.
-      this.acceptSnapshot(await this.readThread(thread.id))
+      this.acceptSnapshot(await this.readBeforeSend(thread.id))
       const validate = (): void => {
         const current = this.state.assignments.find(item => item.threadId === thread.id)
         const live = this.state.host.threads.find(item => item.id === thread.id)

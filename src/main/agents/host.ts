@@ -44,6 +44,12 @@ export function confirmedSettingsSnapshot(result: AgentHostResult): [Omit<AgentH
   return [rest, rest.accepted && !rest.uncertain ? snapshot : undefined]
 }
 /**
+ * What a thread read is for. `beforeSend` is the read immediately before a send: an adapter that can show nothing
+ * changed without reading the whole transcript may do that instead (Codex's newest-turn check, ADR-0005), and
+ * reads it whole whenever it cannot. Every other read omits it.
+ */
+export interface ThreadRead { readonly beforeSend?: boolean }
+/**
  * What Sotto asks a thread's own client to write on the side: a title, a branch name, a commit message or
  * pull request text (ADR-0026). The instruction and the material stay apart so a client that takes a
  * system prompt keeps them apart too, and the material is always something to describe, never to obey.
@@ -159,7 +165,7 @@ export interface AgentHost {
   snapshot(provider?: ProviderId): Promise<AgentHostSnapshot>
   /** Refresh only this thread's authoritative history/status, returning the full cached snapshot.
    * Native adapters must not join a refresh blocked on another thread or model discovery. */
-  refreshThread?(threadId: string): Promise<AgentHostSnapshot>
+  refreshThread?(threadId: string, read?: ThreadRead): Promise<AgentHostSnapshot>
   /** Throws only for a definitive rejection before commitment; unknown delivery returns uncertain. */
   execute(command: AgentHostCommand): Promise<AgentHostResult>
   /** Resolve saved pre-composite IDs without changing provider session identity. */
