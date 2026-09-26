@@ -181,6 +181,8 @@ createInterface({ input: process.stdin }).on('line', line => {
   } else if (method === 'thread/turns/list') {
     // Codex 0.157.1: newest first unless asked otherwise, a summary of items unless asked for all of them, and
     // opaque cursors. It reads the same session history thread/read does.
+    // A Codex older than this request answers with JSON-RPC's "method not found" every time it is asked.
+    if (script.withoutTurnsList) { setTimeout(() => emit({ id, error: { code: -32601, message: 'Method not found' } }), delay); return }
     const thread = state.threads[params.threadId]
     if (!thread) { emit({ id, error: { code: -32000, message: 'Unknown thread' } }); return }
     const turns = historyTurns(thread, script)

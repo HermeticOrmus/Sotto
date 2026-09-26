@@ -12,9 +12,11 @@
  * message alone: the only part of the transcript the `expectedLastUserMessageId` check compares. It then sends the
  * way the Threads page does, through the coordinator over the wrapped adapter, and counts the whole reads each send
  * made before `turn/start` and after it. Counters, sizes and timers only; every seeded text is filler. It asserts no time, so it runs only under `SOTTO_PERF_BENCH=1`
- * (`tests/fixtures/perfBench.ts`):
+ * (`tests/fixtures/perfBench.ts`). Add `SOTTO_PERF_WITHOUT_TURNS_LIST=1` for the same run with the check switched
+ * off, which is how a send read before #324:
  *
  *   SOTTO_PERF_BENCH=1 npx vitest run tests/perf/codexSendRead.perf.test.ts --maxWorkers=1 --disable-console-intercept
+ *   SOTTO_PERF_BENCH=1 SOTTO_PERF_WITHOUT_TURNS_LIST=1 npx vitest run tests/perf/codexSendRead.perf.test.ts --maxWorkers=1 --disable-console-intercept
  */
 import { randomUUID } from 'node:crypto'
 import { readFile, writeFile } from 'node:fs/promises'
@@ -26,6 +28,8 @@ import { manualSendCoordinator } from '../fixtures/manualSendCoordinator'
 import { median, PERF_BENCH, round } from '../fixtures/perfBench'
 
 const SENDS = 5
+/** Measure the send as it was before #324: the fake refuses `thread/turns/list` as a Codex without it does. */
+const WITHOUT_TURNS_LIST = process.env.SOTTO_PERF_WITHOUT_TURNS_LIST === '1'
 const SIZES = [50, 500, 2000] as const
 type Fixture = Awaited<ReturnType<typeof codexFixture>>
 type Stage = 'refreshThread' | 'read' | 'newestTurn' | 'applyThread' | 'persist'
@@ -89,6 +93,8 @@ async function replies(root: string): Promise<{ method: string; bytes: number }[
  * A fixture whose Codex holds a thread with `turns` completed turns, not yet connected. `wrapped` puts the adapter
  * behind the Sotto thread host, so the coordinator addresses it by Sotto thread ID. The workspace and provider hosts
  * the app also puts between them hand a read's purpose on unchanged (threadReadPurpose.test.ts) and are left out.
+ * Under `SOTTO_PERF_WITHOUT_TURNS_LIST=1` the fake is a Codex without `thread/turns/list`, so every send reads the
+ * whole transcript as it did before #324: that run gives the "before" figures.
  */
 async function seededFixture(turns: number, wrapped = false): Promise<{ f: Fixture; id: string }> {
   const first = await codexFixture(undefined, wrapped, 60_000)
@@ -103,7 +109,7 @@ async function seededFixture(turns: number, wrapped = false): Promise<{ f: Fixtu
   state.threads[codexThreadId]!.turns = Array.from({ length: turns }, (_, index) => turn(index, first.root)) as FakeThread['turns']
   await writeFile(statePath, JSON.stringify(state))
   const f = await first.driver.restart() as Fixture
-  await f.script({ recordReplyBytes: true })
+  await f.script({ recordReplyBytes: true, ...(WITHOUT_TURNS_LIST ? { withoutTurnsList: true } : {}) })
   return { f, id }
 }
 /** Wait for the adapter's own read of a thread it was told to show, and say how long that took from `startedAt`. */
