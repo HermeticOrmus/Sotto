@@ -3,14 +3,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test, type Page } from '@playwright/test'
 import { hostEntityKey } from '../../src/shared/clientIdentity'
-import type { AgentCommand, AgentState } from '../../src/shared/agents'
+import type { AgentCommand, AgentCommandReceipt, AgentState } from '../../src/shared/agents'
 import type { SottoBridge } from '../../src/shared/contracts'
 import type { SottoE2EBridge } from '../../src/shared/e2e'
 import { closeSotto, enableVoiceCoordinator, launchSotto, launchSottoWithVoice, openThreads, userMessageTexts } from './support/sottoLaunch'
 import { requireOwnedE2EProfile } from '../../scripts/e2e-profile-policy.mjs'
 
 type BrowserGlobals = { sotto: SottoBridge; sottoE2E: SottoE2EBridge }
-async function command(page: Page, value: AgentCommand): Promise<AgentState> {
+async function command(page: Page, value: AgentCommand): Promise<AgentCommandReceipt> {
   return page.evaluate(async request => {
     const bridge = (globalThis as unknown as BrowserGlobals).sotto.agents
     if (!bridge) throw new Error('Agent bridge unavailable')
@@ -89,7 +89,7 @@ test('limits automatic fixes, stops repeated failures, and never answers permiss
     await expect.poll(async () => (await state(page)).queue.some(q => q.text.includes('repeating a failure'))).toBe(true)
     await event(page, { type: 'permission', threadId: 'workshop', text: 'Publish this project?' })
     await expect.poll(async () => { const current = await state(page); return current.host.threads.find(thread => thread.id === hostEntityKey(current.hostId, 'workshop'))?.requests.length }).toBe(1)
-    let snapshot = await state(page)
+    let snapshot: AgentState | AgentCommandReceipt = await state(page)
     expect(snapshot.host.threads[0]?.requests).toHaveLength(1)
     expect(snapshot.queue.some(q => q.kind === 'permission')).toBe(true)
     const request = snapshot.host.threads[0]!.requests[0]!
@@ -135,7 +135,7 @@ test('reconciles a lost acknowledgement without resubmitting, and keeps skipped 
     await command(page, { type: 'select-thread', threadId: 'workshop' })
     await command(page, { type: 'compose', text: 'Execute exactly once.' })
     await event(page, { type: 'uncertain', threadId: 'workshop', text: '' })
-    let snapshot = await command(page, { type: 'send' })
+    let snapshot: AgentState | AgentCommandReceipt = await command(page, { type: 'send' })
     expect(snapshot.error).toContain('did not confirm')
     expect(snapshot.draft).toBe('Execute exactly once.')
     snapshot = await command(page, { type: 'refresh' })

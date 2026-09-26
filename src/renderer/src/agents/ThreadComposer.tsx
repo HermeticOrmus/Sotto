@@ -13,7 +13,7 @@ import { requestMode } from './requests/requestAnswers'
 import { composeReviewMessage, reviewCommentStore, reviewLabel, useReviewComments, type ReviewComment, type ReviewCommentStore } from './reviewComments'
 import { ScreenshotInput } from './ScreenshotInput'
 import { SkillPicker, skillOptionId, useSkillPicker } from './SkillPicker'
-import { deliveryFor, deliveryPending, hasDraftContent, queueAdmissionOpen, queuedRevision, submissionStatus, UNCONFIRMED_SUBMISSION, useSubmissions, useThreadComposer, type ComposerDraft, type ThreadComposerSnapshot, type SubmissionMode, type SubmissionStatus, type ThreadDraftStore } from './threadDraftStore'
+import { deliveryFor, deliveryPending, hasDraftContent, queueAdmissionOpen, queuedRevision, submissionStatus, UNCONFIRMED_SUBMISSION, useScreenshotReads, useSubmissions, useThreadComposer, type ComposerDraft, type ThreadComposerSnapshot, type SubmissionMode, type SubmissionStatus, type ThreadDraftStore } from './threadDraftStore'
 import type { ThreadRow } from './threadFacts'
 import { followupsFor, ThreadFollowups } from './ThreadFollowups'
 import { ThreadOptions } from './ThreadOptions'
@@ -137,7 +137,8 @@ export function ThreadComposer({ row, state, command, store, onSend, composerId 
   const { draft, save, saveError, hasContent } = useComposerControls(store, threadId)
   const comments = useReviewComments(reviewComments, threadId)
   const submissions = useSubmissions(store)
-  const [readingImages, setReadingImages] = useState(false)
+  // Screenshots still being read for this draft hold Send, even ones pasted before the user left the thread and came back.
+  const readingImages = useScreenshotReads(store, threadId).pending > 0
   // The row under the footer where the option chips say what happened to a refused or unconfirmed change.
   const [settingsNotices, setSettingsNotices] = useState<HTMLDivElement | null>(null)
   const [answerState, setAnswerState] = useState<{ readonly sending: boolean; readonly error: string | null }>({ sending: false, error: null })
@@ -242,7 +243,7 @@ export function ThreadComposer({ row, state, command, store, onSend, composerId 
       <ThreadComposerEditor key={threadId} row={row} state={state} command={command} store={store} composerId={composerId}
         editable={editable} answering={answering} placeholder={placeholder} supported={row.model?.supportsImages === true && !answering && !permission}
         textarea={textarea} caretAfterInsert={caretAfterInsert} leavePickers={leavePickers} onMenuChange={setMenuOpen}
-        edit={edit} onSend={() => send(performance.now())} onReadingChange={setReadingImages}>
+        edit={edit} onSend={() => send(performance.now())}>
         {comments.length > 0 ? <ul className="review-chips" aria-label="Review comments">
           {comments.map(comment => {
             const label = reviewLabel(comment)
@@ -315,7 +316,7 @@ function useComposerControls(store: ThreadDraftStore, threadId: string): Compose
 
 /** The small, immediate typing path, including the menus that follow its caret. */
 function ThreadComposerEditor({ row, state, command, store, composerId, editable, answering, placeholder, supported,
-  textarea, caretAfterInsert, leavePickers, onMenuChange, edit, onSend, onReadingChange, children }: {
+  textarea, caretAfterInsert, leavePickers, onMenuChange, edit, onSend, children }: {
   readonly row: ThreadRow
   readonly state: AgentState
   readonly command: Command
@@ -331,11 +332,11 @@ function ThreadComposerEditor({ row, state, command, store, composerId, editable
   readonly onMenuChange: (open: boolean) => void
   readonly edit: (patch: Parameters<ThreadDraftStore['edit']>[1]) => void
   readonly onSend: () => void
-  readonly onReadingChange: (reading: boolean) => void
   readonly children: ReactNode
 }): ReactNode {
   const threadId = row.thread.id
   const { draft } = useThreadComposer(store, threadId)
+  const screenshotReads = useScreenshotReads(store, threadId)
   const capabilities = capabilitiesForThread(state.host, row.thread)
   const picker = useSkillPicker({ threadId, state, command, enabled: editable && !answering && capabilities.skills === true, text: draft.text })
   const sigils = skillSigils(picker.catalog?.providerId ?? row.providerId)
@@ -394,8 +395,10 @@ function ThreadComposerEditor({ row, state, command, store, composerId, editable
     <SkillPicker model={picker} listId={listId} provider={row.provider} selected={draft.skills} onSelect={skill => selectSkill(picker.options.indexOf(skill))} />
     <FilePicker model={files} listId={fileListId} selected={draft.files} onSelect={(entry: FileEntry) => selectFile(files.options.indexOf(entry))} />
     {children}
+    {/* Screenshots still being read when the user moves to another thread join this thread's draft as it is then. */}
     <ScreenshotInput key={threadId} attachments={[...draft.attachments]} disabled={!editable} supported={supported}
-      onReadingChange={onReadingChange} onChange={attachments => edit({ attachments })}>
+      pending={screenshotReads.pending > 0} notice={screenshotReads.problem} onRead={() => store.beginScreenshotRead(threadId)}
+      onChange={attachments => edit({ attachments })} onAddAfterClose={images => store.addLateScreenshots(threadId, images)}>
       <textarea ref={textarea} id={composerId} rows={3} value={draft.text} disabled={!editable} spellCheck
         aria-describedby={statusId}
         aria-autocomplete={menus ? 'list' : undefined}

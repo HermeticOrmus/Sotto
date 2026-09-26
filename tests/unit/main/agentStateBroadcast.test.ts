@@ -1,5 +1,13 @@
 // @vitest-environment node
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+
+// Counts the content comparisons the broadcaster makes, without changing what they answer.
+const compare = vi.hoisted(() => ({ spy: null as unknown as ReturnType<typeof vi.fn> }))
+vi.mock('node:util', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:util')>()
+  compare.spy = vi.fn(actual.isDeepStrictEqual)
+  return { ...actual, isDeepStrictEqual: compare.spy }
+})
 import { AgentStateBroadcaster } from '../../../src/main/agents/agentStateBroadcast'
 import { defaultAgentConfiguration, EMPTY_AGENT_HOST, type AgentClientHost, type AgentModel, type AgentState, type AgentStateBroadcast } from '../../../src/shared/agents'
 
@@ -119,5 +127,49 @@ describe('AgentStateBroadcaster', () => {
     expect(sent[1]!.host.clientHosts![0]!.models).toEqual({ revision: 1, omitted: true })
     expect(sent[2]!.host.models).toEqual({ revision: 1, omitted: true })
     expect(sent[2]!.host.clientHosts![0]!.models).toEqual({ revision: 1, omitted: true })
+  })
+
+  it('names every catalog in a command receipt by the revision the broadcast uses, and lists no models', () => {
+    const broadcaster = new AgentStateBroadcaster()
+    const hostA = 'aaaaaaaa-0000-4000-8000-000000000000'
+    const hostB = 'bbbbbbbb-0000-4000-8000-000000000000'
+    const shellModels = [model('gpt-5')]
+    const shell = state(shellModels, [clientHost(hostA, shellModels), clientHost(hostB, [model('grok-4')])])
+    const sent: AgentStateBroadcast[] = []
+    broadcaster.send(shell, 'main', payload => { sent.push(payload); return true })
+
+    const receipt = broadcaster.encodeReceipt(state(shellModels.map(entry => ({ ...entry })),
+      [clientHost(hostA, shellModels.map(entry => ({ ...entry }))), clientHost(hostB, [model('grok-4')])]))
+    expect(receipt.host.models).toEqual({ revision: 1, omitted: true })
+    expect(receipt.host.clientHosts!.map(client => client.models)).toEqual([{ revision: 1, omitted: true }, { revision: 1, omitted: true }])
+    // Everything but the catalogs is the shell as it was.
+    expect({ ...receipt, host: { ...receipt.host, models: shell.host.models, clientHosts: shell.host.clientHosts } }).toEqual(shell)
+  })
+
+  it('advances the shared revision when a receipt sees a changed catalog, and records nothing as sent', () => {
+    const broadcaster = new AgentStateBroadcaster()
+    const sent: AgentStateBroadcast[] = []
+    broadcaster.send(state([model('gpt-5')]), 'main', payload => { sent.push(payload); return true })
+    const changed = state([model('gpt-5', { ready: false })])
+    expect(broadcaster.encodeReceipt(changed).host.models).toEqual({ revision: 2, omitted: true })
+    // The window was never sent revision 2, so its next broadcast carries it in full.
+    broadcaster.send(changed, 'main', payload => { sent.push(payload); return true })
+    expect(sent[1]!.host.models).toEqual({ revision: 2, models: changed.host.models })
+  })
+
+  it('compares a catalog shared by host.models and its clientHosts entry once per shell, across both windows and a receipt', () => {
+    const broadcaster = new AgentStateBroadcaster()
+    const hostId = 'aaaaaaaa-0000-4000-8000-000000000000'
+    const fresh = (): AgentState => { const models = [model('gpt-5'), model('gpt-5-mini')]; return state(models, [clientHost(hostId, models)]) }
+    const deliver = (): boolean => true
+    broadcaster.send(fresh(), 'main', deliver)
+    compare.spy.mockClear()
+    const shell = fresh()
+    broadcaster.send(shell, 'main', deliver)
+    broadcaster.send(shell, 'widget', deliver)
+    expect(compare.spy).toHaveBeenCalledTimes(1)
+    compare.spy.mockClear()
+    expect(broadcaster.encodeReceipt(fresh()).host.models).toEqual({ revision: 1, omitted: true })
+    expect(compare.spy).toHaveBeenCalledTimes(1)
   })
 })

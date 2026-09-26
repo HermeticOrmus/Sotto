@@ -71,8 +71,11 @@ The shell still carried a host's whole model catalog on every publish even when 
 changed — on the owner's 608-model catalog, most of the shell's weight and about 4 ms of the window's read.
 ADR-0028 has the coalesced broadcast omit a catalog a window was already sent, tagged with a revision so
 the window can tell an omission from an empty list and recover with `agents.get()` if it is missing what a
-broadcast names. `AGENT_GET` and a command's own answer are unaffected: both still return the catalog in
-full, because they are that recovery path. Measured on the same owner catalog (`node:v8`'s `serialize`, which
+broadcast names. `AGENT_GET` still returns the catalog in full, because it is that recovery path. A
+command's own answer is a command receipt (issue #323, ADR-0028's September 26 amendment): it names each
+catalog by the same revision and never lists it, and the page puts it back from the same cache, so a draft
+save's reply on a 608-model catalog fell from 542 KB to 2.3 KB (`docs/perf/2026-09-26-command-receipt.md`).
+The broadcast's omission was measured on the owner's catalog (`node:v8`'s `serialize`, which
 approximates what Electron's structured clone puts on the wire): an unchanged repeat fell from 649 KB to
 1.1 KB, and detecting "unchanged" costs about 0.5 ms per publish across both windows.
 

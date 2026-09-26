@@ -51,6 +51,52 @@ describe('desktop host routing', () => {
     expect(local.command).toHaveBeenCalledWith({ type: 'connect' }, desktopWindowClient())
     expect(remote.command).toHaveBeenCalledTimes(1)
   })
+  describe('following a selection the host moved', () => {
+    function setup() {
+      const router = new DesktopHostRouter(emptyDesktopState), local = fixture(LOCAL, 'local'), remote = fixture(REMOTE, 'remote')
+      local.state.host.threads.push({ id: 'other', projectId: 'project', title: 'Other', modelId: '', status: 'idle', messages: [], requests: [] })
+      router.add(local.connection); router.add(remote.connection)
+      const moveLocalTo = (threadId: string) => { local.state.activeThreadId = threadId; local.state.activeProjectId = 'project' }
+      return { router, local, remote, moveLocalTo }
+    }
+    it('goes where Later and a new thread take the host', async () => {
+      const { router, local, moveLocalTo } = setup()
+      await router.command({ type: 'select-thread', threadId: hostEntityKey(LOCAL, 'thread') }, desktopWindowClient())
+      local.command.mockImplementationOnce(async () => { moveLocalTo('other'); return local.state })
+      await router.command({ type: 'later' }, desktopWindowClient())
+      expect(router.shell()).toMatchObject({ activeThreadId: hostEntityKey(LOCAL, 'other'), activeProjectId: hostEntityKey(LOCAL, 'project') })
+      local.command.mockImplementationOnce(async () => { moveLocalTo('thread'); return local.state })
+      await router.command({ type: 'create-thread', projectId: hostEntityKey(LOCAL, 'project'), title: 'Task', modelId: 'model' }, desktopWindowClient())
+      expect(router.shell().activeThreadId).toBe(hostEntityKey(LOCAL, 'thread'))
+    })
+    it('still goes there when the command fails after the host moved', async () => {
+      const { router, local, moveLocalTo } = setup()
+      await router.command({ type: 'select-thread', threadId: hostEntityKey(LOCAL, 'thread') }, desktopWindowClient())
+      local.command.mockImplementationOnce(async () => { moveLocalTo('other'); throw new Error('The reply was lost.') })
+      await expect(router.command({ type: 'next' }, desktopWindowClient())).rejects.toThrow('reply was lost')
+      expect(router.shell().activeThreadId).toBe(hostEntityKey(LOCAL, 'other'))
+    })
+    it('stays put when the host moves for an answer or on its own', async () => {
+      const { router, local, moveLocalTo } = setup()
+      await router.command({ type: 'select-thread', threadId: hostEntityKey(LOCAL, 'thread') }, desktopWindowClient())
+      // Answering presents the host's next queued thread; the user stays in the thread they answered in.
+      local.command.mockImplementationOnce(async () => { moveLocalTo('other'); return local.state })
+      await router.command({ type: 'answer', threadId: hostEntityKey(LOCAL, 'thread'), requestId: 'request', answer: 'Yes' }, desktopWindowClient())
+      expect(router.shell().activeThreadId).toBe(hostEntityKey(LOCAL, 'thread'))
+      moveLocalTo('thread'); moveLocalTo('other')
+      expect(router.shell().activeThreadId).toBe(hostEntityKey(LOCAL, 'thread'))
+    })
+    it('keeps a selection the user made while the command ran', async () => {
+      const { router, local, moveLocalTo } = setup()
+      await router.command({ type: 'select-thread', threadId: hostEntityKey(LOCAL, 'thread') }, desktopWindowClient())
+      let finish: () => void = () => undefined
+      local.command.mockImplementationOnce(() => new Promise(resolve => { finish = () => { moveLocalTo('other'); resolve(local.state) } }))
+      const creating = router.command({ type: 'create-thread', projectId: hostEntityKey(LOCAL, 'project'), title: 'Task', modelId: 'model' }, desktopWindowClient())
+      await router.command({ type: 'select-thread', threadId: hostEntityKey(REMOTE, 'thread') }, desktopWindowClient())
+      finish(); await creating
+      expect(router.shell().activeThreadId).toBe(hostEntityKey(REMOTE, 'thread'))
+    })
+  })
   it('forwards select-project to the owning host and keeps a disconnected host\'s selection local', async () => {
     const router = new DesktopHostRouter(emptyDesktopState), local = fixture(LOCAL, 'local'), remote = fixture(REMOTE, 'remote')
     const offline = fixture('33333333-3333-4333-8333-333333333333', 'remote')
