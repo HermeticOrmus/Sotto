@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { SottoBridge } from '../../src/shared/contracts'
 import type { SottoE2EBridge } from '../../src/shared/e2e'
+import { hostKeys } from './support/hostKeys'
 import { closeSotto, launchSottoWithVoice, openThreads, paneMenuAction, userMessageTexts } from './support/sottoLaunch'
 
 async function setup(page: Page): Promise<void> {
@@ -47,7 +48,8 @@ test('selects each native subscription with its available model and reasoning ef
     await expect(page.getByLabel('Reasoning model')).toHaveValue('')
     await expect(page.getByLabel('Reasoning effort')).toHaveValue('')
     await expect.poll(() => page.evaluate(() => (globalThis as unknown as { sotto: SottoBridge }).sotto.agents?.get().then(state => state.configuration.reasoning))).toBe('codex')
-    await page.getByRole('tablist', { name: 'Mode' }).getByRole('tab', { name: 'Agents', exact: true }).click()
+    // Settings owns the window, so the room switch is the one in its sidebar's foot rather than the strip's.
+    await page.getByRole('tablist', { name: 'Page' }).getByRole('tab', { name: 'Agents', exact: true }).click()
     await expect(page.getByLabel('Reasoning account', { exact: true })).toHaveCount(0)
     await page.getByRole('link', { name: 'Settings', exact: true }).click()
     await page.getByRole('tablist', { name: 'Settings sections' }).getByRole('tab', { name: 'Agents', exact: true }).click()
@@ -164,6 +166,7 @@ test('collects an explicit prompt, queues ready threads, and yields only the dir
     await setup(page)
     await page.getByRole('button', { name: 'Connect providers' }).click()
     await expect(page.getByRole('status')).toHaveText('Codex connected')
+    const key = await hostKeys(page)
     await openThreads(page)
     await page.getByRole('button', { name: 'Workshop', exact: true }).click()
     await expect(page.getByRole('heading', { name: 'Workshop', exact: true })).toBeVisible()
@@ -186,7 +189,7 @@ test('collects an explicit prompt, queues ready threads, and yields only the dir
     await page.getByRole('button', { name: 'More actions', exact: true }).click()
     await expect(page.getByRole('menuitem', { name: 'Resume managing', exact: true })).toBeVisible()
     await page.keyboard.press('Escape')
-    await expect.poll(() => page.evaluate(() => (globalThis as unknown as { sotto: SottoBridge }).sotto.agents?.get().then(state => state.assignments.find(assignment => assignment.threadId === 'workshop')?.mode))).toBe('manual')
+    await expect.poll(() => page.evaluate(workshop => (globalThis as unknown as { sotto: SottoBridge }).sotto.agents?.get().then(state => state.assignments.find(assignment => assignment.threadId === workshop)?.mode), key('workshop'))).toBe('manual')
     await page.screenshot({ path: 'artifacts/agent-control-smoke/agents-manual-e2e.png' })
     const widget = launched.app.windows().find((window) => window.url().endsWith('/widget.html'))
     expect(widget).toBeDefined()
@@ -195,9 +198,9 @@ test('collects an explicit prompt, queues ready threads, and yields only the dir
     await expect(widget!.getByRole('button', { name: 'Collapse threads', exact: true })).toBeVisible()
     await widget!.screenshot({ path: 'artifacts/agent-control-smoke/agents-widget-e2e.png' })
     await expect(page.getByLabel('Prompt', { exact: true })).toHaveValue('Inspect the result before proceeding.')
-    await expect.poll(() => page.evaluate(() => (globalThis as unknown as { sotto: SottoBridge }).sotto?.agents?.get().then(s => s.assignments.find(a => a.threadId === 'docs')?.mode))).toBe('managed')
+    await expect.poll(() => page.evaluate(docs => (globalThis as unknown as { sotto: SottoBridge }).sotto?.agents?.get().then(s => s.assignments.find(a => a.threadId === docs)?.mode), key('docs'))).toBe('managed')
     await paneMenuAction(page, 'Resume managing')
-    await expect.poll(() => page.evaluate(() => (globalThis as unknown as { sotto: SottoBridge }).sotto?.agents?.get().then(s => s.assignments.find(a => a.threadId === 'workshop')?.mode))).toBe('managed')
+    await expect.poll(() => page.evaluate(workshop => (globalThis as unknown as { sotto: SottoBridge }).sotto?.agents?.get().then(s => s.assignments.find(a => a.threadId === workshop)?.mode), key('workshop'))).toBe('managed')
     await page.getByRole('main').evaluate((element) => { element.scrollTop = 0 })
     await page.screenshot({ path: 'artifacts/agent-control-smoke/agents-e2e.png' })
   } finally {
