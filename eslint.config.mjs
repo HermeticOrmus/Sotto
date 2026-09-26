@@ -39,6 +39,7 @@ export default tseslint.config(
       'artifacts/effort-furnace/**',
       'artifacts/effort-slider/**',
       'artifacts/pending-settings-run/**',
+      'artifacts/staged-images-run/**',
       'artifacts/natural-voice-qa/**',
       'artifacts/tts-bench/**',
       'artifacts/voice-perf/**',
