@@ -95,9 +95,15 @@ class SettingsUnconfirmed extends Error {
 class Rejected extends Error {
   readonly unmaterializedThreadId: string | undefined
   readonly missingThreadId: string | undefined
+  /**
+   * This Codex has no such request at all. Codex 0.157.1 says so as an invalid request naming an unknown variant;
+   * JSON-RPC's own "method not found" is accepted too.
+   */
+  readonly unknownMethod: boolean
   constructor(value: unknown) {
     super('Codex rejected the operation. Review the thread before retrying.')
     const error = z.object({ code: z.literal(-32600), message: z.string() }).safeParse(value)
+    this.unknownMethod = z.object({ code: z.literal(-32601) }).safeParse(value).success || error.success && error.data.message.startsWith('Invalid request: unknown variant `')
     this.unmaterializedThreadId = error.success
       ? /^thread (\S+) is not materialized yet; includeTurns is unavailable before first user message$/.exec(error.data.message)?.[1]
       : undefined
@@ -133,6 +139,8 @@ export class CodexAppServerHost implements AgentHost {
   private readonly resuming = new Map<string, Promise<void>>()
   private readonly opening = new Map<string, Promise<void>>()
   private readonly threadReads = new Map<string, Promise<void>>()
+  /** Whether this connection's Codex answers `thread/turns/list`; an older one says the method is unknown once. */
+  private turnPages = true
   private readonly revisions = new Map<string, number>()
   private readonly dispatching = new Set<string>()
   private readonly runningTurns = new Map<string, string>()
@@ -215,7 +223,7 @@ export class CodexAppServerHost implements AgentHost {
     for (const alias of Object.values(this.aliases)) if (alias.compaction?.status === 'running') alias.compaction = { ...alias.compaction, status: 'uncertain', error: 'Native compaction was interrupted by disconnection. Reconnecting observes its result without retrying.' }
     this.providerSessionIds.clear()
     for (const [id, alias] of Object.entries(aliases)) this.providerSessionIds.set(alias.codexThreadId, id)
-    this.threads.clear(); this.histories.clear(); this.terminalTurns.clear(); this.runningTurns.clear(); this.turnDates.clear()
+    this.threads.clear(); this.histories.clear(); this.terminalTurns.clear(); this.runningTurns.clear(); this.turnDates.clear(); this.turnPages = true
     this.activity = new CodexActivityProjection(); this.completedMessages.clear(); this.fileSummaries.clear()
     const codexHome = this.options.codexHome ?? process.env.CODEX_HOME ?? join(homedir(), '.codex')
     this.watcher = new CodexSessionLogWatcher({ codexHome, pollIntervalMs: this.options.pollIntervalMs, onMessage: (id, message) => {
@@ -381,7 +389,7 @@ export class CodexAppServerHost implements AgentHost {
   async sendPersonalConversation(command: Extract<AgentHostCommand, { type: 'send' }>, memories: readonly { id: string; content: string }[]): Promise<AgentHostResult> {
     const alias = this.aliases[command.threadId]
     if (alias?.kind !== 'personal') throw new Error('This is not an owned personal conversation.')
-    await this.refreshThread(command.threadId)
+    await this.refreshThread(command.threadId, true)
     const thread = this.ensureThread(command.threadId)
     if (thread.status === 'running' || thread.requests.length) throw new Error('Wait for the current turn and answer its requests first.')
     // ThreadResumeParams.developerInstructions is verified against installed 0.154.
@@ -443,7 +451,11 @@ export class CodexAppServerHost implements AgentHost {
     return writeWithCodexExec({ ...prompt, executable, prefixArgs: this.options.args ?? [], codexHome: this.options.codexHome ?? process.env.CODEX_HOME ?? join(homedir(), '.codex'),
       model: alias.modelId, ...(effort ? { effort } : {}), workingDirectory: await existingWorkingDirectory(alias.cwd), timeoutMs: SIDE_WRITING_TIMEOUT_MS, ...(signal ? { signal } : {}) })
   }
-  async refreshThread(id: string): Promise<AgentHostSnapshot> {
+  /**
+   * Read the thread back from Codex. A read for a dispatch (`dispatch`) first asks only for the newest turn
+   * (`confirmNewestTurn`) and reads the whole transcript when that cannot show nothing changed.
+   */
+  async refreshThread(id: string, dispatch = false): Promise<AgentHostSnapshot> {
     if (!this.aliases[id]) throw new Error('That Codex thread is unavailable.')
     const generation = this.generation
     const work = (this.threadReads.get(id) ?? Promise.resolve()).catch(() => undefined).then(async () => {
@@ -453,7 +465,7 @@ export class CodexAppServerHost implements AgentHost {
       await this.watcher?.pollThread(alias.codexThreadId)
       // Read an uncertain settings save without replaying its overrides.
       if (alias.pendingSettings) await this.rpc('thread/resume', { threadId: alias.codexThreadId, excludeTurns: true }, value => this.applySettings(id, value))
-      let applied = false
+      let applied = dispatch && await this.confirmNewestTurn(id, generation)
       for (let attempt = 0; attempt < 3 && !applied; attempt++) {
         const revision = this.revisions.get(id)
         let current = true
@@ -490,6 +502,47 @@ export class CodexAppServerHost implements AgentHost {
       throw error
     }
     finally { if (this.threadReads.get(id) === work) this.threadReads.delete(id) }
+  }
+  /**
+   * The check before a dispatch, without reading the whole transcript (#324). It asks Codex for its newest turn
+   * alone with `thread/turns/list`, which reads the same session file `thread/read` does, so it sees a turn
+   * another Codex process added. It answers true only when that turn is the newest one Sotto already holds, has
+   * ended, and reconciles onto exactly the messages Sotto already has: then nothing was added to or taken from
+   * the transcript since Sotto last read or streamed it, and a whole read would change nothing a dispatch checks.
+   * Anything else answers false and the caller reads the whole transcript, as it always did: a thread not read on
+   * this connection, work or a request in flight, a settings change, rewind or compaction not yet confirmed, a
+   * dispatch whose delivery is uncertain, session-log input not yet shown, a newest turn Sotto does not hold or
+   * one still running, a message Sotto cannot match, a Codex that refuses the request, or a reply that moved on
+   * while it was read.
+   */
+  private async confirmNewestTurn(id: string, generation: number): Promise<boolean> {
+    const alias = this.aliases[id]!, thread = this.ensureThread(id)
+    const newest = alias.messageIdentities.at(-1)
+    if (!this.turnPages || !this.histories.has(id) || !newest || !this.terminalTurns.has(newest.turnId) || alias.historyMode === 'paginated'
+      || alias.pendingSettings || alias.pendingRollback || compactionPending(alias.compaction) || this.unconfirmedDispatchSessionIds.has(id)
+      || this.pendingLogMessages.has(id) || this.runningTurns.has(id) || thread.status !== 'idle' || thread.requests.length || thread.historyStatus) return false
+    const revision = this.revisions.get(id)
+    let confirmed = false
+    try {
+      await this.rpc('thread/turns/list', { threadId: alias.codexThreadId, limit: 1, sortDirection: 'desc', itemsView: 'full' }, async value => {
+        if (generation !== this.generation || revision !== this.revisions.get(id)) return
+        const page = z.object({ data: z.array(turnSchema) }).safeParse(value)
+        const turn = page.success && page.data.data.length === 1 ? page.data.data[0]! : undefined
+        if (!turn || turn.id !== newest.turnId || turn.status === 'inProgress' || turn.itemsView !== 'full') return
+        const held = newest.messages.map(message => message.id)
+        this.applyTurn(id, turn)
+        const read = alias.messageIdentities.find(identity => identity.turnId === turn.id)
+        if (!read || read !== alias.messageIdentities.at(-1) || !read.ordered || read.messages.some(message => !message.complete || !held.includes(message.id))) return
+        this.flushLogMessages(id); this.orderMessages(id)
+        await this.persist()
+        confirmed = true
+      })
+    } catch (error) {
+      if (!(error instanceof Rejected)) throw error
+      if (error.unknownMethod) this.turnPages = false
+      return false
+    }
+    return confirmed
   }
   private touch(id: string): void { this.revisions.set(id, (this.revisions.get(id) ?? 0) + 1) }
   /**
@@ -953,7 +1006,7 @@ export class CodexAppServerHost implements AgentHost {
           })
         } else {
           validatePromptAttachments(this.state, alias.modelId, command.attachments)
-          try { await this.refreshThread(id) }
+          try { await this.refreshThread(id, true) }
           catch (error) { throw error instanceof Uncertain ? new Error('Codex history could not be verified before sending the prompt.', { cause: error }) : error }
           if (command.expectedLastUserMessageId !== undefined && command.expectedLastUserMessageId !== (this.log.lastUserMessageId(id) ?? null)) {
             throw new Error('The thread changed in Codex before Sotto could reply. Review its manual control state.')

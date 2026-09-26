@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
 import { appendFileSync, existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -83,6 +84,15 @@ function complete(thread, text, status = 'completed') {
   save()
   notify('turn/completed', { threadId: thread.id, turn })
 }
+/** A thread's turns the way a read hands them back; `historyItemIds` reconstructs message item IDs as Codex's legacy history does. */
+function historyTurns(thread, script) {
+  const turns = JSON.parse(JSON.stringify(thread.turns))
+  if (script.historyItemIds) for (const turn of turns) {
+    turn.items = turn.items.map((item, index) => ['userMessage', 'agentMessage'].includes(item.type)
+      ? { ...item, id: `item-${index}` } : item)
+  }
+  return turns
+}
 function raise(thread, kind, text, method, overrides = {}) {
   const id = ++requestId
   const turnId = thread.turns.at(-1)?.id ?? 'turn'
@@ -119,6 +129,8 @@ createInterface({ input: process.stdin }).on('line', line => {
   const holdReply = script.holdReply === method
   if (holdReply) { delete script.holdReply; writeFileSync(file('script.json'), JSON.stringify(script)) }
   const reply = result => {
+    // A benchmark's count of what each reply weighs: the method and its size on the wire, never the body.
+    if (script.recordReplyBytes) appendFileSync(file('replies.jsonl'), JSON.stringify({ method, bytes: Buffer.byteLength(JSON.stringify({ id, result })) + 1 }) + '\n')
     if (holdReply) heldReplies.set(method, { id, result })
     else setTimeout(() => emit({ id, result }), delay)
   }
@@ -161,16 +173,29 @@ createInterface({ input: process.stdin }).on('line', line => {
         loadedThreads.add(thread.id)
         save()
       }
-      const history = JSON.parse(JSON.stringify(thread))
-      if (method === 'thread/resume' && params.excludeTurns) history.turns = []
-      if (script.historyItemIds) for (const turn of history.turns) {
-        turn.items = turn.items.map((item, index) => ['userMessage', 'agentMessage'].includes(item.type)
-          ? { ...item, id: `item-${index}` } : item)
-      }
+      const history = { ...JSON.parse(JSON.stringify(thread)), turns: method === 'thread/resume' && params.excludeTurns ? [] : historyTurns(thread, script) }
       reply({ thread: history, model: thread.model, approvalPolicy: thread.approvalPolicy, approvalsReviewer: thread.approvalsReviewer,
         reasoningEffort: thread.reasoningEffort, sandbox: { type: thread.sandbox === 'read-only' ? 'readOnly' : thread.sandbox === 'danger-full-access' ? 'dangerFullAccess' : 'workspaceWrite' } })
     }
     else emit({ id, error: { code: -32000, message: 'Unknown thread' } })
+  } else if (method === 'thread/turns/list') {
+    // Codex 0.157.1: newest first unless asked otherwise, a summary of items unless asked for all of them, and
+    // opaque cursors. It reads the same session history thread/read does.
+    const thread = state.threads[params.threadId]
+    if (!thread) { emit({ id, error: { code: -32000, message: 'Unknown thread' } }); return }
+    const hasNativeLog = existsSync(join(process.env.CODEX_HOME, 'sessions', '2026', '09', '10', `rollout-2026-09-10-${thread.id}.jsonl`))
+    if (thread.turns.length === 0 && !hasNativeLog) {
+      setTimeout(() => emit({ id, error: { code: -32600, message: `thread ${thread.id} is not materialized yet; thread/turns/list is unavailable before first user message` } }), delay)
+      return
+    }
+    const turns = historyTurns(thread, script)
+    if (params.sortDirection !== 'asc') turns.reverse()
+    const start = params.cursor ? Number(params.cursor) : 0
+    const page = turns.slice(start, start + (params.limit ?? turns.length))
+    const view = params.itemsView ?? 'summary'
+    const data = page.map(turn => ({ ...turn, itemsView: view,
+      items: view === 'full' ? turn.items : view === 'notLoaded' ? [] : turn.items.filter(item => ['userMessage', 'agentMessage'].includes(item.type)) }))
+    reply({ data, nextCursor: start + page.length < turns.length ? String(start + page.length) : null, backwardsCursor: page.length ? String(start) : null })
   } else if (method === 'thread/settings/update') {
     // Codex 0.155.1 acknowledges separately from its effective-settings notification.
     const thread = state.threads[params.threadId]
@@ -252,6 +277,13 @@ setInterval(() => {
   }
   if (!thread) return
   if (action.type === 'complete') complete(thread, action.text, action.status)
+  // Another Codex process on the same session: what it does reaches the shared history, never this connection's stream.
+  else if (action.type === 'native-turn') {
+    const running = action.status === 'inProgress'
+    thread.turns.push({ id: randomUUID(), status: running ? 'inProgress' : 'completed', startedAt: Math.floor(Date.now() / 1000), items: [
+      { type: 'userMessage', id: randomUUID(), content: [{ type: 'text', text: action.text }] }, ...running ? [] : [{ type: 'agentMessage', id: randomUUID(), text: 'Native reply' }]] })
+    save()
+  } else if (action.type === 'native-rewind') { thread.turns = thread.turns.slice(0, -1); save() }
   else if (action.type === 'notify-burst') {
     process.stdout.write(action.frames.map(frame => JSON.stringify(frame) + '\n').join(''))
   }

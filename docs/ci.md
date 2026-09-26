@@ -21,7 +21,7 @@ The job cancels a superseded run on the same ref (`concurrency` with `cancel-in-
 
 - **Playwright end-to-end tests** (`npm run test:e2e`) and the widget design captures — they need a real Electron window and committed reference images captured on a developer machine.
 - **Live provider suites.** Every one of them is gated behind an explicit `SOTTO_*` environment variable (`SOTTO_CLAUDE_LIVE`, `SOTTO_GROK_LIVE`, `SOTTO_NATIVE_THREADS_LIVE`, `SOTTO_SIDE_WRITING_LIVE`, and friends). CI sets none of them and holds no credentials, so they stay skipped.
-- **Perf benchmarks.** The `tests/perf/*` files that read a real workspace skip themselves when neither `SOTTO_PERF_DATA` nor a `%APPDATA%\sotto` data folder exists. A GitHub runner has neither, so they report as skipped rather than failing. The benchmarks that build their own workload and only report timings, `claudeFramer.perf.test.ts`, `claudeSettings.perf.test.ts`, `commandReply.perf.test.ts`, `previewSend.perf.test.ts`, `screenshotTotal.perf.test.tsx`, `threadCommandLanes.perf.test.tsx` and `threadSettings.perf.test.ts`, skip themselves unless `SOTTO_PERF_BENCH=1` is set (`tests/fixtures/perfBench.ts`, which also holds the median they report). They tell a run nothing and cost it seconds, so CI never sets the switch. Two need no data and assert something other than time, so they do run: `markdownRender.perf.test.tsx` renders the same reply incrementally and whole, logs both timings, and always checks that incremental parsing processes less than a third of the characters; `detailCacheRecency.perf.test.tsx` scripts a session over the window's connection and always checks that coming back to the thread the user works in never fetches its detail again. The markdown file's elapsed-time comparison is opt-in like the other stopwatch budgets below.
+- **Perf benchmarks.** The `tests/perf/*` files that read a real workspace skip themselves when neither `SOTTO_PERF_DATA` nor a `%APPDATA%\sotto` data folder exists. A GitHub runner has neither, so they report as skipped rather than failing. The benchmarks that build their own workload and only report timings, `claudeFramer.perf.test.ts`, `claudeSettings.perf.test.ts`, `codexSendRead.perf.test.ts`, `commandReply.perf.test.ts`, `previewSend.perf.test.ts`, `screenshotTotal.perf.test.tsx`, `threadCommandLanes.perf.test.tsx` and `threadSettings.perf.test.ts`, skip themselves unless `SOTTO_PERF_BENCH=1` is set (`tests/fixtures/perfBench.ts`, which also holds the median they report). They tell a run nothing and cost it seconds, so CI never sets the switch. Two need no data and assert something other than time, so they do run: `markdownRender.perf.test.tsx` renders the same reply incrementally and whole, logs both timings, and always checks that incremental parsing processes less than a third of the characters; `detailCacheRecency.perf.test.tsx` scripts a session over the window's connection and always checks that coming back to the thread the user works in never fetches its detail again. The markdown file's elapsed-time comparison is opt-in like the other stopwatch budgets below.
 
   Run a timing benchmark by hand on an idle machine. Each prints its medians to the console; the matching note in `docs/perf/` says what they mean:
 
@@ -64,6 +64,19 @@ npx vitest run tests/integration/claudeSettingsLive.test.ts --maxWorkers=1 --dis
 
 ```sh
 SOTTO_CLAUDE_LIVE=1 npx vitest run tests/integration/claudeSettingsLive.test.ts --maxWorkers=1 --disable-console-intercept
+```
+
+## Codex newest-turn live check
+
+`tests/integration/codexNewestTurnNative.test.ts` is gated by `SOTTO_CODEX_TURNS_LIVE=1`. It starts the installed Codex app-server in a throwaway `CODEX_HOME`, so it needs no sign-in and never reads the user's own Codex threads, and it runs no model turn. On a legacy thread whose session file it fills with filler turns, it checks that `thread/turns/list` hands back the same newest turn `thread/read` does and that both see a turn written to the file from outside, which is what the newest-turn check before a Codex send rests on (ADR-0005). It then prints each request's round trip and reply size at 50, 500 and 2,000 turns. It was last run on Codex CLI 0.157.1 (`docs/perf/2026-09-26-codex-send-read.md`):
+
+```powershell
+$env:SOTTO_CODEX_TURNS_LIVE = '1'
+npx vitest run tests/integration/codexNewestTurnNative.test.ts --maxWorkers=1 --disable-console-intercept
+```
+
+```sh
+SOTTO_CODEX_TURNS_LIVE=1 npx vitest run tests/integration/codexNewestTurnNative.test.ts --maxWorkers=1 --disable-console-intercept
 ```
 
 ## Gated assertions
