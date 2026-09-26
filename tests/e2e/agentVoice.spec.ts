@@ -1,10 +1,10 @@
 import { expect, test, type Page } from '@playwright/test'
-import type { AgentCommand, AgentState } from '../../src/shared/agents'
+import type { AgentCommand, AgentCommandReceipt, AgentState } from '../../src/shared/agents'
 import type { SottoBridge, SottoWidgetBridge } from '../../src/shared/contracts'
 import { closeSotto, launchSottoWithVoice, userMessageTexts } from './support/sottoLaunch'
 import { completeVoiceJourneySetup, openVoiceJourneyAgents } from './support/voiceJourney'
 
-async function command(page: Page, request: AgentCommand): Promise<AgentState> {
+async function command(page: Page, request: AgentCommand): Promise<AgentCommandReceipt> {
   return page.evaluate(async value => {
     const bridge = (globalThis as unknown as { sotto: SottoBridge }).sotto.agents
     if (!bridge) throw new Error('Agent bridge unavailable')
