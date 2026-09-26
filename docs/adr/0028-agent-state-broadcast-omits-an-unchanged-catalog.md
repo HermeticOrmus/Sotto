@@ -56,7 +56,7 @@ save, cloned into the window and parsed there by the preload's schema on every s
 (`error`, `notice`), the evidence its caller acts on (`threadDraftPersistence` for the exact draft revision
 saved, `configuration` for the effective settings) and every other changed field whole. The model catalogs are
 the exception: `host.models` and each `host.clientHosts[].models` cross as `{ revision, omitted: true }`, naming
-their catalog revision. `AgentStateBroadcaster.receipt` encodes it with the same revision counter the broadcast
+their catalog revision. `AgentStateBroadcaster.encodeReceipt` encodes it with the same revision counter the broadcast
 uses, so there is one ordering for a catalog, not a second one for replies. A receipt records nothing as sent,
 so the next broadcast to that window is what it would have been without the receipt. The preload parses it
 with `agentCommandReceiptSchema`, which accepts a catalog only as a revision. The preload's own bridge is typed
@@ -74,8 +74,10 @@ per host. The recovered catalog is filed under the receipt's revisions, where th
 naming them finds it, and a catalog the cache still cannot name is taken from the recovery's own answer. The
 caller always gets the receipt's own fields, never the recovery's. A recovery that fails is asked once more
 before anything else, because main has already run the command and a failed reply tells the user it may not
-have. If that fails too, the catalog the window last held stands in until the next broadcast; with nothing held
-at all, the reply fails the way a lost reply does. Where the reply is committed against broadcasts is
+have. If that fails too, the reply still resolves with the receipt's own fields: the catalog the window last
+held stands in, or the one the last `get()` listed, until the next broadcast. A window that holds neither was
+never sent that catalog, so main recorded none as sent to it and the next broadcast carries it in full; until
+then that host has no models, which is what the window already showed. Where the reply is committed against broadcasts is
 unchanged: `AgentContext` still drops a reply that a broadcast overtook. The catalog revision orders only
 catalogs. Issue #306 is open; if it gives the state its own revision, the receipt carries that revision too.
 
@@ -88,8 +90,10 @@ wrapper, which still hands back a whole `AgentState`.
 
 The broadcast and the receipts advance one counter from two places with no order between them. A reply shell
 built before a catalog changed can be encoded after the broadcast of that change: it takes a new revision for
-the old content, and the next broadcast takes another for the new content. The window then reads `AGENT_GET`
-once for that reply and is sent the catalog in full once more. Nothing wrong reaches the screen, because the
+the old content, and the next broadcast takes another for the new content. The window that sent the command
+reads `AGENT_GET` once for that reply. The next broadcast then sends the catalog in full to both windows, the
+widget included, although the widget never saw the receipt: to main the catalog changed twice. Nothing wrong
+reaches the screen, because the
 recovery answers with main's current catalog. Naming the old content by its old revision instead was
 considered and not done: main cannot tell that reply from a catalog that really went back to what it was,
 such as a provider that reconnects, and a window holding the newer revision would then keep showing it.

@@ -6,12 +6,12 @@ press and every pane change sent the whole catalog to the window, where the prel
 schema before the page saw it. The broadcast had stopped resending an unchanged catalog in #286; replies were
 left whole on purpose, as a recovery path.
 
-Now `AGENT_COMMAND` answers with a command receipt. `AgentStateBroadcaster.receipt` names each catalog by its
-catalog revision, `{ revision, omitted: true }`, using the same counter as the broadcast, and leaves every
-other field of the shell whole: the outcome, the draft revision saved, the effective settings. The preload
-parses it with `agentCommandReceiptSchema`. The page's `wrapAgentBridge` puts the catalogs back from the cache
-the broadcast already fills. A window that holds another revision reads the whole state through `AGENT_GET`
-once and files the answer under the receipt's revisions. `AGENT_GET` still answers whole. ADR-0028 has the
+Now `AGENT_COMMAND` answers with a command receipt. `AgentStateBroadcaster.encodeReceipt` names each catalog
+by its catalog revision, `{ revision, omitted: true }`, using the same counter as the broadcast, and leaves
+every other field of the shell whole: the outcome, the draft revision saved, the effective settings. The
+preload parses it with `agentCommandReceiptSchema`. The page's `wrapAgentBridge` puts the catalogs back from
+the cache the broadcast already fills. A window that holds neither that revision nor a newer one reads the
+whole state through `AGENT_GET` once and files the answer under the receipt's revisions. `AGENT_GET` still answers whole. ADR-0028 has the
 amendment.
 
 The broadcaster also stops comparing the same catalog more than once. `host.models` and the selected host's
@@ -25,8 +25,9 @@ page's wrapped bridge, the preload's bridge and its schema, the `AGENT_COMMAND` 
 router and the local host service over the fixture coordinator, joined in
 `tests/fixtures/commandReceiptWindow.ts`, which the unit tests share. The host lists its own model and 608
 synthetic ones (`tests/fixtures/modelCatalog.ts`), 540 KB serialized. ADR-0028 measured the owner's real
-608-model catalog at 649 KB, so the sizes here are not directly comparable with that ADR's. The window was sent the catalog once by the broadcast first. `node:v8`'s `serialize`
-stands in for Electron's structured clone, as it did for ADR-0028. It reads only byte counts and durations.
+608-model catalog at 649 KB, so the sizes here are not directly comparable with that ADR's. The window was
+sent the catalog once by the broadcast first. `node:v8`'s `serialize` stands in for Electron's structured
+clone, as it did for ADR-0028. It reads only byte counts and durations.
 
 Medians of 40 saves after 5 warm-up saves, three runs each, on the development machine (Windows 11, Intel
 Core Ultra 9 275HX, Node v24.14.1). Other agents' builds and suites were running on it, so read them as
@@ -60,8 +61,8 @@ the first time a receipt names the new revision before the broadcast carrying it
 carries that revision in full as before, and later receipts resolve from the cache. A receipt that names an
 older revision than the window holds, because main built it before a broadcast the window already has,
 resolves from the newer catalog without a read. A reply shell built before a catalog change and encoded after
-its broadcast takes a revision of its own and costs one read and one more full broadcast; ADR-0028's
-amendment says why that is left as it is.
+its broadcast takes a revision of its own and costs one read and one more full broadcast to both windows, the
+widget included; ADR-0028's amendment says why that is left as it is.
 
 ## What was not measured here
 
@@ -84,8 +85,9 @@ sees changes. The built app was run through the Playwright specs that drive comm
   the receipt's own fields kept over the recovery's, a recovered catalog serving the next broadcast, a
   receipt naming an older revision resolved from the newer one without a read, a recovery for an older
   revision never filed over a newer one, a receipt for another host recovered on its own at the same
-  revision, a failed recovery asked once more, the held catalog standing in when both fail, and a whole
-  reply passed through.
+  revision, a failed recovery asked once more, the held catalog or the last `get()`'s standing in when both
+  fail, a reply that still resolves when the window holds no catalog at all, and a whole state from a test
+  bridge passed through.
 - `tests/unit/preload/agentStateForwarding.test.ts` checks that the preload accepts a receipt and refuses a
   catalog that is anything but a revision, a whole list included.
 

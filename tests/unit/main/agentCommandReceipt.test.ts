@@ -6,6 +6,10 @@
  * window's preload bridge, and the page's wrapped bridge that `AgentContext` reads. The broadcast is sent
  * by hand through the same broadcaster, so the window holds exactly what main recorded as sent. The
  * chain is `tests/fixtures/commandReceiptWindow.ts`, which the benchmark in `tests/perf` shares.
+ *
+ * It sits under `unit/main` although it crosses into the preload and the page, because what it pins is
+ * main's answer: the receipt `AgentStateBroadcaster.encodeReceipt` builds and the handler sends. The page's
+ * own resolution rules are tested alone in `tests/unit/renderer/agentStateCatalogs.test.ts`.
  */
 import { mkdtemp, rm } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
