@@ -1,6 +1,6 @@
 import React, { memo, useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Archive, ArchiveRestore, ChevronRight, Columns2, Folder, FolderGit2, GitBranch, Pencil, Sparkles, SquarePen } from 'lucide-react'
-import { isThreadBusy, type AgentState } from '../../../shared/agents'
+import { isThreadBusy, providerWritesShortText, type AgentState } from '../../../shared/agents'
 import { isThreadArchived } from '../../../shared/threadActivity'
 import { ThreadNameField } from './ThreadName'
 import { describeWorkingCopy, useSettleThread } from './ThreadWorkingCopy'
@@ -9,6 +9,7 @@ import { showThreads, useFinishedUnseen } from './finishedThreads'
 import { ProjectSettleAction, SidebarFrame, type SidebarMode } from './SidebarFrame'
 import { workingLabel, type ProjectFolder, type ThreadRow, type WorkspaceOrganization } from './threadFacts'
 import { THREAD_DRAG_TYPE } from './splitLayout'
+import { HostBadge, hostIdOf, listedHosts, type ListedHost } from './HostBadge'
 
 export { useAddProject } from './addProject'
 
@@ -85,7 +86,7 @@ const ThreadNavRow = memo(function ThreadNavRow({ row, current, open, busy, unse
   const branch = copy.status === 'ready' ? copy.branch : undefined
   const copyLabel = copy.status === 'error' ? 'Worktree not ready' : copy.status === 'pending' ? (copy.mode === 'independent' ? 'New worktree pending' : 'Project folder pending') : copy.mode === 'independent' ? 'Worktree' : copy.mode === 'shared' ? 'Project folder' : copy.label
   const branchName = branch ?? (copy.status === 'ready' && copy.repositoryRoot ? 'Detached HEAD' : copyLabel)
-  const copyDetails = [...new Set([row.model?.name, branchName, copyLabel].filter(Boolean))].join(', ')
+  const copyDetails = [...new Set([row.thread.hostLabel, row.model?.name, branchName, copyLabel].filter(Boolean))].join(', ')
   if (renaming) return <li className="thread-nav__row" data-current={current || undefined} data-open={open && !current ? true : undefined}>
     <span className="thread-nav__item thread-nav__item--renaming">
       <ThreadNameField title={title} label={`Rename ${title}`} className="thread-nav__rename tt-focusable"
@@ -108,7 +109,7 @@ const ThreadNavRow = memo(function ThreadNavRow({ row, current, open, busy, unse
         <span id={statusId} className="thread-nav__status" data-state={row.state} data-waiting={row.waitingFor ?? undefined} data-unseen={finished || undefined} data-disconnected={row.connected ? undefined : true} title={status + (row.connected ? '' : ' · Disconnected')}><span className="tt-visually-hidden">{row.provider}, </span>{status}{row.connected ? '' : ' · Disconnected'}</span>
       </span>
       <span className="thread-nav__branch" data-working-copy-state={copy.status} title={branchName !== copyLabel ? `${branchName} · ${copyLabel}` : copyLabel}>
-        <WorkingCopyIcon size={12} aria-hidden="true" />
+        <WorkingCopyIcon size={12} aria-hidden="true" />{row.thread.hostLabel ? <span>{row.thread.hostLabel} · </span> : null}
         <span className="thread-nav__branch-name">{branchName}</span>{branchName !== copyLabel ? <span className="thread-nav__copy-kind"> · {copyLabel}</span> : null}
       </span>
     </button>
@@ -116,7 +117,7 @@ const ThreadNavRow = memo(function ThreadNavRow({ row, current, open, busy, unse
       {besideAvailable && !open ? <button type="button" className="thread-nav__action tt-focusable" aria-label={`Open ${title} beside`} title="Open beside" onClick={() => panes.onOpenBeside(row.thread.id)}><Columns2 size={16} aria-hidden="true" /></button> : null}
       {!archived ? <button type="button" className="thread-nav__action tt-focusable" aria-label={`Rename ${title}`} title="Rename thread" onClick={() => setRenaming(true)}><Pencil size={16} aria-hidden="true" /></button> : null}
       {/* A name the user typed is never written over, so this thread's own name is the one offered for rewriting. */}
-      {!archived && row.thread.titleSource !== 'user'
+      {!archived && row.thread.titleSource !== 'user' && providerWritesShortText(row.thread.providerId)
         ? <button type="button" className="thread-nav__action tt-focusable" aria-label={`Regenerate title for ${title}`} title="Regenerate title" disabled={busy} onClick={() => void command({ type: 'regenerate-thread-title', threadId: row.thread.id })}><Sparkles size={16} aria-hidden="true" /></button>
         : null}
       {row.settledBy === null
@@ -133,8 +134,10 @@ const ThreadNavRow = memo(function ThreadNavRow({ row, current, open, busy, unse
 const folderKey = (section: Section, folderId: string): string => `${section}:${folderId}`
 
 /** One project folder and its rows. Memoised for the same reason a row is: its folder is shared across updates. */
-const FolderView = memo(function FolderView({ folder, section, panes, activeProjectId, expanded, unseen, liveClock, onToggle, onOpen, onNewThread, command, globalLaneBusy, busyThreadIds }: {
+const FolderView = memo(function FolderView({ folder, section, panes, activeProjectId, expanded, unseen, liveClock, onToggle, onOpen, onNewThread, command, globalLaneBusy, busyThreadIds, host }: {
   readonly folder: ProjectFolder; readonly section: Section; readonly panes: PaneActions; readonly activeProjectId: string | null
+  /** The host the project is on, once a remote host is connected; its badge tells same-named projects apart. */
+  readonly host?: ListedHost | undefined
   readonly expanded: boolean; readonly onToggle: (key: string) => void; readonly onOpen: (threadId: string) => void
   readonly unseen: ReadonlySet<string>; readonly liveClock: boolean
   readonly onNewThread: (projectId: string) => void; readonly command: Command
@@ -150,9 +153,9 @@ const FolderView = memo(function FolderView({ folder, section, panes, activeProj
     <div className="thread-folder__head">
       {/* The toggle includes the visible count in its accessible name, with the project title first. */}
       <button type="button" className="thread-folder__toggle tt-focusable" aria-expanded={expanded} aria-controls={listId} onClick={() => onToggle(folderKey(section, folder.id))}
-        aria-label={`${folder.title} ${plural(folder.rows.length, 'thread')}`} aria-describedby={!expanded && (folder.working || folder.needs) ? indicatorsId : undefined} title={project?.path}>
+        aria-label={`${folder.title}${host ? ` on ${host.name}` : ''} ${plural(folder.rows.length, 'thread')}`} aria-describedby={!expanded && (folder.working || folder.needs) ? indicatorsId : undefined} title={project?.path}>
         <ChevronRight size={12} aria-hidden="true" className="thread-folder__chevron" />
-        <Folder size={14} aria-hidden="true" /><span className="thread-folder__title">{folder.title}</span><span className="thread-folder__count" aria-hidden="true">{folder.rows.length}</span>
+        <Folder size={14} aria-hidden="true" /><span className="thread-folder__title">{folder.title}</span>{host ? <HostBadge host={host} /> : null}<span className="thread-folder__count" aria-hidden="true">{folder.rows.length}</span>
         {!expanded ? <Indicators id={indicatorsId} working={folder.working} needs={folder.needs} /> : null}
       </button>
       {project !== undefined ? <span className="thread-folder__actions">
@@ -191,10 +194,9 @@ export function ThreadSidebar({ state, command, organization, query, liveClock =
   // One object for the whole list, rebuilt only when a pane action actually changes: every row compares it.
   const panes = useMemo<PaneActions>(() => ({ currentThreadId, openThreadIds, onOpenBeside, onDragThread }),
     [currentThreadId, openThreadIds, onOpenBeside, onDragThread])
-  // What this list shows is what you have seen, and once the list is gone nothing is. A thread ID is opaque, so
-  // the key joins on a character one cannot contain.
-  const onScreenKey = (currentThreadId === null ? openThreadIds : [...openThreadIds, currentThreadId]).join('\n')
-  useEffect(() => { showThreads(onScreenKey === '' ? [] : onScreenKey.split('\n')); return () => showThreads([]) }, [onScreenKey])
+  // Opaque client keys can contain any separator; the list boundary is encoded explicitly.
+  const onScreenKey = JSON.stringify(currentThreadId === null ? openThreadIds : [...openThreadIds, currentThreadId])
+  useEffect(() => { showThreads(JSON.parse(onScreenKey) as string[]); return () => showThreads([]) }, [onScreenKey])
   const unseen = useFinishedUnseen()
   const searching = query.trim() !== ''
   const toggle = useCallback((key: string): void => setCollapsed(previous => {
@@ -202,9 +204,13 @@ export function ThreadSidebar({ state, command, organization, query, liveClock =
     if (next.has(key)) next.delete(key); else next.add(key)
     return next
   }), [])
+  const connections = state.connections
+  const hosts = useMemo(() => listedHosts({ connections }), [connections])
   const folderView = (section: Section) => (folder: ProjectFolder): ReactNode => {
     const key = folderKey(section, folder.id)
+    const hostId = hosts.length ? hostIdOf(folder.project) ?? hostIdOf({ id: folder.id }) ?? folder.rows[0]?.thread.hostId : undefined
     return <FolderView key={key} folder={folder} section={section} panes={panes} activeProjectId={state.activeProjectId} unseen={unseen} liveClock={liveClock}
+      host={hosts.find(item => item.hostId === hostId)}
       expanded={searching || !collapsed.has(key)} onToggle={toggle} onOpen={onOpen} onNewThread={onNewThread} command={command} globalLaneBusy={state.globalLaneBusy} busyThreadIds={state.busyThreadIds} />
   }
   const { open, settled } = organization

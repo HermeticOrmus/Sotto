@@ -4,267 +4,81 @@
 
 # Sotto
 
-**Dictation that spells your world right, with a desktop control center for your agents in development.**
+**Your coding agents in one desktop window, with dictation built in.**
 
-Sotto is a dictation app for Windows and Apple silicon Macs. Press the global shortcut, speak, press it again, and Sotto copies the transcript and optionally pastes it at the active cursor. Transcription runs on Microsoft MAI-Transcribe-2 through OpenRouter with your own API key, and your personal dictionary is sent along as spelling hints so names and product terms come back the way you write them.
+[![Latest release](https://img.shields.io/github/v/release/millZach/Sotto-releases?label=release&color=2f6f6a)](https://github.com/millZach/Sotto-releases/releases/latest)
+[![Platforms](https://img.shields.io/badge/platforms-Windows%20x64%20%C2%B7%20macOS%20arm64-2f6f6a)](#install)
+[![License: MIT](https://img.shields.io/badge/license-MIT-2f6f6a)](LICENSE.md)
 
-[![Latest release](https://img.shields.io/github/v/release/millZach/Sotto-releases?label=release&color=e8833a)](https://github.com/millZach/Sotto-releases/releases/latest)
-[![Platforms](https://img.shields.io/badge/platforms-Windows%20x64%20%C2%B7%20macOS%20arm64-2f6f6a)](https://github.com/millZach/Sotto-releases/releases/latest)
-[![Transcription](https://img.shields.io/badge/transcription-MAI--Transcribe--2%20via%20OpenRouter-2f6f6a)](#privacy-and-cost)
-[![License](https://img.shields.io/badge/license-freeware-555)](LICENSE.md)
+**[Download the latest release](https://github.com/millZach/Sotto-releases/releases/latest)**
 
-<img src="artifacts/design/baseline/listening-dark.png" alt="Sotto recording widget while listening" width="260" />
-
-**[⬇ Download the latest installer or disk image](https://github.com/millZach/Sotto-releases/releases/latest)**
+<img src="artifacts/changes-diff/changes-working-1600x1000-wide-dark.png" alt="A Claude Code thread with its changes open beside it" width="880" />
 
 </div>
 
----
+Sotto runs the Claude Code, Codex, Grok Build and Devin clients you already have, and keeps every thread in one sidebar. It is free, open source and in beta.
 
-## Why Sotto
+## What it does
 
-- 🎯 **Spells names right** — the words in your personal dictionary are sent with every request as spelling hints. In our bench that took proper-noun accuracy from 56% to 100% on the same audio.
-- ⚡ **One shortcut, anywhere** — a global hotkey works in any app. Sotto always copies the transcript to the clipboard and can paste it at your cursor automatically.
-- 🗣️ **One transcription model, no setup** — Microsoft MAI-Transcribe-2 through OpenRouter. Paste an API key once; there is nothing to download, pick or tune.
-- ✨ **Optional AI cleanup** — punctuation, fillers, self-corrections and spoken lists, using the same OpenRouter key, with a silent fallback to the raw transcript when the network is slow.
-- 🔒 **No account, no telemetry** — Sotto has no analytics or crash upload. Audio is never written to disk, and transcript history stays on this computer.
-- 💸 **Free app, pay-as-you-go transcription** — no Sotto subscription. OpenRouter bills about a cent per hundred short dictations.
+- **One sidebar for every agent.** Each provider keeps its own sign-in and models. Sotto keeps the threads.
+- **You answer every request.** Anything a thread's permissions don't already allow waits for you.
+- **Tools beside each thread.** A browser, a terminal, the thread's files and its changes.
+- **Codex's Computer Use.** In a Codex thread set to Full access, with the Codex app open, Codex can operate the apps on your computer.
+- **Git in one press.** Commit, push and open a pull request. Leave the message empty and the agent writes it.
+- **Worktrees for parallel work.** Give a thread its own branch and folder, and remove the folder when you're done.
+- **Dictation anywhere.** Press `Ctrl+Shift+Space` (`⌃⇧Space` on a Mac), speak, and press it again. The text is copied and can be pasted at your cursor.
 
-Sotto was formerly named TalkType; version 3.0.0 renamed the app and its visual identity. On first launch, Sotto automatically migrates settings and history from an existing TalkType installation.
+Thread drafts save automatically while you type, including while other threads are working.
 
-## Requirements
+## Install
 
-### Windows
+You need Windows 10 or 11 (x64), or an Apple silicon Mac with macOS 12 or newer.
 
-- Windows 10 or Windows 11, x64
-- A working microphone and permission for desktop apps to use it
-- An OpenRouter API key from [openrouter.ai/keys](https://openrouter.ai/keys) and an internet connection while dictating
-- At least 1 GB of free space during installation for the installer, temporary extraction, the app and safe working headroom
+**Windows.** Run `Sotto Setup <version>.exe`. At least 1 GB of free space during installation is needed. The desktop shortcut is optional and unchecked by default. The installer isn't code-signed, so Windows may show a SmartScreen warning.
 
-### macOS
+**macOS.** Drag Sotto into Applications. The app isn't notarized, so the first launch is blocked: open **System Settings → Privacy & Security** and press **Open Anyway**, or run:
 
-- macOS 11 (Big Sur) or newer — TODO(mac-bringup): replace with the LSMinimumSystemVersion read from the built bundle
-- Apple silicon (arm64) only — Intel Macs are not supported
-- An OpenRouter API key and an internet connection while dictating
-- At least 1 GB of free space while the disk image is mounted and copied into Applications
-- A working microphone and microphone permission for Sotto in System Settings → Privacy & Security → Microphone
-- Automation and Accessibility permission for Sotto if you want automatic paste; without them Sotto still copies every transcript to the clipboard
+```bash
+xattr -dr com.apple.quarantine /Applications/Sotto.app
+```
 
-Node.js 22 or newer is needed on either platform only when developing from source.
+Then install and sign in to at least one agent client, and connect it in **Settings → Providers**. For dictation, add an [OpenRouter API key](https://openrouter.ai/keys) in Settings.
 
 ## Privacy and cost
 
-The Tools browser contacts the HTTP(S) pages you open, including local development servers, and the subresources those pages request. Browser agents use Sotto's own pages through thread-scoped tools; providers that require MCP connect to an authenticated endpoint on `127.0.0.1` on this computer. When you authorize browser work or send selected page context, its screenshots and relevant page data go to that thread's provider under the provider's data policy. Sotto keeps browser-task evidence and page grants in memory, never in operational logs. Explicitly attached/sent material follows the existing draft and history controls. See [the browser decision](docs/adr/0020-sotto-owned-browser-tasks.md).
+Sotto has no account of its own and collects nothing about you: no analytics, no crash reports. Your data leaves your computer only when a feature you use needs it, and only to that feature's service:
 
-Dictation audio is uploaded to OpenRouter and transcribed by Microsoft MAI-Transcribe-2 only while you dictate. Your personal dictionary words travel with each request as spelling hints, and the text comes back. Nothing is transcribed on this computer, so Sotto needs your OpenRouter key and a network connection to dictate; when either is missing, Sotto says so instead of transcribing elsewhere. OpenRouter charges your balance at the model's published audio rate (about $0.10 per hour of audio at the time of writing). Read [OpenRouter's privacy policy](https://openrouter.ai/privacy) for what it and its providers retain.
+- **Dictation** goes to OpenRouter (`openrouter.ai`) on your key, where Microsoft MAI-Transcribe-2 transcribes it. Audio is never saved to disk. OpenRouter charges about $0.10 per hour of audio.
+- **Optional AI cleanup** sends the finished text to OpenRouter too. It is off until you turn it on.
+- **Your threads** go to the agent's own provider, under that provider's account and data policy.
+- **Sotto's browser** is used by agents without asking, by default: they can open pages, click and type there, including on sites you are signed in to in it. Turn that off in Settings → Application, or stop it for one thread in Tools → Browser.
+- **Git** talks to your own remotes, including a background fetch every 30 seconds while the window is in front (you can change or turn it off in Settings → Git), and to GitHub through `gh` on your own sign-in for pull requests.
+- **Update checks** ask GitHub for new Sotto versions (Windows) and `registry.npmjs.org` for new agent client versions. Both can be turned off.
+- **Only if you use them:** `api.openai.com` and `api.x.ai` for optional reasoning and reply voices, `open-vsx.org` (with `openvsxorg.blob.core.windows.net` and `openvsx.eclipsecontent.org`) for themes, `huggingface.co` for the natural voice download, SSH hosts you add, and pages you open in Sotto's browser.
 
-The iPhone client, in development, reaches a Sotto host only through your private Tailscale HTTPS address; the host's listener stays on its own loopback address behind Tailscale Serve. It pairs with a code shown on the host, and pairing does not approve permission requests. Tailscale carries that traffic under its own account and policies.
+Dictation history stays on your computer, and you can turn it off. Keys are kept in your operating system's credential store.
 
-Sotto has no analytics or crash upload. Dictation audio is never persisted. Transcript history is local, optional, bounded, searchable, and clearable.
+The iPhone app, in development, talks only to your own Sotto host, through your private Tailscale address. It looks the host's name up through Tailscale's own name service on the phone, pairs with a code the host prints, and never answers a permission unless you have allowed it on the host.
 
-Devin CLI uses your native Devin account and its separate billing, data policies, local session storage, and usage analytics. Keep local history controls only Sotto's copy; it does not erase or disable Devin's records. Review your native account's training and retention controls. The tested native account route contacts server.codeium.com for the service and o4507463137361920.ingest.us.sentry.io for provider telemetry. Devin starts disabled. Its tested Windows baseline is CLI 3000.10.31; Apple silicon verification is still pending. See the [Devin data-policy decision](docs/adr/0017-devin-native-provider-data-policies.md).
+## Build from source
 
-Generated thread titles also enable names for new worktree branches. With an OpenRouter key and Keep local history on, the writing model receives the first prompt alone, capped at 2,000 characters, to name a new worktree's temporary branch. It uses the same key and model as Sotto's other short writing; no request is made for a shared project folder or an existing worktree. Naming failure leaves the temporary name and the turn continues. Turn off Generated thread titles to disable both kinds of automatic naming. Choosing an origin branch under Start from for a new worktree fetches that branch from the project's configured Git origin before setup; Git contacts that remote using its existing authentication. The worktree cleanup rule "when its pull request is merged" asks GitHub once an hour, through the `gh` command and its own sign-in, whether each candidate branch's pull request is merged; the other rules read only the local repository and contact nothing. All of them are off until you turn one on.
+With Node.js 24:
 
-Automatic update checks are on by default. Shortly after launch and then every few minutes, the installed Windows app asks the GitHub releases page whether a newer version exists, which means GitHub sees an ordinary web request from your computer: IP address, time, and the version you are running. No audio, transcripts, settings, or identifiers are sent. When a release is found, the update control at the end of the sidebar foot offers it: one press downloads it, the next press asks before restarting into the installer, and nothing is installed behind your back when you quit. The whole check can be turned off under Settings → Updates, and "Check for Updates…" in the tray menu (the application menu on macOS) runs one on demand.
-
-Client update checks are on by default. When a provider connects, and at most once an hour for each one, Sotto asks the npm registry (registry.npmjs.org) which version that client publishes: Claude Code, Codex and Grok Build. The request carries a package name and nothing else, and npm sees an ordinary web request from your computer. Devin is never asked about, because it ships inside the Devin app and updates itself. When a client is behind, a card in the bottom-right corner names the installed and published versions, and one press installs it the way that client installs: `npm install -g` for a package npm owns, or the client's own updater when npm does not own it. The provider disconnects first, because a running client cannot be replaced and a turn in flight would be lost, and reconnects when the update finishes. A provider with a thread working says so and waits for you to say "Update anyway". If the installer finishes but the client still reports its old version, because another window is holding it open, Sotto says that rather than calling it updated. An install Sotto does not recognise shows the command to run instead of a button. Turn the whole check off with "Check for client updates" in Settings → Providers, which also carries each client's installed version and a Check again press.
-
-Optional AI cleanup is off by default. When you enable it, the finished transcript (never audio) is sent to OpenRouter with the same key for punctuation and self-correction cleanup. If the network is slow or offline, Sotto delivers the raw transcript instead. Optional agent control also sends the prompts you submit to the connected harness and, when configured, sends assignment text and relevant thread context to your selected reasoning provider. Agent replies default to Grok Altair, which sends reply text to xAI using a separately saved xAI API key. Kokoro Heart is a lower-cost choice that sends reply text through OpenRouter using the existing OpenRouter key. Voice previews incur the same provider usage charges; neither option silently falls back to another provider. The optional natural voice is generated on this computer after a one-time voice download. Provider usage is billed separately from Sotto access. Credentials are encrypted using the operating system credential store and are not returned to the UI.
-
-## iPhone client (development)
-
-The native iOS client lives in `apps/ios` and needs a Sotto host running on a machine you own (#181). Install Tailscale on the iPhone and configure Tailscale Serve on the host machine to reach the host's fixed loopback port. On the host, from the extracted host folder, request a code with `node host/index.js --data /path/to/sotto-data --pairing-code`, then enter the private HTTPS address and the code on the iPhone. The first version reads existing threads, replies, interrupts and answers requests explicitly. Native build, signing, real-device verification and TestFlight upload are separate steps; source and HTML design previews are not an installed iPhone app. See [the iOS client's README](apps/ios/README.md).
-
-## Agent control center (development beta)
-
-Codex model, effort and permission changes use its native settings update and wait for confirmation. An interrupted change does not disconnect the provider. If Codex cannot confirm it, the affected thread asks you to choose its settings again before sending. Other threads remain available; reconnecting does not replay the settings change.
-
-The **Agents** view coordinates threads running in installed Codex, Claude Code, Grok Build and Devin clients, collects prompts until you say **“send it,”** and supervises only the threads you assign. It queues questions one at a time and yields a thread to manual control when you send directly in the native client. Connect clients independently in **Settings → Providers** and choose a model for each thread. The model chip opens a two-column menu: the connected providers as a rail of marks down the left, and that provider's models on the right under a search line. The permissions chip beside it lists what a thread may do without asking; on Devin it lists Devin's own modes, each saying what Sotto will still ask you about under it. A model is listed under the fullest name its provider gives it, version and all, and the one the provider recommends stays at the top. **Settings → Agents**, directly below Providers, configures Sotto's separate coordinator inline for deep reasoning and thread management. The floating widget retains click-to-dictate and dragging. In a thread composer, open the effort chip to slide between the model’s supported reasoning levels; each level says what it costs. Release to choose, or use the wheel, the arrow keys, Home, End or the digits, and **Default** returns to the model’s own level. The level you choose shows at once and the card stays usable while it is saved, so you can keep moving; the provider has the last word, and a change it will not take goes back to the level you were on and says the change could not be confirmed. At the model’s highest level the word, the chip and the composer’s outline take the **Effort color** chosen in **Settings → Appearance** (Ember, Cyberpunk, Rainbow, Aurora, Plasma or Theme accent), and reaching it plays a short wash of that color; reduced motion shows the finished state. Claude’s **Add Ultrathink to prompt** puts a visible instruction in the current draft without changing effort or permissions. Ultracode workflow orchestration is not currently exposed in Sotto.
-
-Model questions with choices appear above the thread's message bar. Pick an answer or type in **Write my own answer**, then press **Send answer**. The model's suggested option is marked **(recommended)** when it supplies one; nothing is selected for you. Enter adds a line to a custom answer. Escape collapses the question, and reopening it keeps your answer. Prepared choices also survive restarting Sotto. Long forms scroll inside the panel, while your message draft stays separate. In a very short split pane, collapse the question to return to reading the thread. Pending permissions and saved-answer recovery remain reachable by scrolling the pane. Questions without supplied choices keep their text-answer path.
-
-A thread's messages and retained activity are Sotto's own record, kept in `threads.sqlite` in the app's data folder rather than rebuilt from the provider each time Sotto starts. A thread pane opens on its newest ten turns; press **Show earlier messages** above the oldest one to read further back. A provider session starts when you open or send to a thread, not at connect, and one left idle for thirty minutes is stopped until the next time it is needed. With **Keep local history** off, no message text or activity output is written to disk; turning it off removes the text already written, and what was not kept cannot be recovered. See [ADR-0016](docs/adr/0016-sotto-owned-history-on-an-event-store.md).
-
-This is an unreleased development feature. Native clients retain their own subscription sign-in and model catalogs. Wake control requires separately supplied compatible local model/runtime files; their distribution, real microphone acceptance, and macOS live checks remain release gates. Production sign-in, checkout, and billing webhooks are not deployed. Until a membership service is configured, every build, installed or unpackaged, labels access **Private beta** and allows agent actions; that is not a paid entitlement.
-
-Paste a screenshot into a thread's prompt, drag it in, or choose **Attach screenshots**. Codex models that accept images and Claude Code models support screenshots; text-only models keep the control unavailable. Send an image on its own or alongside text, with up to eight images, 10 MB per image and 20 MB total. Grok Build currently cannot receive screenshots through its native client.
-
-Read the [agent setup and behavior guide](docs/agent-control.md), [implementation evidence and remaining gates](docs/verification/issue-9-implementation.md), and [membership service contract](docs/verification/issue-9-membership-service.md) before using or distributing this feature.
-
-When Claude Code reports an active monitoring task, a small pixel creature walks above the composer with a magnifying glass and the task name. It appears immediately for a confirmed watch, including a brief one, and leaves when the watch ends, the thread disconnects, or your answer is needed. Ordinary commands and unattended background processes do not trigger it. Reduced motion holds a still inspection pose. Codex, Grok Build and Devin stay hidden until their native events can confirm the same lifecycle.
-
-When one command, tool call or subagent has held a thread for twenty seconds or more, the same creature stands there instead with an hourglass, showing what is running and how long it has run. It reads the thread's own activity rather than any one provider's events, so it is not tied to Claude the way the monitoring creature is; it appears on Claude Code, Codex, Grok Build and Devin threads alike. It says only that time is passing: nothing is being watched on your behalf, and nothing is approved. A confirmed monitoring task takes the space instead, and a pending question or permission clears it, as before. Reduced motion holds a half-run glass.
-
-The Threads sidebar keeps each thread’s provider, status and last activity beneath its project. Drag its right edge to resize it; a wider sidebar reveals the branch, model and working copy. Collapse sidebar makes more room for the conversation, and Expand sidebar restores the width you chose. With the divider focused, arrow keys resize it, Home and End choose the limits, and a double-click resets it. Creating a new thread in a settled project returns the folder to the active sidebar with only the new thread; older threads stay in Settled.
-
-Hovering a message or a finished reply shows a copy control at its top corner. One press copies it as Markdown, so code blocks, lists and tables paste intact somewhere else. Right-click the control, or press Shift+F10 with it focused, to copy as plain text instead. A reply still being written has no copy control, and each code block keeps a copy button of its own.
-
-You can create a thread from the Threads page while another thread has a saved coordinator draft. The draft stays with its original thread, including while the voice coordinator is hidden for the beta.
-
-New threads inherit the native agent and model selected in **Settings → Agents**, including its reported default model when no model is selected. An unavailable selection waits until it connects or you choose another model in **Thread options**. Earlier separate defaults for new threads no longer override Agents. With no native agent selected (Not configured or an API account), Sotto starts with an available native thread provider.
-
-New threads use the **Project folder** by default, including its uncommitted edits. Threads in that folder share files and branch; choose **New worktree** for independent parallel work. Choose **New worktree** and a **Start from** source to use either an origin branch fetched on first send or a local branch’s committed files. Uncommitted project edits stay in the project folder. Choose **Existing worktree** to reuse a folder. **Thread options** holds the optional name, model, reasoning and permissions. Before that send, change the choice in the thread's working-copy control. Settings under Application sets the global default; expand **Project defaults** there to override it for a project. Existing threads keep their folders and unfinished work.
-
-The branch label follows the actual checkout. A shared project folder that changes branches can show a dismissible notice while you draft; sending continues on the current branch. **Restore branch** switches back by your choice, asking first about uncommitted changes. Worktree-backed threads follow their branch without that notice.
-
-A worktree is a full checkout, and an agent that installs dependencies in it can leave a gigabyte or more behind. You can give the folder back: **Remove worktree** in the thread's working-copy control removes the folder and keeps its branch, and settling a worktree-backed thread asks whether to remove its worktree too. Sending to the thread again puts the folder back on that branch. A folder with uncommitted changes is removed only after you confirm that they are lost. Settings under Application also offers rules that remove a clean worktree on their own: after it has been idle for a chosen number of days, when its thread is settled, when its commits are all in the repository's default branch, or when its pull request is merged. Every rule is off unless you turn it on; none of them touches uncommitted work or a folder holding anything but installed dependencies in its ignored files.
-
-While a thread is running, **Steer now** beside a queued message sends that message into the current turn when the provider supports steering. The rest of the queue and any newer composer draft stay in place. An unconfirmed message cannot be steered again; use **Check again** to reconcile its delivery.
-
-Open **Tools → Agents** in a thread to see its reported subagents. Each row shows the task, model when reported, status and elapsed time when known. Open a row for its task and result, including earlier assignments when an agent is reused. Children appear under their reported parent. **Load earlier agents** reads older entries without loading the whole history at once.
-
-A small dot above-left of the Tools icon means agents are working in the thread Tools follows, including a pinned thread. Opening Tools keeps the tab you last used. After a disconnect or restart, **Last seen working** means current activity has not been confirmed; the clock and dot wait for fresh provider evidence. Finished agents remain in local history independently of the transcript's activity limit. **Keep local history** controls whether this roster and its task text are saved. Turning it off erases saved tasks and results while unfinished agents keep their status and generic task labels. If you turn it back on, erased assignments stay text-free, including later results; fresh assignments are saved again.
-
-Codex, Claude Code and Grok can use the browser in **Tools** to inspect and check a page. A corner thumbnail shows the active task; click it to open that same page without changing your conversation. **Pause** stops further browser actions, while dismissing the thumbnail leaves the work running. Open, navigation, click and typing requests wait for your one-time answer. Pages you open yourself must be shared before an agent can observe them.
-
-Select an element or region, add a comment, and attach it to the thread's editable draft. Finished tasks retain observed steps, screenshots and unchecked cases for the app session. Image attachments depend on the provider's capabilities. Devin's pinned native client does not support the Sotto browser connection, so its browser is available for manual use and draft feedback only. See [browser tasks](docs/agent-control.md#browser-tasks-in-tools) for details.
-
-## Install and first run
-
-### Windows
-
-Run the `Sotto Setup <version>.exe` installer and choose the per-user installation folder. The desktop shortcut is optional and unchecked by default; the installer always creates a Start Menu shortcut. Uninstalling removes either shortcut but preserves settings and history by default so an accidental uninstall does not silently destroy local data.
-
-Upgrading from TalkType: because the application identity changed in 3.0.0, Sotto installs alongside TalkType instead of replacing it. Your data migrates automatically the first time Sotto starts; uninstall TalkType afterward from Windows Settings → Apps.
-
-Locally built artifacts are not code-signed because no Windows signing certificate is stored in this repository. Windows may therefore show an **Unknown publisher** or SmartScreen prompt. A public release should be Authenticode-signed by its distributor without changing application behavior.
-
-### macOS
-
-1. **Copy the app to Applications.** Open `Sotto-<version>-arm64.dmg` and drag **Sotto** onto the **Applications** shortcut in the same window, then eject the disk image and launch Sotto from Applications. Do not run Sotto from the mounted image: macOS App Translocation launches downloaded apps from a randomized read-only path, which changes the app location on every launch and makes permission grants and settings unreliable.
-
-2. **Allow the unsigned build to open.** Sotto is ad-hoc signed but has no Apple Developer signature, so the first launch is refused with a message such as *"Sotto" is damaged and can't be opened* or *macOS cannot verify that this app is free from malware*. Open **System Settings → Privacy & Security**, scroll to the Security section, and click **Open Anyway** next to the message about Sotto, then confirm and launch Sotto again. Use this path first: macOS 15 and newer no longer offer the old Control-click → Open bypass for this case. As an alternative, clear the quarantine flag in Terminal and launch normally:
-
-   ```bash
-   xattr -dr com.apple.quarantine /Applications/Sotto.app
-   ```
-
-3. **Grant the permissions Sotto asks for.** The first dictation asks for microphone access. The first automatic paste asks for Automation ("Sotto wants to control System Events") and needs Sotto enabled in **System Settings → Privacy & Security → Accessibility** as well. Denying or missing either grant never loses a transcript: Sotto shows **Copied — paste manually** and leaves the complete text in the clipboard, and automatic paste starts working as soon as both grants are in place.
-
-4. **Expect the permission prompts again after every update.** macOS keys these grants to the app's code signature, and an ad-hoc signed build gets a fresh identity on every rebuild. After installing a new version, macOS treats Sotto as a new app and asks for microphone, Automation, and Accessibility again; a stale entry may need to be removed from the list before the new one takes effect. This stops once Sotto ships Developer ID-signed builds.
-
-### First run
-
-First-run setup explains what leaves the computer, tests microphone access, takes your OpenRouter API key (you can add it later in Settings), and shows the active shortcut and safe paste-test field. The default global shortcut is `Ctrl+Shift+Space` on Windows and `⌃⇧Space` (the literal Control key) on macOS. Press it once to start and again to stop and transcribe. `Escape` cancels an active session.
-
-Sotto closes to the Windows notification area or the macOS menu bar. Use that menu to show the window, start or stop dictation, toggle automatic paste, or quit completely. On macOS the Dock icon appears only while the Sotto window is open; the menu-bar icon is always there.
-
-## Settings
-
-- Dictation: microphone, global shortcut, recording limit, local sound cues, and streaming transcription so long dictations finish almost immediately after you stop
-- Transcription: MAI-Transcribe-2 through OpenRouter (the only model), your OpenRouter API key with a verify button, language, and conservative whitespace formatting
-- Cleanup: optional AI cleanup with quality tiers and the personal dictionary that also feeds transcription spelling hints
-- Output: mandatory clipboard safety copy, optional automatic paste, paste delay, and success-message duration
-- Updates: the version you are running, an automatic GitHub release check that is on by default and can be turned off, and a manual check (the update control in the sidebar foot, the tray menu and the macOS application menu run the same check)
-- Application and privacy: launch at login, start minimized, local history, retention, clear history, and reset settings
-
-Automatic paste is best effort. Windows blocks synthetic input into elevated applications, password fields, protected desktops, and some custom editors. macOS blocks it in secure input fields and until both the Automation and Accessibility grants exist. When paste is rejected, Sotto shows **Copied — paste manually** and leaves the complete text in the clipboard. If a Windows target app is running as administrator, either paste manually or run both apps at the same integrity level.
-
-## Development
-
-```powershell
+```sh
 npm ci
 npm run runtime:verify
 npm run dev
 ```
 
-The ONNX WASM runtime that powers the optional natural voice is represented by a hash-locked manifest. If a clean source checkout does not contain its large files, prepare them once with network access:
+`npm run package:win` and `npm run package:mac` build the installers. Each packaging command automatically verifies the source runtime before packaging.
 
-```powershell
-npm run runtime:prepare
-npm run runtime:verify
-```
+## More
 
-Transcription itself needs no local assets: run the app, paste an OpenRouter key in Settings, and dictate.
-
-The same commands run in Terminal on macOS.
-
-## Test matrix
-
-```powershell
-npm run lint
-npm run typecheck
-npm test
-npm run test:e2e
-npm run runtime:verify
-```
-
-Unit and integration tests cover settings recovery, history privacy, audio math and lifecycle, the OpenRouter transcription request and its failure reasons, runtime integrity, IPC validation, hotkeys, clipboard-before-paste output, startup, tray, window security, transcription orchestration, and widget synchronization. Electron end-to-end tests use an admitted non-packaged boundary with deterministic in-memory microphone, shortcut, clipboard, paste, startup, tray, and transcription adapters. They cover onboarding, registered-hotkey dictation, in-app paste, history on/off, theme and settings reload, hotkey conflict, microphone denial recovery, silence, paste fallback, hide-to-tray, single-instance behavior, and transcription failure. Widget visual tests verify ten 420x92 light/dark state images and transparent corners.
-
-The deterministic boundary is rejected in packaged builds and accepts calls only from the trusted main renderer. It never logs transcript text or PCM.
-
-Every push to `main` and every pull request against it runs typecheck, lint, `vitest run` and the third-party notices check on a Windows runner (`.github/workflows/ci.yml`). End-to-end tests, live provider suites and packaging stay local. A separate macOS job tests and builds the native iOS client. See the [continuous integration guide](docs/ci.md) for what each step does and how to read a failed check.
-
-## Build Windows artifacts
-
-```powershell
-npm run package:dir
-npm run package:win
-```
-
-Artifacts are written to:
-
-- `release/win-unpacked/Sotto.exe` — unpacked x64 application
-- `release/Sotto Setup <version>.exe` — assisted, per-user x64 NSIS installer
-
-Brand assets (`build/icon.png`, `build/icon.ico`, `build/installer-sidebar.bmp`) are generated from the SVG masters in `build/` with `node scripts/generate-brand-assets.mjs`.
-
-The packaged `resources` directory contains `runtime/`, `README.md`, and `THIRD_PARTY_NOTICES.md`. Each packaging command automatically verifies the source runtime before packaging and verifies the packaged runtime, notices, bridge and worklet afterward.
-
-## Build macOS artifacts
-
-```bash
-npm run package:dir:mac
-npm run package:mac
-```
-
-Artifacts are written to:
-
-- `release/mac-arm64/Sotto.app` — unpacked arm64 application bundle
-- `release/Sotto-<version>-arm64.dmg` — arm64 disk image with an Applications shortcut
-
-Both commands verify the source runtime before packaging and the packaged runtime, notices, bridge and worklet afterward, exactly like the Windows commands. After `npm install`, a fresh clone must run `npm run runtime:prepare` once to copy the runtime files from the installed ONNX Runtime package; this preparation step needs no network access.
-
-The macOS icon is derived automatically from `build/icon.png` at packaging time; no `.icns` file is committed. The menu-bar template images (`resources/tray/sottoTemplate.png` and its `@2x` companion) come from the same `node scripts/generate-brand-assets.mjs` run as the Windows brand assets.
-
-Builds are ad-hoc signed and not notarized, so anyone installing the disk image needs the macOS install steps above. Widget design captures (`npm run design:capture`) stay Windows-only; the committed reference images are captured on Windows.
-
-## Troubleshooting
-
-### Either platform
-
-- **Shortcut conflict:** Choose another accelerator in Settings. Sotto keeps the last working shortcut if registration fails.
-- **No speech detected:** Move closer to the microphone and confirm the level meter responds. Silence does not replace the clipboard or create history.
-- **"Add your OpenRouter API key":** Transcription needs a key. Paste one under Settings → Transcription and press **Verify key**.
-- **"OpenRouter rejected the API key":** The key is wrong, revoked, or out of credit. Check it at [openrouter.ai/keys](https://openrouter.ai/keys) and verify it again in Settings.
-- **"Sotto could not reach OpenRouter":** Check the internet connection and any proxy or firewall, then dictate again. Nothing was lost except that recording.
-- **AI cleanup not applied:** Check that AI cleanup is enabled and that the computer is online. When cleanup fails or times out, Sotto delivers the raw transcript instead of failing the dictation.
-- **Terminal view could not load:** Press **Reload window** to try again. Terminals keep running and retain their output. Sotto saves thread drafts first and keeps the window open if any thread draft or question answer is not saved. Save those drafts, then try again.
-- **Window disappeared:** Sotto is probably hidden in the Windows notification area or the macOS menu bar. Open it from that icon or start Sotto again; the existing instance will be shown.
-- **A thread never asks:** The provider says a request only you can answer was declined without reaching you. Its client is not routing those requests, so it answers them itself and the thread keeps working. Nothing in the thread is lost. Answer in that client meanwhile, and check **Settings → Providers** for a client update and Sotto for its own.
-
-### Windows
-
-- **Microphone denied:** Open Windows Settings → Privacy & security → Microphone, enable microphone access and desktop-app access, then retry.
-- **No microphone found:** Connect or enable an input in Windows Settings → System → Sound, then select it in Sotto Settings.
-- **Paste did not occur:** Paste manually with `Ctrl+V`; the transcript is already in the clipboard. Elevated and protected targets commonly reject automation.
-
-### macOS
-
-- **"Sotto is damaged and can't be opened":** This is Gatekeeper refusing an unsigned download, not a corrupted file. Use **System Settings → Privacy & Security → Open Anyway**, or run `xattr -dr com.apple.quarantine /Applications/Sotto.app`, then launch Sotto again.
-- **Microphone denied:** Open System Settings → Privacy & Security → Microphone, allow Sotto, then retry.
-- **Paste does nothing:** Sotto needs both System Settings → Privacy & Security → **Automation** (Sotto allowed to control System Events) and → **Accessibility**. Enable both, then dictate again; meanwhile the transcript is already in the clipboard, so `⌘V` works.
-- **A permission prompt never reappears:** macOS remembers the denial. Reset the grants in Terminal and relaunch Sotto:
-
-  ```bash
-  tccutil reset Microphone com.sotto.desktop
-  tccutil reset AppleEvents com.sotto.desktop
-  tccutil reset Accessibility com.sotto.desktop
-  ```
-
-- **Sotto quits immediately after launching:** Check that the Mac has Apple silicon (Apple menu → About This Mac). Intel Macs are not supported and the arm64 build cannot run on them.
+- [Guide](docs/guide.md): every feature, settings, remote hosts and troubleshooting
+- [Agent control](docs/agent-control.md): providers and threads in depth
+- [iPhone app](apps/ios/README.md): building, pairing and installing the iPhone client (in development)
+- [Contributing](AGENTS.md)
 
 ## License
 
-MIT License
+[MIT](LICENSE.md). Third-party licenses are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

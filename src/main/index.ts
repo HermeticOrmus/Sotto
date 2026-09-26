@@ -1,3 +1,11 @@
+import { registerQuitDrain } from './app/quitDrain'
+import { HOSTS_CHANGED } from '../shared/hosts'
+import { parseHostEntityKey } from '../shared/clientIdentity'
+import { DesktopHostRouter } from './hosts/desktopHostRouter'
+import { DesktopHosts } from './hosts/desktopHosts'
+import { inactiveLocalHost, emptyDesktopState, requireLocalHistoryCleanup } from './hosts/inactiveLocalHost'
+import { registerHostsIpc } from './hosts/ipc'
+import { discoverSshHosts } from './hosts/sshSuggestions'
 import { DevinAcpHost } from './agents/devin'
 import { PersonalChatService } from './agents/personalChats'
 import { ChatPromptService } from './agents/chatPrompts'
@@ -5,7 +13,7 @@ import { registerChatPromptIpc } from './agents/chatPromptIpc'
 import { connectCheckpoints } from './tools/checkpointIntegration'
 import { RequestDraftService, personalRequestDraftState } from './agents/requestDrafts'
 import { registerRequestDraftIpc } from './agents/requestDraftIpc'
-import { isThreadProviderConnected } from '../shared/agents'
+import { isThreadProviderConnected, type ProviderId } from '../shared/agents'
 import { requestDraftProvider } from '../shared/requestDrafts'
 import { registerPersonalChatIpc } from './agents/personalChatIpc'
 import { PERSONAL_CHAT_STATE } from '../shared/personalChats'
@@ -67,11 +75,6 @@ import {
 import { createPasteCommands } from './output/pasteCommand'
 import { createWarmPasteAdapter } from './output/pasteHelper'
 import { TranscriptPolishService } from './llm/transcriptPolishService'
-import { ShortTextWriter } from './llm/shortTextWriter'
-import { threadTitleWriter } from './llm/threadTitle'
-import { threadBranchWriter } from './llm/threadBranch'
-import { pullRequestTextWriter } from './llm/pullRequestText'
-import { commitMessageWriter } from './llm/commitMessage'
 import { OpenRouterTranscriptionService } from './asr/openRouterTranscriptionService'
 import { createElectronUpdaterAdapter } from './updates/electronUpdaterAdapter'
 import { UpdateService } from './updates/updateService'
@@ -121,7 +124,7 @@ import { resolvePlatform } from '../shared/platform'
 import { defaultSettings, type AppSettings } from '../shared/settings'
 import { enableWasmThreadSupport } from './security'
 import {
-  loadVerifiedRuntimeSource,
+  beginRuntimeVerification,
   registerLocalAssetProtocols,
   registerModelSchemesAsPrivileged,
 } from './models/modelProtocol'
@@ -138,26 +141,18 @@ import { E2E_SNAPSHOT_CHANNEL, E2E_TRIGGER_SHORTCUT_CHANNEL, E2E_BROWSER_AGENT_C
 import { AGENT_STATE, AGENT_E2E, AGENT_THREAD_DETAIL } from '../shared/agents'
 import { AgentCredentials } from './agents/credentials'
 import { SecureSettings } from './agents/secureSettings'
-import { CodexAppServerHost } from './agents/codex'
-import { ClaudeStreamJsonHost } from './agents/claude'
-import { GrokAcpHost } from './agents/grok'
-import { ConfiguredProviderHost } from './agents/providerSwitch'
-import { WorkspaceHost } from './agents/workspace'
 import { registerSubagentIpc } from './agents/subagentIpc'
 import { SUBAGENTS_CHANGED } from '../shared/subagents'
-import { SottoThreadHost, ThreadRegistry } from './agents/threads'
-import { AgentControl, coalesceAgentStatePublishes, coalesceAgentThreadDetailPublishes } from './agents/control'
-import { TurnRecorder } from './agents/turns'
+import { coalesceAgentStatePublishes, coalesceAgentThreadDetailPublishes } from './agents/control'
+import { AgentStateBroadcaster } from './agents/agentStateBroadcast'
 import { ConfiguredAgentReasoner } from './agents/reasoning'
 import { ClaudeSubscriptionClient } from './agents/subscriptionClaude'
 import { GrokSubscriptionClient } from './agents/subscriptionGrok'
 import { CodexSubscriptionClient } from './agents/subscriptionCodex'
-import { AgentMembershipClient } from './agents/membership'
 import { registerAgentIpc } from './agents/ipc'
-import { LocalHostService, type HostService } from './agents/hostService'
+import { createAgentRuntime } from './agents/runtime'
 import { registerFilesIpc } from './files/ipc'
 import { FilesService } from './files/service'
-import { resolveFilesBinding } from './files/binding'
 import { registerToolsIpc } from './tools/ipc'
 import { registerThemesIpc } from './themes/ipc'
 import { OpenVsxClient } from './themes/openVsx'
@@ -171,7 +166,8 @@ import { TERMINALS_EVENT } from '../shared/terminalWorkspace'
 import { TerminalWorkspaceService } from './terminals/service'
 import { registerTerminalWorkspaceIpc } from './terminals/ipc'
 import { TERMINAL_WORKTREE_HOME, ThreadWorktrees, runWorktreeGit } from './agents/threadWorktrees'
-import { WorktreeCleanup, githubPullRequestMerged } from './agents/worktreeCleanup'
+import { githubPullRequestMerged } from './agents/worktreeCleanup'
+import type { ClaudeSettingsEvent } from './agents/claude'
 import { BROWSER_EVENT } from '../shared/browser'
 import { GIT_CHANGES_EVENT } from '../shared/gitChanges'
 import { NaturalSpeechModels } from './agents/speechModels'
@@ -226,6 +222,9 @@ type NativeDiagnostic =
   | 'checkpoint-unavailable'
   | 'worktree-cleanup-reclaimed'
   | 'worktree-cleanup-skipped'
+  | 'thread-auto-settled'
+  | 'thread-auto-settle-skipped'
+  | ClaudeSettingsEvent
 
 function logOperational(code: NativeDiagnostic): void {
   console.error(`[Sotto] ${code}`)
@@ -477,6 +476,11 @@ async function createRuntime(): Promise<NativeRuntimeController> {
   app.on('will-quit', () => memoryStore?.close())
   const naturalSpeechModels = new NaturalSpeechModels(join(userDataPath, 'models'))
   const resourceRoot = app.isPackaged ? process.resourcesPath : join(__dirname, '../../resources')
+  // The runtime's hash starts here so it overlaps the stores loading below rather than following them.
+  // It is awaited where it always was, before any window, and a tampered runtime still fails startup.
+  const runtimeVerification = e2eConfiguration === null
+    ? beginRuntimeVerification(join(resourceRoot, 'runtime'))
+    : null
   // Packaged builds get the brand icon stamped onto the executable by
   // electron-builder; an unpackaged run has to name the repository icon itself.
   const unpackagedIconPath = app.isPackaged
@@ -502,13 +506,6 @@ async function createRuntime(): Promise<NativeRuntimeController> {
   // off no thread stays managed across a start, and with memory off no turn retrieves preferences.
   let agentVoiceCoordinatorEnabled = startupSettings.voiceCoordinatorEnabled
   const agentMemoryEnabled = startupSettings.memoryEnabled
-  // Sotto's own short writing: thread titles, commit message drafts and pull request drafts.
-  // E2E runs never reach the network, so every title there resolves to the stand-in name.
-  const shortTextWriter = new ShortTextWriter({
-    getSettings: () => settings.forFormatting(),
-    onFailure: failure => { console.error(`[Sotto] writing-model-failed ${failure.purpose} ${failure.reason}`) },
-    ...(e2eConfiguration === null ? {} : { fetchFn: () => Promise.reject(new Error('E2E_NETWORK_DISABLED')) }),
-  })
   let e2eOpenAtLogin = false
   const startup = new StartupService(e2eConfiguration === null ? app : {
     getLoginItemSettings: () => ({ openAtLogin: e2eOpenAtLogin }),
@@ -573,81 +570,81 @@ async function createRuntime(): Promise<NativeRuntimeController> {
     throw new Error('The Devin test fixture requires absolute paths.')
   }
   const testAgentHost = e2eConfiguration === null || devinFixtureRoot ? null : new E2EAgentHost(e2eConfiguration.scenario)
+  // A Playwright journey pushes to an owned remote and "creates" its pull request through a scripted gh; development only.
+  const ghStandInScript = e2eConfiguration !== null && !app.isPackaged ? process.env['SOTTO_E2E_GH_SCRIPT'] : undefined
+  const ghStandInExecutable = process.env['SOTTO_E2E_GH_EXECUTABLE']
+  if (ghStandInScript && (!isAbsolute(ghStandInScript) || !ghStandInExecutable || !isAbsolute(ghStandInExecutable))) throw new Error('The gh test stand-in requires absolute paths.')
+  const ghStandIn = ghStandInScript && ghStandInExecutable ? { executable: ghStandInExecutable, args: [ghStandInScript] } : undefined
   // Static design fixtures include deliberately unavailable folders. Interactive E2E
   // journeys need real, profile-owned folders and exercise the production cwd checks.
   if (testAgentHost !== null && process.env['SOTTO_DESIGN_CAPTURE'] !== '1') {
     await testAgentHost.initializeWorkingFolders(join(userDataPath, 'agent-workspaces'))
   }
-  const threadRegistry = testAgentHost === null ? new ThreadRegistry(userDataPath) : null
-  const agentHost = new WorkspaceHost(testAgentHost ?? new ConfiguredProviderHost({
-    directory: userDataPath,
-    hosts: {
-      codex: new SottoThreadHost('codex', devinFixtureRoot ? new E2EAgentHost() : new CodexAppServerHost({ userDataPath }), threadRegistry!),
-      claude: new SottoThreadHost('claude', devinFixtureRoot ? new E2EAgentHost() : new ClaudeStreamJsonHost({ userDataPath }), threadRegistry!),
-      grok: new SottoThreadHost('grok', devinFixtureRoot ? new E2EAgentHost() : new GrokAcpHost(userDataPath), threadRegistry!),
-      devin: new SottoThreadHost('devin', new DevinAcpHost(userDataPath, devinFixtureRoot ? {
-        executable: devinFixtureExecutable!, args: [join(__dirname, '../../tests/fixtures/fakeDevinAgent.mjs'), devinFixtureRoot],
-        nativeConfigDirectory: join(devinFixtureRoot, 'native-config'), pollIntervalMs: 50,
-      } : {}), threadRegistry!),
-    },
-    provider: () => agentControl.configuration().provider,
-    enabledProviders: () => { const configuration = agentControl.configuration(); return configuration.enabledProviders ?? [configuration.provider] },
-    threadProvider: threadId => threadRegistry?.byThread(threadId)?.provider,
-  }), userDataPath, () => agentHistoryEnabled)
-  let browserService: BrowserService | undefined
-  const browserAgentServer = createBrowserAgentServer(() => browserService)
-  agentHost.useBrowserTools(browserAgentServer)
-  agentHost.setWorkingCopyDefaults(projectId => workingCopySettings.projectThreadWorkingCopyDefaults[projectId] ?? workingCopySettings.threadWorkingCopyDefault)
-  agentHost.setBranchNameWriter(threadBranchWriter(shortTextWriter, () => settings.forFormatting()))
-  // Reclaims worktrees only under the rules the user turned on (ADR-0019); every rule starts off.
-  const worktreeCleanup = new WorktreeCleanup({
-    host: agentHost, rules: () => workingCopySettings.worktreeCleanup,
-    ...(e2eConfiguration === null ? { pullRequestMerged: githubPullRequestMerged } : {}),
-    log: code => { logOperational(code) },
-  })
-  const turns = new TurnRecorder({
-    directory: userDataPath,
-    historyEnabled: () => agentHistoryEnabled,
-    resolveSession: id => {
-      const binding = threadRegistry?.byThread(id)
-      return binding ? { provider: binding.provider, sessionId: binding.sessionId } : undefined
-    },
-  })
-  const membership = new AgentMembershipClient({
-    configuration: () => agentControl.configuration(),
-    credentials, directory: userDataPath, openExternal: url => shell.openExternal(url),
-  })
   let openedThreadFolder: string | null = null
-  const agentControl: AgentControl = new AgentControl({
+  // T3's rule for background Git reads: the window is showing and has the focus, or had it within the last 45 seconds.
+  let windowBlurredAt = 0
+  app.on('browser-window-focus', () => { windowBlurredAt = 0 })
+  app.on('browser-window-blur', () => { windowBlurredAt = Date.now() })
+  const windowInFront = (): boolean => BrowserWindow.getAllWindows().some(window => window.getTitle() === APP_NAME && window.isVisible() && !window.isMinimized()
+    && (window.isFocused() || (windowBlurredAt !== 0 && Date.now() - windowBlurredAt < 45_000)))
+  // Personal chats start after the runtime; until they do, a client update has nothing of theirs to release.
+  const personalClients: { release?: (provider: ProviderId) => Promise<() => Promise<void>> } = {}
+  const localRuntime = startupSettings.localHostEnabled ? await createAgentRuntime({
+    directory: userDataPath, credentials,
+    releaseClient: async provider => await personalClients.release?.(provider) ?? (async () => undefined),
+    ...(app.isPackaged ? { claudeHistoryModulePath: join(process.resourcesPath, 'claude-sdk', 'sdk.mjs') } : {}),
+    settings: () => workingCopySettings, writingSettings: () => settings.get(),
+    historyEnabled: () => agentHistoryEnabled, coordinatorEnabled: () => agentVoiceCoordinatorEnabled,
+    gitStatus: { fetchIntervalMs: () => workingCopySettings.gitFetchIntervalSeconds * 1000, foreground: windowInFront, ...(ghStandIn ? { ghStandIn } : {}) },
+    openExternal: url => shell.openExternal(url),
     openThreadFolder: async path => {
       if (e2eConfiguration !== null) { openedThreadFolder = path; return }
       const error = await shell.openPath(path); if (error) throw new Error(error)
     },
-    directory: userDataPath, host: agentHost, credentials, membership,
     ...(authority === undefined ? {} : { authority }),
     ...(memoryProfile === undefined || !agentMemoryEnabled ? {} : { preferences: memoryProfile }),
-    historyEnabled: () => agentHistoryEnabled, coordinatorEnabled: () => agentVoiceCoordinatorEnabled,
-    writeThreadTitle: threadTitleWriter(shortTextWriter, () => settings.forFormatting()),
     logFailure: (code, detail) => { console.error(`[Sotto] ${code} ${detail}`) },
     bindRequestDraftDecision: (target, decisionId, answers) => requestDrafts.bindDecision(target, decisionId, answers),
-    turns,
-    reasoner: e2eConfiguration === null ? new ConfiguredAgentReasoner(() => agentControl.configuration(), credentials, {
-      claude: new ClaudeSubscriptionClient(join(userDataPath, 'reasoning', 'claude')),
-      codex: new CodexSubscriptionClient(join(userDataPath, 'reasoning', 'codex')),
-      grok: new GrokSubscriptionClient(join(userDataPath, 'reasoning', 'grok')),
-    }) : e2eAgentReasoner,
+    ...(testAgentHost === null ? {} : { host: testAgentHost }),
+    ...(devinFixtureRoot ? { providers: {
+      codex: new E2EAgentHost(), claude: new E2EAgentHost(), grok: new E2EAgentHost(),
+      devin: new DevinAcpHost(userDataPath, {
+        executable: devinFixtureExecutable!, args: [join(__dirname, '../../tests/fixtures/fakeDevinAgent.mjs'), devinFixtureRoot],
+        nativeConfigDirectory: join(devinFixtureRoot, 'native-config'), pollIntervalMs: 50,
+      }),
+    } } : {}),
+    ...(e2eConfiguration === null ? {} : { reasoner: e2eAgentReasoner }),
+    worktreeCleanup: { ...(e2eConfiguration === null ? { pullRequestMerged: githubPullRequestMerged } : {}), log: code => { logOperational(code) } },
+    claudeSettingsLog: event => { logOperational(event) },
+  }) : await inactiveLocalHost(userDataPath)
+  const { agentHost, agentControl, threadRegistry, turns, hostService } = localRuntime
+  let browserService: BrowserService | undefined
+  const browserAgentServer = createBrowserAgentServer(() => browserService)
+  agentHost.useBrowserTools(browserAgentServer)
+  // The runtime builds the worktree cleanup (ADR-0019). Only the local host has worktrees on this
+  // computer; with it off the inactive host's cleanup does nothing, and no terminal check is wired.
+  const worktreeCleanup = startupSettings.localHostEnabled ? localRuntime.worktreeCleanup : null
+  const hostRouter = new DesktopHostRouter(() => emptyDesktopState(agentControl.get().hostId))
+  if (startupSettings.localHostEnabled) hostRouter.add({
+    hostId: agentControl.get().hostId!, name: 'This computer', kind: 'local', service: hostService,
+    detail: id => agentControl.threadDetail(id), preview: request => agentControl.attachmentPreview(request),
+    gitRefs: request => agentControl.gitRefs(request), gitChangedFiles: request => agentControl.gitChangedFiles(request), gitPullRequest: request => agentControl.gitPullRequest(request),
+    subscribeDetail: listener => agentControl.subscribeThreadDetail(listener),
   })
-  await agentControl.start()
-  // The host's own boundary: what a client may use, and nothing else (ADR-0016). Today the only client
-  // is this app's window over IPC, so the only transport is the preload bridge.
-  const hostService: HostService = new LocalHostService({ control: agentControl, events: agentHost })
+  const desktopHosts = new DesktopHosts({ directory: userDataPath, credentials, router: hostRouter,
+    localHostRunning: startupSettings.localHostEnabled, localHostEnabled: () => workingCopySettings.localHostEnabled,
+    restart: () => { app.relaunch(); app.quit() },
+  })
+  await desktopHosts.start()
   const testPersonalChatHosts = e2eConfiguration ? {
     codex: new E2EPersonalChatHost(userDataPath), claude: new E2EPersonalChatHost(userDataPath, 'claude'), grok: new E2EPersonalChatHost(userDataPath, 'grok'),
   } : undefined
-  const personalChats = new PersonalChatService({ userDataPath, bindRequestDraftDecision: (target, decisionId, answers) => requestDrafts.bindDecision(target, decisionId, answers), configuration: () => agentControl.configuration(),
+  const personalChats = new PersonalChatService({ userDataPath,
+    ...(app.isPackaged ? { claudeHistoryModulePath: join(process.resourcesPath, 'claude-sdk', 'sdk.mjs') } : {}), bindRequestDraftDecision: (target, decisionId, answers) => requestDrafts.bindDecision(target, decisionId, answers), configuration: () => agentControl.configuration(),
     ...(memoryProfile && agentMemoryEnabled ? { preferences: memoryProfile } : {}), historyEnabled: () => agentHistoryEnabled,
     ...(testPersonalChatHosts ? { hosts: testPersonalChatHosts } : {}) })
   await personalChats.start()
+  personalClients.release = provider => personalChats.releaseClient(provider)
   const promptSubscriptions = {
     claude: new ClaudeSubscriptionClient(join(userDataPath, 'reasoning', 'claude-prompts')),
     codex: new CodexSubscriptionClient(join(userDataPath, 'reasoning', 'codex-prompts')),
@@ -667,34 +664,48 @@ async function createRuntime(): Promise<NativeRuntimeController> {
   })
   const requestDrafts: RequestDraftService = new RequestDraftService(userDataPath, owner => {
     if (owner.kind === 'personal') return personalRequestDraftState(personalChats.get(), owner)
-    const state = agentControl.shell(), thread = state.host.threads.find(item => item.id === owner.ownerId
+    const key = parseHostEntityKey(owner.ownerId)
+    const remote = key !== null && key.hostId !== agentControl.get().hostId
+    const state = remote ? hostRouter.shell() : agentControl.shell()
+    const id = remote ? owner.ownerId : key?.id ?? owner.ownerId
+    const thread = state.host.threads.find(item => item.id === id
       && requestDraftProvider(state.host, item, state.configuration.provider) === owner.providerId)
-    const recovery = agentControl.requestAnswerRecovery(owner.ownerId, owner.providerId)
+    const recovery = remote ? { completed: [], uncertainRequestIds: thread?.requests.filter(request => request.delivery === 'uncertain').map(request => request.id) ?? [] } : agentControl.requestAnswerRecovery(id, owner.providerId)
     return thread ? { connected: isThreadProviderConnected(state.host, thread), ready: thread.historyStatus !== 'loading' && thread.historyStatus !== 'error',
       requests: thread.requests, ...recovery } : recovery.completed.length ? { connected: false, ready: false, requests: [], ...recovery } : undefined
   }, async owner => {
     if (owner.kind === 'personal') await personalChats.refresh(owner.ownerId)
-    else await agentControl.refreshRequestDraft(owner.ownerId)
+    else { const key = parseHostEntityKey(owner.ownerId); if (key && key.hostId !== agentControl.get().hostId) await hostRouter.threadDetail(owner.ownerId); else await agentControl.refreshRequestDraft(key?.id ?? owner.ownerId) }
   })
   await requestDrafts.start()
   await requestDrafts.reconcile().catch(() => undefined)
   const reconcileRequestDrafts = (): void => { void requestDrafts.reconcile().catch(() => undefined) }
   const unsubscribePersonalChats = personalChats.subscribe(state => { reconcileRequestDrafts(); windows.sendToMain(PERSONAL_CHAT_STATE, state) })
-  app.on('will-quit', () => { unsubscribePersonalChats(); void personalChats.close() })
+
   // The shell reaches both windows; the widget draws a thread's state, never its history, so it needs
   // nothing more. Only the threads the main window has declared viewed receive their messages.
+  const agentStateBroadcaster = new AgentStateBroadcaster()
   const agentStatePublisher = coalesceAgentStatePublishes(state => {
     reconcileRequestDrafts()
     personalChats.configurationChanged()
-    windows.sendToMain(AGENT_STATE, state)
-    windows.sendToWidget(AGENT_STATE, state)
+    // A window's model catalog rarely changes; omitting a repeat is most of what this saves (issue #286).
+    agentStateBroadcaster.send(state, 'main', payload => windows.sendToMain(AGENT_STATE, payload))
+    agentStateBroadcaster.send(state, 'widget', payload => windows.sendToWidget(AGENT_STATE, payload))
     if (state.configuration.enabled) void windows.showWidget().catch(() => undefined)
   })
   const agentDetailPublisher = coalesceAgentThreadDetailPublishes(detail => windows.sendToMain(AGENT_THREAD_DETAIL, detail))
-  const unsubscribeAgents = agentControl.subscribe(state => agentStatePublisher.publish(state))
-  const unsubscribeAgentDetail = agentControl.subscribeThreadDetail(detail => agentDetailPublisher.publish(detail))
+  const unsubscribeAgents = hostRouter.subscribe(state => agentStatePublisher.publish(state))
+  const unsubscribeAgentDetail = hostRouter.subscribeThreadDetail(detail => agentDetailPublisher.publish(detail))
   // Quitting drops the held state with its timer: the windows it would reach are going away.
-  app.on('will-quit', () => { unsubscribeAgents(); unsubscribeAgentDetail(); agentStatePublisher.dispose(); agentDetailPublisher.dispose(); agentControl.dispose(); agentHost.dispose() })
+  registerQuitDrain(app, async () => {
+    unsubscribePersonalChats(); unsubscribeAgents(); unsubscribeAgentDetail()
+    agentStatePublisher.dispose(); agentDetailPublisher.dispose()
+    // Closing the local runtime drains a worktree cleanup sweep in progress before its host closes (ADR-0019).
+    const results = await Promise.allSettled([desktopHosts.close(), localRuntime.close(), personalChats.close()])
+    hostRouter.dispose()
+    const failure = results.find(result => result.status === 'rejected')
+    if (failure?.status === 'rejected') throw failure.reason
+  }, () => console.error('[Sotto] host-shutdown-failed'))
   const showTurnRecords = (): void => {
     void (async () => {
       await writeFile(turns.path(), '', { flag: 'wx' }).catch(() => undefined)
@@ -725,9 +736,7 @@ async function createRuntime(): Promise<NativeRuntimeController> {
     // reload/devtools accelerators the app ships with today.
     Menu.setApplicationMenu(Menu.buildFromTemplate(applicationMenuTemplate))
   }
-  const runtimeSource = e2eConfiguration === null
-    ? await loadVerifiedRuntimeSource(join(resourceRoot, 'runtime'))
-    : null
+  const runtimeSource = runtimeVerification === null ? null : await runtimeVerification
   const e2eState = e2eConfiguration === null ? null : createE2ENativeState()
   const pasteCommands = createPasteCommands(platform)
   const warmPaste = e2eConfiguration === null && pasteCommands.helper !== null
@@ -775,30 +784,38 @@ async function createRuntime(): Promise<NativeRuntimeController> {
     buildPasteInvocation: pasteCommands.oneShot,
   })
 
+  // Local, text-free diagnostics: one JSON line per event, rotated past 256 KB,
+  // never sent anywhere. They carry counts and reasons, never words, audio or keys.
+  const diagnosticsAppender = (fileName: string) => {
+    const path = join(app.getPath('userData'), fileName)
+    return (diagnostic: object): void => {
+      void (async () => {
+        const info = await stat(path).catch(() => null)
+        if (info !== null && info.size > 256 * 1024) {
+          await rename(path, `${path}.1`).catch(() => undefined)
+        }
+        await appendFile(path, `${JSON.stringify(diagnostic)}\n`)
+      })().catch(() => undefined)
+    }
+  }
+
   // Formatting-pass HTTP calls stay deterministic and offline in E2E runs.
   // Word-count-only diagnostics (no transcript content) distinguish "raw text
   // was already short" from "polish truncated it" when users report loss.
-  const polishDiagnosticsPath = join(app.getPath('userData'), 'polish-diagnostics.jsonl')
-  const appendPolishDiagnostic = (line: string): void => {
-    void (async () => {
-      const info = await stat(polishDiagnosticsPath).catch(() => null)
-      if (info !== null && info.size > 256 * 1024) {
-        await rename(polishDiagnosticsPath, `${polishDiagnosticsPath}.1`).catch(() => undefined)
-      }
-      await appendFile(polishDiagnosticsPath, line)
-    })().catch(() => undefined)
-  }
   const transcriptPolish = new TranscriptPolishService({
     getSettings: () => settings.forFormatting(),
-    onDiagnostic: (diagnostic) => appendPolishDiagnostic(`${JSON.stringify(diagnostic)}\n`),
+    onDiagnostic: diagnosticsAppender('polish-diagnostics.jsonl'),
     ...(e2eConfiguration === null
       ? {}
       : { fetchFn: () => Promise.reject(new Error('E2E_NETWORK_DISABLED')) }),
   })
 
   // Hosted transcription stays offline in E2E runs; the renderer uses its fake transcriber.
+  // Each failed request records its reason and HTTP status, so a lost dictation can be
+  // told apart afterwards: out of credit, rate limited, or a service error.
   const transcription = new OpenRouterTranscriptionService({
     getSettings: () => settings.forFormatting(),
+    onFailure: diagnosticsAppender('transcription-diagnostics.jsonl'),
     ...(e2eConfiguration === null
       ? {}
       : { fetchFn: () => Promise.reject(new Error('E2E_NETWORK_DISABLED')) }),
@@ -879,8 +896,10 @@ async function createRuntime(): Promise<NativeRuntimeController> {
       trayController.update(currentTrayState)
     },
     async onSettingsChanged(settings): Promise<void> {
+      const grantDefaultChanged = settings.browserWithoutAsking !== workingCopySettings.browserWithoutAsking
       workingCopySettings = settings
-      worktreeCleanup.settingsChanged()
+      worktreeCleanup?.settingsChanged()
+      if (grantDefaultChanged) browserService?.settingChanged()
       agentHistoryEnabled = settings.historyEnabled
       agentVoiceCoordinatorEnabled = settings.voiceCoordinatorEnabled
       await agentControl.privacyChanged()
@@ -991,7 +1010,7 @@ async function createRuntime(): Promise<NativeRuntimeController> {
       const cleanupChatPrompts = registerChatPromptIpc(ipcMain, chatPrompts, () => windows.getTrustedRenderers(), text => clipboard.writeText(text))
       const cleanupRequestDrafts = registerRequestDraftIpc(ipcMain, requestDrafts, () => windows.getTrustedRenderers())
       const files = new FilesService({
-        resolveBinding: threadId => resolveFilesBinding(agentControl.get().host, threadId),
+        resolveBinding: threadId => agentControl.filesBinding(threadId),
         copyPath: path => clipboard.writeText(path),
         reveal: path => shell.showItemInFolder(path),
       })
@@ -999,12 +1018,12 @@ async function createRuntime(): Promise<NativeRuntimeController> {
       const cleanupSubagents = registerSubagentIpc(ipcMain, agentHost, () => windows.getTrustedRenderers(), change => windows.sendToMain(SUBAGENTS_CHANGED, change))
       const checkpointIntegration = connectCheckpoints({ files, directory: userDataPath, host: agentHost, control: agentControl, registry: threadRegistry,
         git: () => gitChanges, report: () => { logOperational('checkpoint-unavailable') } })
+      agentHost.setMutationGuard(checkpointIntegration.canMutate)
       const gitChanges = new GitChangesService({ files, checkpoints: checkpointIntegration.checkpoints, canMutate: checkpointIntegration.canMutate,
-        draftPullRequestText: pullRequestTextWriter(shortTextWriter, () => settings.forFormatting()),
-        writeCommitMessage: commitMessageWriter(shortTextWriter, () => settings.forFormatting()),
+        acted: threadId => { void agentHost.gitActionFinished(threadId).catch(() => undefined) },
         copyPath: path => clipboard.writeText(path), reveal: path => shell.showItemInFolder(path), emit: event => { windows.sendToMain(GIT_CHANGES_EVENT, event) } })
       const cleanupTerminals = registerTerminalWorkspaceIpc(ipcMain, new TerminalWorkspaceService({
-        projects: () => agentControl.get().host.projects, git: runWorktreeGit,
+        projects: () => agentControl.projects(), git: runWorktreeGit,
         worktrees: new ThreadWorktrees(userDataPath, runWorktreeGit, TERMINAL_WORKTREE_HOME),
         emit: event => { windows.sendToMain(TERMINALS_EVENT, event) },
       }), () => windows.getTrustedRenderers())
@@ -1013,11 +1032,14 @@ async function createRuntime(): Promise<NativeRuntimeController> {
         emit: event => { windows.sendToMain(BROWSER_EVENT, event) },
         destination: async () => (await settingsCoordinator.getSettings()).webLinkDestination,
         openExternal: url => shell.openExternal(url),
+        byDefault: () => workingCopySettings.browserWithoutAsking,
       })
       const terminalService = new TerminalService({ files, directory: userDataPath, emit: event => { windows.sendToMain(TERMINAL_EVENT, event) } })
       // A folder with a shell still running in it is not reclaimed under that shell.
-      agentHost.setWorktreeInUse(threadId => terminalService.hasRunningTerminal(threadId))
-      worktreeCleanup.start()
+      if (worktreeCleanup) {
+        agentHost.setWorktreeInUse(threadId => terminalService.hasRunningTerminal(threadId))
+        worktreeCleanup.start()
+      }
       const cleanupTools = registerToolsIpc(ipcMain, {
         terminal: terminalService,
         browser: browserService,
@@ -1035,14 +1057,17 @@ async function createRuntime(): Promise<NativeRuntimeController> {
         },
       }, () => windows.getTrustedRenderers())
       const cleanupMemory = registerMemoryIpc(ipcMain, memoryProfile, () => windows.getTrustedRenderers(), snapshot => windows.sendToMain(MEMORY_CHANGED, snapshot))
-      const cleanupAgents = registerAgentIpc(ipcMain, agentControl, hostService, () => windows.getTrustedRenderers(), platform, e2eConfiguration === null ? naturalSpeechModels : {
+      // An end-to-end run reads a stand-in SSH folder inside its own profile, never the machine's ~/.ssh.
+      const cleanupHosts = registerHostsIpc(ipcMain, desktopHosts, () => windows.getTrustedRenderers(), state => windows.sendToMain(HOSTS_CHANGED, state),
+        () => discoverSshHosts(e2eConfiguration ? { home: join(userDataPath, 'e2e-home') } : {}))
+      const cleanupAgents = registerAgentIpc(ipcMain, hostRouter, hostRouter, () => windows.getTrustedRenderers(), platform, e2eConfiguration === null ? naturalSpeechModels : {
         status: async () => ({ ready: true, completedBytes: 1, totalBytes: 1 }),
         download: async () => ({ ready: true, completedBytes: 1, totalBytes: 1 }),
-      }, grokSpeech, kokoroSpeech, projectId => agentHost.workingCopyOptions(projectId))
+      }, grokSpeech, kokoroSpeech, projectId => { const key = parseHostEntityKey(projectId); if (key && key.hostId !== agentControl.get().hostId) throw new Error('Working-copy choices are on the host machine. Use the existing project folder or create its worktree there.'); return agentHost.workingCopyOptions(key?.id ?? projectId) })
       const cleanup = registerIpc(ipcMain, {
         settings: {
           get: () => settingsCoordinator.getSettings(),
-          update: (patch) => settingsCoordinator.updateSettings(patch),
+          update: (patch) => { requireLocalHistoryCleanup(startupSettings.localHostEnabled, agentHistoryEnabled, patch.historyEnabled); return settingsCoordinator.updateSettings(patch) },
           reset: () => settingsCoordinator.resetSettings(),
         },
         history,
@@ -1107,6 +1132,7 @@ async function createRuntime(): Promise<NativeRuntimeController> {
       updates.start()
       const cleanupNativeIpc = (): void => {
         cleanupAgents()
+        cleanupHosts()
         cleanupPersonalChats()
         cleanupChatPrompts()
         checkpointIntegration.dispose()
@@ -1114,7 +1140,7 @@ async function createRuntime(): Promise<NativeRuntimeController> {
         cleanupFiles()
         cleanupSubagents()
         cleanupTerminals()
-        worktreeCleanup.dispose()
+        worktreeCleanup?.dispose()
         cleanupTools()
         browserService = undefined
         void browserAgentServer.close()

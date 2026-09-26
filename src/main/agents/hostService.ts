@@ -1,7 +1,10 @@
 import { userInfo } from 'node:os'
 
-import type { AgentCommand, AgentState, AgentThreadDetail } from '../../shared/agents'
+import type { AgentCommand, AgentState, AgentThreadDetail, AgentThreadDetailUpdate, AgentAttachmentPreviewRequest, AgentAttachmentPreviewResult } from '../../shared/agents'
 import type { StoredThreadEvent } from '../../shared/threadEvents'
+import type { GitRefsPage, GitRefsRequest } from '../../shared/gitRefs'
+import type { GitChangedFiles, GitChangedFilesRequest } from '../../shared/gitChangedFiles'
+import type { GitPullRequestDetail, GitPullRequestRequest } from '../../shared/gitPullRequests'
 
 /**
  * Who is speaking to the host. The desktop window on this machine is `ipc`; a paired remote client
@@ -26,19 +29,28 @@ export interface ClientIdentity {
  */
 export interface HostService {
   /** Everything in the log after this sequence number, for a client catching up after a reconnection. */
-  events(afterSeq: number, threadId?: string): StoredThreadEvent[]
+  events(afterSeq: number, threadId?: string, limit?: number): StoredThreadEvent[]
   subscribe(listener: (state: AgentState) => void): () => void
   /** The whole published state, history included. */
   state(): AgentState
   /** The published state without any thread's history: what every client needs on every frame. */
   shell(): AgentState
   threadDetail(threadId: string): AgentThreadDetail | null
+  /** Runs one client's command and answers with the shell: no thread's history rides on the answer. */
   command(command: AgentCommand, client: ClientIdentity): Promise<AgentState>
+  subscribeThreadDetail?(listener: (update: AgentThreadDetailUpdate) => void): () => void
+  attachmentPreview?(request: AgentAttachmentPreviewRequest): AgentAttachmentPreviewResult | Promise<AgentAttachmentPreviewResult>
+  /** The branches a thread's folder offers, read on request (ADR-0027). */
+  gitRefs?(request: GitRefsRequest): Promise<GitRefsPage>
+  /** The changed files of a thread's folder, for the commit dialog (ADR-0027). */
+  gitChangedFiles?(request: GitChangedFilesRequest): Promise<GitChangedFiles>
+  /** One pull request of a thread's, for the Pull request surface and its dialogs (ADR-0027). */
+  gitPullRequest?(request: GitPullRequestRequest): Promise<GitPullRequestDetail | null>
 }
 
 /** The part of the event store a client is allowed to read through the host. */
 export interface ThreadEventSource {
-  eventsAfter(seq: number, threadId?: string): StoredThreadEvent[]
+  eventsAfter(seq: number, threadId?: string, limit?: number): StoredThreadEvent[]
 }
 
 export const DESKTOP_WINDOW_CLIENT_ID = 'desktop-window'
@@ -68,7 +80,15 @@ export interface LocalHostControl {
   shell(): AgentState
   threadDetail(threadId: string): AgentThreadDetail | null
   subscribe(listener: (state: AgentState) => void): () => void
-  command(command: AgentCommand, client?: ClientIdentity): Promise<AgentState>
+  /** Runs one client's command and answers with the shell, without copying any history. */
+  commandShell(command: AgentCommand, client?: ClientIdentity): Promise<AgentState>
+  subscribeThreadDetail?(listener: (update: AgentThreadDetailUpdate) => void): () => void
+  attachmentPreview?(request: AgentAttachmentPreviewRequest): AgentAttachmentPreviewResult
+  gitRefs?(request: GitRefsRequest): Promise<GitRefsPage>
+  /** The changed files of a thread's folder, for the commit dialog (ADR-0027). */
+  gitChangedFiles?(request: GitChangedFilesRequest): Promise<GitChangedFiles>
+  /** One pull request of a thread's, for the Pull request surface and its dialogs (ADR-0027). */
+  gitPullRequest?(request: GitPullRequestRequest): Promise<GitPullRequestDetail | null>
 }
 
 /**
@@ -77,6 +97,7 @@ export interface LocalHostControl {
  * boundary is the same one a socket would cross.
  */
 export class LocalHostService implements HostService {
+  private readonly observations = new Map<string, string[]>()
   private readonly control: LocalHostControl
   private readonly eventSource: ThreadEventSource | undefined
 
@@ -86,15 +107,34 @@ export class LocalHostService implements HostService {
   }
 
   /** Empty when no event source is wired: the window reads history through the thread detail today. */
-  events(afterSeq: number, threadId?: string): StoredThreadEvent[] {
-    return this.eventSource?.eventsAfter(afterSeq, threadId) ?? []
+  events(afterSeq: number, threadId?: string, limit?: number): StoredThreadEvent[] {
+    return this.eventSource?.eventsAfter(afterSeq, threadId, limit) ?? []
   }
 
   subscribe(listener: (state: AgentState) => void): () => void { return this.control.subscribe(listener) }
   state(): AgentState { return this.control.get() }
   shell(): AgentState { return this.control.shell() }
   threadDetail(threadId: string): AgentThreadDetail | null { return this.control.threadDetail(threadId) }
+  subscribeThreadDetail(listener: (update: AgentThreadDetailUpdate) => void): () => void { return this.control.subscribeThreadDetail?.(listener) ?? (() => undefined) }
+  attachmentPreview(request: AgentAttachmentPreviewRequest): AgentAttachmentPreviewResult { return this.control.attachmentPreview?.(request) ?? null }
+  gitRefs(request: GitRefsRequest): Promise<GitRefsPage> {
+    if (!this.control.gitRefs) return Promise.reject(new Error('Branches are unavailable on this host.'))
+    return this.control.gitRefs(request)
+  }
+  gitChangedFiles(request: GitChangedFilesRequest): Promise<GitChangedFiles> {
+    if (!this.control.gitChangedFiles) return Promise.reject(new Error('Changed files are unavailable on this host.'))
+    return this.control.gitChangedFiles(request)
+  }
+  gitPullRequest(request: GitPullRequestRequest): Promise<GitPullRequestDetail | null> {
+    if (!this.control.gitPullRequest) return Promise.reject(new Error('Pull requests are unavailable on this host.'))
+    return this.control.gitPullRequest(request)
+  }
   command(command: AgentCommand, client: ClientIdentity): Promise<AgentState> {
-    return this.control.command(command, client)
+    if (command.type === 'observe-threads') {
+      if (command.threadIds.length) this.observations.set(client.clientId, command.threadIds)
+      else this.observations.delete(client.clientId)
+      command = { type: 'observe-threads', threadIds: [...new Set([...this.observations.values()].flat())] }
+    }
+    return this.control.commandShell(command, client)
   }
 }

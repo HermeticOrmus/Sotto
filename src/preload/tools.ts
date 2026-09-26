@@ -1,11 +1,10 @@
 import { z } from 'zod'
 import { filePathSchema } from '../shared/files'
-import { toolListRequestSchema, toolsResultSchema } from '../shared/tools'
+import { toolListRequestSchema, toolTargetSchema, toolsResultSchema } from '../shared/tools'
 import { TERMINAL_CHANNEL, TERMINAL_EVENT, terminalCreateSchema, terminalRequestSchema, terminalWriteSchema, terminalResizeSchema, terminalSnapshotSchema, terminalListingSchema, terminalEventSchema, type TerminalBridge } from '../shared/terminal'
 import { BROWSER_CHANNEL, BROWSER_EVENT, browserCreateSchema, browserRequestSchema, browserNavigateSchema, browserMountSchema, browserOpenLinkSchema, browserPageSchema, browserListingSchema, browserOpenResultSchema, browserEventSchema, browserTaskSchema, browserShareSchema, browserControlTaskSchema, browserAnswerActionSchema, browserViewportSchema, browserCaptureSchema, browserCaptureResultSchema, type BrowserBridge } from '../shared/browser'
-import { GIT_CHANGES_CHANNEL, GIT_CHANGES_EVENT, gitActionSchema, gitBranchesSchema, gitCommitDraftRequestSchema, gitCommitDraftSchema, gitDiffRequestSchema, gitWatchRequestSchema, gitListingSchema, gitDiffSchema, gitChangedSchema, type GitChangesBridge } from '../shared/gitChanges'
+import { GIT_CHANGES_CHANNEL, GIT_CHANGES_EVENT, gitPathRequestSchema, gitReviewRequestSchema, gitReviewSchema, gitWatchRequestSchema, gitListingSchema, gitChangedSchema, type GitChangesBridge } from '../shared/gitChanges'
 import type { IpcRendererAdapter } from './index'
-import { prReviewRequestSchema, prReviewSchema, prDraftRequestSchema, prDraftSchema, prActionSchema, prActionResultSchema } from '../shared/gitPullRequests'
 import { checkpointListingSchema, checkpointRequestSchema, checkpointRevertSchema, checkpointSchema, checkpointInspectionSchema } from '../shared/checkpoints'
 
 export function createToolsBridges(renderer: IpcRendererAdapter): { terminal: TerminalBridge; browser: BrowserBridge; gitChanges: GitChangesBridge } {
@@ -36,6 +35,7 @@ export function createToolsBridges(renderer: IpcRendererAdapter): { terminal: Te
       share: request => call(BROWSER_CHANNEL + 'share', browserShareSchema, browserPageSchema, request),
       controlTask: request => call(BROWSER_CHANNEL + 'controlTask', browserControlTaskSchema, browserTaskSchema, request),
       answerAction: request => call(BROWSER_CHANNEL + 'answerAction', browserAnswerActionSchema, browserTaskSchema, request),
+      stopGrant: request => call(BROWSER_CHANNEL + 'stopGrant', toolTargetSchema, z.undefined(), request),
       viewport: request => call(BROWSER_CHANNEL + 'viewport', browserViewportSchema, browserPageSchema, request),
       capture: request => call(BROWSER_CHANNEL + 'capture', browserCaptureSchema, browserCaptureResultSchema, request),
       list: request => call(BROWSER_CHANNEL + 'list', toolListRequestSchema, browserListingSchema, request),
@@ -50,20 +50,14 @@ export function createToolsBridges(renderer: IpcRendererAdapter): { terminal: Te
       onEvent: listener => subscribe(BROWSER_EVENT, browserEventSchema, listener),
     }),
     gitChanges: Object.freeze<GitChangesBridge>({
-      reviewPullRequest: request => call(GIT_CHANGES_CHANNEL + 'reviewPullRequest', prReviewRequestSchema, prReviewSchema, request),
-      draftPullRequestText: request => call(GIT_CHANGES_CHANNEL + 'draftPullRequestText', prDraftRequestSchema, prDraftSchema, request),
-      actPullRequest: request => call(GIT_CHANGES_CHANNEL + 'actPullRequest', prActionSchema, prActionResultSchema, request),
       checkpoints: request => call(GIT_CHANGES_CHANNEL + 'checkpoints', toolListRequestSchema, checkpointListingSchema, request),
       inspectCheckpoint: request => call(GIT_CHANGES_CHANNEL + 'inspectCheckpoint', checkpointRequestSchema, checkpointInspectionSchema, request),
       revertCheckpoint: request => call(GIT_CHANGES_CHANNEL + 'revertCheckpoint', checkpointRevertSchema, checkpointSchema, request),
       recoverCheckpoint: request => call(GIT_CHANGES_CHANNEL + 'recoverCheckpoint', checkpointRequestSchema, checkpointSchema, request),
-      act: request => call(GIT_CHANGES_CHANNEL + 'act', gitActionSchema, gitListingSchema, request),
-      draftCommitMessage: request => call(GIT_CHANGES_CHANNEL + 'draftCommitMessage', gitCommitDraftRequestSchema, gitCommitDraftSchema, request),
-      branches: request => call(GIT_CHANGES_CHANNEL + 'branches', toolListRequestSchema, gitBranchesSchema, request),
       list: request => call(GIT_CHANGES_CHANNEL + 'list', toolListRequestSchema, gitListingSchema, request),
-      diff: request => call(GIT_CHANGES_CHANNEL + 'diff', gitDiffRequestSchema, gitDiffSchema, request),
-      copyPath: request => call(GIT_CHANGES_CHANNEL + 'copyPath', gitDiffRequestSchema, filePathSchema, request),
-      reveal: request => call(GIT_CHANGES_CHANNEL + 'reveal', gitDiffRequestSchema, filePathSchema, request),
+      review: request => call(GIT_CHANGES_CHANNEL + 'review', gitReviewRequestSchema, gitReviewSchema, request),
+      copyPath: request => call(GIT_CHANGES_CHANNEL + 'copyPath', gitPathRequestSchema, filePathSchema, request),
+      reveal: request => call(GIT_CHANGES_CHANNEL + 'reveal', gitPathRequestSchema, filePathSchema, request),
       watch: request => call(GIT_CHANGES_CHANNEL + 'watch', gitWatchRequestSchema, z.undefined(), request),
       onChanged: listener => subscribe(GIT_CHANGES_EVENT, gitChangedSchema, listener),
     }),

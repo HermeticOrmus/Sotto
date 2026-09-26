@@ -8,8 +8,11 @@ import {
   APPEARANCES,
   DEFAULT_SETTINGS,
   EFFORT_COLORS,
+  GIT_WRITING_INSTRUCTIONS_MAX_CHARACTERS,
   SETTINGS_VERSION,
   defaultSettings,
+  initialMergeMethod,
+  mergeMethodChosenPatch,
   parseSettings,
   settingsSchema,
   type AppSettings,
@@ -21,7 +24,7 @@ const customSettings = {
   version: 1,
   theme: 'light',
   appearance: 'light',
-  lightTheme: 'ember',
+  lightTheme: 'tropic',
   darkTheme: aurora.id,
   appearanceContrast: 135,
   glassOpacity: 60,
@@ -29,6 +32,8 @@ const customSettings = {
   customThemes: [aurora],
   webLinkDestination: 'embedded',
   responseStreaming: 'complete',
+  showBrowserPreviews: false,
+  browserWithoutAsking: false,
   reducedMotion: 'on',
   microphoneId: 'microphone-1',
   hotkey: 'Alt+D',
@@ -53,15 +58,27 @@ const customSettings = {
   llmQuality: 'high',
   llmTimeoutMs: 3_000,
   llmMinWords: 4,
-  writingModel: 'anthropic/claude-haiku-4.5',
   threadTitles: false,
   threadWorkingCopyDefault: 'independent',
   projectThreadWorkingCopyDefaults: { workshop: 'shared' },
   worktreeCleanup: { afterDays: 30, merged: true, onSettle: false, unchanged: true },
+  gitFetchIntervalSeconds: 60,
+  gitAutoPull: true,
+  defaultMergeMethod: 'rebase',
+  lastMergeMethod: 'squash',
+  diffLayout: 'split',
+  diffHideWhitespace: false,
+  diffFileState: 'expanded',
+  gitWritingStyle: 'custom',
+  gitWritingInstructions: 'Subjects in the past tense.',
+  followPullRequestTemplates: false,
+  autoSettleMergedThreads: true,
+  proactivePanels: true,
   pullRequestText: false,
   commitMessages: false,
   streamingAsr: false,
   autoUpdateCheck: false,
+  localHostEnabled: false,
   voiceCoordinatorEnabled: true,
   memoryEnabled: true,
 } satisfies AppSettings
@@ -74,10 +91,54 @@ describe('settings', () => {
     expect(parseSettings({ threadWorkingCopyDefault: 'unknown', projectThreadWorkingCopyDefaults: { project: 'unknown' } }))
       .toMatchObject({ threadWorkingCopyDefault: 'shared', projectThreadWorkingCopyDefaults: {} })
   })
+  it('shows browser previews for older profiles, keeps them off once turned off, and recovers an unusable value', () => {
+    expect(parseSettings({}).showBrowserPreviews).toBe(true)
+    expect(parseSettings({ showBrowserPreviews: false }).showBrowserPreviews).toBe(false)
+    expect(parseSettings({ showBrowserPreviews: 'no' }).showBrowserPreviews).toBe(true)
+  })
+  it('lets agents use the browser without asking for older profiles, keeps it off once turned off, and recovers an unusable value (ADR-0029)', () => {
+    expect(parseSettings({}).browserWithoutAsking).toBe(true)
+    expect(parseSettings({ browserWithoutAsking: false }).browserWithoutAsking).toBe(false)
+    expect(parseSettings({ browserWithoutAsking: 'no' }).browserWithoutAsking).toBe(true)
+  })
   it('starts every worktree cleanup rule off and recovers an unusable rule set to the defaults', () => {
     expect(parseSettings({}).worktreeCleanup).toEqual({ afterDays: null, merged: false, onSettle: false, unchanged: false })
     expect(parseSettings({ worktreeCleanup: { afterDays: 14, merged: false, onSettle: true, unchanged: false } }).worktreeCleanup).toEqual({ afterDays: 14, merged: false, onSettle: true, unchanged: false })
     expect(parseSettings({ worktreeCleanup: { afterDays: 3, merged: false, onSettle: true, unchanged: false } }).worktreeCleanup).toEqual({ afterDays: null, merged: false, onSettle: false, unchanged: false })
+    expect(parseSettings({}).gitFetchIntervalSeconds).toBe(30)
+    expect(parseSettings({ gitFetchIntervalSeconds: 0 }).gitFetchIntervalSeconds).toBe(0)
+    expect(parseSettings({ gitFetchIntervalSeconds: 7 }).gitFetchIntervalSeconds).toBe(30)
+  })
+  it('starts the Git and diff settings where T3 Code does, with everything that acts on its own off', () => {
+    expect(parseSettings({})).toMatchObject({
+      gitAutoPull: false, defaultMergeMethod: 'last', lastMergeMethod: 'merge',
+      diffLayout: 'stacked', diffHideWhitespace: true, diffFileState: 'collapsed',
+      gitWritingStyle: 'repository', gitWritingInstructions: '', followPullRequestTemplates: true,
+      autoSettleMergedThreads: false, proactivePanels: false,
+    })
+  })
+  it('keeps every Git and diff choice and recovers each unusable one to its default alone', () => {
+    const chosen = {
+      gitAutoPull: true, defaultMergeMethod: 'squash', lastMergeMethod: 'rebase',
+      diffLayout: 'split', diffHideWhitespace: false, diffFileState: 'expanded',
+      gitWritingStyle: 'conventional', gitWritingInstructions: 'Keep it short.', followPullRequestTemplates: false,
+      autoSettleMergedThreads: true, proactivePanels: true,
+    } as const
+    expect(parseSettings(chosen)).toMatchObject(chosen)
+    const unusable = {
+      gitAutoPull: 'yes', defaultMergeMethod: 'fast-forward', lastMergeMethod: 'last',
+      diffLayout: 'unified', diffHideWhitespace: 1, diffFileState: 'open',
+      gitWritingStyle: 'haiku', gitWritingInstructions: 'x'.repeat(GIT_WRITING_INSTRUCTIONS_MAX_CHARACTERS + 1), followPullRequestTemplates: 'no',
+      autoSettleMergedThreads: null, proactivePanels: 'sometimes',
+    }
+    expect(parseSettings({ ...unusable, gitFetchIntervalSeconds: 60 })).toMatchObject({ ...DEFAULT_SETTINGS, gitFetchIntervalSeconds: 60 })
+  })
+  it('starts a merge on the chosen method, or the one used last, and remembers a choice only under Last selected', () => {
+    expect(initialMergeMethod({ defaultMergeMethod: 'last', lastMergeMethod: 'squash' })).toBe('squash')
+    expect(initialMergeMethod({ defaultMergeMethod: 'rebase', lastMergeMethod: 'squash' })).toBe('rebase')
+    expect(mergeMethodChosenPatch({ defaultMergeMethod: 'last', lastMergeMethod: 'merge' }, 'squash')).toEqual({ lastMergeMethod: 'squash' })
+    expect(mergeMethodChosenPatch({ defaultMergeMethod: 'last', lastMergeMethod: 'squash' }, 'squash')).toBeNull()
+    expect(mergeMethodChosenPatch({ defaultMergeMethod: 'merge', lastMergeMethod: 'merge' }, 'squash')).toBeNull()
   })
   it('drops retired transcription settings while preserving valid settings', () => {
     const legacy = { ...customSettings, modelPreset: 'fast', inferencePreference: 'wasm', remoteAsr: true, remoteAsrUrl: 'http://retired.invalid' }
@@ -86,6 +147,16 @@ describe('settings', () => {
     for (const field of ['modelPreset', 'inferencePreference', 'remoteAsr', 'remoteAsrUrl']) {
       expect(parseSettings(legacy)).not.toHaveProperty(field)
     }
+  })
+
+  it('drops the retired writing model and keeps every other choice, whichever model was saved', () => {
+    // Short writing moved to each thread's own provider (ADR-0026); an older settings file still names a model.
+    for (const writingModel of ['google/gemini-3.1-flash-lite', 'anthropic/claude-haiku-4.5', 'no-longer-offered']) {
+      const legacy = { ...customSettings, writingModel }
+      expect(parseSettings(legacy)).toEqual(customSettings)
+      expect(parseSettings(legacy)).not.toHaveProperty('writingModel')
+    }
+    expect(DEFAULT_SETTINGS).not.toHaveProperty('writingModel')
   })
 
   it('tolerates persisted theme values and defaults an unknown value', () => {
@@ -117,11 +188,13 @@ describe('settings', () => {
     }
   })
 
-  it('keeps a selection saved under the built-in ids from before the rename', () => {
-    const saved = parseSettings({ ...customSettings, lightTheme: 'grove', darkTheme: 'iris' })
-    expect([saved.lightTheme, saved.darkTheme]).toEqual(['grove', 'iris'])
+  it('sends a half saved on a retired T3 built-in back to Sotto and keeps a half on one of Sotto’s own', () => {
+    for (const retired of ['t3-chat', 'grove', 'ocean', 'ember', 'iris']) {
+      const saved = parseSettings({ ...customSettings, lightTheme: retired, darkTheme: retired })
+      expect([saved.lightTheme, saved.darkTheme], retired).toEqual(['t3-code', 't3-code'])
+    }
     expect(parseSettings({ ...customSettings, lightTheme: 't3-code', darkTheme: 't3-code' })).toMatchObject({ lightTheme: 't3-code', darkTheme: 't3-code' })
-    expect(parseSettings({ ...customSettings, lightTheme: 't3-chat', darkTheme: 'ember' })).toMatchObject({ lightTheme: 't3-chat', darkTheme: 'ember' })
+    expect(parseSettings({ ...customSettings, lightTheme: 'hush', darkTheme: 'tropic' })).toMatchObject({ lightTheme: 'hush', darkTheme: 'tropic' })
   })
 
   it('keeps every valid appearance and theme choice and recovers an unusable one field by field', () => {
@@ -143,7 +216,7 @@ describe('settings', () => {
 
   it('chooses each half independently and falls back when its theme is gone or cannot paint that half', () => {
     const lightOnly = parseThemeFile({ version: 1, name: 'Paper', appearance: 'light', colors: { canvas: '#fffdf8' } })
-    expect(parseSettings({ lightTheme: 't3-chat', darkTheme: 'grove' })).toMatchObject({ lightTheme: 't3-chat', darkTheme: 'grove' })
+    expect(parseSettings({ lightTheme: 'hush', darkTheme: 'linen' })).toMatchObject({ lightTheme: 'hush', darkTheme: 'linen' })
     expect(parseSettings({ lightTheme: lightOnly.id, darkTheme: lightOnly.id, customThemes: [lightOnly] })).toMatchObject({ lightTheme: lightOnly.id, darkTheme: 't3-code' })
     // A custom theme that was removed from the library no longer owns a half.
     expect(parseSettings({ darkTheme: aurora.id, customThemes: [] })).toMatchObject({ darkTheme: 't3-code' })
@@ -151,7 +224,7 @@ describe('settings', () => {
 
   it('keeps valid custom themes one by one and never lets a hostile colour through', () => {
     const hostile = { ...aurora, id: 'hostile', label: 'Hostile', colors: { ...aurora.colors, canvas: 'red;background:url(https://example.com/x)' } }
-    const reserved = { ...aurora, id: 'ocean' }
+    const reserved = { ...aurora, id: 'nocturne' }
     const parsed = parseSettings({ customThemes: [aurora, hostile, reserved, 'junk', { ...aurora }], darkTheme: aurora.id })
     // The damaged role is repaired from the theme's defaults; the reserved id, junk and duplicate are dropped.
     expect(parsed.customThemes.map(theme => theme.id)).toEqual([aurora.id, 'hostile'])
@@ -169,6 +242,8 @@ describe('settings', () => {
       memoryEnabled: false,
       webLinkDestination: 'external',
       responseStreaming: 'live',
+      showBrowserPreviews: true,
+      browserWithoutAsking: true,
       version: 1,
       theme: 'system',
       appearance: 'dark',
@@ -202,15 +277,27 @@ describe('settings', () => {
       llmQuality: 'low',
       llmTimeoutMs: 2_500,
       llmMinWords: 5,
-      writingModel: 'google/gemini-3.1-flash-lite',
       threadTitles: true,
       threadWorkingCopyDefault: 'shared',
       projectThreadWorkingCopyDefaults: {},
       worktreeCleanup: { afterDays: null, merged: false, onSettle: false, unchanged: false },
+      gitFetchIntervalSeconds: 30,
+      gitAutoPull: false,
+      defaultMergeMethod: 'last',
+      lastMergeMethod: 'merge',
+      diffLayout: 'stacked',
+      diffHideWhitespace: true,
+      diffFileState: 'collapsed',
+      gitWritingStyle: 'repository',
+      gitWritingInstructions: '',
+      followPullRequestTemplates: true,
+      autoSettleMergedThreads: false,
+      proactivePanels: false,
       pullRequestText: true,
       commitMessages: true,
       streamingAsr: true,
       autoUpdateCheck: true,
+      localHostEnabled: true,
     })
   })
 

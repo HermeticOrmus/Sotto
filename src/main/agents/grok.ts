@@ -8,17 +8,21 @@ import { mkdir } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
 import { z } from 'zod'
 import { agentProjectSchema, type AgentHostSnapshot, type AgentThread, type AgentMessage, type AgentRuntimeMode } from '../../shared/agents'
+import { orderReasoningEfforts } from '../../shared/reasoningEfforts'
 import { AtomicJsonStore } from '../storage/atomicJsonStore'
-import type { AgentHost, AgentHostCommand, AgentHostResult, AgentSkillScope, ThreadHistorySource, ThreadHostEvent } from './host'
+import type { AgentHost, AgentHostCommand, AgentHostResult, AgentSkillScope, ShortTextPrompt, ThreadHistorySource, ThreadHostEvent } from './host'
+import { SIDE_WRITING_TIMEOUT_MS } from './sideWriting'
+import { GrokSubscriptionClient, sweepLeftoverSessions } from './subscriptionGrok'
 import { ThreadMessageLog } from './threadMessageLog'
 import { cloneHostSnapshot } from './cloneHostSnapshot'
+import { cloneActivitySnapshot, immutableActivities, isImmutableActivities } from './activitySnapshots'
 import type { AgentSkillCatalog } from '../../shared/agentSkills'
 import { discoverGrokSkills, grokSkillPrompt } from './grokSkills'
 import { verifyFileMentions } from './promptFiles'
 import { validatePromptAttachments, validateThreadOptions } from './threadOptions'
 import { grokActivities } from './grokActivity'
 import { markTurnActivity } from './turnActivity'
-import { grokPending, grokAnswer, type GrokPending as Pending } from './grokRequests'
+import { grokBrowserAdmission, grokPending, grokAnswer, type GrokPending as Pending } from './grokRequests'
 import { needsPerson, unreadableRequest } from './nativeRequests'
 import { object } from './claudeProtocol'
 import { mergeAgentActivities, type AgentActivity } from '../../shared/agentActivity'
@@ -49,18 +53,17 @@ function sessionPolicy(mode: GrokRuntimeMode | undefined): { yoloMode: boolean; 
   return { yoloMode: mode === 'full-access', autoMode: mode === 'auto' }
 }
 /**
- * How Sotto spawns the native client. The allow rule covers Sotto's own browser server and nothing
- * else, and lives on this process rather than in Grok's own configuration; Tools still asks before
- * any page action (ADR-0020). One leader serves every thread, so the rule cannot be per-thread: on a
- * personal chat, which never receives a browser server, it matches nothing.
+ * How Sotto spawns the native client. It once carried an allow rule for Sotto's browser server, but Grok
+ * does not apply `--allow` rules to calls made through its `use_tool`, as a leader or as a local agent, so
+ * the adapter answers that prompt itself instead (ADR-0020).
  */
 export function grokArguments(): string[] {
-  return ['--permission-mode', 'default', '--allow', `MCPTool(${BROWSER_MCP_SERVER}__*)`, 'agent', '--leader', 'stdio']
+  return ['--permission-mode', 'default', 'agent', '--leader', 'stdio']
 }
 const originSchema = z.object({ messageId: z.string(), commandId: z.string(), digest: z.string(), createdAt: z.string(), entryKey: z.string().optional() })
 const aliasSchema = z.object({ grokSessionId: z.string().uuid().optional(), projectId: z.string().optional(), kind: z.literal('personal').optional(), cwd: z.string(), title: z.string(), modelId: z.string(), nativeModelId: z.string().optional(), settingsConfirmed: z.boolean().default(false), createdAt: z.string(), origins: z.array(originSchema), reasoningEffort: z.string().optional(), runtimeMode: grokRuntimeModeSchema.optional(), pendingRuntimeMode: grokRuntimeModeSchema.optional(), answeredRequestIds: z.array(z.string()).default([]) }).refine(alias => alias.kind === 'personal' ? alias.projectId === undefined : !!alias.projectId, 'A personal chat cannot have a project; a project thread requires one.')
 type Alias = z.infer<typeof aliasSchema>
-const catalogSchema = z.object({ currentModelId: z.string(), availableModels: z.array(z.object({ modelId: z.string(), name: z.string(), _meta: z.object({ reasoningEffort: z.string().optional(), supportsReasoningEffort: z.boolean().optional(), reasoningEfforts: z.array(z.object({ id: z.string(), value: z.string().optional() })).optional() }).optional() })).min(1) })
+const catalogSchema = z.object({ currentModelId: z.string(), availableModels: z.array(z.object({ modelId: z.string(), name: z.string(), _meta: z.object({ reasoningEffort: z.string().optional(), supportsReasoningEffort: z.boolean().optional(), reasoningEfforts: z.array(z.object({ id: z.string(), value: z.string().optional(), default: z.boolean().optional() })).optional() }).optional() })).min(1) })
 const updateSchema = z.object({ sessionId: z.string(), _meta: z.object({ eventId: z.string().optional(), agentTimestampMs: z.number().optional(), promptId: z.string().optional(), streamStartMs: z.number().optional() }).optional(), update: z.object({ sessionUpdate: z.string(), content: z.unknown().optional(), stop_reason: z.string().optional(), stopReason: z.string().optional(), tool_call_id: z.string().optional() }).passthrough() })
 const historySchema = z.object({ updates: z.array(z.object({ timestamp: z.union([z.number(), z.string()]), method: z.string(), params: z.unknown() })), totalCount: z.number().int().nonnegative(), hasMore: z.boolean() })
 // Grok 1.0.5 restarts its event counter on CLI resume. eventId alone is not a message identity.
@@ -128,6 +131,15 @@ export class GrokAcpHost implements AgentHost {
     if (!this.browserTools || this.aliases[id]?.kind === 'personal' || !this.browserHttp) return []
     return [await this.browserTools.mcpServer(id)]
   }
+  private showRequest(pending: Pending): void {
+    if (this.aliases[pending.threadId]!.answeredRequestIds.includes(pending.request.id)) { pending.answering = true; pending.request.delivery = 'uncertain'; this.answeredRequests.add(pending.request.id) }
+    this.pending.set(pending.request.id, pending); this.thread(pending.threadId).requests.push(pending.request); this.emit()
+  }
+  /** Grok's prompt for this thread's own browser server, answered here rather than shown (ADR-0020). */
+  private browserAdmission(pending: Pending): unknown {
+    if (!pending.permission || !this.browserTools || !this.browserHttp || this.aliases[pending.threadId]?.kind === 'personal') return undefined
+    return grokBrowserAdmission(pending, BROWSER_MCP_SERVER, this.browserTools.definitions.map(tool => tool.name))
+  }
   private readonly usage: NativeUsage
   private readonly aliasStore: AtomicJsonStore<Record<string, Alias>>
   private readonly projectStore: AtomicJsonStore<AgentHostSnapshot['projects']>
@@ -144,8 +156,13 @@ export class GrokAcpHost implements AgentHost {
   private readonly selections = new Map<string, { model: string; effort: string | undefined }>()
   private readonly seenUpdates = new Set<string>()
   private readonly listeners = new Set<(snapshot: AgentHostSnapshot) => void>()
+  private readonly activityListeners = new Set<(snapshot: AgentHostSnapshot) => void>()
   private readonly publisher = new ProviderSnapshotPublisher(() => {
     for (const listener of this.listeners) listener(this.current())
+    if (this.activityListeners.size) {
+      const snapshot = this.activitySnapshot()
+      for (const listener of this.activityListeners) listener(cloneActivitySnapshot(snapshot))
+    }
   })
   private rpc: GrokRpc | undefined
   private stopping = Promise.resolve()
@@ -226,8 +243,18 @@ export class GrokAcpHost implements AgentHost {
     return cloneHostSnapshot({ ...this.state, threads: [...this.threads.values()]
       .filter((thread): thread is AgentThread => 'projectId' in thread).map(thread => this.log.publishedThread(thread)) })
   }
+  private activitySnapshot(): AgentHostSnapshot {
+    for (const thread of this.threads.values()) if (thread.activities && !isImmutableActivities(thread.activities)) {
+      thread.activities = immutableActivities(thread.activities)
+    }
+    return { ...this.state, threads: [...this.threads.values()]
+      .filter((thread): thread is AgentThread => 'projectId' in thread).map(thread => this.log.publishedThread(thread)) }
+  }
   private emit(streaming = false): void { this.publisher.publish(streaming) }
   subscribe(listener: (snapshot: AgentHostSnapshot) => void): () => void { this.listeners.add(listener); return () => { this.listeners.delete(listener) } }
+  subscribeActivitySnapshots(listener: (snapshot: AgentHostSnapshot) => void): () => void {
+    this.activityListeners.add(listener); return () => this.activityListeners.delete(listener)
+  }
   subscribeEvents(listener: (event: ThreadHostEvent) => void): () => void { return this.log.subscribeEvents(listener) }
   useThreadHistory(source: ThreadHistorySource): void { this.history = source }
   private persist(): Promise<void> { this.writing = this.aliasStore.write(structuredClone(this.aliases)); return this.writing }
@@ -253,6 +280,8 @@ export class GrokAcpHost implements AgentHost {
     const generation = this.generation
     await this.usage.load()
     await mkdir(this.userDataDirectory, { recursive: true })
+    // Side calls' throwaway homes that a crash or a failed removal left behind hold thread content (ADR-0026).
+    await sweepLeftoverSessions(join(this.userDataDirectory, 'writing', 'grok'))
     const executable = this.options.executable ?? await findGrokExecutable(this.options.environment)
     if (!executable || !isAbsolute(executable)) throw new Error('Install Grok CLI and sign in before connecting Grok.')
     this.aliases = await this.aliasStore.read(); this.state.projects = await this.projectStore.read(); this.threads.clear(); this.streams.clear(); this.authored.clear(); this.liveStatus.clear(); this.selections.clear(); this.activePrompts.clear(); this.seenUpdates.clear(); this.answeredRequests.clear(); this.histories.clear()
@@ -274,8 +303,16 @@ export class GrokAcpHost implements AgentHost {
         this.state.version = `${response._meta.agentVersion} / ACP ${GROK_ACP_VERSION}`
         if (compareClientVersions(response._meta.agentVersion, GROK_CLI_VERSION) > 0) this.state.verifiedVersion = GROK_CLI_VERSION
         else delete this.state.verifiedVersion
-        this.state.models = response._meta.modelState.availableModels.map(model => ({ id: model.modelId, name: model.name, provider: 'Grok', ready: true, runtimeModes: [...grokRuntimeModes], supportsImages: false,
-          reasoningEfforts: model._meta?.supportsReasoningEffort ? model._meta.reasoningEfforts?.map(effort => effort.value ?? effort.id) ?? [] : [], ...(model._meta?.reasoningEffort ? { defaultReasoningEffort: model._meta.reasoningEffort } : {}) }))
+        this.state.models = response._meta.modelState.availableModels.map(model => {
+          // Grok lists its levels highest first; Sotto's order runs the other way (orderReasoningEfforts).
+          const reasoningEfforts = model._meta?.supportsReasoningEffort ? orderReasoningEfforts(model._meta.reasoningEfforts?.map(effort => effort.value ?? effort.id) ?? []) : []
+          // `_meta.reasoningEffort` is the level the session is on now, which a user's own Grok settings
+          // can move; the level Grok marks as its default is what the card's Default button means.
+          const flagged = model._meta?.reasoningEfforts?.find(effort => effort.default)
+          const reportedDefault = flagged?.value ?? flagged?.id ?? model._meta?.reasoningEffort
+          return { id: model.modelId, name: model.name, provider: 'Grok', ready: true, runtimeModes: [...grokRuntimeModes], supportsImages: false,
+            reasoningEfforts, ...(reportedDefault && reasoningEfforts.includes(reportedDefault) ? { defaultReasoningEffort: reportedDefault } : {}) }
+        })
       })
       await rpc.request('authenticate', { methodId: 'cached_token', _meta: { headless: true } }, value => { z.object({}).parse(value) })
       // Lazy sessions: a known thread is in the snapshot from its alias, idle, and loads when it is
@@ -341,6 +378,19 @@ export class GrokAcpHost implements AgentHost {
       if (generation !== this.generation) throw new Error('Grok connection changed while discovering skills.')
       return catalog
     } catch { return { threadId, providerId: 'grok', cwd, status: 'error', skills: [], errors: [], error: 'Grok native skill discovery failed. Check that the installed client supports inspect --json.' } }
+  }
+  /**
+   * A side call on this thread's client, account and model, in its folder (ADR-0026). It is its own
+   * short-lived Grok process with a throwaway home, not a session on this connection's leader, so the
+   * thread's session is never loaded for it and this adapter's alias store never learns of it.
+   */
+  async writeShortText(id: string, prompt: ShortTextPrompt, signal?: AbortSignal): Promise<string | null> {
+    const alias = this.aliases[id]
+    if (!this.state.connected || !alias?.grokSessionId) return null
+    const writer = new GrokSubscriptionClient(join(this.userDataDirectory, 'writing', 'grok'), {
+      ...(this.options.executable ? { executable: this.options.executable } : {}), ...(this.options.args ? { prefixArgs: this.options.args } : {}),
+      ...(this.options.environment ? { environment: this.options.environment } : {}) })
+    return writer.write({ ...prompt, model: alias.nativeModelId ?? alias.modelId, workingDirectory: await existingWorkingDirectory(alias.cwd), timeoutMs: SIDE_WRITING_TIMEOUT_MS, ...(signal ? { signal } : {}) })
   }
   async refreshThread(id: string): Promise<AgentHostSnapshot> {
     if (!this.aliases[id]?.grokSessionId) throw new Error('This Grok thread has no confirmed provider session.')
@@ -494,6 +544,8 @@ export class GrokAcpHost implements AgentHost {
     if (command.type === 'steer') throw new Error('This provider does not support native steering. Queue a follow-up instead.')
     if (!this.state.connected || !this.rpc) throw new Error('Connect Grok before managing threads.')
     const rpc = this.rpc
+    /** A settings change Grok confirmed, or one that had nothing to change: its snapshot carries the effective settings. */
+    let settled = false
     try {
       if (command.type === 'create-project') {
         if (!isAbsolute(command.path)) throw new Error('Grok projects require an absolute working directory.')
@@ -502,7 +554,11 @@ export class GrokAcpHost implements AgentHost {
         if (this.aliases[command.threadId]) return this.aliases[command.threadId]!.settingsConfirmed ? { accepted: true } : { accepted: false, uncertain: true }
         validateThreadOptions(this.state, command)
         const project = command.type === 'create-thread' ? this.state.projects.find(project => project.id === command.projectId) : undefined; if (command.type === 'create-thread' && !project) throw new Error('Choose a Grok project first.')
-        const alias: Alias = { ...(command.type === 'create-personal' ? { kind: 'personal' as const } : { projectId: project!.id }), cwd: await existingWorkingDirectory(command.workingDirectory ?? project!.path), title: command.title, modelId: command.modelId, settingsConfirmed: false, createdAt: new Date().toISOString(), origins: [], answeredRequestIds: [], ...(command.reasoningEffort ? { reasoningEffort: command.reasoningEffort } : {}), ...(command.runtimeMode ? { runtimeMode: grokRuntimeMode(command.runtimeMode) } : {}) }
+        // A create that names no level (the Agents view's new-thread form, a coordinator dispatch) starts on
+        // the model's default and says so to Grok. Left unsent, Grok would run at the level in the user's
+        // own Grok settings while the chip fell back to the flagged default and named a level it is not on.
+        const reasoningEffort = command.reasoningEffort ?? this.state.models.find(model => model.id === command.modelId)?.defaultReasoningEffort
+        const alias: Alias = { ...(command.type === 'create-personal' ? { kind: 'personal' as const } : { projectId: project!.id }), cwd: await existingWorkingDirectory(command.workingDirectory ?? project!.path), title: command.title, modelId: command.modelId, settingsConfirmed: false, createdAt: new Date().toISOString(), origins: [], answeredRequestIds: [], ...(reasoningEffort ? { reasoningEffort } : {}), ...(command.runtimeMode ? { runtimeMode: grokRuntimeMode(command.runtimeMode) } : {}) }
         this.aliases[command.threadId] = alias; await this.persist()
         await rpc.request('session/new', { cwd: alias.cwd, mcpServers: await this.browserServers(command.threadId), _meta: sessionPolicy(alias.runtimeMode) }, async value => {
           const response = z.object({ sessionId: z.string().uuid(), models: catalogSchema }).parse(value)
@@ -546,6 +602,7 @@ export class GrokAcpHost implements AgentHost {
               thread.status = alias.settingsConfirmed ? 'idle' : 'error'
             }
           }
+          settled = alias.settingsConfirmed && !alias.pendingRuntimeMode
         } else if (command.type === 'send') {
           if (alias.pendingRuntimeMode) throw new Error('Grok has not confirmed this thread’s permission mode. Reconnect to check before sending.')
           if (!alias.settingsConfirmed) throw new Error('Grok has not confirmed this thread’s model settings. Reconnect to check before sending.')
@@ -615,7 +672,9 @@ export class GrokAcpHost implements AgentHost {
           rpc.write({ jsonrpc: '2.0', method: 'session/cancel', params: { sessionId: alias.grokSessionId } })
         }
       }
-      this.emit(); return { accepted: true }
+      this.emit()
+      // What was emitted is the reconciliation of a confirmed settings change.
+      return settled ? { accepted: true, snapshot: this.current() } : { accepted: true }
     } catch (error) { if (error instanceof GrokUncertain) return { accepted: false, uncertain: true }; throw error }
   }
   private async frame(frame: GrokFrame): Promise<void> {
@@ -634,8 +693,10 @@ export class GrokAcpHost implements AgentHost {
         pending.request.id = `grok-request-${digest(JSON.stringify([threadId, pending.toolCallId, pending.request.kind]))}`
         this.reaper.touch(pending.threadId)
         if (this.answeredRequests.has(pending.request.id) || this.pending.has(pending.request.id)) return
-        if (this.aliases[pending.threadId]!.answeredRequestIds.includes(pending.request.id)) { pending.answering = true; pending.request.delivery = 'uncertain'; this.answeredRequests.add(pending.request.id) }
-        this.pending.set(pending.request.id, pending); this.thread(pending.threadId).requests.push(pending.request); this.emit()
+        const admission = this.browserAdmission(pending); const rpc = this.rpc
+        // An admission that fails to arrive is shown instead, so a request never goes unanswered and unseen.
+        if (admission !== undefined && rpc) { rpc.reply(pending.wireId, admission).catch(() => { if (rpc === this.rpc) this.showRequest(pending) }); return }
+        this.showRequest(pending)
       }
       else {
         this.rpc?.write({ jsonrpc: '2.0', id: frame.id, error: { code: -32601, message: 'Sotto does not handle this request.' } })

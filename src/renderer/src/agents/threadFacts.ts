@@ -1,4 +1,5 @@
-import { PROVIDER_LABELS, isThreadProviderConnected, threadSummaryOf, type AgentAssignment, type AgentModel, type AgentProject, type AgentQueueItem, type AgentState, type AgentThread, type ProviderId } from '../../../shared/agents'
+import { hostForThread, PROVIDER_LABELS, isThreadProviderConnected, threadSummaryOf, type AgentAssignment, type AgentModel, type AgentProject, type AgentQueueItem, type AgentState, type AgentThread, type ProviderId } from '../../../shared/agents'
+import { resolveModel } from '../../../shared/modelCatalog'
 import { isThreadClosed, isWorkspaceThreadSettled } from '../../../shared/threadActivity'
 
 const DAY_MS = 86_400_000
@@ -40,7 +41,7 @@ export interface ThreadRow {
   readonly stateLabel: string
   /** What a row that needs you is waiting for: a permission to allow or deny, or a question to answer. */
   readonly waitingFor: 'approval' | 'question' | null
-  /** The queue item waiting on a decision, when the row carries one inline. */
+  /** What the row is waiting on you to decide: the attention queue's item, or else the thread's first pending request in its shape. */
   readonly request: AgentQueueItem | undefined
   /** In the attention queue: a pending request or any queue entry. Search never hides these rows. */
   readonly attention: boolean
@@ -172,14 +173,20 @@ function runStartedAt(thread: AgentThread, lastUserAt: number, activityAt: numbe
 
 function describe(state: AgentState, thread: AgentThread, now: number): ThreadRow {
   const project = state.host.projects.find(entry => entry.id === thread.projectId)
-  const model = state.host.models.find(entry => entry.id === thread.modelId)
+  const model = resolveModel(hostForThread(state.host, thread).models, thread.modelId)
   const assignment = state.assignments.find(entry => entry.threadId === thread.id)
   const provider = model?.provider ?? (thread.providerId ? PROVIDER_LABELS[thread.providerId] : state.host.name)
   // A row's history facts come from the thread's summary: the shell stream carries it in place of the
   // messages, and a thread whose messages did arrive derives exactly the same thing.
   const { lastAssistant, lastUser, lastMessageAt } = threadSummaryOf(thread)
   const closed = isThreadClosed(thread)
-  const decision = closed ? undefined : state.queue.find(item => item.threadId === thread.id && (item.kind === 'question' || item.kind === 'permission'))
+  const queued = closed ? undefined : state.queue.find(item => item.threadId === thread.id && (item.kind === 'question' || item.kind === 'permission'))
+  // The attention queue holds requests only for threads with an assignment, and not a question supervision is still
+  // deciding. The provider's request is pending all the same, and the composer answers it from the thread.
+  const pending = closed || queued !== undefined ? undefined : thread.requests[0]
+  const decision: AgentQueueItem | undefined = queued ?? (pending === undefined ? undefined : {
+    id: `${thread.id}:${pending.id}`, threadId: thread.id, requestId: pending.id, kind: pending.kind, text: pending.text, createdAt: '', deferred: false,
+  })
   const blocked = state.queue.find(item => item.threadId === thread.id && item.kind === 'blocked')
   const attention = !closed && (thread.requests.length > 0 || state.queue.some(item => item.threadId === thread.id))
   // Once you take over, Sotto's earlier stop is history: manual outranks stopped.

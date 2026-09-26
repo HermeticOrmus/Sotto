@@ -1,7 +1,9 @@
-import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import React, { createContext, startTransition, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 
 import type { AgentBridge, AgentCommand, AgentState, AgentThread, AgentThreadDetail, AgentThreadDetailUpdate } from '../../../shared/agents'
 import { applyAgentThreadDetailDelta, isAgentThreadDetailDelta } from '../../../shared/agentThreadDetail'
+import { LANELESS_THREAD_COMMAND_TYPES, THREAD_SCOPED_COMMAND_TYPES } from '../../../shared/threadLanes'
+import { wrapAgentBridge } from './agentStateCatalogs'
 import { clearShellCache, readShellCache, writeShellCache } from './shellCache'
 import type { AppSettings } from '../../../shared/settings'
 import type { DictationState } from '../../../shared/dictation'
@@ -10,8 +12,9 @@ import { createE2EAgentVoiceEffects } from '../e2e/agentVoiceEffects'
 import { createConfiguredSpeech } from './naturalSpeech'
 import { playWakeCue } from './voiceCue'
 import { useAttentionReview, type AttentionReview } from './attentionReview'
-import { share } from './stateSharing'
+import { createStateSharing } from './stateSharing'
 import { ThreadDraftStore } from './threadDraftStore'
+import { approximateDetailBytes } from './detailCacheSize'
 
 export interface AgentConnection {
   readonly state: AgentState | null
@@ -28,7 +31,7 @@ const SHELL_CACHE_INTERVAL_MS = 2_000
 export function useAgentConnection(bridge: AgentBridge | undefined): AgentConnection {
   // A connection owns its command lane and draft durability knowledge. Neither page
   // navigation nor outstanding writes create a new store; a different bridge does.
-  const session = useMemo(() => ({ current: false, observed: 0, tail: Promise.resolve() as Promise<unknown> }), [bridge])
+  const session = useMemo(() => ({ current: false, observed: 0, tail: Promise.resolve() as Promise<unknown>, share: createStateSharing() }), [bridge])
   /**
    * Main publishes every thread's state but only the history of the threads this window says it is
    * looking at, so the window holds those histories and splices them back into each arriving shell.
@@ -36,7 +39,7 @@ export function useAgentConnection(bridge: AgentBridge | undefined): AgentConnec
    */
   const detail = useMemo(() => ({
     held: new Map<string, AgentThreadDetail>(), used: new Map<string, number>(), asked: new Set<string>(),
-    viewed: new Set<string>(), shell: null as AgentState | null, clock: 0,
+    viewed: new Set<string>(), shell: null as AgentState | null, clock: 0, hits: 0, misses: 0,
     pendingShell: null as AgentState | null, frame: 0,
     channel: bridge?.threadDetail !== undefined || bridge?.onThreadDetail !== undefined,
   }), [bridge])
@@ -60,7 +63,6 @@ export function useAgentConnection(bridge: AgentBridge | undefined): AgentConnec
     function splice(thread: AgentThread): AgentThread {
       const held = detail.held.get(thread.id)
       if (held !== undefined) {
-        detail.used.set(thread.id, ++detail.clock)
         return { ...thread, messages: held.messages, ...(held.activities === undefined ? {} : { activities: held.activities }) }
       }
       // A thread whose history has not arrived is exactly what `historyStatus: 'loading'` already says;
@@ -77,26 +79,37 @@ export function useAgentConnection(bridge: AgentBridge | undefined): AgentConnec
    */
   const ask = useRef<(threadId: string) => void>(() => undefined)
   const resync = useRef<(threadId: string) => void>(() => undefined)
-  const receiveState = useCallback((next: AgentState): void => {
+  // Arriving agent state is background news, about 1.4 times a second while a thread works, and the
+  // render it causes must not sit in front of a keystroke. `startTransition`
+  // gives the commit low priority so a sync update — the composer's draft store — interrupts it, while
+  // React still guarantees the transition itself lands, just later. `urgent` opts a caller out of that:
+  // the initial connect (nothing is on screen yet to stay interruptible for) and a command's own reply
+  // (the user is watching that one land) both ask for it.
+  const receiveState = useCallback((next: AgentState, options: { urgent?: boolean } = {}): void => {
     arrived.current = performance.now()
     detail.shell = next
     // The thread on screen needs its history whether or not this window asked for it: a restart opens
     // straight onto the selected thread, with no pane change to declare it viewed.
     if (next.stale !== true && next.activeThreadId !== null) ask.current(next.activeThreadId)
     const assembled = assemble(next)
-    setSnapshot(current => {
+    // React's own update queue, not extra bookkeeping here, keeps this in order: a `useState` setter
+    // called from a transition and one called urgently both enqueue on the same fiber, and whichever
+    // priority renders first, React replays the whole queue in the order the setters were called
+    // once every lane has rendered — so a call made after another's can never be overwritten by it.
+    const commit = (): void => setSnapshot(current => {
       // The cached shell is replaced outright, never reconciled: its identities belong to the last run.
       if (current?.session !== session || current.state.stale === true) return { session, state: assembled }
-      const state = share(current.state, assembled)
+      const state = session.share(current.state, assembled)
       return state === current.state ? current : { session, state }
     })
+    if (options.urgent === true) commit(); else startTransition(commit)
   }, [session, assemble, detail])
   /** A shell held for its frame commits now: the detail that follows it lands in the same commit. */
-  const commitPendingShell = useCallback((): void => {
+  const commitPendingShell = useCallback((options: { urgent?: boolean } = {}): void => {
     if (detail.frame !== 0) { cancelAnimationFrame(detail.frame); detail.frame = 0 }
     const pending = detail.pendingShell
     detail.pendingShell = null
-    if (pending !== null) receiveState(pending)
+    if (pending !== null) receiveState(pending, options)
   }, [detail, receiveState])
   const receiveDetail = useRef<(update: AgentThreadDetailUpdate) => void>(() => undefined)
   receiveDetail.current = (update: AgentThreadDetailUpdate): void => {
@@ -115,7 +128,9 @@ export function useAgentConnection(bridge: AgentBridge | undefined): AgentConnec
       next = update
     }
     detail.held.set(next.threadId, next)
-    detail.used.set(next.threadId, ++detail.clock)
+    // A history that arrives unasked, for work main wants this window to see land, starts as recent as its
+    // arrival. After that only a look moves it: a streamed chunk is not the user coming back to a thread.
+    if (!detail.used.has(next.threadId)) detail.used.set(next.threadId, ++detail.clock)
     if (detail.held.size > DETAIL_CACHE_LIMIT) {
       const evictable = [...detail.held.keys()].filter(id => !detail.viewed.has(id) && id !== detail.shell?.activeThreadId)
         .sort((first, second) => (detail.used.get(first) ?? 0) - (detail.used.get(second) ?? 0))
@@ -129,17 +144,30 @@ export function useAgentConnection(bridge: AgentBridge | undefined): AgentConnec
    * A thread's history the window does not hold, asked for once until it arrives. A resync asks for a
    * history the window does hold but can no longer follow, and is deduplicated the same way, so a run of
    * deltas the window cannot apply costs one request rather than one per delta.
+   *
+   * Asking is also what recency is made of. A history moves up when its thread is selected, declared viewed
+   * or on screen, so the one evicted is the one the user looked at longest ago, never whichever a shell
+   * happened to list first. A resync is the window catching up, not the user looking, and moves nothing.
+   * A request from a selection or a view counts as a hit or a miss for the development console.
    */
-  const requestDetail = useCallback((threadId: string, options: { stale?: boolean } = {}): void => {
-    if (bridge?.threadDetail === undefined || detail.asked.has(threadId)) return
+  const requestDetail = useCallback((threadId: string, options: { stale?: boolean; onScreen?: boolean } = {}): void => {
+    if (bridge?.threadDetail === undefined) return
+    if (options.stale !== true) {
+      detail.used.set(threadId, ++detail.clock)
+      if (options.onScreen !== true) { if (detail.held.has(threadId)) detail.hits++; else detail.misses++ }
+    }
+    if (detail.asked.has(threadId)) return
     if (detail.held.has(threadId) && options.stale !== true) return
     detail.asked.add(threadId)
+    // A history that never arrives leaves no recency behind.
+    const forget = (): void => { if (!detail.held.has(threadId)) detail.used.delete(threadId) }
     void bridge.threadDetail(threadId).then(result => {
       detail.asked.delete(threadId)
       if (result !== null && session.current) receiveDetail.current(result)
-    }).catch(() => { detail.asked.delete(threadId) })
+      forget()
+    }).catch(() => { detail.asked.delete(threadId); forget() })
   }, [bridge, detail, session])
-  ask.current = requestDetail
+  ask.current = threadId => requestDetail(threadId, { onScreen: true })
   resync.current = threadId => requestDetail(threadId, { stale: true })
   const command = useCallback((request: AgentCommand): Promise<AgentState | null> => {
     // Telling main which panes are open is also this window's own record of whose history it needs.
@@ -156,7 +184,9 @@ export function useAgentConnection(bridge: AgentBridge | undefined): AgentConnec
         if (session.current) {
           setFailure(null)
           // A shell held for its frame is older than this response; it commits first so it can never land after.
-          if (version === session.observed) { commitPendingShell(); receiveState(next) }
+          // Both commit urgently: the user is watching their own action land, and a transition here could let
+          // the sync command reply paint before the older pending shell it must follow.
+          if (version === session.observed) { commitPendingShell({ urgent: true }); receiveState(next, { urgent: true }) }
         }
         return next
       } catch {
@@ -169,12 +199,15 @@ export function useAgentConnection(bridge: AgentBridge | undefined): AgentConnec
     // checks busy state, provider locks and authority before dispatch.
     const speechPreference = request.type === 'configure' && typeof request.patch.speak === 'boolean' && Object.keys(request.patch).length === 1
     const providerOperation = request.type === 'connect' || request.type === 'disconnect' || request.type === 'refresh'
-    // A thread's own follow-up queue, steering and skills catalog never wait behind another thread's work;
-    // telling main which panes are open grants nothing and must not wait either.
-    const threadLane = request.type === 'queue-followup' || request.type === 'edit-followup' || request.type === 'remove-followup'
-      || request.type === 'reorder-followups' || request.type === 'resume-followups' || request.type === 'steer-followup' || request.type === 'steer' || request.type === 'refresh-thread-skills'
-      || request.type === 'observe-threads'
-    if (request.type === 'manual-send' || request.type === 'select-thread' || request.type === 'save-thread-draft' || request.type === 'voice' || request.type === 'voice-state' || speechPreference || providerOperation || threadLane) return run()
+    // A command main runs in one thread's own lane goes straight to main: waiting here for another
+    // thread's reply would undo that lane. Main orders a thread's commands in the order they arrive, so
+    // sending at once keeps them in user order. A thread's commands that never enter a lane in main (Stop,
+    // selection, its saved draft, its follow-up queue and its skills catalog) go at once too, and telling
+    // main which panes are open grants nothing, so it does not wait either. What main keeps global
+    // (assignment moves, a new thread, settling or restoring a project, the single composer draft) still
+    // waits for the reply before it.
+    const threadCommand = THREAD_SCOPED_COMMAND_TYPES.has(request.type) || LANELESS_THREAD_COMMAND_TYPES.has(request.type)
+    if (threadCommand || request.type === 'observe-threads' || request.type === 'voice' || request.type === 'voice-state' || speechPreference || providerOperation) return run()
     const operation = session.tail.then(run)
     session.tail = operation
     return operation
@@ -191,7 +224,9 @@ export function useAgentConnection(bridge: AgentBridge | undefined): AgentConnec
     // waits out the frame so the detail that follows commits with it; a shell nothing follows commits in
     // the frame it would have painted in anyway, and a second shell inside the frame commits the first —
     // nothing published is skipped. Hidden windows cannot wait for animation frames: voice controls must
-    // still reach their effects. They and windows without a detail channel commit at once.
+    // still reach their effects. They and windows without a detail channel commit at once — still as a
+    // transition, which is fine: React's scheduler runs on its own timer, not a rAF, so it keeps
+    // committing while the window is hidden.
     const flushPendingShell = (): void => { if (active) commitPendingShell() }
     const unsubscribe = bridge?.onState(next => {
       ++session.observed
@@ -205,13 +240,14 @@ export function useAgentConnection(bridge: AgentBridge | undefined): AgentConnec
     document.addEventListener('visibilitychange', visibilityChanged)
     const unsubscribeDetail = bridge?.onThreadDetail?.(next => { if (active) receiveDetail.current(next) })
     // The shell this window saw last time paints the page on the first frame, marked stale and
-    // disconnected, and the first live shell replaces it.
+    // disconnected, and the first live shell replaces it. Both are urgent: there is nothing on
+    // screen yet for a transition to stay interruptible for, only a blank window to fill in.
     if (detail.shell === null) {
       const cached = readShellCache()
-      if (cached !== null) receive(cached)
+      if (cached !== null) receive(cached, { urgent: true })
     }
     void bridge?.get().then(next => {
-      if (active && version === session.observed) receive(next)
+      if (active && version === session.observed) receive(next, { urgent: true })
     }).catch(() => { if (active) setFailure({ session, error: 'Agent controls are unavailable. Reopen Sotto to reconnect.' }) })
     const flush = (): void => threadDrafts.flushAll()
     window.addEventListener('pagehide', flush)
@@ -243,7 +279,10 @@ export function useAgentConnection(bridge: AgentBridge | undefined): AgentConnec
   // says nothing about what is on disk now.
   useLayoutEffect(() => { if (state !== null && state.stale !== true) threadDrafts.receive(state) }, [state, threadDrafts])
   // What one state update costs this window, from the moment it arrived to the commit that shows it, in the
-  // dev console at most once a second. Development only: the production bundle drops the whole effect body.
+  // dev console at most once a second — the figure now includes whatever time a transition spent waiting
+  // behind a higher-priority input. Development only: the production bundle drops the whole effect body.
+  // Beside it, how many thread details the window holds, roughly how large they are, and how often a
+  // selection or a view found its detail already held: the numbers a byte budget for them would be set from.
   useEffect(() => {
     if (!import.meta.env.DEV || import.meta.env.MODE === 'test') return
     const at = arrived.current
@@ -253,7 +292,9 @@ export function useAgentConnection(bridge: AgentBridge | undefined): AgentConnec
     if (now - reported.current < 1000) return
     reported.current = now
     console.info(`sotto: state update ${Math.round(now - at)} ms`)
-  }, [state])
+    const kilobytes = Math.round(approximateDetailBytes(detail.held.values()) / 1024)
+    console.info(`sotto: ${detail.held.size} thread details held, about ${kilobytes} KB, ${detail.hits} hits, ${detail.misses} misses`)
+  }, [state, detail])
   return { state, error, command, threadDrafts }
 }
 
@@ -266,6 +307,8 @@ interface AgentContextValue extends AgentConnection {
   readonly claimPersonalAudio: () => () => void
   readonly waitForPersonalAudio: () => Promise<void>
   readonly responseStreaming: AppSettings['responseStreaming']
+  /** Whether the browser player opens on its own when an agent opens a page; off leaves the work and Tools > Browser unchanged. */
+  readonly showBrowserPreviews: boolean
 }
 
 const AgentContext = createContext<AgentContextValue | null>(null)
@@ -275,7 +318,8 @@ export function AgentProvider({ children, settings, dictation }: {
   readonly settings: AppSettings | null
   readonly dictation: DictationState
 }): ReactNode {
-  const connection = useAgentConnection(window.sotto?.agents)
+  const agentsBridge = window.sotto?.agents
+  const connection = useAgentConnection(agentsBridge && wrapAgentBridge(agentsBridge))
   const [voice, setVoice] = useState<AgentVoiceState>({ status: 'off' })
   const voiceRef = useRef<AgentVoiceSession | null>(null)
   const [personalAudio, setPersonalAudio] = useState(false)
@@ -410,6 +454,7 @@ export function AgentProvider({ children, settings, dictation }: {
     claimPersonalAudio,
     waitForPersonalAudio: () => personalRelease.current,
     responseStreaming: settings?.responseStreaming ?? 'live',
+    showBrowserPreviews: settings?.showBrowserPreviews ?? true,
     attention,
     voice,
     muteVoice: () => { void connection.command({ type: 'voice', action: voiceRef.current?.getState().status === 'muted' ? 'unmute' : 'mute' }) },

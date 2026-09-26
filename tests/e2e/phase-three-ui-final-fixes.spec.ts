@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import sharp from 'sharp'
 import { expect, test, type Locator, type Page } from '@playwright/test'
+import { parseHostEntityKey } from '../../src/shared/clientIdentity'
 import { DEFAULT_SETTINGS } from '../../src/shared/settings'
 import { closeSotto, launchSotto, openThreads, type LaunchedSotto } from './support/sottoLaunch'
 import { forceDomTerminalRenderer } from './support/terminal'
@@ -20,7 +21,7 @@ type Mode = 'dark' | 'light'
 
 async function ownedProfile(prefix: string): Promise<string> {
   const profile = await mkdtemp(join(tmpdir(), prefix))
-  await writeFile(join(profile, 'settings.json'), JSON.stringify({ ...DEFAULT_SETTINGS, onboardingComplete: true, appearance: 'dark', lightTheme: 'ocean', darkTheme: 'ocean' }))
+  await writeFile(join(profile, 'settings.json'), JSON.stringify({ ...DEFAULT_SETTINGS, onboardingComplete: true, appearance: 'dark', lightTheme: 'nocturne', darkTheme: 'nocturne' }))
   return profile
 }
 
@@ -48,8 +49,11 @@ async function workshop(launched: LaunchedSotto): Promise<{ folder: string; pane
     const agents = window.sotto!.agents!
     await agents.command({ type: 'configure', patch: { enabled: true, speak: false } })
     const state = await agents.command({ type: 'connect' })
-    const thread = state.host.threads.find(item => item.id === 'workshop')!
-    return state.host.projects.find(project => project.id === thread.projectId)!.path
+    return { threads: state.host.threads.map(({ id, projectId }) => ({ id, projectId })), projects: state.host.projects.map(({ id, path }) => ({ id, path })) }
+  }).then(({ threads, projects }) => {
+    // The window names threads by their host's key (`host:<host>:<id>`); the fixture's own ID is the last part.
+    const thread = threads.find(item => parseHostEntityKey(item.id)?.id === 'workshop')!
+    return projects.find(project => project.id === thread.projectId)!.path
   })
   expect(folder.startsWith(launched.userData)).toBe(true)
   await resize(launched, 1280, 860)
@@ -60,7 +64,7 @@ async function workshop(launched: LaunchedSotto): Promise<{ folder: string; pane
   return { folder, panel: page.getByRole('complementary', { name: 'Tools' }) }
 }
 
-test('keeps working-folder actions accessible in the compact header while an open diff has the panel', async () => {
+test('keeps working-folder actions accessible in the footer while an open diff has the panel', async () => {
   test.setTimeout(180_000)
   const launched = await launchSotto('success', await ownedProfile('sotto-e2e-phase3-ui-short-path-'))
   const { page } = launched
@@ -79,21 +83,21 @@ test('keeps working-folder actions accessible in the compact header while an ope
     ].join('\n'))
 
     await panel.getByRole('tab', { name: 'Changes' }).click()
-    await panel.getByRole('listbox', { name: 'Changed files' }).getByRole('option', { name: /^app\.ts/u }).click()
-    const diff = panel.getByRole('region', { name: 'Changes in src/app.ts' })
+    const diff = panel.getByRole('group', { name: 'src/app.ts' })
     await expect(diff).toContainText('return `Goodbye, ${name}.`')
     const path = panel.locator('.tools-panel__path-text')
     const copy = panel.getByRole('button', { name: 'Copy working folder path' })
     const reveal = panel.getByRole('button', { name: /: working folder$/u })
     const expectFolderActions = async (): Promise<void> => {
-      // The sidecar replaced the redundant path rail with full tooltips and an accessible path.
+      // The footer holds the working folder's actions, with full tooltips and an accessible path.
       await expect(path).toHaveText(folder)
       await expect(copy).toHaveAttribute('title', `Copy path: ${folder}`)
       await expect(reveal).toHaveAttribute('title', new RegExp(folder.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')))
       await expect(copy).toBeInViewport()
       await expect(reveal).toBeInViewport()
       await expect(panel.getByRole('button', { name: 'Pin to Workshop' })).toBeInViewport()
-      expect(await panel.locator('.tools-panel__head').evaluate(element => element.getBoundingClientRect().height)).toBeLessThanOrEqual(100)
+      // The surface's line of chrome stays one line above the diff.
+      expect(await panel.locator('.tools-chrome').first().evaluate(element => element.getBoundingClientRect().height)).toBeLessThanOrEqual(46)
     }
     await expectFolderActions()
 
@@ -101,16 +105,16 @@ test('keeps working-folder actions accessible in the compact header while an ope
     await expect(diff).toBeVisible()
     await expectFolderActions()
     const heights = await panel.evaluate(element => ({
-      header: element.querySelector('.tools-panel__head')!.getBoundingClientRect().height,
-      diff: element.querySelector('.changes-diff__body')!.getBoundingClientRect().height,
+      header: element.querySelector('.tools-chrome')!.getBoundingClientRect().height,
+      diff: element.querySelector('.changes-files')!.getBoundingClientRect().height,
       line: Number.parseFloat(getComputedStyle(element.querySelector('.changes-diff__rows')!).lineHeight),
-      list: element.querySelector('.changes-list')!.getBoundingClientRect().height,
+      bar: element.querySelector('.changes-bar')!.getBoundingClientRect().height,
     }))
-    expect(heights.header).toBeLessThanOrEqual(100)
-    // Git actions and the comparison selector now share this height. Keep six readable code rows
-    // and substantially more reading space than the selected-file strip.
+    expect(heights.header).toBeLessThanOrEqual(46)
+    // The line of chrome and the view bar share this height. Keep six readable code rows
+    // and substantially more reading space than the bar.
     expect(heights.diff).toBeGreaterThanOrEqual(heights.line * 6)
-    expect(heights.diff).toBeGreaterThan(heights.list * 2)
+    expect(heights.diff).toBeGreaterThan(heights.bar * 2)
     await shoot(page, 'tools-path-diff-820x560')
 
     await copy.focus()
@@ -173,7 +177,7 @@ test('repaints one running terminal with the DOM fallback through the theme gall
     await panel.locator('.xterm').click()
     await page.keyboard.type('echo SOTTOPROBE')
     await page.keyboard.press('Enter')
-    await expect.poll(async () => ((await screen.innerText()).match(/SOTTOPROBE/gu) ?? []).length, { timeout: 20_000 }).toBeGreaterThanOrEqual(2)
+    await expect.poll(async () => ((await screen.innerText()).replace(/\n/gu, '').match(/SOTTOPROBE/gu) ?? []).length, { timeout: 20_000 }).toBeGreaterThanOrEqual(2)
     await panel.locator('.xterm').evaluate(element => { element.dataset.probe = 'same-terminal' })
     const tab = await panel.locator('.terminal-tabs__tab[aria-selected="true"]').getAttribute('id')
     const view = panel.locator('.terminal-view')
@@ -195,26 +199,29 @@ test('repaints one running terminal with the DOM fallback through the theme gall
       return want
     }
 
-    await expect(page.locator('html')).toHaveAttribute('data-theme-id', 'ocean')
-    const ocean = await expectField()
+    await expect(page.locator('html')).toHaveAttribute('data-theme-id', 'nocturne')
+    const nocturne = await expectField()
 
-    // The gallery: another built-in theme for both halves.
+    // The picker: another built-in theme for both halves.
     await settings()
-    await page.getByRole('button', { name: 'Use Copper theme', exact: true }).click()
-    await expect(page.locator('html')).not.toHaveAttribute('data-theme-id', 'ocean')
+    for (const half of ['Light', 'Dark'] as const) {
+      await page.getByRole('radiogroup', { name: `${half} theme`, exact: true }).getByRole('radio', { name: 'Tropic', exact: true }).click()
+    }
+    await expect(page.locator('html')).toHaveAttribute('data-theme-id', 'tropic')
     await threads()
-    const emberField = await expectField()
-    expect(near(emberField, ocean, 8)).toBe(false)
+    const tropicField = await expectField()
+    expect(near(tropicField, nocturne, 8)).toBe(false)
 
-    // Light mode from the gallery's own tile.
+    // Light mode from the colour scheme track.
     await settings()
-    await page.getByRole('button', { name: 'Use light mode', exact: true }).click()
+    const scheme = page.getByRole('radiogroup', { name: 'Color scheme', exact: true })
+    await scheme.getByRole('radio', { name: 'Light', exact: true }).click()
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
     await threads()
-    const emberLight = await expectField()
-    expect(near(emberLight, emberField, 8)).toBe(false)
+    const tropicLight = await expectField()
+    expect(near(tropicLight, tropicField, 8)).toBe(false)
     await settings()
-    await page.getByRole('button', { name: 'Use dark mode', exact: true }).click()
+    await scheme.getByRole('radio', { name: 'Dark', exact: true }).click()
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
 
     // The live editor: a terminal background typed in Advanced paints the running terminal while the editor stays open.
@@ -234,7 +241,7 @@ test('repaints one running terminal with the DOM fallback through the theme gall
     // Closing without saving puts the saved theme back on the same terminal.
     await editor.getByRole('button', { name: 'Close the theme editor' }).click()
     await expect(editor).toHaveCount(0)
-    expect(near(await expectField(), emberField)).toBe(true)
+    expect(near(await expectField(), tropicField)).toBe(true)
 
     // Reduced motion from Settings stills the cursor of the same terminal, and Follow system lets it blink again.
     const cursor = panel.locator('.xterm-rows .xterm-cursor')
@@ -275,7 +282,7 @@ test('repaints one running terminal with the DOM fallback through the theme gall
     expect(await panel.locator('.terminal-tabs__tab[aria-selected="true"]').getAttribute('id')).toBe(tab)
     await page.keyboard.type('echo AFTERTHEME')
     await page.keyboard.press('Enter')
-    await expect.poll(async () => { const text = await screen.innerText(); return text.includes('SOTTOPROBE') && (text.match(/AFTERTHEME/gu) ?? []).length >= 2 }, { timeout: 20_000 }).toBe(true)
+    await expect.poll(async () => { const text = (await screen.innerText()).replace(/\n/gu, ''); return text.includes('SOTTOPROBE') && (text.match(/AFTERTHEME/gu) ?? []).length >= 2 }, { timeout: 20_000 }).toBe(true)
     await view.screenshot({ path: join(SHOTS, 'terminal-after-themes-dark.png'), animations: 'disabled' })
   } finally {
     await closeSotto(launched)

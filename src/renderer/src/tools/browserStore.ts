@@ -1,5 +1,5 @@
 import { useCallback, useSyncExternalStore } from 'react'
-import { safeBrowserUrl, type BrowserBounds, type BrowserBridge, type BrowserEvent, type BrowserPage, type BrowserTask } from '../../../shared/browser'
+import { safeBrowserUrl, type BrowserBounds, type BrowserBridge, type BrowserEvent, type BrowserPage, type BrowserGrantView, type BrowserTask } from '../../../shared/browser'
 import type { FileWorkspace } from '../../../shared/files'
 import type { ToolsError, ToolsResult } from '../../../shared/tools'
 
@@ -16,6 +16,8 @@ export interface ThreadBrowser {
   readonly notice: string | null
   /** A page main would not show, and why. It stays off the window until the reader tries again. */
   readonly placementProblem: { readonly pageId: string; readonly message: string } | null
+  /** The thread's browser grant while it lives: it opens, navigates, clicks and types without asking (ADR-0029). */
+  readonly grant: BrowserGrantView | null
 }
 
 const unavailable: ToolsError = { code: 'unavailable', message: 'Browser is not available in this window.' }
@@ -53,12 +55,9 @@ function sameBounds(a: BrowserBounds | null, b: BrowserBounds | null): boolean {
  */
 export class BrowserStore {
   private tasksSnapshot: readonly BrowserTask[] = []
-  private readonly dismissedTasks = new Set<string>()
   private readonly taskThreads = new Set<string>()
   taskSnapshot = (): readonly BrowserTask[] => this.tasksSnapshot
-  isDismissed(id: string): boolean { return this.dismissedTasks.has(id) }
-  dismissTask(id: string): void { this.dismissedTasks.add(id); this.tasksSnapshot = [...this.tasksSnapshot]; this.emit() }
-  /** Subscribe before Tools opens, so background browser work can introduce itself in the corner. */
+  /** Subscribe before Tools opens, so background browser work can introduce itself in the player. */
   watchTasks(bridge: BrowserBridge | undefined, threadIds: readonly string[]): void {
     if (!bridge) return
     this.listen(bridge)
@@ -78,17 +77,25 @@ export class BrowserStore {
     if (result.ok) { this.receiveTask(result.value); return null }
     return result.error.message
   }
-  async answerAction(bridge: BrowserBridge | undefined, task: BrowserTask, allow: boolean): Promise<string | null> {
+  /** `forThread` also grants the thread the browser without asking for the rest of the session (ADR-0029). */
+  async answerAction(bridge: BrowserBridge | undefined, task: BrowserTask, allow: boolean, forThread = false): Promise<string | null> {
     if (!bridge?.answerAction || !task.pendingAction) return 'This action is no longer waiting.'
-    const result = await settle(bridge.answerAction({ threadId: task.threadId, workspaceId: task.workspaceId, pageId: task.pageId, taskId: task.id, actionId: task.pendingAction.id, allow }))
+    const result = await settle(bridge.answerAction({ threadId: task.threadId, workspaceId: task.workspaceId, pageId: task.pageId, taskId: task.id, actionId: task.pendingAction.id, allow, ...(forThread ? { forThread: true as const } : {}) }))
     if (result.ok) { this.receiveTask(result.value); return null }
     return result.error.message
+  }
+  /** The user's Stop on a browser grant. Main's event clears it too; clearing here keeps the line honest if that event is late. */
+  async stopGrant(bridge: BrowserBridge | undefined, threadId: string): Promise<string | null> {
+    const workspace = this.threads.get(threadId)?.workspace
+    if (!bridge?.stopGrant || !workspace) return 'Browser is not available in this window.'
+    const result = await settle(bridge.stopGrant({ threadId, workspaceId: workspace.workspaceId }))
+    if (!result.ok) return `Could not stop this thread using the browser without asking; try Stop again. ${result.error.message}`.trim()
+    this.patch(threadId, { grant: null })
+    return null
   }
   private receiveTask(task: BrowserTask): void {
     const previous = this.tasksSnapshot.find(item => item.id === task.id)
     if (previous && previous.updatedAt > task.updatedAt) return
-    // A new permission needs the user again; ordinary progress never reopens a dismissed preview.
-    if (task.pendingAction && task.pendingAction.id !== previous?.pendingAction?.id) this.dismissedTasks.delete(task.id)
     this.tasksSnapshot = [...this.tasksSnapshot.filter(item => item.id !== task.id), task].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 100)
     this.emit()
   }
@@ -112,7 +119,7 @@ export class BrowserStore {
   thread(threadId: string): ThreadBrowser | undefined { return this.threads.get(threadId) }
 
   async activate(bridge: BrowserBridge | undefined, threadId: string): Promise<void> {
-    if (!this.threads.has(threadId)) this.setThread({ threadId, workspace: null, status: 'loading', error: null, pages: [], activePageId: null, busy: false, notice: null, placementProblem: null })
+    if (!this.threads.has(threadId)) this.setThread({ threadId, workspace: null, status: 'loading', error: null, pages: [], activePageId: null, busy: false, notice: null, placementProblem: null, grant: null })
     if (!bridge) { this.patch(threadId, { status: 'error', error: unavailable }); return }
     this.listen(bridge)
     const token = (this.listTokens.get(threadId) ?? 0) + 1
@@ -123,7 +130,7 @@ export class BrowserStore {
     if (!result.ok) { this.patch(threadId, { status: 'error', error: result.error }); return }
     const { workspace, pages } = result.value
     const active = pages.some(page => page.id === latest.activePageId) ? latest.activePageId : pages.at(-1)?.id ?? null
-    this.setThread({ ...latest, workspace, status: 'ready', error: null, pages, activePageId: active })
+    this.setThread({ ...latest, workspace, status: 'ready', error: null, pages, activePageId: active, grant: result.value.grant ?? null })
   }
 
   /** The thread's target for main, listing it first when this window has not yet. */
@@ -142,7 +149,7 @@ export class BrowserStore {
     const threadId = page.workspace.threadId
     const thread = this.threads.get(threadId)
     if (!thread) {
-      this.setThread({ threadId, workspace: page.workspace, status: 'ready', error: null, pages: [page], activePageId: page.id, busy: false, notice: null, placementProblem: null })
+      this.setThread({ threadId, workspace: page.workspace, status: 'ready', error: null, pages: [page], activePageId: page.id, busy: false, notice: null, placementProblem: null, grant: null })
       return
     }
     this.upsert(page)
@@ -253,6 +260,8 @@ export class BrowserStore {
 
   private receive(event: BrowserEvent): void {
     if (event.type === 'task') { this.receiveTask(event.task); return }
+    // A thread this window has not listed learns its grant when it is listed.
+    if (event.type === 'browser-grant') { this.patch(event.threadId, { grant: event.grant }); return }
     if (event.type === 'page') {
       const thread = this.threads.get(event.page.workspace.threadId)
       if (!thread || (thread.workspace !== null && thread.workspace.workspaceId !== event.page.workspace.workspaceId)) return

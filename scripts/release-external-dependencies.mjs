@@ -24,6 +24,8 @@ const reviewedInventories = Object.freeze({
       'node:http',
       'node:https',
       'node:module',
+      // The SSH launcher listens on a loopback port it picks and validates host addresses (#181).
+      'node:net',
       'node:os',
       'node:path',
       'node:sqlite',
@@ -45,8 +47,8 @@ const reviewedInventories = Object.freeze({
       'zlib',
       'zod',
     ]),
-    // Claude's isolated history helper checks packaged resources only in Electron.
-    dynamicImports: Object.freeze(['electron', 'node-pty']),
+    // The terminal loads node-pty on demand (ADR-0018). The headless host removed the dynamic Electron import (#181).
+    dynamicImports: Object.freeze(['node-pty']),
   }),
   preload: Object.freeze({
     version: 1,
@@ -104,6 +106,30 @@ export function verifyExternalDependencyInventories(
     const root = packageRoot(specifier)
     if (!packaged.has(root)) {
       throw new Error(`external package is missing from app.asar: ${root}`)
+    }
+  }
+}
+
+// The Linux host currently needs only pure JavaScript zod. Adding a native module requires
+// an explicit platform build/ABI strategy; never copy the desktop's node-pty into this archive.
+export const HOST_EXTERNAL_IMPORTS = Object.freeze([
+  'node:child_process', 'node:crypto', 'node:fs', 'node:fs/promises', 'node:http',
+  'node:os', 'node:path', 'node:sqlite', 'node:string_decoder', 'node:timers/promises',
+  'node:url', 'node:util', 'zod',
+])
+
+export function verifyHostExternalDependencies(inventory, packagedDependencies, availableBuiltinModules = builtinModules) {
+  if (inventory?.version !== 1 || inventory.scope !== 'host' ||
+      JSON.stringify(inventory.imports) !== JSON.stringify(HOST_EXTERNAL_IMPORTS) ||
+      JSON.stringify(inventory.dynamicImports) !== '[]') {
+    throw new Error('host external dependency metadata differs from the reviewed allowlist')
+  }
+  if (JSON.stringify(Object.keys(packagedDependencies).sort()) !== '["zod"]') {
+    throw new Error('host archive must contain exactly its reviewed zod runtime dependency')
+  }
+  for (const id of inventory.imports) {
+    if (id.startsWith('node:') && !availableBuiltinModules.includes(id) && !availableBuiltinModules.includes(id.slice(5))) {
+      throw new Error(`host Node builtin is unavailable: ${id}`)
     }
   }
 }

@@ -376,6 +376,7 @@ describe('typed preload bridge', () => {
         'getWindowMaximized',
         'gitChanges',
         'hideApp',
+        'hosts',
         'installUpdate',
         'listHistory',
         'listRecoveryNotices',
@@ -421,7 +422,7 @@ describe('typed preload bridge', () => {
       expect(Object.isFrozen(surface)).toBe(true)
     }
     expect(Object.keys(bridge.memory!).sort()).toEqual(['command', 'get', 'onChanged'])
-    expect(Object.keys(bridge.agents!).sort()).toEqual(['attachmentPreview', 'cancelSpeech', 'chooseProjectDirectory', 'command', 'detectWake', 'get', 'grokVoices', 'onState', 'onThreadDetail', 'prepareWake', 'releaseWake', 'synthesizeSpeech', 'threadDetail', 'voiceModel', 'workingCopyOptions'])
+    expect(Object.keys(bridge.agents!).sort()).toEqual(['attachmentPreview', 'cancelSpeech', 'chooseProjectDirectory', 'command', 'detectWake', 'get', 'gitChangedFiles', 'gitPullRequest', 'gitRefs', 'grokVoices', 'onState', 'onThreadDetail', 'prepareWake', 'releaseWake', 'synthesizeSpeech', 'threadDetail', 'voiceModel', 'workingCopyOptions'])
   })
 
   it('creates a frozen widget surface without private settings, dictation history, or audio processing', async () => {
@@ -1172,6 +1173,10 @@ describe('IPC validation and lifecycle', () => {
     await expect(ipc.invoke(SETTINGS_UPDATE, { theme: 'ultraviolet' })).rejects.toThrow(
       'Invalid IPC payload',
     )
+    // The OpenRouter writing model is gone (ADR-0026): nothing may set it, so nothing can bring it back.
+    await expect(ipc.invoke(SETTINGS_UPDATE, { writingModel: 'anthropic/claude-haiku-4.5' })).rejects.toThrow(
+      'Invalid IPC payload',
+    )
     await expect(
       ipc.invoke(SETTINGS_UPDATE, { theme: 'dark', injectedChannel: 'app:quit' }),
     ).rejects.toThrow('Invalid IPC payload')
@@ -1186,6 +1191,18 @@ describe('IPC validation and lifecycle', () => {
     expect(settings.update).toHaveBeenCalledExactlyOnceWith({ webLinkDestination: 'embedded' })
   })
 
+  it('persists turning browser previews off through settings IPC', async () => {
+    const { ipc, settings } = createIpcHarness()
+    await expect(ipc.invoke(SETTINGS_UPDATE, { showBrowserPreviews: false })).resolves.toMatchObject({ showBrowserPreviews: false })
+    expect(settings.update).toHaveBeenCalledExactlyOnceWith({ showBrowserPreviews: false })
+  })
+
+  it('persists turning the browser grant off through settings IPC (ADR-0029)', async () => {
+    const { ipc, settings } = createIpcHarness()
+    await expect(ipc.invoke(SETTINGS_UPDATE, { browserWithoutAsking: false })).resolves.toMatchObject({ browserWithoutAsking: false })
+    expect(settings.update).toHaveBeenCalledExactlyOnceWith({ browserWithoutAsking: false })
+  })
+
   it('persists and clears working-copy defaults through the settings allow-list', async () => {
     const { ipc, settings } = createIpcHarness()
     const patch = { threadWorkingCopyDefault: 'independent', projectThreadWorkingCopyDefaults: { project: 'shared' } }
@@ -1193,6 +1210,25 @@ describe('IPC validation and lifecycle', () => {
     expect(settings.update).toHaveBeenLastCalledWith(patch)
     await ipc.invoke(SETTINGS_UPDATE, { projectThreadWorkingCopyDefaults: {} })
     expect(settings.update).toHaveBeenLastCalledWith({ projectThreadWorkingCopyDefaults: {} })
+  })
+
+  it('persists every Git and diff setting through the allow-list, one at a time, and refuses a value none of them takes', async () => {
+    const { ipc, settings } = createIpcHarness()
+    const choices = [
+      { gitAutoPull: true }, { defaultMergeMethod: 'squash' }, { lastMergeMethod: 'rebase' },
+      { diffLayout: 'split' }, { diffHideWhitespace: false }, { diffFileState: 'expanded' },
+      { gitWritingStyle: 'custom' }, { gitWritingInstructions: 'Subjects in the past tense.' }, { followPullRequestTemplates: false },
+      { autoSettleMergedThreads: true }, { proactivePanels: true },
+    ]
+    // One control saves one field, so each must survive the allow-list on its own or its toggle snaps back.
+    for (const patch of choices) {
+      await expect(ipc.invoke(SETTINGS_UPDATE, patch)).resolves.toMatchObject(patch)
+      expect(settings.update).toHaveBeenLastCalledWith(patch)
+    }
+    for (const patch of [{ defaultMergeMethod: 'fast-forward' }, { lastMergeMethod: 'last' }, { diffLayout: 'unified' }, { diffFileState: 'open' }, { gitWritingStyle: 'haiku' }, { gitWritingInstructions: 'x'.repeat(2_001) }, { proactivePanels: 'yes' }]) {
+      await expect(ipc.invoke(SETTINGS_UPDATE, patch)).rejects.toThrow('Invalid IPC payload')
+    }
+    expect(settings.update).toHaveBeenCalledTimes(choices.length)
   })
 
   it.each([

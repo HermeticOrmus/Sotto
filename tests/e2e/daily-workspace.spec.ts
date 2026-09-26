@@ -1,3 +1,4 @@
+import { hostEntityKey } from '../../src/shared/clientIdentity'
 import { execFileSync } from 'node:child_process'
 import { createServer } from 'node:http'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
@@ -10,7 +11,7 @@ import { closeSotto, launchSotto, openThreads, userMessageTexts, type LaunchedSo
 import { terminalOutput } from './support/terminal'
 
 // Full app, real controller/IPC/files/PTY/browser/Git/worktrees; coding providers are explicit fixtures.
-// Only the final GitHub PR responses are replaced, AFTER a real push to an owned local bare repository.
+// GitHub is a scripted gh (tests/fixtures/fakeGh.mjs), reached AFTER a real push to an owned local bare repository.
 const SHOTS = resolve('artifacts/issue-74-daily-workspace')
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true, timeout: 15000 }).trim()
 async function size(launched: LaunchedSotto, width = 1600, height = 1000): Promise<void> {
@@ -36,8 +37,8 @@ async function capture(page: Page, name: string): Promise<void> {
   await page.screenshot({ path: join(SHOTS, `${name}.png`), animations: 'disabled' })
 }
 async function focusThread(page: Page, id: string, title: string): Promise<void> {
-  const tab = page.getByRole('tab', { name: title, exact: true })
-  if (await tab.isVisible()) await tab.click()
+  // The sidebar stays available while a restored split changes from narrow tabs to wide panes.
+  await page.getByRole('complementary', { name: 'Thread sidebar' }).getByRole('button', { name: title, exact: true }).click()
   await page.locator(`section.thread-pane[data-thread-id="${id}"]`).getByRole('textbox', { name: 'Prompt', exact: true }).click()
 }
 async function beside(page: Page, title: string): Promise<void> {
@@ -62,6 +63,11 @@ test('daily mixed-provider workspace joins independent work, tools, reviewed com
   const address = server.address()
   if (!address || typeof address === 'string') throw new Error('Owned server has no address')
   const url = `http://127.0.0.1:${address.port}/`
+  const ghState = join(directory, 'gh-state.json')
+  const previousGh = { script: process.env.SOTTO_E2E_GH_SCRIPT, executable: process.env.SOTTO_E2E_GH_EXECUTABLE, state: process.env.FAKE_GH_STATE }
+  process.env.SOTTO_E2E_GH_SCRIPT = resolve('tests/fixtures/fakeGh.mjs')
+  process.env.SOTTO_E2E_GH_EXECUTABLE = process.execPath
+  process.env.FAKE_GH_STATE = ghState
   const launched = await launchSotto('phase3-workspace', directory)
   const { page, app } = launched
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message))
@@ -142,44 +148,48 @@ test('daily mixed-provider workspace joins independent work, tools, reviewed com
       return view.executeJavaScript('({title: document.title, bridge: typeof window.sotto, require: typeof window.require})')
     }, url)).toEqual({ title: 'Daily local preview', bridge: 'undefined', require: 'undefined' })
     await panel.getByRole('tab', { name: 'Changes', exact: true }).click()
-    await panel.getByRole('option', { name: /^greeting.txt/ }).click()
-    await expect(panel.getByRole('region', { name: 'Changes in greeting.txt' })).toContainText('Hello, daily workspace')
-    await panel.getByRole('button', { name: 'Stage file', exact: true }).click()
-    await expect(panel.getByText('Change staged.', { exact: true })).toBeVisible()
-    await panel.getByRole('button', { name: 'Git actions', exact: true }).click()
-    await panel.getByRole('textbox', { name: 'Commit message', exact: true }).fill('Make the daily greeting friendlier')
-    await panel.getByRole('button', { name: 'Commit staged changes (1)', exact: true }).click()
-    await expect(panel.getByText('Commit created.', { exact: true })).toBeVisible()
+    // Changes reads the working tree against HEAD; there is no staging to do first (ADR-0027).
+    await expect(panel.getByRole('group', { name: 'greeting.txt' })).toContainText('Hello, daily workspace')
+    await expect(panel.getByRole('button', { name: 'Stage file', exact: true })).toHaveCount(0)
+    // The commit is the pane header's Git action (ADR-0027): Commit from its menu, the message typed in the dialog.
+    await pane(first).getByRole('button', { name: 'More Git actions', exact: true }).click()
+    await page.getByRole('menuitem', { name: 'Commit', exact: true }).click()
+    const commitDialog = page.getByRole('dialog', { name: 'Commit changes' })
+    await commitDialog.getByRole('textbox', { name: 'Commit message (optional)' }).fill('Make the daily greeting friendlier')
+    await commitDialog.getByRole('button', { name: 'Commit', exact: true }).click()
+    await expect(pane(first).locator('.git-action-notice')).toContainText(/Committed [0-9a-f]{7}/u, { timeout: 60_000 })
     const committed = git(working, 'rev-parse', 'HEAD')
     expect(committed).not.toBe(original); expect(git(other, 'rev-parse', 'HEAD')).toBe(original)
     expect(git(repository, 'rev-parse', 'HEAD')).toBe(original)
-    await panel.getByRole('button', { name: 'Pull request', exact: true }).click()
-    await expect(panel.getByText('Pull requests require a GitHub remote. This branch can still be pushed.')).toBeVisible()
-    await expect(panel.getByRole('button', { name: 'Create pull request', exact: true })).toBeDisabled()
+    // The pull request is T3's (ADR-0027): Create PR in the pane header pushes to the owned remote and opens it through
+    // the scripted gh, the badge under the composer opens it in Tools, and it merges only after its confirmation.
     expect(git(repository, '--git-dir', remote, 'for-each-ref', '--format=%(refname)', 'refs/heads')).toBe('')
-    await panel.getByRole('button', { name: 'Push branch', exact: true }).click()
-    await expect(panel.getByText('Branch pushed.', { exact: true })).toBeVisible()
-    expect(git(repository, '--git-dir', remote, 'rev-parse', `refs/heads/${implementation!.worktree!.branch}`)).toBe(committed)
-    // Faithful GitHub UI fixture, explicitly separate from the real service/IPC/Git lane above.
-    const inspected = await page.evaluate(async threadId => window.sotto!.gitChanges!.reviewPullRequest!({ threadId }), first)
-    if (!inspected.ok) throw new Error(inspected.error.message)
-    const fixture = { ...inspected.value, repository: 'https://github.com/sotto-fixture/owned', remoteUrl: 'https://github.com/sotto-fixture/owned.git', base: 'main', error: null }
-    const pr = { number: 74, title: 'Make the daily greeting friendlier', url: 'https://github.com/sotto-fixture/owned/pull/74', state: 'OPEN', base: 'main', head: fixture.branch!, draft: false, review: 'REVIEW_REQUIRED', checks: [{ name: 'Owned build', status: 'SUCCESS', url: null }] }
-    await app.evaluate(({ ipcMain }, { fixture, pr }) => {
-      let creates = 0
-      ipcMain.removeHandler('sotto:git-changes:reviewPullRequest')
-      ipcMain.handle('sotto:git-changes:reviewPullRequest', () => ({ ok: true, value: { ...fixture, pullRequest: creates ? pr : null } }))
-      ipcMain.removeHandler('sotto:git-changes:actPullRequest')
-      ipcMain.handle('sotto:git-changes:actPullRequest', (_event, request) => {
-        if (++creates !== 1 || request.action !== 'create' || request.threadId !== fixture.workspace.threadId || request.workspaceId !== fixture.workspace.workspaceId || request.revision !== fixture.revision || request.base !== 'main' || request.title !== pr.title || request.body !== 'Verified against the owned local remote.') throw new Error('Incorrect or repeated fixture PR action')
-        return { ok: true, value: { message: 'Pull request created.', pullRequest: pr } }
-      })
-    }, { fixture, pr })
-    await panel.getByRole('button', { name: 'Refresh pull request', exact: true }).click()
-    await panel.getByRole('textbox', { name: 'Base branch', exact: true }).fill('main')
-    await panel.getByRole('textbox', { name: 'PR body', exact: true }).fill('Verified against the owned local remote.')
-    await panel.getByRole('button', { name: 'Create pull request', exact: true }).click()
-    await expect(panel.getByRole('region', { name: 'Pull request status' })).toContainText('#74')
+    await pane(first).getByRole('button', { name: 'More Git actions', exact: true }).click()
+    await page.getByRole('menuitem', { name: 'Create PR', exact: true }).click()
+    await expect(pane(first).locator('.git-action-notice')).toContainText('Created PR #74', { timeout: 90_000 })
+    const branch = git(working, 'branch', '--show-current')
+    expect(git(repository, '--git-dir', remote, 'rev-parse', `refs/heads/${branch}`)).toBe(committed)
+    await pane(first).getByRole('button', { name: /^Open PR #74 - Open: .* in Tools$/u }).click({ timeout: 30_000 })
+    await expect(panel.getByRole('tab', { name: 'Pull request', exact: true })).toHaveAttribute('aria-selected', 'true')
+    const created = (JSON.parse(await readFile(ghState, 'utf8')) as { pulls: Array<{ title: string }> }).pulls[0]!
+    await expect(panel.getByRole('heading', { name: `#74 ${created.title}`, exact: true })).toBeVisible({ timeout: 30_000 })
+    // The merge checklist: the owned repository requires no review, the one check passed, and every line is done.
+    const checklist = panel.getByRole('list', { name: 'Merge checklist' })
+    await expect(checklist).toContainText('CI / Owned build passed')
+    await expect(checklist).toContainText('No review required')
+    await expect(panel.getByRole('heading', { name: /^Ready to merge/u })).toContainText('5 of 5 done')
+    await panel.getByRole('button', { name: 'Merge #74', exact: true }).click()
+    const confirmMerge = page.getByRole('dialog', { name: 'Merge pull request?' })
+    await expect(confirmMerge).toContainText('This merges #74 into main using merge.')
+    expect((JSON.parse(await readFile(ghState, 'utf8')) as { calls: string[] }).calls.some(call => call.startsWith('pr merge'))).toBe(false)
+    await confirmMerge.getByRole('button', { name: 'Merge', exact: true }).click()
+    await expect(panel.getByText('Pull request merged.', { exact: true })).toBeVisible({ timeout: 30_000 })
+    await expect(panel.locator('.pr-surface__finished')).toContainText('Merged into main')
+    const merged = JSON.parse(await readFile(ghState, 'utf8')) as { pulls: Array<{ number: number; state: string; mergedWith?: string; headRefName: string }>; calls: string[] }
+    expect(merged.pulls).toEqual([expect.objectContaining({ number: 74, state: 'MERGED', mergedWith: 'merge', headRefName: branch })])
+    expect(merged.calls.filter(call => call.startsWith('pr merge'))).toHaveLength(1)
+    await panel.getByRole('button', { name: /^Linked pull requests/u }).click()
+    await expect(panel.getByRole('list', { name: 'Linked pull requests' })).toContainText('Created from this thread')
     await capture(page, 'owned-push-fixture-pr')
     await focusThread(page, second, 'Daily review')
     await expect(prompt(second)).toHaveValue('Keep this review draft private to this pane.')
@@ -190,10 +200,16 @@ test('daily mixed-provider workspace joins independent work, tools, reviewed com
       expect(messages.filter(message => message === own)).toHaveLength(1)
       expect(messages.some(message => message === foreign)).toBe(false)
     }
-    await writeFile(join(SHOTS, 'daily-proof.json'), JSON.stringify({ lane: 'provider fixtures; real Electron services; GitHub status IPC fixture', original, committed, pushed: committed, first, second, working, other, realGitHubWrites: 0, errors }, null, 2))
+    await writeFile(join(SHOTS, 'daily-proof.json'), JSON.stringify({ lane: 'provider fixtures; real Electron services; scripted gh', original, committed, pushed: committed, first, second, working, other, realGitHubWrites: 0, errors }, null, 2))
     expect(errors).toEqual([])
   } catch (error) { await capture(page, 'failure').catch(() => undefined); throw error }
-  finally { await closeSotto(launched); await new Promise<void>(done => server.close(() => done())); await rm(requireOwnedE2EProfile(directory), { recursive: true, force: true }) }
+  finally {
+    await closeSotto(launched); await new Promise<void>(done => server.close(() => done()))
+    for (const [key, value] of [['SOTTO_E2E_GH_SCRIPT', previousGh.script], ['SOTTO_E2E_GH_EXECUTABLE', previousGh.executable], ['FAKE_GH_STATE', previousGh.state]] as const) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value
+    }
+    await rm(requireOwnedE2EProfile(directory), { recursive: true, force: true })
+  }
 })
 
 test('mixed pane drafts, queued work, settlement and preferences recover without automatic replay', async () => {
@@ -207,7 +223,9 @@ test('mixed pane drafts, queued work, settlement and preferences recover without
     const sidebar = page.getByRole('complementary', { name: 'Thread sidebar' })
     await sidebar.getByRole('button', { name: 'Grok voice previews', exact: true }).click()
     await beside(page, 'Footer links')
-    const pane = (id: string) => page.locator(`section.thread-pane[data-thread-id="${id}"]`)
+    const hostId = await page.evaluate(async () => (await window.sotto!.agents!.get()).hostId)
+    const key = (id: string): string => hostEntityKey(hostId, id)
+    const pane = (id: string) => page.locator(`section.thread-pane[data-thread-id="${key(id)}"]`)
     const prompt = (id: string) => pane(id).getByRole('textbox', { name: 'Prompt', exact: true })
     await prompt('grok-previews').fill('Unsent Claude draft for tomorrow.')
     await prompt('footer-links').fill('Queued Codex follow-up after this turn.')
@@ -215,7 +233,7 @@ test('mixed pane drafts, queued work, settlement and preferences recover without
     await expect(pane('footer-links').getByRole('region', { name: 'Queued messages' })).toContainText('Queued Codex follow-up after this turn.')
     await prompt('footer-links').fill('Newer unsent Codex draft.')
     await page.evaluate(async () => {
-      await window.sotto!.updateSettings({ appearance: 'light', darkTheme: 'ocean', lightTheme: 'grove', webLinkDestination: 'embedded' })
+      await window.sotto!.updateSettings({ appearance: 'light', darkTheme: 'nocturne', lightTheme: 'linen', webLinkDestination: 'embedded' })
       await window.sotto!.agents!.command({ type: 'settle-thread', threadId: 'grok-previews' })
       await window.sotto!.agents!.command({ type: 'settle-project', projectId: 'workshop' })
       await window.sotto!.agents!.command({ type: 'restore-project', projectId: 'workshop' })
@@ -225,21 +243,21 @@ test('mixed pane drafts, queued work, settlement and preferences recover without
     await expect(sidebar.getByRole('region', { name: 'Projects' }).getByRole('button', { name: 'Grok voice previews', exact: true })).toHaveCount(0)
     await page.evaluate(async () => window.sotto!.agents!.command({ type: 'restore-thread', threadId: 'grok-previews' }))
     await expect(sidebar.getByRole('region', { name: 'Projects' }).getByRole('button', { name: 'Grok voice previews', exact: true })).toBeVisible()
-    await focusThread(page, 'grok-previews', 'Grok voice previews')
+    await focusThread(page, key('grok-previews'), 'Grok voice previews')
     await pane('grok-previews').getByRole('button', { name: 'Tools', exact: true }).click()
     const panel = page.getByRole('complementary', { name: 'Tools' })
     await panel.getByRole('button', { name: 'Pin to Grok voice previews', exact: true }).click()
-    await focusThread(page, 'footer-links', 'Footer links')
+    await focusThread(page, key('footer-links'), 'Footer links')
     await expect(panel.getByRole('button', { name: 'Unpin from Grok voice previews', exact: true })).toBeVisible()
-    const drafts = async () => page.evaluate(async () => (await window.sotto!.agents!.get()).threadDrafts?.filter(draft => ['grok-previews', 'footer-links'].includes(draft.threadId)).map(draft => [draft.threadId, draft.text]).sort())
-    const expected = [['footer-links', 'Newer unsent Codex draft.'], ['grok-previews', 'Unsent Claude draft for tomorrow.']]
+    const drafts = async () => page.evaluate(async ids => (await window.sotto!.agents!.get()).threadDrafts?.filter(draft => ids.includes(draft.threadId)).map(draft => [draft.threadId, draft.text]).sort(), [key('grok-previews'), key('footer-links')])
+    const expected = [[key('footer-links'), 'Newer unsent Codex draft.'], [key('grok-previews'), 'Unsent Claude draft for tomorrow.']]
     await expect.poll(drafts).toEqual(expected)
     await expect(prompt('footer-links')).toHaveValue('Newer unsent Codex draft.')
     await page.evaluate(async () => window.sottoE2E!.agentEvent!({ type: 'disconnect', threadId: 'footer-links', text: '' }))
     await expect(prompt('footer-links')).toHaveValue('Newer unsent Codex draft.')
     await page.evaluate(async () => window.sotto!.agents!.command({ type: 'connect' }))
     const before = await page.evaluate(async () => window.sotto!.agents!.get())
-    expect(before.followups).toEqual([expect.objectContaining({ threadId: 'footer-links', text: 'Queued Codex follow-up after this turn.' })])
+    expect(before.followups).toEqual([expect.objectContaining({ threadId: key('footer-links'), text: 'Queued Codex follow-up after this turn.' })])
     expect(before.host.threads.flatMap(thread => thread.messages).some(message => message.text === 'Queued Codex follow-up after this turn.')).toBe(false)
     await capture(page, 'reconnect-pinned-drafts-light')
     await closeSotto(launched)
@@ -247,18 +265,18 @@ test('mixed pane drafts, queued work, settlement and preferences recover without
     launched = await launchSotto('phase3-workspace', directory); page = launched.page
     await connect(page); await size(launched)
     await openThreads(page)
-    await focusThread(page, 'grok-previews', 'Grok voice previews')
+    await focusThread(page, key('grok-previews'), 'Grok voice previews')
     await expect(prompt('grok-previews')).toHaveValue('Unsent Claude draft for tomorrow.')
-    await focusThread(page, 'footer-links', 'Footer links')
+    await focusThread(page, key('footer-links'), 'Footer links')
     await expect(prompt('footer-links')).toHaveValue('Newer unsent Codex draft.')
     // Tools chrome is explicitly session-scoped; reopening follows the currently focused thread.
     await expect(page.getByRole('complementary', { name: 'Tools' })).toBeHidden()
     await pane('footer-links').getByRole('button', { name: 'Tools', exact: true }).click()
     await expect(page.getByRole('complementary', { name: 'Tools' }).getByRole('button', { name: 'Pin to Footer links', exact: true })).toBeVisible()
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
-    expect(await page.evaluate(async () => window.sotto!.getSettings())).toMatchObject({ appearance: 'light', lightTheme: 'grove', darkTheme: 'ocean', webLinkDestination: 'embedded' })
+    expect(await page.evaluate(async () => window.sotto!.getSettings())).toMatchObject({ appearance: 'light', lightTheme: 'linen', darkTheme: 'nocturne', webLinkDestination: 'embedded' })
     const restored = await page.evaluate(async () => window.sotto!.agents!.get())
-    expect(restored.followups).toEqual([expect.objectContaining({ threadId: 'footer-links', text: 'Queued Codex follow-up after this turn.' })])
+    expect(restored.followups).toEqual([expect.objectContaining({ threadId: key('footer-links'), text: 'Queued Codex follow-up after this turn.' })])
     expect((await userMessageTexts(page, 'footer-links')).some(text => text === 'Queued Codex follow-up after this turn.')).toBe(false)
     expect(restored.assignments).toEqual([])
     await page.evaluate(async () => window.sottoE2E!.agentEvent!({ type: 'ready', threadId: 'footer-links', text: 'The original Codex turn is complete.' }))
@@ -268,7 +286,7 @@ test('mixed pane drafts, queued work, settlement and preferences recover without
     await page.evaluate(async () => window.sotto!.agents!.command({ type: 'connect' }))
     const delivered = await page.evaluate(async () => window.sotto!.agents!.get())
     expect((await userMessageTexts(page, 'footer-links')).filter(text => text === 'Queued Codex follow-up after this turn.')).toHaveLength(1)
-    for (const thread of delivered.host.threads.filter(thread => thread.id !== 'footer-links')) {
+    for (const thread of delivered.host.threads.filter(thread => thread.id !== key('footer-links'))) {
       expect((await userMessageTexts(page, thread.id)).some(text => text === 'Queued Codex follow-up after this turn.'), thread.id).toBe(false)
     }
     await expect(prompt('footer-links')).toHaveValue('Newer unsent Codex draft.')

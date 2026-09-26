@@ -7,12 +7,10 @@ import type { AgentConnection } from './AgentContext'
 import { Button } from '../components/Button'
 import { ConfirmationDialog } from '../components/ConfirmationDialog'
 import { folderKey } from './NewThreadDialog'
-import { ThreadWorkingCopyFields, type ThreadWorkingCopySelection } from './ThreadWorkingCopyFields'
-import './newThread.css'
 import './workingCopy.css'
 
 /** Older threads carry no working-copy metadata and keep the folder they already use. */
-export type WorkingCopyThread = Pick<AgentThread, 'id' | 'nativeSessionStarted' | 'workingDirectory' | 'worktree'> & Partial<Pick<AgentThread, 'projectId'>>
+export type WorkingCopyThread = Pick<AgentThread, 'id' | 'nativeSessionStarted' | 'workingDirectory' | 'worktree'> & Partial<Pick<AgentThread, 'projectId' | 'remoteHost'>>
 export interface ThreadWorkingCopyProps {
   readonly thread: WorkingCopyThread
   /** The thread's original Sotto project, never a provider's project alias. */
@@ -129,7 +127,6 @@ export function ThreadWorkingCopy({ thread, project, command }: ThreadWorkingCop
     window.addEventListener('resize', update)
     return () => { observer?.disconnect(); window.removeEventListener('resize', update) }
   }, [open])
-  const configurable = thread.projectId && thread.nativeSessionStarted === false && (!thread.worktree?.path || thread.worktree.mode === 'shared')
   const Icon = facts.status === 'pending' || facts.status === 'error' ? FolderGit2 : facts.branch || facts.repositoryRoot ? GitBranch : Folder
   return <span className="working-copy" ref={root} data-status={facts.status}
     onKeyDown={event => { if (event.key === 'Escape' && open && !reclaiming) { event.stopPropagation(); setOpen(false); trigger.current?.focus() } }}>
@@ -138,18 +135,19 @@ export function ThreadWorkingCopy({ thread, project, command }: ThreadWorkingCop
       <Icon size={14} aria-hidden="true" /><span>{facts.label}</span>
     </button>
     {open ? <div ref={panel} id={panelId} className="working-copy__panel" style={position ?? undefined} role="group" aria-label="Working copy details">
-      {configurable ? <UnsentWorkingCopy key={thread.id} thread={thread} command={command} /> : null}
       <dl>
         {facts.directory ? <div><dt>Folder</dt><dd className="working-copy__path">{facts.directory}</dd></div> : null}
         {facts.branch ? <div><dt>Branch</dt><dd className="working-copy__path">{facts.branch}</dd></div> : null}
         {facts.repositoryRoot && facts.status === 'ready' && facts.mode === 'independent' ? <div><dt>Repository</dt><dd className="working-copy__path">{facts.repositoryRoot}</dd></div> : null}
         {facts.status === 'ready' && facts.reclaimed ? <div><dt>Status</dt><dd>Folder removed. Sending to this thread puts it back on {facts.branch ?? 'its branch'}.</dd></div> : null}
         {facts.status === 'ready' && !facts.reclaimed && facts.dirty !== undefined ? <div><dt>Changes</dt><dd>{facts.dirty ? 'Uncommitted changes' : 'No uncommitted changes'}</dd></div> : null}
-        {facts.status === 'pending' && !configurable ? <div><dt>Status</dt><dd>Preparing the working copy.</dd></div> : null}
+        {/* A draft's worktree is not being prepared: it is made on first send, and the composer's toolbar chooses it (ADR-0027). */}
+        {facts.status === 'pending' ? <div><dt>Status</dt><dd>{thread.nativeSessionStarted === false ? 'Created on first send. Choose the workspace and branch under the composer.' : 'Preparing the working copy.'}</dd></div> : null}
         {facts.status === 'error' ? <div><dt>Status</dt><dd>{facts.error ?? 'Setup did not finish.'}</dd></div> : null}
       </dl>
+      {thread.remoteHost ? <p>This folder is on the host machine. Open it there.</p> : null}
       <div className="working-copy__actions">
-        {facts.directory && !facts.reclaimed ? <Button variant="secondary" aria-disabled={running !== null} onClick={() => void run('open-thread-folder')}><FolderOpen size={15} aria-hidden="true" />Open folder</Button> : null}
+        {facts.directory && !facts.reclaimed ? <Button variant="secondary" aria-disabled={running !== null || thread.remoteHost === true} onClick={() => { if (!thread.remoteHost) void run('open-thread-folder') }}><FolderOpen size={15} aria-hidden="true" />Open folder</Button> : null}
         {thread.worktree ? <Button variant="ghost" aria-disabled={running !== null} onClick={() => void run('refresh-thread-worktree')}><RefreshCw size={15} aria-hidden="true" />{running === 'refresh-thread-worktree' ? 'Checking...' : 'Refresh'}</Button> : null}
         {reclaimable ? <Button variant="ghost" aria-disabled={running !== null} aria-label="Remove worktree folder, keeping its branch" onClick={() => setReclaiming(facts.dirty ? 'dirty' : 'clean')}><FolderMinus size={15} aria-hidden="true" />{running === 'reclaim-thread-worktree' ? 'Removing…' : 'Remove worktree'}</Button> : null}
       </div>
@@ -210,44 +208,10 @@ export function useSettleThread(command: AgentConnection['command']) {
   return { settle, dialog }
 }
 
-/** Choices remain editable until a first send allocates a checkout or binds a provider session. */
-function UnsentWorkingCopy({ thread, command }: { readonly thread: WorkingCopyThread; readonly command: AgentConnection['command'] }): ReactNode {
-  const [selection, setSelection] = useState<ThreadWorkingCopySelection>(() => ({ workingCopy: thread.worktree?.mode ?? 'shared', baseBranch: thread.worktree?.baseBranch, startFromOrigin: thread.worktree?.startFromOrigin ?? true, existingWorktreePath: thread.worktree?.existingWorktreePath }))
-  const [changed, setChanged] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const applying = useRef(false)
-  const form = useRef<HTMLDivElement>(null)
-  const applyButton = useRef<HTMLButtonElement>(null)
-  const restoreFocus = useRef(false)
-  useLayoutEffect(() => {
-    if (saving || !restoreFocus.current) return
-    restoreFocus.current = false
-    form.current?.querySelector<HTMLInputElement>('input[type="radio"]:checked')?.focus()
-  }, [saving])
-  const apply = async (): Promise<void> => {
-    if (applying.current) return
-    const hadFocus = document.activeElement === applyButton.current
-    applying.current = true; setSaving(true); setError(null)
-    try {
-      const result = await command({ type: 'configure-thread-working-copy', threadId: thread.id, ...selection })
-      if (!result || result.error) setError(result?.error ?? 'Could not confirm the working copy. Your choices are retained.')
-      else {
-        // Apply disappears after success. Keep keyboard navigation inside the popover unless the user moved away.
-        restoreFocus.current = hadFocus && (document.activeElement === applyButton.current || document.activeElement === document.body)
-        setChanged(false)
-      }
-    } catch { setError('Could not confirm the working copy. Your choices are retained.') }
-    finally { applying.current = false; setSaving(false) }
-  }
-  return <div ref={form} className="working-copy__selection">
-    <ThreadWorkingCopyFields projectId={thread.projectId} value={selection} disabled={saving} onChange={value => { setSelection(value); setChanged(true) }} />
-    {changed ? <Button ref={applyButton} variant="secondary" aria-disabled={saving} onClick={() => void apply()}>{saving ? 'Applying…' : 'Apply working copy'}</Button> : null}
-    {error ? <p className="agent-error" role="alert">{error}</p> : null}
-  </div>
-}
-
-/** Above the pane composer: a failed setup and the one action that can recover it. The draft stays untouched. */
+/**
+ * Above the pane composer: a failed setup and the one action that can recover it, or the local branch notice for a
+ * worktree that started from the local branch because origin had nothing to fetch. The draft stays untouched.
+ */
 export function ThreadWorkingCopyNotice({ thread, project, command, onRecovered }: ThreadWorkingCopyProps & { readonly onRecovered?: (() => void) | undefined }): ReactNode {
   const facts = describeWorkingCopy(thread, project)
   const { running, error, run } = useWorkingCopyAction(thread.id, command)
@@ -261,6 +225,19 @@ export function ThreadWorkingCopyNotice({ thread, project, command, onRecovered 
     latestRecovered.current?.()
   }, [facts.status])
   useEffect(() => { recovering.current = false }, [thread.id])
+  const [, rerender] = useState(0)
+  const originBase = thread.worktree?.originBase
+  if (facts.status === 'ready' && (originBase === 'not-on-origin' || originBase === 'no-origin') && !localBranchNoticeDismissed(thread.id)) {
+    // The local branch notice (CONTEXT.md): Start from origin found nothing to fetch and the worktree took the local
+    // branch instead (ADR-0014). Said once, in the status tone: nothing stopped, and the pane header names the branch.
+    const base = thread.worktree?.baseBranch ?? 'the branch'
+    return <div className="working-copy-notice" data-tone="status" role="status">
+      <p>{originBase === 'not-on-origin'
+        ? <><strong>origin/{base} was not found</strong>, so the worktree started from the local branch {base}.</>
+        : <><strong>This project has no origin</strong>, so the worktree started from the local branch {base}.</>}</p>
+      <Button variant="secondary" aria-label="Dismiss the local branch notice" onClick={() => { dismissLocalBranchNotice(thread.id); rerender(value => value + 1) }}>Dismiss</Button>
+    </div>
+  }
   if (facts.status !== 'error') return null
   // Setup can only be retried before native work starts; afterwards Sotto only re-checks the bound folder.
   const retry = thread.nativeSessionStarted === false
@@ -281,8 +258,29 @@ export function ThreadWorkingCopyNotice({ thread, project, command, onRecovered 
  * and asks first when the folder has uncommitted work to carry along.
  */
 const dismissedBranchNotices = new Set<string>()
+/**
+ * Threads whose local branch notice was dismissed. The worktree record keeps `originBase` for the thread's life, so
+ * a dismissal that lived only in memory would bring the notice back at every launch; it is remembered on this
+ * computer instead. Thread ids only, nothing the user wrote.
+ */
+const LOCAL_BRANCH_NOTICE_KEY = 'sotto.localBranchNotice.dismissed'
+const LOCAL_BRANCH_NOTICE_LIMIT = 200
+function localBranchNoticeDismissed(threadId: string): boolean { return readDismissedLocalBranchNotices().includes(threadId) }
+function dismissLocalBranchNotice(threadId: string): void {
+  const kept = [...readDismissedLocalBranchNotices().filter(id => id !== threadId), threadId].slice(-LOCAL_BRANCH_NOTICE_LIMIT)
+  try { globalThis.localStorage?.setItem(LOCAL_BRANCH_NOTICE_KEY, JSON.stringify(kept)) } catch { /* Storage refused: the notice comes back next launch, which loses nothing. */ }
+}
+function readDismissedLocalBranchNotices(): string[] {
+  try {
+    const parsed: unknown = JSON.parse(globalThis.localStorage?.getItem(LOCAL_BRANCH_NOTICE_KEY) ?? '[]')
+    return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === 'string') : []
+  } catch { return [] }
+}
 /** Test seam: a new client session has no dismissed notices. */
-export function resetBranchNoticeDismissals(): void { dismissedBranchNotices.clear() }
+export function resetBranchNoticeDismissals(): void {
+  dismissedBranchNotices.clear()
+  try { globalThis.localStorage?.removeItem(LOCAL_BRANCH_NOTICE_KEY) } catch { /* nothing to clear */ }
+}
 
 export function ThreadBranchNotice({ thread, project, command, composing }: ThreadWorkingCopyProps & { readonly composing: boolean }): ReactNode {
   const facts = describeWorkingCopy(thread, project)

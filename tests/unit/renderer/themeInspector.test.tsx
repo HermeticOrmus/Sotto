@@ -66,7 +66,7 @@ describe('theme editor inspector and resizing', () => {
         <ThemeEditorHost settings={settings} onSave={vi.fn(async () => true)} getSettings={() => settings} />
       </>,
     )
-    act(() => openThemeEditor({ editingThemeId: null, seedThemeId: 'ocean', seedName: null, initialAppearance: 'dark' }))
+    act(() => openThemeEditor({ editingThemeId: null, seedThemeId: 'nocturne', seedName: null, initialAppearance: 'dark' }))
     return screen.getByRole('dialog', { name: 'Create theme' })
   }
 
@@ -97,7 +97,9 @@ describe('theme editor inspector and resizing', () => {
     renderEditor()
     await user.click(screen.getByRole('button', { name: 'Inspect app colors' }))
     screen.getByRole('button', { name: 'Page action' }).focus()
+    expect(document.documentElement).toHaveAttribute('data-theme-inspecting')
     await user.keyboard('{Escape}')
+    expect(document.documentElement).not.toHaveAttribute('data-theme-inspecting')
     expect(screen.getByRole('button', { name: 'Inspect app colors' })).toHaveAttribute('aria-pressed', 'false')
     expect(screen.getByRole('dialog', { name: 'Create theme' })).toBeVisible()
 
@@ -148,6 +150,7 @@ describe('theme editor inspector and resizing', () => {
     await user.click(screen.getByRole('button', { name: 'Minimize the theme editor' }))
     expect(dialog).toHaveAttribute('data-minimized')
     expect(dialog).not.toHaveAttribute('data-inspecting')
+    expect(document.documentElement).not.toHaveAttribute('data-theme-inspecting')
     expect(screen.queryByRole('button', { name: /inspecting app colors/u })).not.toBeInTheDocument()
     expect(screen.getAllByRole('button').filter(button => dialog.contains(button)).map(button => button.getAttribute('aria-label'))).toEqual(['Expand the theme editor', 'Close the theme editor'])
     await user.click(screen.getByRole('button', { name: 'Expand the theme editor' }))
@@ -202,7 +205,7 @@ describe('the spotlight and colour readers do not wake each other', () => {
         <ThemeEditorHost settings={settings} onSave={vi.fn(async () => true)} getSettings={() => settings} />
       </>,
     )
-    act(() => openThemeEditor({ editingThemeId: null, seedThemeId: 'ocean', seedName: null, initialAppearance: 'dark' }))
+    act(() => openThemeEditor({ editingThemeId: null, seedThemeId: 'nocturne', seedName: null, initialAppearance: 'dark' }))
     await user.click(screen.getByRole('button', { name: 'Show where Background is used' }))
 
     let probes = 0
@@ -238,7 +241,7 @@ describe('the spotlight and colour readers do not wake each other', () => {
       reply.setAttribute('data-test-page-change', '')
       document.body.append(reply)
     })
-    await waitFor(() => expect(highlight.mock.calls.length).toBe(settled + 1), { timeout: 1500 })
+    await waitFor(() => expect(highlight.mock.calls.length).toBe(settled + 1))
     await wait(1100)
     expect(highlight.mock.calls.length).toBe(settled + 1)
     counter.disconnect()

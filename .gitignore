@@ -43,6 +43,7 @@ artifacts/voice-perf/
 
 artifacts/effort-furnace/
 artifacts/effort-slider/
+artifacts/pending-settings-run/
 artifacts/new-thread-saved-draft/
 artifacts/codex-stream-freeze/
 
@@ -62,6 +63,8 @@ artifacts/terminal-loading/
 artifacts/activity-performance/
 artifacts/process-creature/
 artifacts/held-action/
+artifacts/working-creature/
+artifacts/background-command/
 artifacts/queued-steering/
 
 # Question panel verification captures
@@ -71,4 +74,14 @@ artifacts/question-choices/
 artifacts/agents-view/
 
 artifacts/agent-browser/
+artifacts/browser-grant/
 artifacts/new-thread-setup/
+artifacts/sidebar-question/
+artifacts/tools-rail-run/
+artifacts/review-comments-run/
+artifacts/git-interface-run/
+artifacts/worktree-origin-fallback-run/
+artifacts/codex-questions-thread-agents/
+artifacts/git-settings/
+artifacts/phase-three-themes/
+artifacts/thread-browser-player/

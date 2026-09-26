@@ -3,6 +3,7 @@ import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { EMPTY_AGENT_HOST, agentRuntimeModeSchema, attachmentSizeBytes, type AgentHostSnapshot, type AgentThread } from '../../shared/agents'
 import { designThreadsFixture, type E2EScenario, type SottoE2EBridge } from '../../shared/e2e'
+import { resolveModel } from '../../shared/modelCatalog'
 import type { AgentHost, AgentHostCommand, AgentHostResult, AgentSkillScope } from '../agents/host'
 import type { AgentSkillCatalog } from '../../shared/agentSkills'
 import type { AgentReasoner } from '../agents/reasoning'
@@ -15,6 +16,14 @@ export class E2EAgentHost implements AgentHost {
   private uncertain = false
   private rejection: string | null = null
   private connectRejection: string | null = null
+  /**
+   * Thread settings changes as a test drives them: `hold` keeps each one waiting for the provider until `release`,
+   * and `refuse` has the next one answered with a plain refusal, as a provider that will not take it does.
+   * `unconfirmed` (the `settings-unconfirmed` event) has the next one answered with no result and that error, as a
+   * lost answer is: the change is kept for the thread's next start, which `apply` stands for, and not shown before.
+   */
+  private readonly settingsGate: { held: boolean; waiting: (() => void)[]; refuse: boolean; unconfirmed: string | null } = { held: false, waiting: [], refuse: false, unconfirmed: null }
+  private readonly nextStartSettings = new Map<string, Extract<AgentHostCommand, { type: 'configure-thread' }>>()
   private state: AgentHostSnapshot = {
     ...structuredClone(EMPTY_AGENT_HOST), version: 'fixture',
     capabilities: { projects: true, threads: true, submit: true, observe: true, questions: true, permissions: true, interrupt: true, messageOrigin: true, reconcile: true, configureThread: true },
@@ -35,7 +44,7 @@ export class E2EAgentHost implements AgentHost {
         this.state.capabilities.skills = true
         this.state.threads = structuredClone([...fixture.threads])
         for (const model of this.state.models) model.providerId = model.id.startsWith('claude:') ? 'claude' : model.id.startsWith('grok:') ? 'grok' : 'codex'
-        for (const thread of this.state.threads) thread.providerId = this.state.models.find(model => model.id === thread.modelId)!.providerId
+        for (const thread of this.state.threads) thread.providerId = resolveModel(this.state.models, thread.modelId)!.providerId
       }
     }
   }
@@ -93,10 +102,20 @@ export class E2EAgentHost implements AgentHost {
       this.rejection = null
       throw new Error(message)
     }
+    if (command.type === 'configure-thread') {
+      if (this.settingsGate.held) await new Promise<void>(done => { this.settingsGate.waiting.push(done) })
+      if (this.settingsGate.refuse) { this.settingsGate.refuse = false; return { accepted: false } }
+      if (this.settingsGate.unconfirmed !== null) {
+        const error = this.settingsGate.unconfirmed
+        this.settingsGate.unconfirmed = null
+        this.nextStartSettings.set(command.threadId, command)
+        return { accepted: false, uncertain: true, error }
+      }
+    }
     this.commands.add(command.commandId)
     if (command.type === 'create-project') this.state.projects.push({ id: command.projectId, title: command.title, path: command.path })
     else if (command.type === 'create-thread') {
-      const providerId = this.state.models.find(model => model.id === command.modelId)?.providerId
+      const providerId = resolveModel(this.state.models, command.modelId)?.providerId
       this.state.threads.push({ id: command.threadId, title: command.title, projectId: command.projectId, modelId: command.modelId,
         ...(providerId ? { providerId } : {}),
         runtimeMode: command.runtimeMode ?? 'approval-required', reasoningEffort: command.reasoningEffort ?? 'low', status: 'idle', messages: [], requests: [] })
@@ -126,6 +145,24 @@ export class E2EAgentHost implements AgentHost {
     if (event.type === 'connect-reject') { this.connectRejection = event.text; return }
     if (event.type === 'uncertain') { this.uncertain = true; return }
     if (event.type === 'reject') { this.rejection = event.text; return }
+    if (event.type === 'settings') {
+      if (event.text === 'hold') this.settingsGate.held = true
+      else if (event.text === 'release') { this.settingsGate.held = false; for (const done of this.settingsGate.waiting.splice(0)) done() }
+      else if (event.text === 'refuse') this.settingsGate.refuse = true
+      else if (event.text === 'apply') {
+        const kept = this.nextStartSettings.get(event.threadId)
+        const thread = this.state.threads.find(item => item.id === event.threadId)
+        if (!kept || !thread) throw new Error('E2E_SETTINGS_NOTHING_KEPT')
+        this.nextStartSettings.delete(event.threadId)
+        if (kept.modelId !== undefined) thread.modelId = kept.modelId
+        if (kept.reasoningEffort !== undefined) thread.reasoningEffort = kept.reasoningEffort
+        if (kept.runtimeMode !== undefined) thread.runtimeMode = kept.runtimeMode
+        if (kept.providerMode !== undefined) thread.providerMode = kept.providerMode
+        this.emit()
+      } else throw new Error('E2E_SETTINGS_EVENT_UNKNOWN')
+      return
+    }
+    if (event.type === 'settings-unconfirmed') { this.settingsGate.unconfirmed = event.text; return }
     if (event.type === 'reasoner-release') { pendingReasoning.get(event.threadId)?.(); pendingReasoning.delete(event.threadId); return }
     if (event.type === 'disconnect') { this.state.connected = false; this.emit(); return }
     const thread = this.state.threads.find(t => t.id === event.threadId)
@@ -133,6 +170,9 @@ export class E2EAgentHost implements AgentHost {
     if (event.type === 'monitoring') {
       if (!event.monitoring) throw new Error('E2E_MONITORING_REQUIRED')
       thread.monitoring = structuredClone(event.monitoring)
+    } else if (event.type === 'background-work') {
+      if (!event.backgroundWork) throw new Error('E2E_BACKGROUND_WORK_REQUIRED')
+      thread.backgroundWork = structuredClone(event.backgroundWork)
     } else if (event.type === 'history') {
       if (!event.messages) throw new Error('E2E_HISTORY_REQUIRED')
       thread.messages = structuredClone(event.messages)

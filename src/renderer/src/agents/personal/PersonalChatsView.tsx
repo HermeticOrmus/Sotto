@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { ArrowDown, ArrowUp, MessageSquare, SquarePen } from 'lucide-react'
+import { ArrowDown, ArrowUp, MessageSquare, PanelLeftClose, PanelLeftOpen, SquarePen } from 'lucide-react'
 import type { AgentSkillCatalog } from '../../../../shared/agentSkills'
+import { publicProviderEntityId, type AgentState } from '../../../../shared/agents'
+import { resolveModel } from '../../../../shared/modelCatalog'
 import type { PersonalChat, PersonalChatBridge, PersonalChatState } from '../../../../shared/personalChats'
 import { Button } from '../../components/Button'
 import { PageWindowControls } from '../../components/WindowControls'
@@ -8,8 +10,11 @@ import { composerEnterIntent, readComposerKey, runComposerMenuKey } from '../com
 import { insertSkill, retainSkillReferences, sameSkillReferences, skillLimitReached, skillSigils } from '../composerSkills'
 import { MessageContent } from '../MessageContent'
 import { useOptionalAgents } from '../AgentContext'
+import { useOptionalApp } from '../../state/AppContext'
+import { SottoMark } from '../../components/SottoMark'
 import { ProviderMark } from '../ProviderMark'
-import { SidebarFoot, SidebarTop } from '../SidebarFrame'
+import { SidebarFoot, SidebarResize, SidebarTop, useCollapseToggleFocus } from '../SidebarFrame'
+import { CHATS_SIDEBAR_KEY, useSidebarSize } from '../sidebarSize'
 import { AgentRequestCard } from '../requests/AgentRequestCard'
 import { requestMode } from '../requests/requestAnswers'
 import { RequestDraftRecovery } from '../requests/RequestDraftRecovery'
@@ -23,7 +28,6 @@ import '../composer.css'
 import './personalChats.css'
 import { PersonalVoice } from './PersonalVoice'
 import { ChatPromptEditor } from './ChatPromptEditor'
-import { ThreadUsage } from '../ThreadUsage'
 
 const PERSONAL_PROMPT_ID = 'personal-chat-prompt'
 const providerLabel = (provider: string): string => ({ codex: 'Codex', claude: 'Claude', grok: 'Grok' })[provider] ?? provider
@@ -36,7 +40,15 @@ function bridgePersonalChats(): PersonalChatBridge | undefined {
   return window.sotto?.personalChats
 }
 
-const modelLabel = (modelId: string): string => modelId.replace(/^(?:codex|claude|grok):/u, '')
+/**
+ * A chat's model by the name its provider's catalog gives it, as a thread's is: a 1M-context variant such as
+ * `opus[1m]` reads as its base model. A chat holds its model's native ID, which the host catalog knows by its
+ * public one and the reasoning account by the native one. A model neither lists shows as its ID.
+ */
+export const personalModelLabel = (agents: AgentState | null | undefined, chat: Pick<PersonalChat, 'providerId' | 'modelId'>): string =>
+  (chat.modelId ? resolveModel(agents?.host.models ?? [], publicProviderEntityId(chat.providerId, 'model', chat.modelId))
+    ?? resolveModel(agents?.reasoningAccounts.find(account => account.provider === chat.providerId)?.models ?? [], chat.modelId) : undefined)?.name
+    ?? chat.modelId.replace(/^(?:codex|claude|grok):/u, '')
 
 /** A plain question with no choices takes its answer from the composer, as in a project thread. */
 function composerQuestion(chat: PersonalChat): PersonalChat['requests'][number] | undefined {
@@ -237,6 +249,7 @@ function PersonalComposer({ bridge, state, chat, store, onSent }: {
   readonly store: PersonalDraftStore; readonly onSent: () => void
 }): ReactNode {
   const PROVIDER = providerLabel(chat.providerId)
+  const agents = useOptionalAgents()?.state
   const draft = usePersonalDraft(store, chat)
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -321,7 +334,7 @@ function PersonalComposer({ bridge, state, chat, store, onSent }: {
       }} />
     <div className="thread-prompt__footer">
       <div className="thread-prompt__meta" id={statusId}>
-        <span className="thread-prompt__model"><ProviderMark provider={chat.providerId} name={PROVIDER} />{modelLabel(chat.modelId)}<small>{answering ? 'Answer this question' : 'Personal chat'}</small></span>
+        <span className="thread-prompt__model"><ProviderMark provider={chat.providerId} name={PROVIDER} />{personalModelLabel(agents, chat)}<small>{answering ? 'Answer this question' : 'Personal chat'}</small></span>
         {status}
       </div>
       <div className="thread-prompt__actions">
@@ -347,11 +360,83 @@ export interface PersonalChatsViewProps {
  * still leads off the page and the window still has its controls.
  */
 function EmptyChatsFrame({ children }: { readonly children: ReactNode }): ReactNode {
-  return <div className="threads-view personal-chats">
-    <nav className="thread-nav personal-chats__nav" aria-label="Chats"><SidebarTop /><div className="thread-nav__scroll" /><SidebarFoot /></nav>
+  const mac = useOptionalApp()?.platform === 'darwin'
+  return <div className={mac ? 'threads-view threads-view--mac personal-chats' : 'threads-view personal-chats'}>
+    <ChatsNavFrame rail={null}><div className="thread-nav__scroll" /></ChatsNavFrame>
     <div className="personal-chats--unavailable">{children}</div>
     <PageWindowControls />
   </div>
+}
+
+/**
+ * The chat list's frame: a width of its own that the right edge drags, and a Collapse sidebar button that folds
+ * it to a rail, the way the Threads sidebar folds to its rail. The width and the fold are remembered apart from
+ * the Threads sidebar's. Titles end in an ellipsis rather than widening the column.
+ */
+function ChatsNavFrame({ rail, head, children }: { readonly rail: ReactNode; readonly head?: ReactNode; readonly children: ReactNode }): ReactNode {
+  const mac = useOptionalApp()?.platform === 'darwin'
+  const size = useSidebarSize(CHATS_SIDEBAR_KEY)
+  const [resizing, setResizing] = useState(false)
+  const toggle = useCollapseToggleFocus(size.collapsed)
+  return <nav className={mac ? 'thread-nav thread-nav--mac personal-chats__nav' : 'thread-nav personal-chats__nav'} aria-label="Chats"
+    data-collapsed={size.collapsed || undefined} data-resizing={resizing || undefined} style={{ width: size.collapsed ? (mac ? 80 : 52) : size.width }}>
+    {size.collapsed ? <div className="thread-nav__rail">
+      <SottoMark className="thread-nav__glyph" />
+      <button ref={toggle} type="button" className="thread-nav__action tt-focusable" aria-label="Expand sidebar" title="Expand sidebar" onClick={() => size.collapse(false)}><PanelLeftOpen size={16} aria-hidden="true" /></button>
+      <div className="thread-nav__rail-list">{rail}</div>
+      <SidebarFoot />
+    </div> : <>
+      <SidebarTop>
+        <button ref={toggle} type="button" className="thread-nav__action tt-focusable thread-nav__collapse" aria-label="Collapse sidebar" title="Collapse sidebar" onClick={() => size.collapse(true)}><PanelLeftClose size={16} aria-hidden="true" /></button>
+      </SidebarTop>
+      {head}
+      {children}
+      <SidebarFoot />
+      <SidebarResize size={size} onResizing={setResizing} />
+    </>}
+  </nav>
+}
+
+/** The chats, listed in the frame; collapsed, each chat is its provider's mark in a tile named by its title. */
+function ChatsSidebar({ state, clock, newChat, onSelect, onOpenCoordinatorSettings }: {
+  readonly state: PersonalChatState; readonly clock: number
+  readonly newChat: { readonly label: string; readonly blocked: boolean; readonly start: () => void }
+  readonly onSelect: (chatId: string) => void
+  readonly onOpenCoordinatorSettings?: (() => void) | undefined
+}): ReactNode {
+  const { availability } = state
+  const rows = state.chats.map(chat => ({ chat, current: chat.id === state.selectedChatId, status: rowStatus(chat, chat.connected ?? state.connected, clock) }))
+  const rail = <>
+    <button type="button" className="thread-nav__action tt-focusable" aria-label="New chat" title={newChat.label} disabled={newChat.blocked} onClick={newChat.start}><SquarePen size={16} aria-hidden="true" /></button>
+    <ul className="personal-chats__rail">{rows.map(({ chat, current, status }) => <li key={chat.id}>
+      <button type="button" className="thread-nav__rail-thread tt-focusable" aria-label={chat.title} aria-current={current ? 'page' : undefined}
+        title={`${chat.title} · ${providerLabel(chat.providerId)} · ${status.text}`} onClick={() => onSelect(chat.id)}>
+        <span className="thread-nav__mark" data-provider={chat.providerId}><ProviderMark provider={chat.providerId} name={providerLabel(chat.providerId)} size={16} /></span>
+        {status.state === 'idle' ? null : <span className="thread-nav__ring" data-state={status.state} data-disconnected={(chat.connected ?? state.connected) ? undefined : true} aria-hidden="true" />}
+      </button>
+    </li>)}</ul>
+  </>
+  const head = <>
+    <div className="thread-nav__head"><h1>Chats</h1><div className="thread-nav__head-actions">
+      <Button iconOnly variant="ghost" aria-label="New chat" title={newChat.label} disabled={newChat.blocked} onClick={newChat.start}><SquarePen size={17} /></Button></div></div>
+    {!availability.supported ? <div className="thread-nav__error personal-chats__availability" role="status">
+      <span>{availability.reason ?? 'New chats are unavailable with the current coordinator.'}</span>
+      {onOpenCoordinatorSettings ? <button type="button" className="thread-prompt__link tt-focusable" onClick={onOpenCoordinatorSettings}>Coordinator settings</button> : null}
+    </div> : null}
+  </>
+  return <ChatsNavFrame rail={rail} head={head}>
+    <div className="thread-nav__scroll">
+      {rows.length ? <ul className="personal-chats__list">
+        {rows.map(({ chat, current, status }) => <li key={chat.id} className="thread-nav__row" data-current={current || undefined}>
+          <button type="button" className="thread-nav__item tt-focusable" aria-current={current ? 'page' : undefined} onClick={() => onSelect(chat.id)}>
+            <span className="thread-nav__mark" data-provider={chat.providerId} title={providerLabel(chat.providerId)}><ProviderMark provider={chat.providerId} name={providerLabel(chat.providerId)} /></span>
+            <span className="thread-nav__title">{chat.title}</span>
+            <span className="thread-nav__status" data-state={status.state}><i aria-hidden="true" />{status.text}</span>
+          </button>
+        </li>)}
+      </ul> : <p className="thread-nav__empty">No chats yet.</p>}
+    </div>
+  </ChatsNavFrame>
 }
 
 /**
@@ -362,11 +447,13 @@ function EmptyChatsFrame({ children }: { readonly children: ReactNode }): ReactN
 export function PersonalChatsView({ bridge = bridgePersonalChats(), store = personalDraftStore, onOpenCoordinatorSettings, now, statusText }: PersonalChatsViewProps): ReactNode {
   const [state, setState] = useState<PersonalChatState | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
+  const agents = useOptionalAgents()?.state
   const [attempt, setAttempt] = useState(0)
   const [pending, setPending] = useState<Pending | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [followSignal, setFollowSignal] = useState(0)
   const focusComposer = useRef(false)
+  const mac = useOptionalApp()?.platform === 'darwin'
 
   useEffect(() => {
     if (!bridge) return
@@ -424,40 +511,15 @@ export function PersonalChatsView({ bridge = bridgePersonalChats(), store = pers
   const refresh = (): void => { if (selected) void run('refresh', () => bridge.refresh(selected.id), 'Sotto could not refresh this chat.') }
   const newChatBlocked = !availability.supported || pending === 'create'
 
-  const newChat = <Button iconOnly variant="ghost" aria-label="New chat" title={availability.supported ? 'New chat' : availability.reason ?? 'New chats are unavailable.'}
-    disabled={newChatBlocked} onClick={() => void create()}><SquarePen size={17} /></Button>
-
-  return <div className="threads-view personal-chats">
+  return <div className={mac ? 'threads-view threads-view--mac personal-chats' : 'threads-view personal-chats'}>
     {/* The chat list wears the Threads sidebar's frame: its top row above the list, its foot below it. */}
-    <nav className="thread-nav personal-chats__nav" aria-label="Chats">
-      <SidebarTop />
-      <div className="thread-nav__head"><h1>Chats</h1><div className="thread-nav__head-actions">{newChat}</div></div>
-      {!availability.supported ? <div className="thread-nav__error personal-chats__availability" role="status">
-        <span>{availability.reason ?? 'New chats are unavailable with the current coordinator.'}</span>
-        {onOpenCoordinatorSettings ? <button type="button" className="thread-prompt__link tt-focusable" onClick={onOpenCoordinatorSettings}>Coordinator settings</button> : null}
-      </div> : null}
-      <div className="thread-nav__scroll">
-        {state.chats.length ? <ul className="personal-chats__list">
-          {state.chats.map(chat => {
-            const current = chat.id === state.selectedChatId
-            const status = rowStatus(chat, chat.connected ?? state.connected, clock)
-            return <li key={chat.id} className="thread-nav__row" data-current={current || undefined}>
-              <button type="button" className="thread-nav__item tt-focusable" aria-current={current ? 'page' : undefined} onClick={() => select(chat.id)}>
-                <span className="thread-nav__mark" data-provider={chat.providerId} title={providerLabel(chat.providerId)}><ProviderMark provider={chat.providerId} name={providerLabel(chat.providerId)} /></span>
-                <span className="thread-nav__title">{chat.title}</span>
-                <span className="thread-nav__status" data-state={status.state}><i aria-hidden="true" />{status.text}</span>
-              </button>
-            </li>
-          })}
-        </ul> : <p className="thread-nav__empty">No chats yet.</p>}
-      </div>
-      <SidebarFoot />
-    </nav>
+    <ChatsSidebar state={state} clock={clock} onSelect={select} onOpenCoordinatorSettings={onOpenCoordinatorSettings}
+      newChat={{ label: availability.supported ? 'New chat' : availability.reason ?? 'New chats are unavailable.', blocked: newChatBlocked, start: () => void create() }} />
     <section className="thread-workspace personal-chat" aria-label={selected ? selected.title : 'Chat'}>
       {selected ? <>
         <header className="thread-workspace__head">
           <div className="thread-workspace__title">
-            <span className="thread-workspace__crumb"><ProviderMark provider={selected.providerId} name={PROVIDER} size={16} /><span>{PROVIDER} · {modelLabel(selected.modelId)}</span>
+            <span className="thread-workspace__crumb"><ProviderMark provider={selected.providerId} name={PROVIDER} size={16} /><span>{PROVIDER} · {personalModelLabel(agents, selected)}</span>
               <span className="thread-workspace__tag">No project</span>
               {!state.connected ? <span className="thread-workspace__tag" data-tone="warning">{state.connecting ? 'Connecting' : `${PROVIDER} disconnected`}</span> : null}
             </span>
@@ -479,7 +541,6 @@ export function PersonalChatsView({ bridge = bridgePersonalChats(), store = pers
         <div className="thread-workspace__compose">
           <PersonalComposer key={selected.id} bridge={bridge} state={state} chat={selected} store={store} onSent={() => setFollowSignal(value => value + 1)} />
           <PersonalVoice key={`voice-${selected.id}`} bridge={bridge} chat={selected} state={state} store={store} />
-          <ThreadUsage usage={selected.usage} modelId={selected.modelId} />
         </div>
       </> : <>
         {actionError || state.error ? <p className="agent-error thread-workspace__error" role="alert">{actionError ?? state.error}</p> : null}

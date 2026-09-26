@@ -1,0 +1,12 @@
+{
+  "grantedByDefault": true,
+  "clickAndTypeWithoutAsking": true,
+  "stopAsksAgain": true,
+  "threadWideAnswerRestoresGrant": true,
+  "settingOffAsksOtherThread": true,
+  "otherThreadPlayerHidden": true,
+  "autoShowOffHidden": true,
+  "toolsIconMarkedWaiting": true,
+  "focusSwitchHidesPlayerAndPage": true,
+  "errors": []
+}

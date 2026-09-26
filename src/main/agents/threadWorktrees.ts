@@ -65,7 +65,30 @@ const DEPENDENCY_FOLDER = /(^|\/)node_modules\/$/u
 export class ThreadWorktrees {
   constructor(private readonly directory: string, private readonly git: RunGit = runWorktreeGit, private readonly home: WorktreeHome = THREAD_WORKTREE_HOME) {}
 
-  async allocate(projectPath: string, mode: 'independent' | 'shared', selection: Partial<AgentWorkingCopySelection> = {}): Promise<AgentWorktree> {
+  /**
+   * Start from origin, T3's way (ADR-0014, amended September 24, 2026): fetch the base when origin has it, fall back
+   * to the local branch when origin does not, and skip the fetch for a project with no origin at all. Only a fetch
+   * that fails for another reason, the connection or the credentials, stops setup. The answer is kept on the
+   * worktree so the pane can say which happened.
+   */
+  private async resolveOriginBase(repositoryRoot: string, baseBranch: string): Promise<NonNullable<AgentWorktree['originBase']>> {
+    // No origin is an answer; Git being unavailable is not, and the message runWorktreeGit gives it must reach the user.
+    try { await this.git(repositoryRoot, ['remote', 'get-url', 'origin']) }
+    catch (error) { if (error instanceof Error && /Git is unavailable/u.test(error.message)) throw error; return 'no-origin' }
+    const failure = new Error(`The origin branch ${baseBranch} could not be fetched. Check the remote and connection, or choose a local branch under Start from.`)
+    // --exit-code answers 2 for a remote that is reachable and has no such branch; anything else is a real failure.
+    try { await this.git(repositoryRoot, ['ls-remote', '--exit-code', '--heads', 'origin', `refs/heads/${baseBranch}`]) }
+    catch (error) { if ((error as { code?: unknown }).code === 2) return 'not-on-origin'; throw failure }
+    try { await this.git(repositoryRoot, ['fetch', '--no-tags', 'origin', `refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`]) }
+    catch { throw failure }
+    return 'fetched'
+  }
+
+  /**
+   * `checkoutBranch` names a branch that exists already, such as a pull request's head: the worktree checks it
+   * out as it stands rather than cutting a new branch from a base.
+   */
+  async allocate(projectPath: string, mode: 'independent' | 'shared', selection: Partial<AgentWorkingCopySelection> & { readonly checkoutBranch?: string | undefined } = {}): Promise<AgentWorktree> {
     const cwd = await existingWorkingDirectory(projectPath)
     if (mode === 'shared') return { mode, status: 'ready', path: cwd }
     let repositoryRoot: string
@@ -82,14 +105,21 @@ export class ThreadWorktrees {
       const projectRelativePath = relative(await realpath(repositoryRoot), cwd).split(sep).join('/')
       return this.inspect({ mode, status: 'ready', path, repositoryRoot: await realpath(repositoryRoot), projectRelativePath, reused: true })
     }
+    const checkoutBranch = selection.checkoutBranch
+    if (checkoutBranch) {
+      await this.git(repositoryRoot, ['check-ref-format', `refs/heads/${checkoutBranch}`])
+      let branchCommit: string
+      try { branchCommit = (await this.git(repositoryRoot, ['rev-parse', '--verify', `refs/heads/${checkoutBranch}^{commit}`])).trim() }
+      catch { throw new Error(`The branch ${checkoutBranch} is gone. Check the pull request out again from the branch picker.`) }
+      const relativePath = relative(await realpath(repositoryRoot), cwd).split(sep).join('/')
+      const token = randomUUID()
+      return { mode, status: 'pending', path: join(await realpath(this.directory), this.home.folder, token), repositoryRoot: await realpath(repositoryRoot), branch: checkoutBranch, baseCommit: branchCommit, projectRelativePath: relativePath, checkoutBranch: true, temporaryBranch: false }
+    }
     const baseBranch = selection.baseBranch ?? (selection.startFromOrigin ? (await this.git(repositoryRoot, ['branch', '--show-current'])).trim() || undefined : undefined)
     if (baseBranch) await this.git(repositoryRoot, ['check-ref-format', `refs/heads/${baseBranch}`])
     if (selection.startFromOrigin && !baseBranch) throw new Error('Choose a base branch before starting from origin.')
-    const base = baseBranch ? `${selection.startFromOrigin ? 'refs/remotes/origin/' : 'refs/heads/'}${baseBranch}` : 'HEAD'
-    if (selection.startFromOrigin) {
-      try { await this.git(repositoryRoot, ['fetch', '--no-tags', 'origin', `refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`]) }
-      catch { throw new Error(`The origin branch ${baseBranch} could not be fetched. Check the remote and connection, or choose a local branch under Start from.`) }
-    }
+    const originBase = selection.startFromOrigin && baseBranch ? await this.resolveOriginBase(repositoryRoot, baseBranch) : undefined
+    const base = baseBranch ? `${originBase === 'fetched' ? 'refs/remotes/origin/' : 'refs/heads/'}${baseBranch}` : 'HEAD'
     let baseCommit: string
     try { baseCommit = (await this.git(repositoryRoot, ['rev-parse', '--verify', `${base}^{commit}`])).trim() }
     catch { throw new Error(baseBranch ? `The base branch ${baseBranch} is unavailable. Choose an existing branch and retry.` : 'This Git repository has no commit to branch from. Make its first commit, or create the thread with Project folder.') }
@@ -100,7 +130,7 @@ export class ThreadWorktrees {
       } catch { throw new Error('The project subdirectory is not present in the committed source. Commit that folder or explicitly choose a shared working copy, then retry.') }
     }
     const token = randomUUID()
-    return { mode, status: 'pending', path: join(await realpath(this.directory), this.home.folder, token), repositoryRoot: await realpath(repositoryRoot), branch: `${this.home.branchPrefix}${this.home === THREAD_WORKTREE_HOME ? token.slice(0, 8) : token}`, baseCommit, projectRelativePath, baseBranch, startFromOrigin: selection.startFromOrigin, temporaryBranch: this.home === THREAD_WORKTREE_HOME }
+    return { mode, status: 'pending', ...(originBase ? { originBase } : {}), path: join(await realpath(this.directory), this.home.folder, token), repositoryRoot: await realpath(repositoryRoot), branch: `${this.home.branchPrefix}${this.home === THREAD_WORKTREE_HOME ? token.slice(0, 8) : token}`, baseCommit, projectRelativePath, baseBranch, startFromOrigin: selection.startFromOrigin, temporaryBranch: this.home === THREAD_WORKTREE_HOME }
   }
 
 
@@ -195,10 +225,12 @@ export class ThreadWorktrees {
     if (!branch) throw new Error('The independent working-copy allocation is incomplete.')
     if (await lstat(metadata.path).then(() => true, (error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return false; throw error })) throw new Error('The reserved working folder already exists but is not this thread’s Git worktree. Nothing was changed.')
     if (entries.some(entry => entry.branch === `refs/heads/${branch}`)) throw new Error('The reserved branch is already checked out in another folder. Nothing was changed.')
-    // -b refuses any existing branch; never reset it with -B or force another checkout.
+    // -b refuses any existing branch; never reset it with -B or force another checkout. A pull request's branch
+    // exists already and is checked out as it stands, with no -b.
     await mkdir(allocationRoot, { recursive: true })
     if (pathKey(await realpath(allocationRoot)) !== pathKey(allocationRoot)) throw new Error('The reserved worktree parent folder was redirected. Nothing was changed.')
-    await this.git(repositoryRoot, ['worktree', 'add', '-b', branch, '--', metadata.path, baseCommit])
+    if (metadata.checkoutBranch) await this.git(repositoryRoot, ['worktree', 'add', '--', metadata.path, branch])
+    else await this.git(repositoryRoot, ['worktree', 'add', '-b', branch, '--', metadata.path, baseCommit])
     return this.inspect({ ...metadata, status: 'ready', error: undefined })
   }
 

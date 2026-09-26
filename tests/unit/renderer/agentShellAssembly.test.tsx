@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { useAgentConnection } from '../../../src/renderer/src/agents/AgentContext'
 import { SHELL_CACHE_KEY, cacheableShell, readShellCache, writeShellCache } from '../../../src/renderer/src/agents/shellCache'
 import { agentShell, defaultAgentConfiguration, EMPTY_AGENT_HOST, summarizeThread,
-  type AgentBridge, type AgentMessage, type AgentState, type AgentThread, type AgentThreadDetail,
+  type AgentBridge, type AgentMessage, type AgentModel, type AgentState, type AgentThread, type AgentThreadDetail,
   type AgentThreadDetailUpdate } from '../../../src/shared/agents'
 
 afterEach(() => { cleanup(); localStorage.clear(); vi.restoreAllMocks() })
@@ -15,6 +15,8 @@ const message = (id: string, role: AgentMessage['role'], text: string): AgentMes
 function thread(id: string, messages: AgentMessage[]): AgentThread {
   return { id, title: id, projectId: 'project', modelId: 'claude:test', status: 'idle', messages, requests: [] }
 }
+
+const model = (id: string): AgentModel => ({ id, provider: 'Claude Code', providerId: 'claude', name: id, ready: true })
 
 function fullState(threads: AgentThread[], activeThreadId: string | null = null): AgentState {
   return {
@@ -61,6 +63,26 @@ function shellBridge(state: AgentState, options: { detail?: boolean } = {}) {
 }
 
 describe('assembling the window state from the shell', () => {
+  it('does not walk retained history again for unrelated shell updates', async () => {
+    let reads = 0
+    const messages = Array.from({ length: 200 }, (_, index) => ({
+      ...message(String(index), 'assistant', 'Retained history'),
+      get id() { reads++; return String(index) },
+    }))
+    const state = fullState([thread('workshop', messages)], 'workshop')
+    const wire = shellBridge(state)
+    const { result } = renderHook(() => useAgentConnection(wire.bridge))
+    await waitFor(() => expect(result.current.state?.host.threads[0]?.messages.length).toBe(200))
+    wire.publish({ ...state, notice: 'First update' })
+    await waitFor(() => expect(result.current.state?.notice).toBe('First update'))
+    reads = 0
+    wire.publish({ ...state, notice: 'Another update' })
+    await waitFor(() => expect(result.current.state?.notice).toBe('Another update'))
+    // The shell summary may inspect the last message; reconciliation must not
+    // scan every retained message merely because another shell arrived.
+    expect(reads).toBeLessThan(10)
+  })
+
   it('splices the history it holds into each arriving shell and leaves the rest of the state alone', async () => {
     const messages = [message('a', 'user', 'Pick the palette'), message('bb', 'assistant', 'Indigo it is.')]
     const wire = shellBridge(fullState([thread('workshop', messages), thread('docs', [])], 'workshop'))
@@ -135,6 +157,57 @@ describe('the detail deltas that follow a history', () => {
   })
 })
 
+describe('which history the window gives up', () => {
+  it('keeps the thread viewed last through streaming shells and drops one not viewed since before it', async () => {
+    // X is listed first, where shell order used to leave it looking oldest after every shell.
+    const ids = Array.from({ length: 17 }, (_, index) => `t${String(index).padStart(2, '0')}`)
+    const x = ids[0]!
+    const threadsAt = (tick: number): AgentThread[] => ids.map((id, index) =>
+      index === 0 || index === 16 ? thread(id, [message('a', 'assistant', `History of ${id}`)])
+        : { ...thread(id, [message('a', 'assistant', `History of ${id}${' more'.repeat(tick)}`)]), status: 'running' as const })
+    const wire = shellBridge(fullState(threadsAt(0)))
+    const { result } = renderHook(() => useAgentConnection(wire.bridge))
+    await waitFor(() => expect(result.current.state).not.toBeNull())
+    const held = (id: string): boolean => (result.current.state!.host.threads.find(item => item.id === id)?.messages.length ?? 0) > 0
+    const view = async (threadIds: string[]): Promise<void> => {
+      await act(async () => { await result.current.command({ type: 'observe-threads', threadIds }) })
+    }
+    // Sixteen histories held, each viewed in turn, then X viewed again and left.
+    for (const id of ids.slice(0, 16)) { await view([id]); await waitFor(() => expect(held(id)).toBe(true)) }
+    await view([x])
+    await view([])
+    // Twenty shells while the other threads stream, two of them with work in flight whose history main pushes.
+    for (let tick = 1; tick <= 20; tick += 1) {
+      act(() => { wire.publish({ ...fullState(threadsAt(tick)), notice: `tick ${tick}` }) })
+      if (tick % 5 === 0) act(() => { wire.push('t01'); wire.push('t02') })
+    }
+    await waitFor(() => expect(result.current.state!.notice).toBe('tick 20'))
+    // A seventeenth history makes the window give one up.
+    await view([ids[16]!])
+    await waitFor(() => expect(held(ids[16]!)).toBe(true))
+    expect(held(x)).toBe(true)
+    expect(held('t01')).toBe(false)
+    expect(ids.slice(2, 16).every(held)).toBe(true)
+    expect(wire.threadDetail.mock.calls.filter(([id]) => id === x)).toHaveLength(1)
+  })
+
+  it('never gives up a viewed thread, even past the limit', async () => {
+    const ids = Array.from({ length: 17 }, (_, index) => `t${String(index).padStart(2, '0')}`)
+    const wire = shellBridge(fullState(ids.map(id => thread(id, [message('a', 'assistant', `History of ${id}`)]))))
+    const { result } = renderHook(() => useAgentConnection(wire.bridge))
+    await waitFor(() => expect(result.current.state).not.toBeNull())
+    const held = (id: string): boolean => (result.current.state!.host.threads.find(item => item.id === id)?.messages.length ?? 0) > 0
+    for (const id of ids.slice(0, 16)) {
+      await act(async () => { await result.current.command({ type: 'observe-threads', threadIds: [id] }) })
+      await waitFor(() => expect(held(id)).toBe(true))
+    }
+    // Seventeen panes open at once: every one is viewed, so none is the window's to give up.
+    await act(async () => { await result.current.command({ type: 'observe-threads', threadIds: ids }) })
+    await waitFor(() => expect(held(ids[16]!)).toBe(true))
+    expect(ids.every(held)).toBe(true)
+  })
+})
+
 describe('the startup shell cache', () => {
   it('paints what the window saw last, marked stale and disconnected, then replaces it', async () => {
     const live = fullState([thread('workshop', [message('a', 'assistant', 'Indigo it is.')])], 'workshop')
@@ -176,6 +249,59 @@ describe('the startup shell cache', () => {
     renderHook(() => useAgentConnection(wire.bridge))
     await waitFor(() => expect(localStorage.getItem(SHELL_CACHE_KEY)).toBeNull())
     expect(readShellCache()).toBeNull()
+  })
+
+  it('trims a large catalog to the models its threads reference, so the cache stays under the cap', () => {
+    const kept = model('claude:kept')
+    const catalog = [kept, ...Array.from({ length: 700 }, (_, index) => model(`catalog:unused-${index}`))]
+    const live = { ...fullState([{ ...thread('workshop', []), modelId: kept.id }]) }
+    live.host = { ...live.host, models: catalog }
+    writeShellCache(live)
+    const raw = localStorage.getItem(SHELL_CACHE_KEY)
+    expect(raw).not.toBeNull()
+    expect(raw!.length).toBeLessThan(20_000)
+    const restored = readShellCache()
+    expect(restored!.host.models).toEqual([kept])
+  })
+
+  it('restores each host\'s own catalog, trimmed to what its threads reference, including a remote host\'s own', () => {
+    const ownModel = model('local:kept'), ownUnused = model('local:unused')
+    const remoteModel = model('remote:kept'), remoteUnused = model('remote:unused')
+    const ownCatalog = [ownModel, ownUnused]
+    const remoteCatalog = [remoteModel, remoteUnused]
+    const live = fullState([
+      { ...thread('local-thread', []), hostId: 'local-host', modelId: ownModel.id },
+      { ...thread('remote-thread', []), hostId: 'remote-host', modelId: remoteModel.id },
+    ])
+    live.host = {
+      ...live.host, models: ownCatalog,
+      clientHosts: [
+        // The selected host's own entry is the very array `host.models` holds, as the desktop router produces.
+        { hostId: 'local-host', connected: true, models: ownCatalog, capabilities: live.host.capabilities },
+        { hostId: 'remote-host', connected: true, models: remoteCatalog, capabilities: live.host.capabilities },
+      ],
+    }
+    writeShellCache(live)
+    const restored = readShellCache()!
+    expect(restored.host.models).toEqual([ownModel])
+    expect(restored.host.clientHosts!.find(entry => entry.hostId === 'local-host')!.models).toEqual([ownModel])
+    expect(restored.host.clientHosts!.find(entry => entry.hostId === 'remote-host')!.models).toEqual([remoteModel])
+  })
+
+  it('keeps a remote thread\'s model in the host\'s own catalog, where the Agents room looks it up', () => {
+    // Model IDs are not host-keyed, so the same model can sit in both catalogs.
+    const shared = model('native:claude:model:sonnet')
+    const live = fullState([
+      { ...thread('local-thread', []), hostId: 'local-host', modelId: 'claude:local' },
+      { ...thread('remote-thread', []), hostId: 'remote-host', modelId: shared.id },
+    ])
+    const ownCatalog = [model('claude:local'), shared, model('claude:unused')]
+    live.host = { ...live.host, models: ownCatalog, clientHosts: [
+      { hostId: 'local-host', connected: true, models: ownCatalog, capabilities: live.host.capabilities },
+      { hostId: 'remote-host', connected: true, models: [shared], capabilities: live.host.capabilities },
+    ] }
+    writeShellCache(live)
+    expect(readShellCache()!.host.models.map(entry => entry.id)).toEqual(['claude:local', shared.id])
   })
 })
 
@@ -256,6 +382,33 @@ describe('shell updates while the main window is hidden', () => {
   })
 })
 
+describe('a sync command reply racing a low-priority broadcast', () => {
+  it('is not overtaken once its transition finally catches up', async () => {
+    // Hidden, a broadcast commits directly as a transition (no frame holds it). Publishing it here does
+    // not await React's own scheduling of that low-priority work, so it is still unsettled — exactly
+    // like the real Scheduler, which runs it on its own macrotask — when the command below replies.
+    vi.spyOn(document, 'hidden', 'get').mockReturnValue(true)
+    const initial = fullState([thread('workshop', [])], 'workshop')
+    const wire = shellBridge(initial)
+    const { result } = renderHook(() => useAgentConnection(wire.bridge))
+    await waitFor(() => expect(result.current.state).not.toBeNull())
+    let resolveCommand!: (state: AgentState) => void
+    vi.mocked(wire.bridge.command).mockImplementationOnce(() => new Promise(resolve => { resolveCommand = resolve }))
+    wire.publish({ ...initial, notice: 'from the broadcast' })
+    // `refresh` is a provider operation and runs at once rather than waiting behind the command lane,
+    // so `bridge.command` (and `resolveCommand`) is called synchronously here.
+    const sending = result.current.command({ type: 'refresh' })
+    resolveCommand({ ...initial, notice: 'from the command' })
+    // The command's reply is urgent: it lands as soon as its own promise settles.
+    await act(async () => { await sending })
+    expect(result.current.state?.notice).toBe('from the command')
+    // Give the older broadcast's transition every chance to run its own render; React replays the
+    // whole update queue in call order whenever it does, so the later, urgent call still wins.
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)) })
+    expect(result.current.state?.notice).toBe('from the command')
+  })
+})
+
 it('keeps monitoring on the live shell but never caches or restores it', () => {
   const watched = thread('workshop', [])
   watched.monitoring = [{ id: '56d13d2c-f6d0-4968-a9ed-18c87a7d5b5a', label: 'Watch only while connected' }]
@@ -268,4 +421,17 @@ it('keeps monitoring on the live shell but never caches or restores it', () => {
   localStorage.setItem(SHELL_CACHE_KEY, JSON.stringify(agentShell(live)))
   expect(readShellCache()!.host.threads[0]!.monitoring).toBeUndefined()
   expect(watched.monitoring).toHaveLength(1)
+})
+
+it('keeps background work on the live shell but never caches or restores it', () => {
+  const working = thread('workshop', [])
+  working.backgroundWork = [{ id: '0d5c4b7e-3f5a-4f0e-8a51-2b8f1c9d7e60', label: 'Agent only while connected', type: 'workflow' }]
+  const live = fullState([working])
+  expect(agentShell(live).host.threads[0]!.backgroundWork).toEqual(working.backgroundWork)
+  writeShellCache(live)
+  expect(localStorage.getItem(SHELL_CACHE_KEY)).not.toContain('Agent only while connected')
+  expect(readShellCache()!.host.threads[0]!.backgroundWork).toBeUndefined()
+  localStorage.setItem(SHELL_CACHE_KEY, JSON.stringify(agentShell(live)))
+  expect(readShellCache()!.host.threads[0]!.backgroundWork).toBeUndefined()
+  expect(working.backgroundWork).toHaveLength(1)
 })

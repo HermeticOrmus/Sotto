@@ -491,7 +491,7 @@ describe('a thread created without a round trip', () => {
     await screen.findByRole('dialog', { name: 'New thread' })
     expect(screen.getByRole('alert')).toHaveTextContent('Send or clear your draft before creating another thread.')
     expect(screen.getByLabelText('Thread name')).toHaveValue('Refused thread')
-    expect(screen.getByRole('radio', { name: 'Project folder' })).toBeChecked()
+    expect(screen.getByText('Starts in the project folder. Change it under the composer.')).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Refused thread', exact: true })).not.toBeInTheDocument()
     expect(draftThreads.get()).toEqual([])
     // The selection returns to the thread that had it, and creation is never repeated on its own.
@@ -563,5 +563,129 @@ describe('monitoring in the thread composer', () => {
       if (reason === 'permission' || reason === 'question') thread.requests = [{ id: 'monitor-attention', kind: reason, text: 'Your answer is needed.', options: [] }]
       const view = renderThreads(state)
       expect(view.container.querySelector('.thread-monitor')).toBeNull()
+    })
+})
+
+describe('background work in the thread composer', () => {
+  beforeEach(() => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} })
+    vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener() {}, removeEventListener() {} }))
+  })
+  afterEach(() => { cleanup(); vi.unstubAllGlobals() })
+
+  const work = (count: number) => Array.from({ length: count }, (_, index) => ({
+    id: `6f0c1a2e-8f4b-4d3c-9a1e-${String(index).padStart(12, '0')}`, label: `Agent ${index + 1}`, type: 'subagent' as const,
+  }))
+  const watched = () => {
+    const state = stateFixture(); state.assignments = []; state.activeThreadId = 'footer-links'
+    return { state, thread: state.host.threads.find(item => item.id === 'footer-links')! }
+  }
+  const ornament = (view: ReturnType<typeof renderThreads>) => view.container.querySelector<HTMLElement>('.thread-monitor')
+
+  it('reads Working for one task, names every task in the title and keeps the polite status region', () => {
+    const { state, thread } = watched()
+    thread.backgroundWork = [{ id: '6f0c1a2e-8f4b-4d3c-9a1e-000000000000', label: 'Review the diff for standards', type: 'workflow' }]
+    const view = renderThreads(state)
+    const node = ornament(view)!
+    expect(node.dataset.ornament).toBe('working')
+    expect(node).toHaveAttribute('role', 'status')
+    expect(node).toHaveAttribute('aria-live', 'polite')
+    expect(node.querySelector('.thread-monitor__label')).toHaveTextContent('Review the diff for standards')
+    expect(node.querySelector('.thread-monitor__status')).toHaveTextContent(/^Working$/u)
+    expect(node.querySelectorAll('.thread-monitor__mini')).toHaveLength(1)
+    expect(node.querySelector('.thread-monitor__mini')).toHaveAttribute('aria-hidden', 'true')
+  })
+
+  it('counts every agent in the readout but sends out no more than six', () => {
+    const { state, thread } = watched()
+    thread.backgroundWork = work(3)
+    const view = renderThreads(state)
+    expect(ornament(view)!.querySelector('.thread-monitor__status')).toHaveTextContent('Working · 3 agents')
+    expect(ornament(view)!.querySelector('.thread-monitor__task')).toHaveAttribute('title', 'Agent 1\nAgent 2\nAgent 3')
+    expect(ornament(view)!.querySelectorAll('.thread-monitor__mini')).toHaveLength(3)
+    thread.backgroundWork = work(9)
+    view.rerender(<ThreadsView onOpenAgents={vi.fn()} now={NOW} />)
+    expect(ornament(view)!.querySelector('.thread-monitor__status')).toHaveTextContent('Working · 9 agents')
+    expect(ornament(view)!.querySelectorAll('.thread-monitor__mini')).toHaveLength(6)
+    thread.backgroundWork = []
+    view.rerender(<ThreadsView onOpenAgents={vi.fn()} now={NOW} />)
+    expect(ornament(view)).toBeNull()
+  })
+
+  it('gives the track to a confirmed watch first, then to background work, then to a held action', () => {
+    const { state, thread } = watched()
+    thread.status = 'running'
+    thread.activities = [
+      { id: 'held-turn', turnId: 'held-turn', sequence: 0, kind: 'turn', status: 'running', title: 'Turn' },
+      { id: 'held-command', turnId: 'held-turn', sequence: 1, kind: 'command', status: 'running', title: 'Bash', command: 'npm run build', startedAt: new Date(NOW - 60_000).toISOString() },
+    ]
+    thread.backgroundWork = work(2)
+    thread.monitoring = [{ id: '56d13d2c-f6d0-4968-a9ed-18c87a7d5b5a', label: 'Watch the build' }]
+    const view = renderThreads(state)
+    expect(view.container.querySelectorAll('.thread-monitor')).toHaveLength(1)
+    expect(ornament(view)!.dataset.ornament).toBe('monitoring')
+    thread.monitoring = []
+    view.rerender(<ThreadsView onOpenAgents={vi.fn()} now={NOW} />)
+    expect(ornament(view)!.dataset.ornament).toBe('working')
+    thread.backgroundWork = []
+    view.rerender(<ThreadsView onOpenAgents={vi.fn()} now={NOW} />)
+    expect(ornament(view)!.dataset.ornament).toBe('held')
+  })
+
+  const command = (label: string, index = 0, startedAt = new Date(NOW - 252_000).toISOString()) => ({
+    id: `7a1d2b3c-8f4b-4d3c-9a1e-${String(index).padStart(12, '0')}`, label, type: 'command' as const, startedAt,
+  })
+
+  it('waits on a command left running once the turn is over, named by its description and counted from its start', () => {
+    const { state, thread } = watched()
+    thread.status = 'idle'
+    thread.backgroundWork = [command('Run all CI gates')]
+    const view = renderThreads(state)
+    const node = ornament(view)!
+    expect(node.dataset.ornament).toBe('held')
+    expect(node.querySelector('.thread-monitor__label')).toHaveTextContent('Run all CI gates')
+    expect(node.querySelector('.thread-monitor__status')).toHaveTextContent('Waiting · 4m 12s')
+    thread.backgroundWork = [command('Run all CI gates'), command('Watch the dev server', 1)]
+    view.rerender(<ThreadsView onOpenAgents={vi.fn()} now={NOW} />)
+    expect(ornament(view)!.querySelector('.thread-monitor__status')).toHaveTextContent('Waiting · 2 commands · 4m 12s')
+    expect(ornament(view)!.querySelector('.thread-monitor__task')).toHaveAttribute('title', 'Run all CI gates\nWatch the dev server')
+    thread.backgroundWork = []
+    view.rerender(<ThreadsView onOpenAgents={vi.fn()} now={NOW} />)
+    expect(ornament(view)).toBeNull()
+  })
+
+  it('leaves a live turn to its own held action, even with a command in the background', () => {
+    const { state, thread } = watched()
+    thread.status = 'running'
+    thread.backgroundWork = [command('Run all CI gates')]
+    const view = renderThreads(state)
+    expect(ornament(view)).toBeNull()
+  })
+
+  it('lets agents lead and counts a command running beside them', () => {
+    const { state, thread } = watched()
+    thread.status = 'idle'
+    thread.backgroundWork = [...work(2), command('Run all CI gates')]
+    const view = renderThreads(state)
+    const node = ornament(view)!
+    expect(node.dataset.ornament).toBe('working')
+    expect(node.querySelector('.thread-monitor__label')).toHaveTextContent('Agent 1')
+    expect(node.querySelector('.thread-monitor__status')).toHaveTextContent('Working · 2 agents · 1 command')
+    expect(node.querySelectorAll('.thread-monitor__mini')).toHaveLength(2)
+    expect(node.querySelector('.thread-monitor__task')).toHaveAttribute('title', 'Agent 1\nAgent 2\nRun all CI gates')
+  })
+
+  it.each(['disconnected', 'settled', 'archived', 'error', 'permission', 'question', 'blocked'] as const)(
+    'hides the working creature for %s even though the work is still reported', reason => {
+      const { state, thread } = watched()
+      thread.backgroundWork = work(2)
+      if (reason === 'disconnected') state.host.connected = false
+      if (reason === 'settled') thread.settledOverride = 'settled'
+      if (reason === 'archived') thread.archivedAt = new Date(NOW).toISOString()
+      if (reason === 'error') thread.status = 'error'
+      if (reason === 'blocked') state.queue.push({ id: 'working-blocked', threadId: thread.id, kind: 'blocked', text: 'Your decision is needed.', createdAt: new Date(NOW).toISOString(), deferred: false })
+      if (reason === 'permission' || reason === 'question') thread.requests = [{ id: 'working-attention', kind: reason, text: 'Your answer is needed.', options: [] }]
+      const view = renderThreads(state)
+      expect(ornament(view)).toBeNull()
     })
 })

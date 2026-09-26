@@ -104,6 +104,26 @@ async function fixture() {
   return { client, state, children, requests, responses, cwd, complete: () => client.complete('Return a decision JSON object.', { request: 'fixture only' }, '') }
 }
 
+describe('Codex reasoning shutdown', () => {
+  it('cancels blocked discovery, waits for child close and cleans the temporary decision folder', async () => {
+    const f = await fixture()
+    f.state.hang = true
+    const shutdown = new AbortController()
+    const result = f.client.complete('Return JSON.', { request: 'fixture only' }, '', undefined, shutdown.signal)
+    const rejected = expect(result).rejects.toThrow('Sotto reasoning stopped.')
+    try {
+      await expect.poll(() => f.requests.some(request => request.method === 'initialize')).toBe(true)
+      shutdown.abort()
+      await rejected
+      expect(f.children).toHaveLength(1)
+      expect(f.children.every(child => child.closed)).toBe(true)
+      expect(await readdir(f.cwd)).toEqual([])
+      await expect(f.client.complete('Return JSON.', {}, '', undefined, shutdown.signal)).rejects.toThrow()
+      expect(f.children).toHaveLength(1)
+    } finally { shutdown.abort(); await result.catch(() => undefined) }
+  })
+})
+
 beforeEach(() => { vi.mocked(spawn).mockReset() })
 afterEach(async () => {
   vi.unstubAllEnvs()
@@ -204,7 +224,7 @@ describe('native Codex subscription client', () => {
     f.state.config.mcp_servers = { fixture: { command: 'never-run' }, 'another.server': { command: 'never-run' } }
     expect(await f.complete()).toEqual({ decision: 'human', text: 'Needs your preference.' })
     const execution = f.children.find((child) => child.started)!
-    expect(execution.args).toEqual(expect.arrayContaining(['features.code_mode_host=false', 'features.hooks=false', 'orchestrator.mcp.enabled=false', 'orchestrator.skills.enabled=false', 'skills.include_instructions=false']))
+    expect(execution.args).toEqual(expect.arrayContaining(['features.code_mode_host=false', 'features.hooks=false', 'orchestrator.mcp.enabled=false', 'orchestrator.skills.enabled=false', 'skills.include_instructions=false', 'notify=[]', 'otel.log_user_prompt=false']))
     expect(f.requests.find((request) => request.method === 'thread/start')?.params).toMatchObject({ model, ephemeral: true, environments: [], dynamicTools: [], allowProviderModelFallback: false, config: { mcp_servers: { fixture: { enabled: false }, 'another.server': { enabled: false } } } })
     expect(f.requests.find((request) => request.method === 'turn/start')?.params).toMatchObject({ environments: [], sandboxPolicy: { type: 'readOnly', networkAccess: false }, outputSchema: { required: ['json'] } })
     expect(execution.args).not.toContain('fixture only')

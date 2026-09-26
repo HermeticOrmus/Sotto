@@ -11,7 +11,7 @@
 export const DESIGN_CAPTURE_THEME = 'dark'
 export const DESIGN_CAPTURE_APP_THEMES = Object.freeze(['dark', 'light'])
 /** The built-in themes, in the order Settings shows them; Sotto (`t3-code`) is the default. */
-export const DESIGN_CAPTURE_BUILT_IN_THEMES = Object.freeze(['t3-code', 't3-chat', 'grove', 'ocean', 'ember', 'iris'])
+export const DESIGN_CAPTURE_BUILT_IN_THEMES = Object.freeze(['t3-code', 'hush', 'linen', 'nocturne', 'tropic', 'citrine'])
 export const DESIGN_CAPTURE_DEFAULT_THEME = 't3-code'
 /** The narrowest main window the Phase 1 surfaces are reviewed at. */
 export const DESIGN_CAPTURE_MINIMUM_WIDTH = 760
@@ -59,6 +59,7 @@ for (const [id, category, state] of [
   ['settings-transcription', 'settings', 'transcription'],
   ['settings-output', 'settings', 'output'],
   ['settings-application-privacy', 'settings', 'application-privacy'],
+  ['settings-git', 'settings', 'git'],
   ['settings-validation-error', 'settings', 'validation-error'],
   ['help', 'help', 'overview'],
   // Threads captures show clock times; the capture run pins America/Los_Angeles and en-US.
@@ -93,6 +94,7 @@ for (const [id, category, state] of [
   ['settings-providers-light', 'settings', 'providers'],
   ['settings-capture-light', 'settings', 'capture'],
   ['settings-application-privacy-light', 'settings', 'application-privacy'],
+  ['settings-git-light', 'settings', 'git'],
   ['settings-validation-error-light', 'settings', 'validation-error'],
   ['settings-appearance-light', 'settings', 'appearance'],
   ['help-light', 'help', 'overview'],

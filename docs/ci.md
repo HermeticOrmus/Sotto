@@ -1,6 +1,6 @@
 # Continuous integration
 
-`.github/workflows/ci.yml` runs the same gates a developer runs by hand, on a `windows-latest` runner, for every push to `main` and every pull request against `main`. It never builds installers, never publishes, and uses no secrets. A separate macOS job tests and compiles the native iOS client.
+`.github/workflows/ci.yml` runs the same gates a developer runs by hand, on a `windows-latest` runner, for every push to `main` and every pull request against `main`. It never builds desktop installers, never publishes, and uses no secrets. A separate Linux job builds and verifies the plain Node host archive, and a macOS job tests and compiles the native iOS client.
 
 ## What the job runs
 
@@ -20,10 +20,21 @@ The job cancels a superseded run on the same ref (`concurrency` with `cancel-in-
 ## What CI deliberately does not run
 
 - **Playwright end-to-end tests** (`npm run test:e2e`) and the widget design captures — they need a real Electron window and committed reference images captured on a developer machine.
-- **Live provider suites.** Every one of them is gated behind an explicit `SOTTO_*` environment variable (`SOTTO_CLAUDE_LIVE`, `SOTTO_GROK_LIVE`, `SOTTO_NATIVE_THREADS_LIVE`, and friends). CI sets none of them and holds no credentials, so they stay skipped.
-- **Perf benchmarks.** The `tests/perf/*` files that read a real workspace skip themselves when neither `SOTTO_PERF_DATA` nor a `%APPDATA%\sotto` data folder exists. A GitHub runner has neither, so they report as skipped rather than failing. `markdownRender.perf.test.tsx` needs no data and does run: it renders the same reply incrementally and whole, logs both timings, and always checks that incremental parsing processes less than a third of the characters. Its elapsed-time comparison is opt-in like the other stopwatch budgets below.
+- **Live provider suites.** Every one of them is gated behind an explicit `SOTTO_*` environment variable (`SOTTO_CLAUDE_LIVE`, `SOTTO_GROK_LIVE`, `SOTTO_NATIVE_THREADS_LIVE`, `SOTTO_SIDE_WRITING_LIVE`, and friends). CI sets none of them and holds no credentials, so they stay skipped.
+- **Perf benchmarks.** The `tests/perf/*` files that read a real workspace skip themselves when neither `SOTTO_PERF_DATA` nor a `%APPDATA%\sotto` data folder exists. A GitHub runner has neither, so they report as skipped rather than failing. The benchmarks that build their own workload and only report timings, `claudeFramer.perf.test.ts`, `claudeSettings.perf.test.ts`, `commandReply.perf.test.ts`, `previewSend.perf.test.ts`, `screenshotTotal.perf.test.tsx`, `threadCommandLanes.perf.test.tsx` and `threadSettings.perf.test.ts`, skip themselves unless `SOTTO_PERF_BENCH=1` is set (`tests/fixtures/perfBench.ts`, which also holds the median they report). They tell a run nothing and cost it seconds, so CI never sets the switch. Two need no data and assert something other than time, so they do run: `markdownRender.perf.test.tsx` renders the same reply incrementally and whole, logs both timings, and always checks that incremental parsing processes less than a third of the characters; `detailCacheRecency.perf.test.tsx` scripts a session over the window's connection and always checks that coming back to the thread the user works in never fetches its detail again. The markdown file's elapsed-time comparison is opt-in like the other stopwatch budgets below.
+
+  Run a timing benchmark by hand on an idle machine. Each prints its medians to the console; the matching note in `docs/perf/` says what they mean:
+
+  ```powershell
+  $env:SOTTO_PERF_BENCH = '1'
+  npx vitest run tests/perf/claudeFramer.perf.test.ts --maxWorkers=1 --disable-console-intercept
+  ```
+
+  ```sh
+  SOTTO_PERF_BENCH=1 npx vitest run tests/perf/claudeFramer.perf.test.ts --maxWorkers=1 --disable-console-intercept
+  ```
 - **Wall-clock budgets.** See below.
-- **Packaging and publishing.** Releases are still cut by hand on the Windows PC and the Apple silicon Mac.
+- **Desktop packaging and all publishing.** Desktop releases are still cut by hand on the Windows PC and the Apple silicon Mac. The Linux host archive is built and verified in its separate job, then published manually.
 
 ## Devin native verification
 
@@ -41,6 +52,19 @@ SOTTO_DEVIN_LIVE=1 npx vitest run tests/integration/devinLive.test.ts --maxWorke
 ```
 
 Use `npm run build` followed by `npx playwright test tests/e2e/devin-provider.spec.ts` for the Electron provider/permission journey, keyboard path, independent-provider behavior, coordinator separation, and light/dark/minimum-size captures. The verification note records actual platforms and results; a fixture pass is not a native-platform pass.
+
+## Claude settings live check
+
+`tests/integration/claudeSettingsLive.test.ts` is gated by `SOTTO_CLAUDE_LIVE=1`. It starts one thread's CLI in a temporary synthetic project with the installed, signed-in Claude Code and changes that thread's effort, model and permission mode over the control channel, then reads back what the CLI reports. It sends no prompt and runs no model turn. It prints the CLI version, the IDs of the models it moved between, whether each value matched and the timings, never a prompt, a reply or a key. It was last run on Claude Code 2.1.283 (`docs/verification/2026-09-25-claude-settings-live.md`):
+
+```powershell
+$env:SOTTO_CLAUDE_LIVE = '1'
+npx vitest run tests/integration/claudeSettingsLive.test.ts --maxWorkers=1 --disable-console-intercept
+```
+
+```sh
+SOTTO_CLAUDE_LIVE=1 npx vitest run tests/integration/claudeSettingsLive.test.ts --maxWorkers=1 --disable-console-intercept
+```
 
 ## Gated assertions
 
@@ -67,6 +91,7 @@ renderer tests for memoization and identical final markup run in CI.
 | 250 ms | `tests/integration/codexStreamingResponsiveness.test.ts`, `tests/integration/nativeStreamingResponsiveness.test.ts` | The longest main-process heartbeat gap while three threads stream 600 output updates, tested for Codex, Claude and Grok. Snapshot coalescing and lossless output are checked regardless of the budget switch. |
 | Less than half of structuredClone | `tests/unit/main/cloneHostSnapshot.test.ts` | Median internal snapshot copy with 24 MiB of retained output; container isolation and the incremental-storage work bound are always checked. |
 | Less than whole-message rendering | `tests/perf/markdownRender.perf.test.tsx` | Total elapsed time for rendering a reply in 40 incremental chunks against re-parsing each whole prefix. |
+| Half the answer's 250 ms acknowledgement | `tests/perf/threadCommandLanes.perf.test.tsx` | Median time for one thread's settings change to reach main while another thread's answer waits on its provider. It is a timing benchmark, so it also needs `SOTTO_PERF_BENCH=1`. |
 
 Run them by hand on an idle machine:
 
@@ -74,11 +99,14 @@ Run them by hand on an idle machine:
 $env:SOTTO_PERF_ASSERT = '1'
 npx vitest run tests/unit/renderer/threadQueueSkills.test.tsx tests/integration/personalChats.test.ts tests/unit/main/threadDrafts.test.ts tests/integration/codexStreamingResponsiveness.test.ts tests/integration/nativeStreamingResponsiveness.test.ts --maxWorkers=2
 npx vitest run tests/perf/markdownRender.perf.test.tsx --maxWorkers=1
+$env:SOTTO_PERF_BENCH = '1'
+npx vitest run tests/perf/threadCommandLanes.perf.test.tsx --maxWorkers=1
 ```
 
 ```sh
 SOTTO_PERF_ASSERT=1 npx vitest run tests/unit/renderer/threadQueueSkills.test.tsx tests/integration/personalChats.test.ts tests/unit/main/threadDrafts.test.ts tests/integration/codexStreamingResponsiveness.test.ts tests/integration/nativeStreamingResponsiveness.test.ts --maxWorkers=2
 SOTTO_PERF_ASSERT=1 npx vitest run tests/perf/markdownRender.perf.test.tsx --maxWorkers=1
+SOTTO_PERF_ASSERT=1 SOTTO_PERF_BENCH=1 npx vitest run tests/perf/threadCommandLanes.perf.test.tsx --maxWorkers=1
 ```
 
 One test is skipped by platform rather than gated: *preserves an occupied broken-symlink backup
@@ -93,7 +121,8 @@ nothing: the 2 MB rollout read in `tests/unit/main/codexTargetLog.test.ts` and t
 comparison in `tests/unit/renderer/streamingMarkdown.test.tsx`, and the 1005-file directory enumeration
 in `tests/unit/main/files.test.ts` each allow 60 s.
 
-`vitest.config.ts` gives a test 15 s and an `expect.poll` 5 s, rather than vitest's 5 s and 1 s. Waiting
+`vitest.config.ts` gives a test 15 s and an `expect.poll` 5 s, rather than vitest's 5 s and 1 s, and
+`tests/setup.ts` gives Testing Library's `findBy` and `waitFor` the same 5 s rather than their 1 s. Waiting
 is not the assertion: a runner takes several times longer over a provider round trip or a child process
 start than a developer machine, and a deadline that expires there describes the machine. Something that
 is genuinely wrong still fails, a few seconds later.
@@ -136,7 +165,7 @@ is still releasing a just-exited child's handles.
    - *Lint* — eslint prints file, line and rule name.
    - *Unit and integration tests* — vitest prints the failing test file and name, then the diff. The summary line at the end counts passed/failed/skipped; skipped perf and live tests are expected.
    - *Third-party notices* — the verifier names the component that drifted; regenerate or update `THIRD_PARTY_NOTICES.md` to match the lockfile.
-3. Reproduce locally with the exact command from the table. The gates are the same ones in the README test matrix, so a clean local run means a clean CI run, with two exceptions worth checking first when CI fails and your machine passes: stale `node_modules` (run `npm ci`, not `npm install`) and a missing `resources/runtime` (run `npm run runtime:prepare`).
+3. Reproduce locally with the exact command from the table. The gates are the same ones in the guide's test matrix (`docs/guide.md`, under Development), so a clean local run means a clean CI run, with two exceptions worth checking first when CI fails and your machine passes: stale `node_modules` (run `npm ci`, not `npm install`) and a missing `resources/runtime` (run `npm run runtime:prepare`).
 4. Push a fix to the same branch. The previous run is cancelled automatically and a new one starts.
 
 ## Expected duration
@@ -151,6 +180,29 @@ Run `npm run build && npx playwright test tests/e2e/subagents.spec.ts` for the r
 
 For the local HEAD/current startup, update and memory comparison, run `node tests/perf/subagents-bench.mjs` with `SOTTO_PERF_ASSERT=1`. See [the performance note](perf/issue-124-agents.md) for its workload, baseline revision, measurements and limits.
 
+## Headless host foundations
+
+`npm run test:host` runs the Node-only host lifecycle and credential checks, shared adapter contracts and HostService journeys with fake providers. The normal unit/integration gate includes these tests. The process test builds a temporary plain-Node entry and checks its import graph for Electron; it does not use the shipped Electron executable. On Windows its SIGTERM handler is exercised through an owned IPC signal fixture because Windows process termination cannot deliver a graceful POSIX SIGTERM. The separate Linux host job delivers a real SIGTERM to both the lifecycle fixture and the extracted archive smoke test.
+
+`tests/e2e/host-identity.spec.ts` launches the real desktop with a legacy workspace, verifies durable host identity and raw persisted Sotto IDs, then checks host-scoped panes and a saved draft after restart. Run it with the daily-workspace and coordinator journeys when changing the host/client boundary.
+
+## Linux host archive and socket contract
+
+The **Host archive and socket contract (Linux)** job runs on `ubuntu-latest` with Node 24, read-only repository access and no provider credentials. It installs the locked dependencies without downloading Electron, then runs:
+
+| Command | Evidence |
+| --- | --- |
+| `npm run test:socket` | The shared HostService contract through `SocketHostService` against a built Node child and all four scripted providers; pairing, the remote command allow-list, receipts and reconnect boundaries; protocol v1's detail deltas, and the version and features a client reads before it opens a session; headless startup and native SIGTERM; the SSH launcher over a fake ssh that asks its questions through the real askpass helper; the launch script, including the Node probe's POSIX shell, which only this job runs; that the host listener answers on loopback and on no other interface; and hello, a command and a pushed event over Node's own global WebSocket, so the socket is proven against a client whose framing Sotto did not write. |
+| `npm run package:host` | A standalone Node build, reviewed external dependency closure, notices, runtime manifest, provenance and SHA256; extraction into a fresh directory, listener health and persisted identity after native SIGTERM. |
+| `SOTTO_REAL_SSHD=1 npx vitest run tests/integration/realSshd.test.ts` | The SSH transport against a real OpenSSH server. The step before it installs openssh-server if the image lacks it. The test generates a host key and a passphrase-protected client key, starts its own sshd on a loopback port as the runner account, and drives `DesktopHosts` and the real launcher through the runner's ssh at `<user>@localhost`, against the host archive the previous step built, extracted into a fresh directory. Connect asks for the host key and the passphrase once each through the askpass helper, starts the host and pairs itself; the host's thread list and a command cross the forward; killing the forward reconnects after the first 3-second backoff step, to the same host and pairing; Disconnect leaves the host running; Stop host stops it; Forget revokes the pairing on the host and stops it, and nothing pairs again, even after the first backoff step has passed, nor does a further connect. On Linux CI, or with `SOTTO_REAL_SSHD_INSTALL` set, the file fails instead of skipping when `SOTTO_REAL_SSHD=1` is missing, so a renamed variable cannot pass the step. |
+| `npm run notices:verify` | The host's external and bundled dependency inventories are covered by the maintained notices. |
+
+The job retains `Sotto-host-*-linux-x64.tar.gz` and its checksum sidecar as a workflow artifact for 14 days. It does not publish them. The archive contains zod and no native modules; a new dependency or native binary fails the packaging check until its runtime/release path is reviewed. The desktop's Windows node-pty installation is never copied into a Linux archive.
+
+Run `npm run package:host` locally for the same extraction and startup check. The filename records the actual platform. `npm run host:verify -- <extracted-directory>` verifies an existing extracted archive against its manifest and provenance; `node scripts/smoke-host-archive.mjs <extracted-directory>` additionally starts and stops it. On Windows only, smoke shutdown exercises the signal handler through IPC, since Windows cannot deliver a graceful POSIX SIGTERM. The Linux CI run and a real Forge SSH connection remain separate evidence from a local Windows pass.
+
+The real OpenSSH journey is skipped unless `SOTTO_REAL_SSHD=1` is set, so the Windows gates and a plain `npm test` report it as skipped. To run it on a Linux or macOS machine with openssh-server and Node 24, use `SOTTO_REAL_SSHD=1 npx vitest run tests/integration/realSshd.test.ts --maxWorkers=1`. Without `SOTTO_REAL_SSHD_INSTALL` it builds and stages the host itself; `SOTTO_SSHD` names an sshd other than `/usr/sbin/sshd`. It uses its own keys, client configuration and known_hosts file and never touches the account's `~/.ssh`. It proves the transport on this machine's OpenSSH; Windows' own ssh.exe and a real remote host are still proved by hand.
+
 ## Browser provider and desktop verification
 
 `tests/integration/browserProviders.test.ts` verifies thread-bound MCP injection and reconnection with scripted native clients. `browserAgentServer.test.ts` checks local transport admission and rejection; browser host and dispatcher tests check page grants, exact actions and observation redaction. These run in the normal two-worker suite.
@@ -160,6 +212,20 @@ The opt-in native discovery test starts the installed Codex, Claude Code and Gro
 ```powershell
 $env:SOTTO_BROWSER_LIVE = '1'
 npx vitest run tests/integration/browserProvidersLive.test.ts --maxWorkers=1
+```
+
+The same file's turn cases send one paid model turn per client and mode, asking the agent to use a synthetic `browser_status` tool, and report whether the client asked its own permission before reaching it. Every native request is denied. They report only a request's kind, tool name and choice kinds, never a prompt, argument or reply. Three test-only switches exist to diagnose a client: `SOTTO_BROWSER_TURN_PROMPT` replaces the prompt, `SOTTO_GROK_ARGS` (a JSON array) launches Grok with other arguments, and `SOTTO_BROWSER_NO_ADMISSION=1` hides the tool names from the adapter, so only the client's own rules can let a call through.
+
+```powershell
+$env:SOTTO_BROWSER_TURN_LIVE = '1'
+npx vitest run tests/integration/browserProvidersLive.test.ts --maxWorkers=1
+```
+
+`tests/integration/codexComputerUseLive.test.ts` sends one paid Codex turn per case, asking only for the list of open apps with Computer Use, and reports the requests that arrive and which known outcome each Computer Use call ended in, never its text. `SOTTO_CODEX_COMPUTER_USE_PROMPT` replaces the prompt and `SOTTO_CODEX_EXECUTABLE` runs another Codex build. Its Full access case needs the Codex desktop app open. Results so far are in `docs/verification/2026-09-25-browser-prompts-and-computer-use.md`.
+
+```powershell
+$env:SOTTO_CODEX_COMPUTER_USE_LIVE = '1'
+npx vitest run tests/integration/codexComputerUseLive.test.ts --maxWorkers=1
 ```
 
 Build and run `npx playwright test tests/e2e/agent-browser.spec.ts tests/e2e/tools-sidecar.spec.ts tests/e2e/phase-three-tools-bridge.spec.ts` to exercise the real Electron browser, permission continuation, feedback drafts and the Tools pane. The agent test uses a local page and test-only provider entry point; it needs no provider account. Screenshots and a geometry report are written to ignored `artifacts/agent-browser/`. Native-provider compatibility and actual desktop results are recorded separately in `docs/verification/`.

@@ -4,21 +4,24 @@ import { readFile } from 'node:fs/promises'
 import { z } from 'zod'
 import { AtomicJsonStore } from '../storage/atomicJsonStore'
 import { cloneHostSnapshot } from './cloneHostSnapshot'
+import { cloneActivitySnapshot, subscribeActivitySnapshots } from './activitySnapshots'
 import { join, resolve } from 'node:path'
-import { EMPTY_AGENT_HOST, PROVIDER_LABELS, providerIdSchema, publicProviderEntityId, type AgentCapabilities, type AgentHostSnapshot, type AgentProviderStatus, type ProviderId } from '../../shared/agents'
-import type { AgentHost, AgentHostCommand, AgentHostResult, AgentSkillScope, RestoredThreadHistory, ThreadHistorySource, ThreadHostEvent } from './host'
+import { EMPTY_AGENT_HOST, PROVIDER_LABELS, parsePublicProviderEntityId, providerIdSchema, publicProviderEntityId, type AgentCapabilities, type AgentHostSnapshot, type AgentProviderStatus, type ProviderId } from '../../shared/agents'
+import { resolveModel } from '../../shared/modelCatalog'
+import { confirmedSettingsSnapshot, type AgentHost, type AgentHostCommand, type AgentHostResult, type AgentSkillScope, type RestoredThreadHistory, type ShortTextPrompt, type ThreadHistorySource, type ThreadHostEvent } from './host'
 
 /** Public IDs are opaque to callers and reversible only at the provider boundary. */
 export function providerEntityId(provider: ProviderId, kind: 'model' | 'project', value: string): string {
   return publicProviderEntityId(provider, kind, value)
 }
 function nativeEntityId(provider: ProviderId, kind: 'model' | 'project', value: string): string {
-  const prefix = `native:${provider}:${kind}:`
-  if (!value.startsWith(prefix)) throw new Error(`Choose a ${kind} belonging to ${PROVIDER_LABELS[provider]}.`)
-  return decodeURIComponent(value.slice(prefix.length))
+  const parsed = parsePublicProviderEntityId(value)
+  if (parsed?.provider !== provider || parsed.kind !== kind) throw new Error(`Choose a ${kind} belonging to ${PROVIDER_LABELS[provider]}.`)
+  return parsed.value
 }
 function folderKey(path: string): string { const key = resolve(path); return process.platform === 'win32' ? key.toLowerCase() : key }
-type Slot = { snapshot: AgentHostSnapshot; status: AgentProviderStatus; wanted: boolean; epoch: number; connecting?: Promise<void> | undefined }
+type Slot = { snapshot: AgentHostSnapshot; status: AgentProviderStatus; wanted: boolean; epoch: number; connecting?: Promise<void> | undefined;
+  unsubscribeSnapshot?: (() => void) | undefined; unsubscribeEvents?: (() => void) | undefined }
 
 /** Independent native connections; durable Sotto thread identity selects the transport, never reasoning settings. */
 export class ConfiguredProviderHost implements AgentHost {
@@ -32,6 +35,7 @@ export class ConfiguredProviderHost implements AgentHost {
   private observed: readonly string[] | undefined
   private readonly slots = new Map<ProviderId, Slot>()
   private readonly listeners = new Set<(snapshot: AgentHostSnapshot) => void>()
+  private readonly activityListeners = new Set<(snapshot: AgentHostSnapshot) => void>()
   private readonly eventListeners = new Set<(event: ThreadHostEvent) => void>()
   /** Thread events from whichever provider owns the thread. Absent when no provider publishes any. */
   readonly subscribeEvents?: (listener: (event: ThreadHostEvent) => void) => () => void
@@ -45,14 +49,6 @@ export class ConfiguredProviderHost implements AgentHost {
     for (const id of providerIdSchema.options) {
       this.slots.set(id, { snapshot: structuredClone(EMPTY_AGENT_HOST), wanted: false, epoch: 0,
         status: { id, name: PROVIDER_LABELS[id], version: '', connection: 'disconnected', capabilities: structuredClone(EMPTY_AGENT_HOST.capabilities) } })
-      options.hosts[id].subscribe(snapshot => {
-        const slot = this.slots.get(id)!
-        if (!slot.wanted) return
-        this.accept(id, snapshot)
-        this.publish()
-      })
-      // A thread is owned by one provider, so its events pass straight through under its own thread ID.
-      options.hosts[id].subscribeEvents?.(event => { if (this.slots.get(id)!.wanted) for (const listener of this.eventListeners) listener(event) })
     }
     if (providerIdSchema.options.some(id => options.hosts[id].subscribeEvents)) {
       this.subscribeEvents = listener => { this.eventListeners.add(listener); return () => this.eventListeners.delete(listener) }
@@ -87,12 +83,13 @@ export class ConfiguredProviderHost implements AgentHost {
   private accept(id: ProviderId, snapshot: AgentHostSnapshot): void {
     const slot = this.slots.get(id)!
     // A transport disappearing must not discard the identities and recovery material it already supplied.
-    slot.snapshot = snapshot.connected ? cloneHostSnapshot(snapshot) : { ...slot.snapshot, ...snapshot,
-      threads: snapshot.threads.length ? snapshot.threads : slot.snapshot.threads,
-      projects: snapshot.projects.length ? snapshot.projects : slot.snapshot.projects,
-      models: snapshot.models.length ? snapshot.models : slot.snapshot.models }
+    const owned = cloneActivitySnapshot(snapshot)
+    slot.snapshot = snapshot.connected ? owned : { ...slot.snapshot, ...owned,
+      threads: owned.threads.length ? owned.threads : slot.snapshot.threads,
+      projects: owned.projects.length ? owned.projects : slot.snapshot.projects,
+      models: owned.models.length ? owned.models : slot.snapshot.models }
     slot.status = { id, name: PROVIDER_LABELS[id], version: snapshot.version || slot.status.version,
-      capabilities: snapshot.connected ? snapshot.capabilities : slot.status.capabilities,
+      capabilities: owned.connected ? owned.capabilities : slot.status.capabilities,
       connection: snapshot.connected ? 'connected' : snapshot.error ? 'error' : slot.connecting ? 'connecting' : 'disconnected',
       ...(snapshot.verifiedVersion ? { verifiedVersion: snapshot.verifiedVersion } : {}),
       ...(snapshot.error ? { error: snapshot.error } : {}) }
@@ -125,19 +122,35 @@ export class ConfiguredProviderHost implements AgentHost {
     }
     return result
   }
-  private publish(): void { const snapshot = this.aggregate(); for (const listener of this.listeners) listener(snapshot) }
+  private publish(): void {
+    if (!this.listeners.size && !this.activityListeners.size) return
+    const snapshot = this.aggregate()
+    for (const listener of this.listeners) listener(cloneHostSnapshot(snapshot))
+    for (const listener of this.activityListeners) listener(cloneActivitySnapshot(snapshot))
+  }
   async connect(provider?: ProviderId): Promise<AgentHostSnapshot> {
     const requested = (provider ? [provider] : this.options.enabledProviders?.() ?? [this.options.provider()]).map(id => ({ id, epoch: this.slots.get(id)!.epoch }))
     await this.initialize()
     await Promise.all(requested.filter(({ id, epoch }) => this.slots.get(id)!.epoch === epoch).map(({ id }) => this.connectOne(id)))
-    return this.aggregate()
+    return cloneHostSnapshot(this.aggregate())
   }
   private async connectOne(id: ProviderId): Promise<void> {
     const slot = this.slots.get(id)!
     if (slot.connecting) return slot.connecting
     if (slot.status.connection === 'connected') return
     slot.wanted = true; const epoch = ++slot.epoch
+    slot.unsubscribeSnapshot?.(); slot.unsubscribeEvents?.()
     slot.status = { ...slot.status, connection: 'connecting' }; delete slot.status.error
+    slot.unsubscribeSnapshot = subscribeActivitySnapshots(this.options.hosts[id], snapshot => {
+      if (!slot.wanted || slot.epoch !== epoch) return
+      this.accept(id, snapshot)
+      this.publish()
+    })
+    // A thread belongs to one provider. Its events keep that provider's connection epoch.
+    slot.unsubscribeEvents = this.options.hosts[id].subscribeEvents?.(event => {
+      if (!slot.wanted || slot.epoch !== epoch) return
+      for (const listener of this.eventListeners) listener(event)
+    })
     this.publish()
     if (this.observed) this.options.hosts[id].observeThreads?.(this.observed)
     const pending = (async () => {
@@ -160,7 +173,7 @@ export class ConfiguredProviderHost implements AgentHost {
       try { const snapshot = await this.options.hosts[id].snapshot(); if (slot.epoch === epoch) this.accept(id, snapshot) }
       catch (error) { if (slot.epoch === epoch) this.failed(id, error) }
     }))
-    this.publish(); return this.aggregate()
+    this.publish(); return cloneHostSnapshot(this.aggregate())
   }
   private owner(threadId: string): ProviderId {
     const durable = this.options.threadProvider?.(threadId)
@@ -195,7 +208,7 @@ export class ConfiguredProviderHost implements AgentHost {
     const slot = this.slots.get(id)!; const epoch = slot.epoch; const host = this.options.hosts[id]
     const snapshot = await (host.refreshThread?.(threadId) ?? host.snapshot())
     if (slot.epoch !== epoch) throw new Error('This thread provider disconnected while reading the thread.')
-    this.accept(id, snapshot); this.publish(); return this.aggregate()
+    this.accept(id, snapshot); this.publish(); return cloneHostSnapshot(this.aggregate())
   }
   rollbackCapability(threadId: string) {
     const provider = this.providerForThread(threadId)
@@ -207,6 +220,15 @@ export class ConfiguredProviderHost implements AgentHost {
     const host = this.options.hosts[provider]
     if (!host.rollbackThread) throw new Error('This provider does not support conversation rewind.')
     return host.rollbackThread(threadId, removedUserMessages, expectedUserMessageIds)
+  }
+  /**
+   * The thread's own provider writes or nothing does (ADR-0026). A client that is not connected is not
+   * started for a side call, and no other provider is asked in its place.
+   */
+  async writeShortText(threadId: string, prompt: ShortTextPrompt, signal?: AbortSignal): Promise<string | null> {
+    const id = this.providerForThread(threadId)
+    if (!id || this.slots.get(id)!.status.connection !== 'connected') return null
+    return await this.options.hosts[id].writeShortText?.(threadId, prompt, signal) ?? null
   }
   providerForThread(threadId: string): ProviderId | undefined {
     try { return this.owner(threadId) } catch { return undefined }
@@ -226,7 +248,7 @@ export class ConfiguredProviderHost implements AgentHost {
       return this.options.hosts[id].execute({ ...command, projectId: nativeId })
     }
     if (command.type === 'create-thread') {
-      const model = this.aggregate().models.find(model => model.id === this.resolveModelId(command.modelId))
+      const model = resolveModel(this.aggregate().models, this.resolveModelId(command.modelId))
       if (!model?.providerId || !model.ready) throw new Error('Choose an available model and provider.')
       const id = model.providerId; this.requireConnected(id)
       if (!this.slots.get(id)!.status.capabilities.threads) throw new Error('This provider cannot create threads.')
@@ -278,10 +300,14 @@ export class ConfiguredProviderHost implements AgentHost {
     const capabilities = this.slots.get(id)!.status.capabilities
     const needed = command.type === 'send' ? 'submit' : command.type === 'interrupt' ? 'interrupt' : command.type === 'compact-thread' ? 'compact' : command.type === 'configure-thread' ? 'configureThread' : undefined
     if (needed && !capabilities[needed]) throw new Error('This provider does not support that thread action.')
-    if (command.type === 'configure-thread' && command.modelId !== undefined) {
-      return this.options.hosts[id].execute({ ...command, modelId: nativeEntityId(id, 'model', command.modelId) })
-    }
-    return this.options.hosts[id].execute(command)
+    if (command.type !== 'configure-thread') return this.options.hosts[id].execute(command)
+    const slot = this.slots.get(id)!; const epoch = slot.epoch
+    const [result, snapshot] = confirmedSettingsSnapshot(await this.options.hosts[id].execute(command.modelId !== undefined ? { ...command, modelId: nativeEntityId(id, 'model', command.modelId) } : command))
+    // The provider's snapshot of a confirmed change becomes the whole view, as a read of the thread would.
+    // One from a connection that has since changed is dropped.
+    if (!snapshot || slot.epoch !== epoch) return result
+    this.accept(id, snapshot)
+    return { ...result, snapshot: cloneHostSnapshot(this.aggregate()) }
   }
   observeThreads(ids: readonly string[]): void {
     this.observed = [...ids]
@@ -291,6 +317,8 @@ export class ConfiguredProviderHost implements AgentHost {
   disconnect(provider?: ProviderId): void {
     for (const id of provider ? [provider] : providerIdSchema.options) {
       const slot = this.slots.get(id)!; slot.wanted = false; ++slot.epoch; slot.connecting = undefined
+      slot.unsubscribeSnapshot?.(); slot.unsubscribeEvents?.()
+      slot.unsubscribeSnapshot = undefined; slot.unsubscribeEvents = undefined
       this.options.hosts[id].disconnect(); slot.snapshot.connected = false
       slot.status = { ...slot.status, connection: 'disconnected' }; delete slot.status.error
     }
@@ -298,5 +326,8 @@ export class ConfiguredProviderHost implements AgentHost {
   }
   subscribe(listener: (snapshot: AgentHostSnapshot) => void): () => void {
     this.listeners.add(listener); return () => this.listeners.delete(listener)
+  }
+  subscribeActivitySnapshots(listener: (snapshot: AgentHostSnapshot) => void): () => void {
+    this.activityListeners.add(listener); return () => this.activityListeners.delete(listener)
   }
 }

@@ -10,6 +10,7 @@ import {
   type SottoE2EBridge,
 } from '../../src/shared/e2e'
 import type { SottoBridge } from '../../src/shared/contracts'
+import { TRANSCRIPTION_ERROR_DETAIL } from '../../src/shared/dictation'
 import { DETERMINISTIC_TRANSCRIPT, PRESERVED_CLIPBOARD_TEXT } from '../fixtures/fakeTranscription'
 import { closeSotto, e2eEnvironment, launchSotto, openPage } from './support/sottoLaunch'
 
@@ -176,7 +177,7 @@ test('keeps the widget theme apart from the main window and applies a persisted 
 
     await launched.page.evaluate(async () => {
       const bridge = (globalThis as unknown as { sotto: SottoBridge }).sotto
-      await bridge.updateSettings({ appearance: 'light', lightTheme: 'ember' })
+      await bridge.updateSettings({ appearance: 'light', lightTheme: 'tropic' })
     })
     await expect(html).toHaveAttribute('data-theme', 'light')
     await launched.page.reload()
@@ -184,7 +185,7 @@ test('keeps the widget theme apart from the main window and applies a persisted 
     await openPage(launched.page, 'Dictate')
     await expect(launched.page.getByRole('heading', { name: /ready when you are/i })).toBeVisible()
     await expect(html).toHaveAttribute('data-theme', 'light')
-    await expect(html).toHaveAttribute('data-theme-id', 'ember')
+    await expect(html).toHaveAttribute('data-theme-id', 'tropic')
     expect(await launched.page.evaluate(() => getComputedStyle(document.body).backgroundColor)).not.toBe(darkCanvas)
   } finally {
     await closeSotto(launched)
@@ -512,7 +513,7 @@ test('transcription failure is finite and leaves clipboard and history untouched
   try {
     await completeOnboarding(launched.page)
     await dictateWithButton(launched.page)
-    await expect(launched.page.getByRole('alert')).toContainText(/transcription failed/i)
+    await expect(launched.page.getByRole('alert')).toContainText(TRANSCRIPTION_ERROR_DETAIL.TRANSCRIPTION_FAILED)
     expect(await snapshot(launched.page)).toMatchObject({
       clipboardText: PRESERVED_CLIPBOARD_TEXT,
       pasteAttempts: 0,

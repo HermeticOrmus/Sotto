@@ -3,7 +3,9 @@ import { randomUUID } from 'node:crypto'
 import { readFile, readdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { isImmutableActivities, subscribeActivitySnapshots } from '../../src/main/agents/activitySnapshots'
 import { WorkspaceHost } from '../../src/main/agents/workspace'
+import type { AgentHostSnapshot } from '../../src/shared/agents'
 import { describeAdapterContract } from './adapterContract'
 import { devinFixture } from '../fixtures/devinFixture'
 
@@ -157,13 +159,32 @@ describe('Devin dispatch and decision boundaries', () => {
   })
 
   it('refuses a changed request reusing the same native wire ID without approving it', async () => {
-    await send(); await f.driver.raisePermission(threadId, 'Original action')
-    await expect.poll(async () => (await thread()).requests.length).toBe(1)
-    const requestId = (await thread()).requests[0]!.id
-    await f.action(threadId, { type: 'changed-permission', text: 'Different action' })
-    await expect.poll(async () => (await thread()).status).toBe('error')
-    await expect(f.host.execute({ type: 'answer', commandId: randomUUID(), threadId, requestId, answer: '', approved: true })).rejects.toThrow()
-    expect((await f.driver.requests()).some(record => f.protocol.permissionDecision(record) === true)).toBe(false)
+    const published: AgentHostSnapshot[] = []
+    const off = subscribeActivitySnapshots(f.host, snapshot => { published.push(snapshot) })
+    try {
+      await send(); await f.driver.raisePermission(threadId, 'Original action')
+      await expect.poll(async () => (await thread()).requests.length).toBe(1)
+      await expect.poll(() => published.some(snapshot => snapshot.threads.find(item => item.id === threadId)?.activities?.some(activity => activity.kind === 'command' && activity.title === 'Original action'))).toBe(true)
+      const before = published.findLast(snapshot => snapshot.threads.find(item => item.id === threadId)?.activities?.some(activity => activity.kind === 'command' && activity.title === 'Original action'))!
+      const beforeThread = before.threads.find(item => item.id === threadId)!
+      const command = beforeThread.activities!.find(activity => activity.kind === 'command' && activity.title === 'Original action')!
+      expect(isImmutableActivities(beforeThread.activities)).toBe(true)
+      expect(Object.isFrozen(command)).toBe(true)
+      const publicSnapshot = await f.host.snapshot()
+      publicSnapshot.threads.find(item => item.id === threadId)!.activities!.find(activity => activity.id === command.id)!.title = 'Consumer edit'
+      expect((await thread()).activities?.find(activity => activity.id === command.id)?.title).toBe('Original action')
+
+      const requestId = (await thread()).requests[0]!.id
+      await f.action(threadId, { type: 'changed-permission', text: 'Different action' })
+      await expect.poll(async () => (await thread()).status).toBe('error')
+      await expect.poll(() => published.at(-1)?.threads.find(item => item.id === threadId)?.activities?.find(activity => activity.id === command.id)?.title).toBe('Different action')
+      const changed = published.at(-1)!.threads.find(item => item.id === threadId)!.activities!.find(activity => activity.id === command.id)!
+      expect(changed).not.toBe(command)
+      expect(command.title).toBe('Original action')
+      expect(beforeThread.requests[0]?.text).toBe('Original action')
+      await expect(f.host.execute({ type: 'answer', commandId: randomUUID(), threadId, requestId, answer: '', approved: true })).rejects.toThrow()
+      expect((await f.driver.requests()).some(record => f.protocol.permissionDecision(record) === true)).toBe(false)
+    } finally { off() }
   })
 
   it.each(['interrupt', 'disconnect'] as const)('keeps failed acceptance observation uncertain after %s', async action => {
@@ -231,6 +252,8 @@ describe('Devin dispatch and decision boundaries', () => {
     // Every mode says what Sotto will still put to the user under it, including the one named for not asking.
     expect(model.providerModes?.every(mode => (mode.asks ?? '').length > 0)).toBe(true)
     expect(model.providerModes?.find(mode => mode.id === 'bypass')?.asks).toMatch(/nothing/iu)
+    // What each allows travels with it, so a paired device's choice is judged by that and not by list order.
+    expect(Object.fromEntries(model.providerModes?.map(mode => [mode.id, mode.allows]) ?? [])).toEqual({ 'ask-first': 'nothing', 'accept-edits': 'edits', smart: 'edits', plan: 'nothing', ask: 'nothing', bypass: 'everything' })
     expect(await thread()).toMatchObject({ providerMode: 'ask-first', runtimeMode: 'approval-required' })
   })
 

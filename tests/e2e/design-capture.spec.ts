@@ -17,6 +17,7 @@ import {
   designCaptureTupleKey,
 } from '../../scripts/design-capture-matrix.mjs'
 import { requireOwnedE2EProfile } from '../../scripts/e2e-profile-policy.mjs'
+import { hostEntityKey } from '../../src/shared/clientIdentity'
 import { designThreadsFixture, type E2EScenario } from '../../src/shared/e2e'
 import type { HistoryEntry } from '../../src/shared/history'
 import { DEFAULT_SETTINGS, type Appearance } from '../../src/shared/settings'
@@ -876,6 +877,7 @@ test.describe('authoritative design-review captures', () => {
         ['Output', 'output'],
         ['Appearance', 'appearance'],
         ['Application', 'application-privacy'],
+        ['Git', 'git'],
       ] as const
       for (const [heading, state] of settingsSections) {
         await page.getByRole('tablist', { name: 'Settings sections' }).getByRole('tab', { name: heading, exact: true }).click()
@@ -974,7 +976,8 @@ test.describe('authoritative design-review captures', () => {
       await capturePage(page, `threads-split-workspace-${appearance}.png`, { theme: appearance, category: 'threads', state: 'split-workspace' })
       await resize(820)
       await expect(page.getByRole('tablist', { name: 'Open panes' })).toBeVisible()
-      await expect(page.locator('#thread-pane-grok-previews')).toHaveAttribute('inert')
+      const hostId = await page.evaluate(async () => (await window.sotto!.agents!.get()).hostId)
+      await expect(page.locator(`[id="thread-pane-${hostEntityKey(hostId, 'grok-previews')}"]`)).toHaveAttribute('inert')
       await capturePage(page, `threads-split-focus-820-${appearance}.png`, { theme: appearance, category: 'threads', state: 'split-focus-820' })
       await page.getByRole('button', { name: 'Tools', exact: true }).click()
       const tools = page.getByRole('complementary', { name: 'Tools', exact: true })
@@ -984,7 +987,8 @@ test.describe('authoritative design-review captures', () => {
       await page.getByRole('button', { name: 'New thread', exact: true }).first().click()
       const dialog = page.getByRole('dialog', { name: 'New thread', exact: true })
       await dialog.getByRole('button', { name: 'sotto-site C:/sotto-site', exact: true }).click()
-      await expect(dialog.getByRole('radio', { name: 'Project folder', exact: true })).toBeChecked()
+      // The working copy is chosen under the composer now (ADR-0027); the dialog says where it starts and where to change it.
+      await expect(dialog.getByText('Starts in the project folder. Change it under the composer.', { exact: true })).toBeVisible()
       await capturePage(page, `threads-working-copy-choice-${appearance}.png`, { theme: appearance, category: 'threads', state: 'working-copy-choice' })
     })
   })
@@ -1071,6 +1075,7 @@ test.describe('authoritative design-review captures', () => {
         ['Dictation', 'capture'],
         ['Appearance', 'appearance'],
         ['Application', 'application-privacy'],
+        ['Git', 'git'],
       ] as const) {
         await page.getByRole('tablist', { name: 'Settings sections' }).getByRole('tab', { name: heading, exact: true }).click()
         const section = page.locator('.settings-section').filter({ has: page.getByRole('heading', { name: heading, exact: true }) })
@@ -1106,7 +1111,7 @@ test.describe('authoritative design-review captures', () => {
       for (const theme of ['dark', 'light'] as const) {
         await page.emulateMedia({ colorScheme: theme })
         await expect(page.locator('html')).toHaveAttribute('data-theme', theme)
-        await expect(section.getByRole('button', { name: 'Follow the system appearance' })).toHaveAttribute('aria-pressed', 'true')
+        await expect(section.getByRole('radio', { name: /^Match (Windows|macOS)$/u })).toHaveAttribute('aria-checked', 'true')
         await assertRenderedRoom(page, theme)
         await captureSection(page, section, `appearance-system-${theme}.png`, { category: 'appearance', state: 'system-settings', theme })
       }

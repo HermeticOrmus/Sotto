@@ -108,6 +108,21 @@ describe('coordinator images, authority and durable settings', () => {
     expect(created.host.threads.find(t => t.id === created.activeThreadId)).toMatchObject({ reasoningEffort: 'high', runtimeMode: 'full-access' })
     expect((await f.control.command({ type: 'create-thread', projectId: 'project', title: 'Managed', modelId: 'claude:test' })).assignments).toHaveLength(1)
   })
+  it('creates, configures and sends a screenshot on a long-context model the catalog lists only by its base', async () => {
+    // Claude Code 2.1.283 lists `opus` and no `opus[1m]`; the thread keeps the variant's ID throughout (#344).
+    const f = await controlFixture()
+    const created = await f.control.command({ type: 'create-thread', projectId: 'project', title: 'Long context', modelId: 'claude:test[1m]', reasoningEffort: 'max', managed: false })
+    expect(created.error).toBeNull()
+    const threadId = created.activeThreadId!
+    expect(f.host.attempts.at(-1)).toMatchObject({ type: 'create-thread', modelId: 'claude:test[1m]', reasoningEffort: 'max' })
+    expect((await f.control.command({ type: 'configure-thread', threadId, reasoningEffort: 'xhigh' })).error).toBeNull()
+    expect((await f.control.command({ type: 'configure-thread', threadId, reasoningEffort: 'ultra' })).error).toBe('That reasoning level is not supported by this model.')
+    const sent = await f.control.command({ type: 'manual-send', threadId, text: '', attachments: [image] })
+    expect(sent.error).toBeNull()
+    expect(sent.host.threads.find(thread => thread.id === threadId)).toMatchObject({ modelId: 'claude:test[1m]', messages: [{ attachments: [{ id: image.id }] }] })
+    expect((await f.control.command({ type: 'create-thread', projectId: 'project', title: 'Unknown', modelId: 'claude:other[1m]', managed: false })).error)
+      .toMatch(/unavailable/u)
+  })
   it('persists image-only manual drafts and never creates an assignment or duplicates an uncertain send', async () => {
     const f = await controlFixture(); f.host.unknown = true
     const command = { type: 'manual-send' as const, threadId: 'workshop', text: '', attachments: [image] }

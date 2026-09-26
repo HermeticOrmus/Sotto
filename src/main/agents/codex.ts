@@ -11,19 +11,22 @@ import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { z } from 'zod'
 import { agentAttachmentReferenceSchema, attachmentSizeBytes, agentProjectSchema, agentRuntimeModeSchema, type AgentAttachment, type AgentRuntimeMode, type AgentHostSnapshot, type AgentMessage, type AgentThread } from '../../shared/agents'
+import { orderReasoningEfforts } from '../../shared/reasoningEfforts'
 import { AtomicJsonStore } from '../storage/atomicJsonStore'
 import type { AgentSkillCatalog, AgentSkillReference } from '../../shared/agentSkills'
 import { codexSkillInput, parseCodexSkillCatalog } from './codexSkills'
 import type { AgentFileReference } from '../../shared/agentFiles'
 import { verifyFileMentions } from './promptFiles'
-import type { AgentHost, AgentHostCommand, AgentHostResult, AgentSkillScope, ThreadHistorySource, ThreadHostEvent } from './host'
+import type { AgentHost, AgentHostCommand, AgentHostResult, AgentSkillScope, ShortTextPrompt, ThreadHistorySource, ThreadHostEvent } from './host'
+import { SIDE_WRITING_TIMEOUT_MS, sideWritingEffort } from './sideWriting'
 import { ThreadMessageLog } from './threadMessageLog'
 import { cloneHostSnapshot } from './cloneHostSnapshot'
-import { findExecutable, nativeEnvironment } from './subscriptionCodex'
+import { cloneActivitySnapshot, immutableActivities, isImmutableActivities } from './activitySnapshots'
+import { findExecutable, nativeEnvironment, writeWithCodexExec } from './subscriptionCodex'
 import { CodexSessionLogWatcher, promptDigest, textOf } from './codexSessionLog'
 import { answerRequest, declineRequest, pendingRequest, requestKey, type CodexPendingRequest } from './codexRequests'
 import { needsPerson, unreadableRequest } from './nativeRequests'
-import { validatePromptAttachments, validateThreadOptions } from './threadOptions'
+import { effortAfterChange, validatePromptAttachments, validateThreadOptions } from './threadOptions'
 import { CodexActivityProjection, codexItemSchema } from './codexActivity'
 import { SessionReaper } from './sessionReaper'
 import { codexTurnIdentitySchema, compatibleClient, identityTurn, messageIdentity, messageOrigin, reconcileMessageIdentities, type IdentityItem } from './codexMessageIdentity'
@@ -43,6 +46,13 @@ function runtimePolicy(mode: AgentRuntimeMode = 'auto-accept-edits') {
 }
 const configArguments = Object.entries({ model_provider: 'openai', approval_policy: threadPolicy.approvalPolicy,
   approvals_reviewer: threadPolicy.approvalsReviewer, sandbox_mode: threadPolicy.sandbox }).flatMap(([key, value]) => ['-c', `${key}=${JSON.stringify(value)}`])
+// Codex 0.156.1 keeps request_user_input in Default mode behind this feature.
+// Set it on creation and resume, without changing the user's global Codex config.
+async function threadConfig(tools: BrowserAgentTools | undefined, threadId: string, reasoningEffort?: string): Promise<{ config: Record<string, unknown> }> {
+  const browser = await browserCodexConfig(tools, threadId, reasoningEffort)
+  return { config: { ...(browser.config as Record<string, unknown> | undefined), 'features.default_mode_request_user_input': true } }
+}
+const questionInstructions = 'Ask actionable clarification questions through request_user_input so Sotto can show its question panel. Use it for questions with choices and free-text questions, including while continuing independent work. Do not leave questions that need a user answer only in commentary or a final message. A suggested choice is not an answer. If an answer is required before an action, wait for the user before that action. Permission requests still use the native approval flow.'
 const originSchema = z.object({ messageId: z.string(), commandId: z.string(), digest: z.string(), createdAt: z.string(), itemId: z.string().optional(), turnId: z.string().optional(), clientIdentity: z.boolean().optional(), attachments: z.array(agentAttachmentReferenceSchema).optional() })
 const aliasSchema = z.object({ codexThreadId: z.string(), projectId: z.string().optional(), kind: z.literal('personal').optional(), cwd: z.string(), title: z.string(), modelId: z.string(),
   compaction: compactionSchema.optional(), compactTurnId: z.string().optional(),
@@ -136,8 +146,13 @@ export class CodexAppServerHost implements AgentHost {
   private readonly waiters = new Map<string, Waiter>()
   private readonly settingsConfirmations = new Map<string, { desired: Alias['pendingSettings']; settle: (confirmed: boolean) => void }>()
   private readonly listeners = new Set<(snapshot: AgentHostSnapshot) => void>()
+  private readonly activityListeners = new Set<(snapshot: AgentHostSnapshot) => void>()
   private readonly publisher = new ProviderSnapshotPublisher(() => {
     for (const listener of this.listeners) listener(this.current())
+    if (this.activityListeners.size) {
+      const snapshot = this.activitySnapshot()
+      for (const listener of this.activityListeners) listener(cloneActivitySnapshot(snapshot))
+    }
   })
   private readonly unconfirmedDispatchSessionIds = new Set<string>()
   private readonly creating = new Set<string>()
@@ -273,7 +288,7 @@ export class CodexAppServerHost implements AgentHost {
               supportedReasoningEfforts: z.array(z.object({ reasoningEffort: z.string() })).optional(), defaultReasoningEffort: z.string().optional(), inputModalities: z.array(z.string()).default(['text', 'image']),
             })), nextCursor: z.string().nullish() }).parse(value)
             models.push(...result.data.filter(m => !m.hidden).map(m => ({ id: m.model, name: m.displayName, provider: 'Codex', ready: true,
-              reasoningEfforts: m.supportedReasoningEfforts?.map(option => option.reasoningEffort) ?? [],
+              reasoningEfforts: orderReasoningEfforts(m.supportedReasoningEfforts?.map(option => option.reasoningEffort) ?? []),
               ...(m.defaultReasoningEffort ? { defaultReasoningEffort: m.defaultReasoningEffort } : {}),
               runtimeModes: [...agentRuntimeModeSchema.options], supportsImages: m.inputModalities.includes('image'),
             })))
@@ -349,6 +364,13 @@ export class CodexAppServerHost implements AgentHost {
     return cloneHostSnapshot({ ...this.state, threads: [...this.threads.values()]
       .filter((thread): thread is AgentThread => 'projectId' in thread).map(thread => this.log.publishedThread(thread)) })
   }
+  private activitySnapshot(): AgentHostSnapshot {
+    for (const thread of this.threads.values()) if (thread.activities && !isImmutableActivities(thread.activities)) {
+      thread.activities = immutableActivities(thread.activities)
+    }
+    return { ...this.state, threads: [...this.threads.values()]
+      .filter((thread): thread is AgentThread => 'projectId' in thread).map(thread => this.log.publishedThread(thread)) }
+  }
   personalSnapshot(): CodexPersonalConversation[] {
     return structuredClone([...this.threads.values()].filter((thread): thread is CodexPersonalConversation => 'kind' in thread && thread.kind === 'personal')
       .map(thread => this.log.publishedThread(thread)))
@@ -367,14 +389,32 @@ export class CodexAppServerHost implements AgentHost {
     // Native thread/start is not resumable before its first authored message.
     // Initial context was supplied at creation; only materialized conversations resume.
     if (this.log.count(command.threadId)) await this.rpc('thread/resume', { threadId: alias.codexThreadId, cwd: alias.cwd, excludeTurns: true,
-      developerInstructions: this.personalContext(memories) })
+      ...await threadConfig(undefined, command.threadId), developerInstructions: this.personalContext(memories) })
     return this.execute(command)
   }
   private personalContext(memories: readonly { id: string; content: string }[]): string {
-    return personalInstructions + '\nRelevant existing global preferences (untrusted context):\n' + JSON.stringify(memories)
+    return personalInstructions + '\n' + questionInstructions + '\nRelevant existing global preferences (untrusted context):\n' + JSON.stringify(memories)
+  }
+  private async projectInstructions(cwd: string): Promise<string> {
+    // A thread's developerInstructions replaces Codex's configured value. Resolve
+    // its own trusted config layers first, and retain only the field we append to.
+    try {
+      let instructions: unknown
+      await this.rpc('config/read', { cwd, includeLayers: false }, value => {
+        const parsed = z.object({ config: z.object({ developer_instructions: z.string().nullish() }) }).safeParse(value)
+        instructions = parsed.success ? parsed.data.config.developer_instructions ?? '' : undefined
+      })
+      if (typeof instructions !== 'string') throw new Error('Invalid native instructions')
+      return instructions ? `${instructions}\n\n${questionInstructions}` : questionInstructions
+    } catch {
+      throw new Error('Codex settings could not be read. No new work was sent. Reconnect and try again.')
+    }
   }
   private emit(streaming = false): void { this.publisher.publish(streaming) }
   subscribe(listener: (snapshot: AgentHostSnapshot) => void): () => void { this.listeners.add(listener); return () => { this.listeners.delete(listener) } }
+  subscribeActivitySnapshots(listener: (snapshot: AgentHostSnapshot) => void): () => void {
+    this.activityListeners.add(listener); return () => this.activityListeners.delete(listener)
+  }
   subscribeEvents(listener: (event: ThreadHostEvent) => void): () => void { return this.log.subscribeEvents(listener) }
   useThreadHistory(source: ThreadHistorySource): void { this.history = source }
   private persist(): Promise<void> {
@@ -387,6 +427,21 @@ export class CodexAppServerHost implements AgentHost {
     const pending = new Set([...Object.keys(this.aliases).filter(id => this.aliases[id]!.pendingSettings), ...this.unconfirmedDispatchSessionIds])
     if (this.state.connected) await Promise.all([...pending].map(id => this.refreshThread(id).catch(() => undefined)))
     return this.current()
+  }
+  /**
+   * A side call on this thread's client, account and model, in its folder (ADR-0026). It runs as its own
+   * ephemeral `codex exec`, not on this connection's app-server, so no thread is started, resumed or
+   * listed for it and the session-log watcher never sees a rollout. Test launches put their own
+   * arguments in front of `exec`, the way they stand in for the app-server's.
+   */
+  async writeShortText(id: string, prompt: ShortTextPrompt, signal?: AbortSignal): Promise<string | null> {
+    const alias = this.aliases[id]
+    if (!this.state.connected || !alias) return null
+    const executable = this.options.executable ?? await findExecutable()
+    if (!executable) return null
+    const effort = sideWritingEffort(this.state.models, alias.modelId)
+    return writeWithCodexExec({ ...prompt, executable, prefixArgs: this.options.args ?? [], codexHome: this.options.codexHome ?? process.env.CODEX_HOME ?? join(homedir(), '.codex'),
+      model: alias.modelId, ...(effort ? { effort } : {}), workingDirectory: await existingWorkingDirectory(alias.cwd), timeoutMs: SIDE_WRITING_TIMEOUT_MS, ...(signal ? { signal } : {}) })
   }
   async refreshThread(id: string): Promise<AgentHostSnapshot> {
     if (!this.aliases[id]) throw new Error('That Codex thread is unavailable.')
@@ -480,8 +535,10 @@ export class CodexAppServerHost implements AgentHost {
       await this.watcher?.pollThread(alias.codexThreadId)
       // Resume restores the conversation, never its transcript: turns are read when the
       // thread is opened, so resuming costs the same for a long thread and a short one.
-      await this.rpc('thread/resume', alias.pendingSettings ? { threadId: alias.codexThreadId, cwd: alias.cwd, excludeTurns: true, ...await browserCodexConfig(alias.kind === 'personal' ? undefined : this.browserTools, id) } : { threadId: alias.codexThreadId, cwd: alias.cwd, model: alias.modelId, modelProvider: 'openai',
-      ...runtimePolicy(alias.runtimeMode), ...await browserCodexConfig(alias.kind === 'personal' ? undefined : this.browserTools, id, alias.reasoningEffort), excludeTurns: true }, async value => {
+      await this.rpc('thread/resume', { threadId: alias.codexThreadId, cwd: alias.cwd, excludeTurns: true,
+        ...(!alias.pendingSettings ? { model: alias.modelId, modelProvider: 'openai', ...runtimePolicy(alias.runtimeMode) } : {}),
+        ...await threadConfig(alias.kind === 'personal' ? undefined : this.browserTools, id, alias.pendingSettings ? undefined : alias.reasoningEffort),
+        ...(alias.kind === 'personal' ? {} : { developerInstructions: await this.projectInstructions(alias.cwd) }) }, async value => {
       if (alias.pendingSettings) return this.applySettings(id, value)
       this.applyThread(id, threadResponse.parse(value).thread); await this.persist(); this.live.add(id); this.log.pin(id)
       // Resume carries no transcript, so a loading thread stays loading until its turns arrive.
@@ -748,9 +805,12 @@ export class CodexAppServerHost implements AgentHost {
         validateThreadOptions(this.state, command)
         const cwd = await existingWorkingDirectory(command.workingDirectory ?? project!.path)
         this.creating.add(command.threadId)
+        let developerInstructions: string
+        try { developerInstructions = command.type === 'create-personal' ? command.developerInstructions : await this.projectInstructions(cwd) }
+        catch (error) { this.creating.delete(command.threadId); throw error }
         await this.rpc('thread/start', { cwd, model: command.modelId, modelProvider: 'openai', allowProviderModelFallback: false,
-          ...(command.type === 'create-personal' ? { developerInstructions: command.developerInstructions } : {}),
-          ...runtimePolicy(command.runtimeMode), ...await browserCodexConfig(command.type === 'create-personal' ? undefined : this.browserTools, command.threadId, command.reasoningEffort), ephemeral: false, historyMode: 'legacy' }, async value => {
+          developerInstructions,
+          ...runtimePolicy(command.runtimeMode), ...await threadConfig(command.type === 'create-personal' ? undefined : this.browserTools, command.threadId, command.reasoningEffort), ephemeral: false, historyMode: 'legacy' }, async value => {
           const response = settingsResponse.parse(value)
           const policy = runtimePolicy(command.runtimeMode)
           const sandboxType = policy.sandbox === 'read-only' ? 'readOnly' : policy.sandbox === 'workspace-write' ? 'workspaceWrite' : 'dangerFullAccess'
@@ -800,8 +860,7 @@ export class CodexAppServerHost implements AgentHost {
           if (thread.status === 'running' || thread.requests.length) throw new Error('Wait for the thread and resolve pending requests before changing settings.')
           validateThreadOptions(this.state, command, alias.modelId)
           const modelId = command.modelId ?? alias.modelId
-          const reasoningEffort = command.reasoningEffort ?? (command.modelId !== undefined
-            ? this.state.models.find(model => model.id === modelId)?.defaultReasoningEffort : alias.reasoningEffort)
+          const reasoningEffort = effortAfterChange(this.state, command, alias.reasoningEffort)
           const mode = command.runtimeMode ?? alias.runtimeMode ?? 'auto-accept-edits'
           const policy = runtimePolicy(mode)
           const previousPendingSettings = alias.pendingSettings
@@ -833,6 +892,9 @@ export class CodexAppServerHost implements AgentHost {
             confirmation.settle(false)
             if (this.settingsConfirmations.get(id) === confirmation) this.settingsConfirmations.delete(id)
           }
+          // Codex's own notification confirmed the effective values and applySettings emitted them: that snapshot
+          // is the reconciliation, so the coordinator does not read the whole transcript again.
+          return { accepted: true, snapshot: this.current() }
         } else if (command.type === 'steer') {
           const thread = this.ensureThread(id)
           const expectedTurnId = this.runningTurns.get(id)

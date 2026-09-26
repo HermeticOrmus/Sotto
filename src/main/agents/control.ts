@@ -1,6 +1,7 @@
 import type { AgentSkillReference } from '../../shared/agentSkills'
 import type { AgentFileReference } from '../../shared/agentFiles'
 import type { AgentActivity } from '../../shared/agentActivity'
+import { isImmutableActivities, subscribeActivitySnapshots } from './activitySnapshots'
 import { FollowupStore, followupDigest } from './followups'
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, stat } from 'node:fs/promises'
@@ -8,8 +9,8 @@ import { isAbsolute, join, resolve } from 'node:path'
 import { z } from 'zod'
 import {
   agentAssignmentSchema, agentConfigurationSchema, agentQueueItemSchema, agentAttachmentsSchema, agentThreadOptionsSchema, agentThreadDraftSchema, agentDeliverySchema,
-  providerUpgradeSchema, defaultAgentConfiguration, EMPTY_AGENT_HOST, PROVIDER_LABELS, supportsAgentSupervision, isSubscriptionReasoning, agentDeliveryReceiptsSchema, MAX_DELIVERED_DRAFTS, enabledThreadProviders, defaultThreadModelId, capabilitiesForThread, isThreadProviderConnected, providerIdSchema, threadSummaryOf,
-  type AgentMessage, type AgentThreadDetail, type AgentThreadDetailDelta, type AgentThreadDetailUpdate, type ProviderId, type AgentAttachment, type AgentAttachmentPreviewRequest, type AgentAttachmentPreviewResult, type AgentAssignment, type AgentCommand, type AgentConfiguration, type AgentDelivery, type AgentThreadDraft, type AgentHostSnapshot, type AgentQueueItem, type AgentState, type AgentThread, type ProviderClientUpdate, type SubscriptionProvider,
+  providerUpgradeSchema, defaultAgentConfiguration, PROVIDER_REJECTED_ACTION, PROVIDER_RESULT_UNCONFIRMED, THREAD_SETTINGS_UNRECONCILED, EMPTY_AGENT_HOST, PROVIDER_LABELS, supportsAgentSupervision, isSubscriptionReasoning, agentDeliveryReceiptsSchema, MAX_DELIVERED_DRAFTS, enabledThreadProviders, defaultThreadModelId, capabilitiesForThread, isThreadProviderConnected, providerIdSchema, threadSummaryOf,
+  type AgentMessage, type AgentThreadDetail, type AgentThreadDetailDelta, type AgentThreadDetailUpdate, type ProviderId, type AgentAttachment, type AgentAttachmentPreviewRequest, type AgentAttachmentPreviewResult, type AgentAssignment, type AgentCommand, type AgentConfiguration, type AgentDelivery, type AgentThreadDraft, type AgentHostSnapshot, type AgentProject, type AgentQueueItem, type AgentState, type AgentThread, type ProviderClientUpdate, type SubscriptionProvider,
 } from '../../shared/agents'
 import { AtomicJsonStore } from '../storage/atomicJsonStore'
 import type { MemoryProfile } from '../memory/profile'
@@ -24,12 +25,16 @@ import { attentionItemKey, isLiveAttention } from '../../shared/agentAttention'
 import { maintainProviderRecovery, retireLegacyProvider, stripRetiredEndpoint } from './providerRetirement'
 import { clientVersionOf } from './clientVersions'
 import { locateClient as locateClientOnDisk, ProviderClients } from './providerClients'
+import { resolveModel } from '../../shared/modelCatalog'
 import { validatePromptAttachments, validateThreadOptions } from './threadOptions'
 import { AttachmentPreviews } from './attachmentPreviews'
 import type { ThreadTitleExchange } from '../llm/threadTitle'
 import { requestQuestionsDigest, type BindRequestDraftDecision } from './requestDrafts'
 import { requestDraftProvider, requestDraftQuestions } from '../../shared/requestDrafts'
 import { agentActivitySignature, applyAgentThreadDetailDelta, diffAgentThreadDetail, mergeAgentThreadDetailUpdates } from '../../shared/agentThreadDetail'
+import { resolveFilesBinding } from '../files/binding'
+import { THREAD_SCOPED_COMMAND_TYPES } from '../../shared/threadLanes'
+import type { FilesBinding } from '../files/service'
 
 /** One shared empty array stands in for every shell thread's history; the clone that follows copies nothing. */
 const EMPTY_MESSAGES: AgentMessage[] = []
@@ -38,27 +43,6 @@ const RECORDED_COMMAND_TYPES: ReadonlySet<AgentCommand['type']> = new Set([
   'utterance', 'connect', 'refresh', 'send', 'steer', 'steer-followup', 'manual-send', 'answer', 'create-thread', 'create-project', 'select-project',
   'select-thread', 'select-attention', 'assign', 'unassign', 'resume', 'pause', 'interrupt', 'next', 'later',
   'cancel-draft', 'pause-draft', 'resume-draft', 'cancel-request', 'configure-thread-working-copy', 'configure-thread', 'compact-thread',
-])
-/**
- * The commands that name one thread and act only on it. Each runs in that thread's own lane, so an
- * action on one thread never waits on an action on another, nor on the global lane.
- *
- * Everything else keeps the one global lane, including commands that carry a `threadId` but reach
- * past the thread they name:
- * - `assign`, `unassign`, `resume`, `pause` move assignment authority and hand the single composer
- *   draft to or from management, which supervision reads across every thread.
- * - `recover-draft` and `resume-draft` rebind that same single composer draft.
- * - `create-thread` has no existing thread to key a lane on, and it also takes the selection.
- * - `settle-project` and `restore-project` move every thread of a project at once.
- * `interrupt`, `select-thread`, `save-thread-draft`, `refresh-thread-skills` and the follow-up queue
- * edits are thread-scoped too, and are absent here because they never enter a lane at all: each one
- * answers before a lane is chosen, which is already the behaviour this list gives the rest, so none of
- * them waits on the global lane or on another thread. They are unchanged.
- */
-const THREAD_SCOPED_COMMAND_TYPES: ReadonlySet<AgentCommand['type']> = new Set([
-  'manual-send', 'steer', 'steer-followup', 'answer', 'configure-thread-working-copy', 'configure-thread', 'compact-thread',
-  'settle-thread', 'restore-thread', 'retry-thread-worktree', 'refresh-thread-worktree', 'open-thread-folder', 'restore-thread-branch',
-  'reclaim-thread-worktree', 'load-earlier-messages',
 ])
 
 const savedSchema = z.object({
@@ -87,6 +71,8 @@ const savedSchema = z.object({
   })),
 })
 type Saved = z.infer<typeof savedSchema>
+/** A write handed to the store: the state it carries, serialized and by outbox, and its landing. */
+type QueuedWrite = { serialized: string; outbox: Saved['outbox']; written: Promise<void> }
 class SupersededSupervision extends Error {}
 const PRIVACY_CLEANUP_ERROR = 'Could not finish applying history privacy. Sotto will retry when local storage is available.'
 /**
@@ -107,6 +93,10 @@ function firstExchange(thread: AgentThread, trigger: 'automatic' | 'requested', 
 /** What a snapshot says about a connection that was refused, or undefined if it
  * connected. An adapter may report a refusal in the snapshot rather than by
  * throwing, so accepting one is not on its own evidence that it connected. */
+/** What a Connect press meets while that provider's client is being replaced. */
+function updatingRefusal(provider: ProviderId): string {
+  return `${PROVIDER_LABELS[provider]} is updating. It connects again when the update finishes.`
+}
 function connectionRefusal(snapshot: AgentHostSnapshot, provider: ProviderId | undefined, fallback: string): string | undefined {
   const requested = provider && snapshot.providers?.find(entry => entry.id === provider)
   if (requested && requested.connection !== 'connected') return requested.error || `${requested.name} did not confirm the connection.`
@@ -120,6 +110,14 @@ export interface AgentMembership {
 }
 
 /** Owns assignment authority, queue ordering and durable dispatch intent across all host adapters. */
+import type { GitRefsPage, GitRefsRequest } from '../../shared/gitRefs'
+import type { GitChangedFiles, GitChangedFilesRequest } from '../../shared/gitChangedFiles'
+import type { GitPullRequestDetail, GitPullRequestRequest } from '../../shared/gitPullRequests'
+
+const GIT_COMMAND_TYPES = ['git-action', 'git-pull', 'git-switch-branch', 'git-init', 'git-publish', 'git-pull-request-action', 'git-link-pull-request', 'git-unlink-pull-request', 'git-checkout-pull-request'] as const
+type GitCommand = Extract<AgentCommand, { type: (typeof GIT_COMMAND_TYPES)[number] }>
+const isGitCommand = (command: AgentCommand): command is GitCommand => (GIT_COMMAND_TYPES as readonly string[]).includes(command.type)
+
 export class AgentControl {
   private readonly followupStore: FollowupStore
   private readonly threadActions = new Map<string, Promise<unknown>>()
@@ -139,9 +137,21 @@ export class AgentControl {
   private readonly pendingDraftWrites = new Set<Map<string, string>>()
   private readonly emptyDraftRevisions = new Map<string, string>()
   private publishedDraftPersistence = ''
-  // Skip unchanged state only when no writes are pending: an older queued write could otherwise
-  // overwrite a newer state that happens to match the last completed save.
-  private lastWritten = ''
+  /**
+   * The newest write handed to the store, finished or not. The store writes in order, so this is what the disk
+   * holds once every queued write lands. State that matches it waits for that write instead of writing again; it
+   * is compared with the newest write rather than the last finished one, because an older queued write could
+   * otherwise overwrite a newer state that happens to match the last completed save.
+   */
+  private queuedWrite: QueuedWrite | undefined
+  /** Thread settings changes being dispatched now: the outbox entries that were added inside this dispatch. */
+  private readonly settingsDispatching = new Set<string>()
+  /**
+   * Settings entries the provider confirmed inside their own dispatch, whose removal is not on disk yet. Dropping
+   * one is the only change such a write would carry, so it waits for the next write that carries anything else.
+   * Until then the entry stays on disk, where a restart reconciles it against the thread's settings.
+   */
+  private readonly settledSettings = new Set<string>()
   private readonly attachmentPreviews: AttachmentPreviews
   private readonly listeners = new Set<(state: AgentState) => void>()
   private readonly deciding = new Set<string>()
@@ -156,6 +166,7 @@ export class AgentControl {
   private readonly providerReconnect = new Map<ProviderId, ReturnType<typeof setTimeout>>()
   private retirementFailure: string | null = null
   private disposed = false
+  private readonly activeCommands = new Set<Promise<AgentState>>()
   private membershipTimer: ReturnType<typeof setInterval> | null = null
   private privacyCleanupPending = false
   private privacyRevision = 0
@@ -168,6 +179,12 @@ export class AgentControl {
   private selectionRevision = 0
   private manualDraftId: string | null = null
   private readonly promptAdmissions = new Map<string, { digest: string; task: Promise<AgentState> }>()
+  /**
+   * The whole-state answer `command()` built over each shell answer, keyed on the shell answer itself. A
+   * repeated prompt is answered with the task already admitted for it, so every caller of that prompt shares
+   * one shell answer, and through this map one whole-state answer too.
+   */
+  private readonly sharedWholeStateReplies = new WeakMap<Promise<AgentState>, Promise<AgentState>>()
   private deliveredPromptDigests: Saved['deliveredPromptDigests'] = []
   private answeredRequests: Saved['answeredRequests'] = []
   /** Ephemeral view interest; never persisted, selected or granted assignment authority. */
@@ -179,6 +196,7 @@ export class AgentControl {
   private broadcastPending = false
   private readonly detailListeners = new Set<(update: AgentThreadDetailUpdate) => void>()
   /** Per thread: the signature of the messages last handed out, and the revision that stands for them. */
+  private readonly activityDetailSignatures = new WeakMap<readonly AgentActivity[], string>()
   private readonly detailRevisions = new Map<string, { signature: string; revision: number }>()
   /** The message count a thread's first exchange was last looked for at, so it is looked for once per arrival. */
   private readonly titleChecked = new Map<string, number>()
@@ -191,6 +209,7 @@ export class AgentControl {
   private contextActivityAt = Date.now()
   /** Threads already asked about this run, so a failure is not retried on every provider frame. */
   private readonly titled = new Set<string>()
+  private readonly titleWrites = new Set<Promise<void>>()
   /** The desktop window on this machine: the only client there is, and what an unattributed call means. */
   private readonly localClient: ClientIdentity = desktopWindowClient()
   /** Sotto's own supervision, so a recorded answer shows it came from Sotto and not from the user. */
@@ -201,16 +220,17 @@ export class AgentControl {
     historyEnabled?: () => boolean
     /** Whether the voice coordinator ships. Off, no thread stays managed across a start (ADR-0012). */
     coordinatorEnabled?: () => boolean
+    observeActiveThread?: boolean
     turns?: TurnRecorder
     authority?: Authority
     preferences?: Pick<MemoryProfile, 'retrieve'>
     openThreadFolder?: (path: string) => Promise<void>
     /**
-     * Writes a thread's name from its first exchange. `null` leaves the thread the name it has,
-     * which is also what an off switch, a missing key and every failure resolve to. Absent here
-     * means no thread is ever named by Sotto.
+     * Writes a thread's name from its first exchange, asking that thread's own provider on the side
+     * (ADR-0026). `null` leaves the thread the name it has, which is also what an off switch, a provider
+     * that writes nothing and every failure resolve to. Absent here means no thread is ever named by Sotto.
      */
-    writeThreadTitle?: (exchange: ThreadTitleExchange) => Promise<string | null>
+    writeThreadTitle?: (threadId: string, exchange: ThreadTitleExchange) => Promise<string | null>
     /** Local record of a silent failure; never a banner, never shown to the user. */
     logFailure?: (code: string, detail: string) => void
     /** Defers a coalesced broadcast; injectable so tests own the clock. */
@@ -219,6 +239,11 @@ export class AgentControl {
     clients?: ProviderClients
     /** Where a client is installed. Injected so a test never reads the machine's real PATH. */
     locateClient?: (provider: ProviderId) => Promise<string | undefined>
+    /**
+     * Anything else in this process running a client, told to let go of it before an install and
+     * handed back the way to take it again after. Personal chats hold their own copy of each client.
+     */
+    releaseClient?: (provider: ProviderId) => Promise<() => Promise<void>>
   }) {
     this.followupStore = new FollowupStore(dependencies.directory)
     this.clients = dependencies.clients ?? new ProviderClients()
@@ -329,10 +354,10 @@ export class AgentControl {
     }
     // Subscribe before the first observe: telling the workspace which threads are open now makes it
     // load their history, and that publish has to reach this coordinator (issue #119).
-    this.unsubscribe = this.dependencies.host.subscribe(snapshot => this.acceptSnapshot(snapshot))
+    this.unsubscribe = subscribeActivitySnapshots(this.dependencies.host, snapshot => this.acceptSnapshot(snapshot))
     this.observe()
     if (this.state.configuration.enabled || (this.dependencies.host.concurrentProviders && this.state.configuration.enabledProviders?.length)) {
-      const connection = this.command({ type: 'connect' })
+      const connection = this.commandShell({ type: 'connect' })
       if (!this.dependencies.host.concurrentProviders) await connection
       // Independent native discovery must not delay constructing the desktop IPC surface.
       else void connection
@@ -340,15 +365,31 @@ export class AgentControl {
   }
   hasPendingThreadWork(threadId: string): boolean {
     return this.outbox.some(item => item.threadId === threadId)
-      || this.followupStore.get().items.some(item => item.threadId === threadId)
+      || this.followupStore.peek().items.some(item => item.threadId === threadId)
       || this.state.assignments.some(item => item.threadId === threadId && item.mode === 'managed' && !item.paused)
       || (this.state.deliveries ?? []).some(item => item.threadId === threadId && ['queued', 'submitting', 'uncertain'].includes(item.status))
   }
+  /**
+   * Where one thread's files are, from the live state. Files, Git changes, the terminal and the browser
+   * ask this several times per listing and every couple of seconds per watched workspace; answering from
+   * `get()` copied every loaded history to read six fields. The binding is a new object of strings.
+   */
+  filesBinding(threadId: string): FilesBinding | null { return resolveFilesBinding(this.state.host, threadId) }
+  /** The projects alone, as a copy, for callers that need nothing else from the state. */
+  projects(): AgentProject[] { return structuredClone(this.state.host.projects) }
+  /**
+   * The whole state, every loaded thread's history included, with attachment preview markers placed.
+   * It copies every history and walks every message, so it is for a caller that reads histories;
+   * a client's command is answered with `shell()` instead (issue #313).
+   */
   get(): AgentState {
     const state = structuredClone(this.state)
+    state.hostId = state.host.hostId
     state.threadDraftPersistence = this.draftPersistence()
     state.historyEnabled = this.dependencies.historyEnabled?.() !== false
     if (this.busyThreads.size) state.busyThreadIds = [...this.busyThreads.keys()]
+    const unconfirmedSettings = this.unconfirmedSettings()
+    if (unconfirmedSettings.length) state.unconfirmedSettings = unconfirmedSettings
     this.attachmentPreviews.decorate(state.host)
     return state
   }
@@ -375,6 +416,12 @@ export class AgentControl {
    * kilobytes and a provider publishes dozens of times a second; the shell is what every window needs, and
    * only the threads it has declared viewed also receive `threadDetail`.
    */
+  /** The settings changes kept in the outbox with no result, as the window marks them on the thread's chips. */
+  private unconfirmedSettings(): NonNullable<AgentState['unconfirmedSettings']> {
+    // An entry whose dispatch is still running has no result yet; the chips are already waiting on it.
+    return this.outbox.flatMap(item => item.type === 'configure-thread' && item.threadId && item.options && !this.settingsDispatching.has(item.id)
+      ? [{ ...item.options, threadId: item.threadId }] : [])
+  }
   shell(): AgentState {
     const threads = this.state.host.threads
     const bare = { ...this.state, host: { ...this.state.host, threads: threads.map(thread => ({
@@ -383,24 +430,42 @@ export class AgentControl {
       summary: threadSummaryOf(thread),
     })) } }
     const state = structuredClone(bare)
+    state.hostId = state.host.hostId
     state.threadDraftPersistence = this.draftPersistence()
     state.historyEnabled = this.dependencies.historyEnabled?.() !== false
     if (this.busyThreads.size) state.busyThreadIds = [...this.busyThreads.keys()]
+    const unconfirmedSettings = this.unconfirmedSettings()
+    if (unconfirmedSettings.length) state.unconfirmedSettings = unconfirmedSettings
     return state
   }
   /**
    * One thread's history — its messages and the activity beside them — for a window looking at it.
    * Handing out a whole detail also resets what the deltas that follow are measured from: a window that
    * asked for this one holds exactly this revision, so the next delta is the one that follows it.
+   *
+   * Every other listener still holds the revision last broadcast. When the thread has moved on since, a
+   * change still waiting in the coalescing window is sent to them first, measured from what they hold,
+   * so the reset never leaves them a delta they cannot apply and a read by one client never sets off a
+   * whole read by another.
    */
   threadDetail(threadId: string): AgentThreadDetail | null {
     const thread = this.state.host.threads.find(item => item.id === threadId)
     if (!thread) return null
     const revision = this.detailRevision(thread)
+    if (this.detailListeners.size && this.detailSnapshots.has(threadId) && this.publishedDetail.get(threadId) !== revision) {
+      const update = this.detailUpdate(thread, revision)
+      if (update) for (const listener of this.detailListeners) listener(update)
+    }
+    return this.wholeDetail(thread, revision)
+  }
+  /** The whole of a thread's history at a revision, which becomes the base the next delta is measured from. */
+  private wholeDetail(thread: AgentThread, revision: number): AgentThreadDetail {
+    const threadId = thread.id
     const messages = structuredClone(thread.messages)
     // Nothing decorates or edits an activity record on either side of the bridge, so the snapshot and the
     // detail share one copy of it. Messages cannot be shared: decoration rewrites their attachments.
-    const activities = thread.activities === undefined ? undefined : structuredClone(thread.activities)
+    const pane = this.paneActivities(thread)
+    const activities = pane === undefined ? undefined : structuredClone(pane) as AgentActivity[]
     // The snapshot is the undecorated history: decoration is a fact about the preview store rather than
     // about the thread, and diffing decorated against live would report every image message as changed.
     this.detailSnapshots.set(threadId, { threadId, revision, messages: structuredClone(thread.messages),
@@ -410,13 +475,21 @@ export class AgentControl {
     return { threadId, revision, messages, ...(activities === undefined ? {} : { activities }),
       ...(thread.earlierAvailable ? { earlierAvailable: true } : {}) }
   }
+  /**
+   * The activity a detail carries beside the thread's messages. The host keeps back the work of turns above
+   * the loaded window, which waits there with their messages; everything else in main reads every record.
+   */
+  private paneActivities(thread: AgentThread): readonly AgentActivity[] | undefined {
+    if (thread.activities === undefined) return undefined
+    return this.dependencies.host.paneActivities?.(thread.id, thread.activities) ?? thread.activities
+  }
   /** Which threads main pushes detail for: what the window says it is looking at, plus work it must see land. */
   private detailTargets(): string[] {
     return [...new Set([
-      ...(this.state.activeThreadId ? [this.state.activeThreadId] : []),
+      ...(this.dependencies.observeActiveThread !== false && this.state.activeThreadId ? [this.state.activeThreadId] : []),
       ...this.viewedThreadIds,
       ...(this.state.deliveries ?? []).filter(item => item.status !== 'accepted').map(item => item.threadId),
-      ...this.followupStore.get().items.map(item => item.threadId),
+      ...this.followupStore.peek().items.map(item => item.threadId),
       ...this.outbox.flatMap(item => item.threadId ? [item.threadId] : []),
     ])].filter(id => this.state.host.threads.some(thread => thread.id === id))
   }
@@ -425,9 +498,15 @@ export class AgentControl {
    * than the text itself: a streaming chunk must bump it without the cost of copying every message.
    */
   private detailRevision(thread: AgentThread): number {
+    const activities = this.paneActivities(thread)
+    let activitySignature = activities && this.activityDetailSignatures.get(activities)
+    if (activitySignature === undefined) {
+      activitySignature = (activities ?? []).map(record => `${record.id}:${agentActivitySignature(record)}`).join(',')
+      if (activities && isImmutableActivities(activities)) this.activityDetailSignatures.set(activities, activitySignature)
+    }
     const signature = `${thread.historyEpoch ?? ''}|${thread.messages.length}|` + thread.messages
       .map(message => `${message.id}:${message.text.length}:${message.attachments?.length ?? 0}`).join(',')
-      + `|${(thread.activities ?? []).map(record => `${record.id}:${agentActivitySignature(record)}`).join(',')}`
+      + `|${activitySignature}`
     const held = this.detailRevisions.get(thread.id)
     if (held && held.signature === signature) return held.revision
     const revision = (held?.revision ?? 0) + 1
@@ -437,6 +516,21 @@ export class AgentControl {
   subscribeThreadDetail(listener: (update: AgentThreadDetailUpdate) => void): () => void {
     this.detailListeners.add(listener)
     return () => this.detailListeners.delete(listener)
+  }
+  /** The branches a thread's folder offers, read on request rather than pushed with every state. */
+  gitRefs(request: GitRefsRequest): Promise<GitRefsPage> {
+    if (!this.dependencies.host.listThreadRefs) throw new Error('Branches are unavailable on this host.')
+    return this.dependencies.host.listThreadRefs(request)
+  }
+  /** The changed files the commit dialog lists, read when it opens rather than pushed with every state. */
+  gitChangedFiles(request: GitChangedFilesRequest): Promise<GitChangedFiles> {
+    if (!this.dependencies.host.listThreadChangedFiles) throw new Error('Changed files are unavailable on this host.')
+    return this.dependencies.host.listThreadChangedFiles(request)
+  }
+  /** One pull request of a thread's, read when the Pull request surface or a pull request dialog asks for it (ADR-0027). */
+  gitPullRequest(request: GitPullRequestRequest): Promise<GitPullRequestDetail | null> {
+    if (!this.dependencies.host.readThreadPullRequest) throw new Error('Pull requests are unavailable on this host.')
+    return this.dependencies.host.readThreadPullRequest(request)
   }
   /** One submitted image, fetched by the window when it draws the tile rather than pushed with every state. */
   attachmentPreview(request: AgentAttachmentPreviewRequest): AgentAttachmentPreviewResult {
@@ -501,19 +595,33 @@ export class AgentControl {
     this.publish()
     if (failure?.status === 'rejected') throw failure.reason
   }
-  private async persist(): Promise<void> {
+  /** `closing`: the last write before Sotto stops, which leaves no confirmed settings entry behind on disk. */
+  private async persist(closing = false): Promise<void> {
     if (this.retirementFailure) throw new Error(this.retirementFailure)
     const saved = this.saved()
     const serialized = JSON.stringify(saved)
-    if (serialized !== this.lastWritten || this.pendingDraftWrites.size > 0) {
+    const outbox = [...saved.outbox]
+    const queued = this.queuedWrite
+    if (queued && (serialized === queued.serialized || (!closing && this.onlySettledSettings(saved, outbox, queued)))) {
+      // The newest queued write already carries this state, so it is durable when that write lands. A write
+      // still in flight is waited for rather than repeated, and its failure is this call's failure.
+      await queued.written
+    } else {
       const drafts = this.draftSignatures(saved.threadDrafts)
       this.pendingDraftWrites.add(drafts)
+      const written = this.store.write(saved)
+      const current: QueuedWrite = { serialized, outbox, written }
+      this.queuedWrite = current
       try {
-        await this.store.write(saved)
+        await written
         // AtomicJsonStore serializes writes. Confirm only the snapshot that actually
         // completed, never newer state that changed while this write was outstanding.
         this.persistedDrafts = drafts
-        this.lastWritten = serialized
+        for (const id of this.settledSettings) if (!outbox.some(item => item.id === id)) this.settledSettings.delete(id)
+      } catch (error) {
+        // The disk still holds an older state, so the next persist writes whatever it has.
+        if (this.queuedWrite === current) this.queuedWrite = undefined
+        throw error
       } finally {
         this.pendingDraftWrites.delete(drafts)
       }
@@ -524,15 +632,26 @@ export class AgentControl {
     // every thread's history for them backs up the main process.
     if (JSON.stringify(this.draftPersistence()) !== this.publishedDraftPersistence) this.publish()
   }
+  /**
+   * True when the state differs from the newest queued write only by settings entries confirmed inside their own
+   * dispatch. The entry's add was the write that mattered; its removal rides on the next write.
+   */
+  private onlySettledSettings(saved: Saved, outbox: Saved['outbox'], queued: QueuedWrite): boolean {
+    if (!this.settledSettings.size) return false
+    const kept = queued.outbox.filter(item => !this.settledSettings.has(item.id))
+    if (kept.length === queued.outbox.length || JSON.stringify(kept) !== JSON.stringify(outbox)) return false
+    return JSON.stringify({ ...saved, outbox: queued.outbox }) === queued.serialized
+  }
   private draftSignatures(drafts: readonly AgentThreadDraft[]): Map<string, string> {
     return new Map(drafts.map(({ threadId, draftId, text, attachments, skills, files, requestId }) => [threadId,
       createHash('sha256').update(JSON.stringify({ draftId, text, attachments, skills, files, requestId })).digest('hex')]))
   }
   /**
    * Records this moment's feedback evidence, then asks for a broadcast. A provider emits dozens of
-   * frames a second and every one of them publishes, so the broadcast itself — the full copy of
-   * every thread's history each listener receives — coalesces onto one run per window. Commands
-   * that `return this.get()` are untouched: their caller still gets the state its command produced.
+   * frames a second and every one of them publishes, so listener notifications coalesce onto
+   * one run per window. Commands
+   * still return the state their action produced. Draft saves and voice-status reports return the
+   * shell directly so a routine reply never copies histories the desktop router will discard.
    */
   private publish(feedback?: { receivedAt: number; threadId: string; draftId: string }): void {
     if (this.disposed) return
@@ -592,7 +711,7 @@ export class AgentControl {
   private detailUpdate(thread: AgentThread, revision: number): AgentThreadDetailUpdate | null {
     const held = this.detailSnapshots.get(thread.id)
     if (held !== undefined) {
-      const delta = diffAgentThreadDetail(held, thread, revision)
+      const delta = diffAgentThreadDetail(held, { messages: thread.messages, activities: this.paneActivities(thread) }, revision)
       const advanced = delta === null ? null : applyAgentThreadDetailDelta(held, delta)
       if (delta !== null && advanced !== null) {
         this.detailSnapshots.set(thread.id, advanced)
@@ -600,7 +719,7 @@ export class AgentControl {
         return this.decorateDetailDelta(thread, delta)
       }
     }
-    return this.threadDetail(thread.id)
+    return this.wholeDetail(thread, revision)
   }
   /** A delta's whole messages carry the same preview markers a full detail's would; its appends carry text alone. */
   private decorateDetailDelta(thread: AgentThread, delta: AgentThreadDetailDelta): AgentThreadDetailDelta {
@@ -648,7 +767,7 @@ export class AgentControl {
       const reading = await this.clients.check(provider.id, installed, executable)
       const before = fresh ? undefined : previous.find(item => item.id === provider.id)
       readings.push(before && before.state !== 'idle' && before.installed === reading.installed
-        ? { ...reading, state: before.state, ...(before.error ? { error: before.error } : {}) } : reading)
+        ? { ...reading, state: before.state, ...(before.error ? { error: before.error } : {}), ...(before.ranAt ? { ranAt: before.ranAt } : {}) } : reading)
     }
     if (this.disposed) return
     // A client that updated, failed or did not change still has something to say after its provider
@@ -695,9 +814,13 @@ export class AgentControl {
     try {
       const executable = await this.clientPath(provider)
       this.dependencies.host.disconnect(provider)
-      const result = await this.clients.install(provider, executable)
+      const restore = await this.dependencies.releaseClient?.(provider).catch(() => undefined)
+      let result: Awaited<ReturnType<ProviderClients['install']>>
+      // Handed back whatever the install did, without holding up the threads' own reconnect.
+      try { result = await this.clients.install(provider, executable) }
+      finally { void restore?.().catch(() => undefined) }
       if (!result.ok) {
-        this.setClientUpdate(provider, { state: 'failed', ...(result.detail ? { error: result.detail } : {}) })
+        this.setClientUpdate(provider, { state: 'failed', ranAt: new Date().toISOString(), ...(result.detail ? { error: result.detail } : {}) })
         // The client was not replaced, so put the connection back the way it was.
         await this.dependencies.host.connect(provider).then(snapshot => this.acceptSnapshot(snapshot)).catch(() => undefined)
         throw new Error(`${PROVIDER_LABELS[provider]} did not update${result.detail ? `. ${result.detail}` : '.'} Your installed version is unchanged.`)
@@ -717,20 +840,24 @@ export class AgentControl {
       // can check, so the reading says what the client actually reports.
       const running = this.state.clientUpdates?.find(item => item.id === provider)?.installed
       const moved = running !== undefined && running !== record.installed
-      this.setClientUpdate(provider, { state: moved ? 'updated' : 'unchanged',
+      this.setClientUpdate(provider, { state: moved ? 'updated' : 'unchanged', ranAt: new Date().toISOString(),
         ...(reconnectFailure ? { error: reconnectFailure } : {}) })
       if (reconnectFailure) throw new Error(`${PROVIDER_LABELS[provider]} updated, but did not reconnect. ${reconnectFailure}`)
       if (running === record.installed) {
-        throw new Error(`${PROVIDER_LABELS[provider]} still reports ${record.installed}. The update ran, but this client is the one still open. Close other windows using it and connect again.`)
+        throw new Error(`The installer finished, but ${PROVIDER_LABELS[provider]} still reports ${record.installed} when Sotto connects. Another app may still have the old ${PROVIDER_LABELS[provider]} open. Close it, then try again.`)
       }
       this.say(`${PROVIDER_LABELS[provider]} updated.`)
-    } finally { this.updatingClient = null }
+    } finally {
+      this.updatingClient = null; this.scheduleProviderReconnects()
+      // A Connect refused while this ran is answered now, one way or the other.
+      if (this.state.error === updatingRefusal(provider)) this.state.error = null
+    }
   }
   private observe(...threadIds: string[]): void {
     this.dependencies.host.observeThreads?.([...new Set([...this.state.assignments.map(a => a.threadId),
-      ...(this.state.activeThreadId ? [this.state.activeThreadId] : []),
+      ...(this.dependencies.observeActiveThread !== false && this.state.activeThreadId ? [this.state.activeThreadId] : []),
       ...this.viewedThreadIds.filter(id => this.state.host.threads.some(thread => thread.id === id)),
-      ...this.followupStore.get().items.map(item => item.threadId), ...this.outbox.flatMap(item => item.threadId ? [item.threadId] : []), ...threadIds])])
+      ...this.followupStore.peek().items.map(item => item.threadId), ...this.outbox.flatMap(item => item.threadId ? [item.threadId] : []), ...threadIds])])
   }
   private thread(id: string | null): AgentThread {
     const thread = this.state.host.threads.find(t => t.id === id)
@@ -767,6 +894,7 @@ export class AgentControl {
     return assignment
   }
   private canAct(threadId?: string): void {
+    if (this.disposed) throw new Error('Sotto is stopping. Your draft is saved.')
     if (!['active', 'beta'].includes(this.state.membership.status)) throw new Error('Agent actions require an active Sotto membership. Free dictation remains available.')
     if (this.state.membership.expiresAt && Date.parse(this.state.membership.expiresAt) <= Date.now()) throw new Error('Refresh your Sotto membership before starting more agent actions. Existing provider work continues.')
     if (threadId && !isThreadProviderConnected(this.state.host, this.thread(threadId))) throw new Error('Reconnect this thread provider before sending. Your draft is saved.')
@@ -816,7 +944,7 @@ export class AgentControl {
       const draft = agentThreadDraftSchema.parse({ ...command, attachments: command.attachments ?? [],
         requestId: command.requestId ?? null, updatedAt: new Date().toISOString() })
       if (!this.state.threadDrafts?.some(item => item.threadId === draft.threadId)) this.thread(draft.threadId)
-      if (this.state.followupReceipts?.some(item => item.threadId === draft.threadId && item.draftId === draft.draftId) || this.state.deliveredDrafts?.some(item => item.threadId === draft.threadId && item.draftId === draft.draftId)) return this.get()
+      if (this.state.followupReceipts?.some(item => item.threadId === draft.threadId && item.draftId === draft.draftId) || this.state.deliveredDrafts?.some(item => item.threadId === draft.threadId && item.draftId === draft.draftId)) return this.shell()
       const submitted = this.state.deliveries?.find(item => item.threadId === draft.threadId && item.draftId === draft.draftId)
       if (submitted && submitted.status !== 'failed') throw new Error('Use a new draft revision when editing a submitted prompt.')
       const previous = this.state.threadDrafts?.find(item => item.threadId === draft.threadId)
@@ -838,7 +966,9 @@ export class AgentControl {
       await this.persist().catch(() => { throw new Error('Could not save this thread draft. Keep your text and images and retry when storage is available.') })
     } catch (error) { this.state.error = error instanceof z.ZodError ? 'Choose valid draft text and images before saving.' : error instanceof Error ? error.message : 'Could not save this thread draft.' }
     this.publish()
-    return this.get()
+    // Saving text needs exact revision/durability evidence, not a copy of every loaded history.
+    // The desktop router discards those histories anyway; copying them here blocks native input.
+    return this.shell()
   }
   private readonly skillReads = new Map<string, number>()
   private async refreshThreadSkills(threadId: string, forceReload = false): Promise<AgentState> {
@@ -857,12 +987,92 @@ export class AgentControl {
         { threadId, providerId: this.state.host.threads.find(thread => thread.id === threadId)?.providerId ?? 'codex', cwd: '', status: 'error', skills: [], errors: [], error: error instanceof Error ? error.message : 'Skills could not be listed.' },
       ]
     }
-    this.publish(); return this.get()
+    this.publish(); return this.shell()
   }
   /**
    * The thread's new name. It is a state edit alone: no native work is started, interrupted or queued
    * behind, so a thread can be renamed while its agent is still working.
    */
+  /** T3's Git commands, answered in the host's words: a refusal is the notice, never a thrown error the window has to guess at. */
+  private async gitCommand(command: GitCommand): Promise<AgentState> {
+    const host = this.dependencies.host
+    try {
+      this.thread(command.threadId)
+      switch (command.type) {
+        case 'git-action': {
+          if (!host.runGitAction) throw new Error('Git actions are unavailable.')
+          this.acceptSnapshot(await host.runGitAction(command))
+          const outcome = this.state.host.threads.find(thread => thread.id === command.threadId)?.gitAction
+          if (outcome?.actionId === command.actionId && outcome.status === 'failed') this.state.error = outcome.error ?? 'The Git action failed.'
+          else this.state.error = null
+          break
+        }
+        case 'git-pull': {
+          if (!host.pullThreadBranch) throw new Error('Pull is unavailable.')
+          const { snapshot, result } = await host.pullThreadBranch(command.threadId)
+          this.acceptSnapshot(snapshot)
+          this.state.notice = result.status === 'pulled' ? `Pulled. Updated ${result.branch} from ${result.upstream ?? 'its upstream'}.` : `Already up to date. ${result.branch} matches ${result.upstream ?? 'its upstream'}.`
+          this.state.error = null
+          break
+        }
+        case 'git-switch-branch': {
+          if (!host.switchThreadBranch) throw new Error('Switching branches is unavailable.')
+          this.acceptSnapshot(await host.switchThreadBranch(command.threadId, command.ref, command.create === true))
+          this.state.notice = command.create ? `Created and switched to ${command.ref}.` : `Switched to ${command.ref}.`
+          this.state.error = null
+          break
+        }
+        case 'git-init': {
+          if (!host.initThreadRepository) throw new Error('Initializing Git is unavailable.')
+          this.acceptSnapshot(await host.initThreadRepository(command.threadId))
+          this.state.notice = 'Git initialized.'
+          this.state.error = null
+          break
+        }
+        case 'git-publish': {
+          if (!host.publishThreadRepository) throw new Error('Publishing is unavailable.')
+          const { snapshot, url } = await host.publishThreadRepository(command.threadId, { repository: command.repository, visibility: command.visibility })
+          this.acceptSnapshot(snapshot)
+          this.state.notice = `Repository published at ${url}.`
+          this.state.error = null
+          break
+        }
+        case 'git-pull-request-action': {
+          if (!host.runPullRequestAction) throw new Error('Pull requests are unavailable.')
+          const { snapshot, notice } = await host.runPullRequestAction({ threadId: command.threadId, url: command.url, action: command.action, method: command.method })
+          this.acceptSnapshot(snapshot)
+          this.state.notice = notice
+          this.state.error = null
+          break
+        }
+        case 'git-link-pull-request': {
+          if (!host.linkThreadPullRequest) throw new Error('Linking pull requests is unavailable.')
+          const { snapshot, link } = await host.linkThreadPullRequest(command.threadId, command.reference)
+          this.acceptSnapshot(snapshot)
+          this.state.notice = `Linked PR #${link.number}.`
+          this.state.error = null
+          break
+        }
+        case 'git-unlink-pull-request': {
+          if (!host.unlinkThreadPullRequest) throw new Error('Linking pull requests is unavailable.')
+          this.acceptSnapshot(await host.unlinkThreadPullRequest(command.threadId, command.url))
+          this.state.notice = 'Unlinked the pull request from this thread.'
+          this.state.error = null
+          break
+        }
+        case 'git-checkout-pull-request': {
+          if (!host.checkoutThreadPullRequest) throw new Error('Checking out pull requests is unavailable.')
+          const { snapshot, notice } = await host.checkoutThreadPullRequest(command.threadId, command.reference, command.mode)
+          this.acceptSnapshot(snapshot)
+          this.state.notice = notice
+          this.state.error = null
+          break
+        }
+      }
+    } catch (error) { this.state.error = error instanceof Error ? error.message : 'The Git command failed.' }
+    this.publish()
+    return this.shell()
+  }
   private async renameThread(command: Extract<AgentCommand, { type: 'rename-thread' }>): Promise<AgentState> {
     const title = command.title.trim()
     try {
@@ -875,7 +1085,7 @@ export class AgentControl {
       await this.persist().catch(() => { throw new Error('Could not save the new name. Retry when storage is available.') })
     } catch (error) { this.state.error = error instanceof Error ? error.message : 'Could not rename this thread.' }
     this.publish()
-    return this.get()
+    return this.shell()
   }
   /**
    * A thread names itself once, from its first exchange. Only a thread still carrying a stand-in or
@@ -889,6 +1099,10 @@ export class AgentControl {
     if (this.dependencies.historyEnabled?.() === false) return
     for (const thread of this.state.host.threads) {
       if (this.titled.has(thread.id) || thread.titleSource === 'user' || thread.titleSource === 'generated') continue
+      // A client shows the first reply while its turn is still running and ends the turn on a later frame
+      // that adds no message, so a running thread is not yet checked: checking it would record this count
+      // and skip the frame that finishes the turn.
+      if (thread.status === 'running') continue
       // A thread's history lives in the store, so read it only when this thread has said something new:
       // otherwise a thread that will never be named would be read on every provider frame.
       const messageCount = threadSummaryOf(thread).messageCount
@@ -897,7 +1111,9 @@ export class AgentControl {
       const exchange = firstExchange(thread, 'automatic', this.threadHistory(thread))
       if (!exchange) continue
       this.titled.add(thread.id)
-      void this.writeThreadTitle(thread.id, exchange)
+      const pending = this.writeThreadTitle(thread.id, exchange)
+      this.titleWrites.add(pending)
+      void pending.finally(() => this.titleWrites.delete(pending)).catch(() => undefined)
     }
   }
   /** A thread's whole history: what the pane holds when that is all of it, else the store's own copy. */
@@ -907,9 +1123,10 @@ export class AgentControl {
   }
   /** Asks for the name and applies it, unless the thread was renamed by hand while the answer was in flight. */
   private async writeThreadTitle(threadId: string, exchange: ThreadTitleExchange): Promise<void> {
+    if (this.disposed) return
     try {
-      const title = await this.dependencies.writeThreadTitle!(exchange)
-      if (title === null) return
+      const title = await this.dependencies.writeThreadTitle!(threadId, exchange)
+      if (this.disposed || title === null) return
       const thread = this.state.host.threads.find(item => item.id === threadId)
       if (!thread || thread.titleSource === 'user' || isThreadArchived(thread) || thread.title === title) return
       this.acceptSnapshot(await this.dependencies.host.renameThread!(threadId, title, 'generated'))
@@ -929,14 +1146,36 @@ export class AgentControl {
       await this.writeThreadTitle(threadId, exchange)
     }
     this.publish()
-    return this.get()
+    return this.shell()
   }
   /**
-   * One client's command. `client` says who sent it, for the record an answer leaves and for the
-   * policy check that decides whether a remote client's answer counts as a grant. Absent means the
-   * desktop window on this machine, which is the only client that exists today.
+   * One client's command, answered with the whole state: every loaded history copied in, as `get()`
+   * gives it. It is for a caller that reads histories from the answer. A client's command runs through
+   * `commandShell`, which runs the same command without the copy.
    */
   command(command: AgentCommand, client: ClientIdentity = this.localClient): Promise<AgentState> {
+    const reply = this.commandShell(command, client)
+    let whole = this.sharedWholeStateReplies.get(reply)
+    if (!whole) { whole = reply.then(shell => ({ ...this.get(), error: shell.error })); this.sharedWholeStateReplies.set(reply, whole) }
+    return whole
+  }
+  /**
+   * One client's command, answered with the shell. `client` says who sent it, for the record an answer
+   * leaves and for the policy check that decides whether a remote client's answer counts as a grant.
+   * Absent means the desktop window on this machine.
+   *
+   * No history rides on the answer: a window reads a thread's history through `threadDetail`, and
+   * copying every history into an answer the window strips again held up main on every command,
+   * a draft save included (issue #313).
+   */
+  commandShell(command: AgentCommand, client: ClientIdentity = this.localClient): Promise<AgentState> {
+    if (this.disposed) return Promise.resolve({ ...this.shell(), error: 'Sotto is stopping. Restart it before sending another command.' })
+    const pending = this.commandWhileRunning(command, client)
+    this.activeCommands.add(pending)
+    void pending.then(() => this.activeCommands.delete(pending), () => this.activeCommands.delete(pending))
+    return pending
+  }
+  private commandWhileRunning(command: AgentCommand, client: ClientIdentity): Promise<AgentState> {
     if (command.type !== 'manual-send' && command.type !== 'steer' && command.type !== 'queue-followup') return this.commandUnreserved(command, client)
     const prompt = structuredClone({ ...command, draftId: command.draftId ?? randomUUID() })
     const { threadId, draftId } = prompt
@@ -954,10 +1193,10 @@ export class AgentControl {
     if (pending || queued || receipt || delivered || outbox) {
       if (ownedDigest !== digest) {
         this.state.error = 'This revision already belongs to a submitted prompt. Use a new draft revision for different content.'
-        this.publish(); return Promise.resolve(this.get())
+        this.publish(); return Promise.resolve(this.shell())
       }
       if (pending) return pending.task
-      if (queued || receipt || delivered || prompt.type === 'queue-followup') return Promise.resolve(this.get())
+      if (queued || receipt || delivered || prompt.type === 'queue-followup') return Promise.resolve(this.shell())
       // An explicit retry of an uncertain manual send/steer only reconciles the outbox.
     }
     let resolve!: (state: AgentState) => void; let reject!: (error: unknown) => void
@@ -969,7 +1208,7 @@ export class AgentControl {
     return task
   }
   private commandUnreserved(command: AgentCommand, client: ClientIdentity = this.localClient): Promise<AgentState> {
-    if (this.retirementFailure) { this.state.error = this.retirementFailure; return Promise.resolve(this.get()) }
+    if (this.retirementFailure) { this.state.error = this.retirementFailure; return Promise.resolve(this.shell()) }
     // Provider discovery has independent progress; a stalled account must not own the thread command lane.
     if ((command.type === 'connect' || command.type === 'disconnect' || command.type === 'refresh') && (command.provider || this.dependencies.host.concurrentProviders)) return this.providerCommand(command)
     // An install runs for as long as npm takes. It belongs on the provider lane with connect and
@@ -983,12 +1222,14 @@ export class AgentControl {
       this.observe()
       // A newly viewed thread needs its history now, not at the next provider frame.
       this.broadcastDetail()
-      return Promise.resolve(this.get())
+      return Promise.resolve(this.shell())
     }
     if (command.type === 'save-thread-draft') return this.saveThreadDraft(command)
+    // A Git action runs as long as its hooks and its push take, on the thread's own lane in the host, never on the global one.
+    if (isGitCommand(command)) return this.gitCommand(command)
     // Renaming edits Sotto's own record of the thread, so it never waits on a running turn or any provider action.
     if (command.type === 'rename-thread') return this.renameThread(command)
-    // Naming a thread is Sotto's own record too, and it asks a writing model, never the provider.
+    // Naming a thread is Sotto's own record too: the thread's provider is asked on the side, never inside the thread.
     if (command.type === 'regenerate-thread-title') return this.regenerateThreadTitle(command.threadId)
     if (command.type === 'queue-followup' || command.type === 'edit-followup' || command.type === 'remove-followup' || command.type === 'reorder-followups' || command.type === 'resume-followups') return this.followupCommand(command)
     // A create-thread carries the ID the window minted, which no lane can be keyed on until the thread exists.
@@ -1028,18 +1269,18 @@ export class AgentControl {
       this.speechPreferenceRevision += 1
       if (!command.patch.speak) { this.state.voice.action = 'stop-speaking'; this.state.voice.revision += 1 }
       this.publish()
-      return this.persist().then(() => this.get(), () => {
+      return this.persist().then(() => this.shell(), () => {
         this.state.error = 'Could not save the spoken reply setting. Retry when storage is available.'
-        this.publish(); return this.get()
+        this.publish(); return this.shell()
       })
     }
     if (command.type === 'voice-state') {
       this.state.voice.status = command.status; this.state.voice.error = command.error; this.publish()
-      return Promise.resolve(this.get())
+      return Promise.resolve(this.shell())
     }
     if (command.type === 'voice') {
       this.state.voice.action = command.action; this.state.voice.revision += 1; this.publish()
-      return Promise.resolve(this.get())
+      return Promise.resolve(this.shell())
     }
     // Host observations bypass this lane: a direct provider send must revoke authority even during model reasoning.
     const laneThreadId = actionThreadId && THREAD_SCOPED_COMMAND_TYPES.has(command.type) ? actionThreadId : ''
@@ -1090,7 +1331,7 @@ export class AgentControl {
       this.publish()
       if (turn) turn.firstFeedbackAtMs ??= Date.now()
       await this.finishTurn(turn, failure)
-      return this.get()
+      return this.shell()
     })
     if (independent) {
       this.threadActions.set(laneThreadId, task)
@@ -1151,11 +1392,11 @@ export class AgentControl {
       this.state.error = error instanceof Error ? error.message : 'Could not save the follow-up queue.'
       if (command.type === 'queue-followup' && !this.followupStore.get().receipts.some(r => r.threadId === command.threadId && r.draftId === command.draftId)) this.setDelivery(command.threadId, command.draftId, 'failed')
     }
-    this.publish(); this.pumpFollowups(); return this.get()
+    this.publish(); this.pumpFollowups(); return this.shell()
   }
   private followupReady(threadId: string, ownCommandId?: string): boolean {
     const thread = this.state.host.threads.find(t => t.id === threadId)
-    const reviewed = thread && this.followupStore.get().items.find(i => i.threadId === threadId)?.resumeAfterTurnId === (thread.lastTurn?.id ?? 'unknown')
+    const reviewed = thread && this.followupStore.peek().items.find(i => i.threadId === threadId)?.resumeAfterTurnId === (thread.lastTurn?.id ?? 'unknown')
     return Boolean(thread && isThreadProviderConnected(this.state.host, thread) && (thread.status === 'idle' || thread.status === 'error' && reviewed)
       && thread.lastTurn?.status !== 'running'
       && (thread.nativeSessionStarted === false || thread.lastTurn?.status === 'completed' || reviewed) && !thread.requests.length
@@ -1166,7 +1407,9 @@ export class AgentControl {
   }
   private pumpFollowups(): void {
     if (this.disposed) return
-    const items = this.followupStore.get().items
+    // Read, not copied: this runs for every host snapshot. `first` below may be held across the dispatch
+    // awaits, which is safe because the store replaces its state rather than editing it.
+    const items = this.followupStore.peek().items
     for (const threadId of new Set(items.map(item => item.threadId))) {
       // A queued follow-up waits on a prompt of its own thread, as before, not on the thread's other work.
       if (this.pumping.has(threadId) || this.threadPrompts.has(threadId)) continue
@@ -1223,7 +1466,7 @@ export class AgentControl {
           }
         } finally { await this.finishTurn(turn, failure) }
       })().catch(() => { this.state.error = 'Could not save follow-up delivery state. Refresh before making changes.' })
-        .finally(() => { this.syncFollowups(); this.publish(); this.pumping.delete(threadId); if (this.followupStore.get().items.find(i => i.threadId === threadId)?.id !== first.id) this.pumpFollowups() })
+        .finally(() => { this.syncFollowups(); this.publish(); this.pumping.delete(threadId); if (this.followupStore.peek().items.find(i => i.threadId === threadId)?.id !== first.id) this.pumpFollowups() })
     }
   }
   private async interruptThread(command: Extract<AgentCommand, { type: 'interrupt' }>): Promise<AgentState> {
@@ -1239,7 +1482,7 @@ export class AgentControl {
       this.syncFollowups(); await this.execute(command, turn); await this.persist()
     } catch (error) { failure = error instanceof Error ? error.message : 'Could not interrupt this thread.'; this.state.error = failure }
     release()
-    this.publish(); await this.finishTurn(turn, failure); return this.get()
+    this.publish(); await this.finishTurn(turn, failure); return this.shell()
   }
   private async steerFollowup(command: Extract<AgentCommand, { type: 'steer-followup' }>, turn?: ActiveTurn): Promise<void> {
     const queued = this.followupStore.get().items.find(item => item.threadId === command.threadId && item.id === command.itemId)
@@ -1304,7 +1547,10 @@ export class AgentControl {
     let failure: string | undefined
     try { this.state.error = null; await this.execute(command, turn); await this.persist() }
     catch (error) { failure = error instanceof Error ? error.message : 'Provider action failed.'; this.state.error = failure }
-    await this.finishTurn(turn, failure); this.publish(); return this.get()
+    await this.finishTurn(turn, failure); this.publish()
+    // Provider commands overlap, so each answers with its own outcome and not a refusal another one met meanwhile.
+    const state = this.shell()
+    return failure === undefined ? { ...state, error: null } : state
   }
   private beginTurn(input: Parameters<TurnRecorder['begin']>[0]): ActiveTurn | undefined {
     try { return this.dependencies.turns?.begin(input) } catch { return undefined }
@@ -1332,7 +1578,7 @@ export class AgentControl {
       this.publish()
     }
     await this.finishTurn(turn, failure)
-    return this.get()
+    return this.shell()
   }
   private selectThread(threadId: string, revision: number): void {
     if (revision !== this.selectionRevision) return
@@ -1348,6 +1594,7 @@ export class AgentControl {
   }
   private async execute(command: AgentCommand, turn?: ActiveTurn, manualRetryId?: string, selectionRevision = this.selectionRevision,
     client: ClientIdentity = this.localClient): Promise<void> {
+    if (this.disposed) throw new Error('Sotto is stopping. Your draft is saved.')
     // Explicit targets survive host observations and queue-driven selection changes.
     if (turn && 'threadId' in command) {
       turn.threadId = command.threadId
@@ -1388,6 +1635,12 @@ export class AgentControl {
         if (!['active', 'beta'].includes(this.state.membership.status)) this.state.assignments.forEach(a => { a.paused = true })
         return
       case 'connect': {
+        if (command.provider && this.updatingClient === command.provider) throw new Error(updatingRefusal(command.provider))
+        // Connecting every provider must still leave the one being replaced alone.
+        // A host with one provider at a time has nothing else to connect.
+        const others = !command.provider && this.updatingClient ? this.dependencies.host.concurrentProviders
+          ? enabledThreadProviders(this.state.configuration).filter(provider => provider !== this.updatingClient) : [] : undefined
+        if (others && !others.length) throw new Error(updatingRefusal(this.updatingClient!))
         if (command.provider) {
           this.state.configuration.enabledProviders = [...new Set([...enabledThreadProviders(this.state.configuration), command.provider])]
           if (!this.dependencies.host.concurrentProviders) this.state.configuration.enabled = true
@@ -1396,7 +1649,10 @@ export class AgentControl {
         if (!this.state.host.connected) this.state.connection = 'connecting'
         this.publish(); this.observe()
         try {
-          const snapshot = await (command.provider ? this.dependencies.host.connect(command.provider) : this.dependencies.host.connect())
+          if (this.disposed) throw new Error('Sotto is stopping. Reconnect after restarting it.')
+          const snapshot = command.provider ? await this.dependencies.host.connect(command.provider)
+            : others ? (await Promise.all(others.map(provider => this.dependencies.host.connect(provider))), await this.dependencies.host.snapshot())
+            : await this.dependencies.host.connect()
           this.acceptSnapshot(snapshot)
           const refusal = connectionRefusal(snapshot, command.provider, `${PROVIDER_LABELS[this.state.configuration.provider]} did not confirm the connection.`)
           if (refusal) throw new Error(refusal)
@@ -1564,11 +1820,11 @@ export class AgentControl {
       case 'create-thread': {
         const managed = command.managed !== false
         if (managed && this.state.composing && this.hasDraft()) throw new Error('Send or clear your draft before creating another thread.')
-        const model = this.state.host.models.find(model => model.id === command.modelId)
+        const model = resolveModel(this.state.host.models, command.modelId)
         this.canCreate(model?.providerId)
         if (!this.state.host.capabilities.threads) throw new Error('This provider cannot create threads.')
         if (!this.state.host.projects.some(p => p.id === command.projectId)) throw new Error('Choose an available project.')
-        if (!this.state.host.models.some(m => m.id === command.modelId && m.ready)) throw new Error('That model or account is unavailable. Choose a ready model; Sotto will not switch your account.')
+        if (!model?.ready) throw new Error('That model or account is unavailable. Choose a ready model; Sotto will not switch your account.')
         validateThreadOptions(this.state.host, command)
         // The window may already be showing this thread under an ID it minted; main adopts it so nothing has to move.
         if (command.threadId !== undefined && this.state.host.threads.some(thread => thread.id === command.threadId)) {
@@ -1615,12 +1871,13 @@ export class AgentControl {
         this.canAct()
         if (command.modelId === undefined && command.reasoningEffort === undefined && command.runtimeMode === undefined && command.providerMode === undefined) throw new Error('Choose a thread setting to change.')
         if (this.thread(command.threadId).nativeSessionStarted !== false && !capabilitiesForThread(this.state.host, this.thread(command.threadId)).configureThread) throw new Error('This provider does not support changing thread settings.')
-        this.observe(command.threadId)
-        this.acceptSnapshot(await this.readThread(command.threadId))
+        // Checked against the thread as Sotto holds it, without opening it: watching or reading a reaped Claude
+        // thread starts its CLI only for the adapter to restart it with the new settings. Each adapter checks
+        // the thread's status, requests and model itself before it changes anything.
         const validate = (): void => {
           const thread = this.thread(command.threadId)
           if (thread.status === 'running' || thread.requests.length) throw new Error('Wait for this thread to finish and answer its pending requests before changing settings.')
-          if (thread.nativeSessionStarted !== false && command.modelId && thread.providerId && this.state.host.models.find(model => model.id === command.modelId)?.providerId !== thread.providerId) throw new Error('Choose a model from this thread provider. Existing sessions cannot move between providers.')
+          if (thread.nativeSessionStarted !== false && command.modelId && thread.providerId && resolveModel(this.state.host.models, command.modelId)?.providerId !== thread.providerId) throw new Error('Choose a model from this thread provider. Existing sessions cannot move between providers.')
           validateThreadOptions(this.state.host, command, thread.modelId)
         }
         validate()
@@ -1816,7 +2073,7 @@ export class AgentControl {
     client: ClientIdentity = this.localClient): Promise<void> {
     if (turn) this.dispatchTurns.set(command.commandId, turn)
     try { await this.dispatchPending(command, turn, validate, draftId, client) }
-    finally { this.dispatchTurns.delete(command.commandId) }
+    finally { this.dispatchTurns.delete(command.commandId); this.settingsDispatching.delete(command.commandId) }
   }
   private async dispatchPending(command: AgentHostCommand, turn?: ActiveTurn, validate?: () => void, draftId?: string,
     client: ClientIdentity = this.localClient): Promise<void> {
@@ -1826,7 +2083,7 @@ export class AgentControl {
     const threadId = 'threadId' in command ? command.threadId : undefined
     const provider = command.type === 'create-project' ? command.provider ?? this.state.configuration.provider
       : command.type === 'create-thread' || (command.type === 'configure-thread' && command.modelId && this.thread(command.threadId).nativeSessionStarted === false)
-        ? this.state.host.models.find(model => model.id === command.modelId)?.providerId : command.type === 'answer'
+        ? resolveModel(this.state.host.models, command.modelId)?.providerId : command.type === 'answer'
           ? requestDraftProvider(this.state.host, this.thread(command.threadId), this.state.configuration.provider) : this.thread(command.threadId).providerId
     if (threadId && command.type !== 'create-thread' && !(command.type === 'configure-thread' && this.thread(threadId).nativeSessionStarted === false)) this.canAct(threadId)
     if ((command.type === 'send' || command.type === 'steer') || command.type === 'answer') {
@@ -1841,17 +2098,19 @@ export class AgentControl {
     if (this.outbox.some(item => threadId ? item.threadId === threadId : item.threadId === undefined && (item.provider ?? this.state.configuration.provider) === provider)) throw new Error('An earlier action has an unknown result. Reconnect and inspect the provider before retrying; Sotto will not send it twice.')
     const answerRequest = command.type === 'answer' ? this.thread(command.threadId).requests.find(item => item.id === command.requestId) : undefined
     const answerQuestions = answerRequest ? requestDraftQuestions(answerRequest) : []
+    // A model change that names no effort is saved with the new model's default, as the provider will start it on.
+    const startingEffort = command.type === 'configure-thread' && command.modelId !== undefined && command.reasoningEffort === undefined
+      ? resolveModel(this.state.host.models, command.modelId)?.defaultReasoningEffort : undefined
     this.outbox.push({ id: command.commandId, type: command.type, ...(provider ? { provider } : {}), ...(threadId ? { threadId } : {}),
       ...('messageId' in command ? { messageId: command.messageId } : {}),
       ...('requestId' in command ? { requestId: command.requestId } : {}),
       ...(answerQuestions.length ? { questionsDigest: requestQuestionsDigest(answerQuestions) } : {}),
-      ...(command.type === 'configure-thread' ? { options: agentThreadOptionsSchema.parse({ ...command,
-        ...(command.modelId !== undefined && command.reasoningEffort === undefined && this.state.host.models.find(model => model.id === command.modelId)?.defaultReasoningEffort
-          ? { reasoningEffort: this.state.host.models.find(model => model.id === command.modelId)!.defaultReasoningEffort } : {}) }) } : {}),
+      ...(command.type === 'configure-thread' ? { options: agentThreadOptionsSchema.parse({ ...command, ...(startingEffort ? { reasoningEffort: startingEffort } : {}) }) } : {}),
       ...((command.type === 'send' || command.type === 'steer') ? { draftDigest: this.promptDigest(command.text, command.attachments, command.skills, command.files), ...(draftId ? { draftId } : {}) } : {}),
       ...(command.type === 'create-project' ? { entityId: command.projectId } : command.type === 'create-thread' ? { entityId: command.threadId } : {}),
     })
     const answerIntent = command.type === 'answer' ? this.outbox.find(item => item.id === command.commandId) : undefined
+    if (command.type === 'configure-thread') this.settingsDispatching.add(command.commandId)
     if ((command.type === 'send' || command.type === 'steer') && draftId) {
       this.setDelivery(command.threadId, draftId, 'submitting', { commandId: command.commandId, messageId: command.messageId })
       // The message shows as Sending as soon as the intent exists, not after the disk write.
@@ -1868,11 +2127,12 @@ export class AgentControl {
     let result
     if ((command.type === 'send' || command.type === 'steer') || command.type === 'answer') addTurnContext(turn, (command.type === 'send' || command.type === 'steer') ? command.text : command.answer)
     let providerLatencyMs: number | undefined
+    let previewAttachments: AgentAttachment[] = []
     try {
       this.canAct(); this.guardAuthority(command, turn); validate?.()
       if ((command.type === 'send' || command.type === 'steer') && command.attachments?.length) {
-        const attachments = validatePromptAttachments(this.state.host, this.thread(command.threadId).modelId, command.attachments)
-        await this.attachmentPreviews.remember(command.threadId, command.messageId, command.commandId, attachments)
+        // Checked before the provider hears anything; kept as a preview only once it has.
+        previewAttachments = validatePromptAttachments(this.state.host, this.thread(command.threadId).modelId, command.attachments)
       }
       if (command.type === 'answer' && answerRequest && answerQuestions.length && provider) {
         const draftAnswers = answerRequest.questions?.length ? command.questionAnswers : { [answerRequest.id]: { optionIds: [command.answer] } }
@@ -1880,13 +2140,12 @@ export class AgentControl {
         this.canAct(); this.guardAuthority(command, turn); validate?.()
       }
       const providerStartedAt = Date.now()
-      try { result = await this.dependencies.host.execute(command) }
+      try { this.canAct(); result = await this.dependencies.host.execute(command) }
       finally { providerLatencyMs = Math.max(0, Date.now() - providerStartedAt) }
     } catch (error) {
       this.outbox = this.outbox.filter(o => o.id !== command.commandId)
       if ((command.type === 'send' || command.type === 'steer') && draftId) this.setDelivery(command.threadId, draftId, 'failed')
       await this.persist()
-      if ((command.type === 'send' || command.type === 'steer') && command.attachments?.length) await this.attachmentPreviews.forget(command.threadId, command.messageId, command.commandId)
       throw error
     } finally {
       if (turn) turn.delegationMs += providerLatencyMs ?? 0
@@ -1895,6 +2154,11 @@ export class AgentControl {
         this.setDelivery(command.threadId, draftId, delivery?.status ?? 'submitting', { providerLatencyMs })
       }
     }
+    // Previews are decoration, not history: the provider hears the prompt first, and a definitive refusal records nothing.
+    if ((command.type === 'send' || command.type === 'steer') && previewAttachments.length
+      && (result.accepted || result.uncertain || !this.outbox.some(item => item.id === command.commandId))) {
+      this.rememberPreviews(command.threadId, command.messageId, command.commandId, previewAttachments)
+    }
     // An exact native message already reconciled this outbox item. Delivery is
     // settled even if its running turn prevents a later display/history read.
     if ((command.type === 'send' || command.type === 'steer') && !this.outbox.some(item => item.id === command.commandId)) {
@@ -1902,9 +2166,12 @@ export class AgentControl {
       return
     }
     if ((command.type === 'send' || command.type === 'steer') && draftId) this.setDelivery(command.threadId, draftId, result.accepted || result.uncertain ? 'uncertain' : 'failed')
-    if (result.uncertain && this.outbox.some(o => o.id === command.commandId)) throw new Error('The provider did not confirm the result. Sotto will reconcile the existing action when reconnected; it will not resend it.')
+    // An adapter that knows more about what an unconfirmed action cost says it; the intent is kept either way.
+    if (result.uncertain && this.outbox.some(o => o.id === command.commandId)) throw new Error(result.error ?? PROVIDER_RESULT_UNCONFIRMED)
     if ((command.type === 'configure-thread' || (command.type === 'send' || command.type === 'steer')) && result.accepted) {
-      try { this.acceptSnapshot(await this.readThread(threadId)) }
+      // A settings change the provider confirmed comes back with the snapshot it produced, which is the
+      // reconciliation; the thread is read again only when the adapter has none to give.
+      try { this.acceptSnapshot(command.type === 'configure-thread' && result.snapshot ? result.snapshot : await this.readThread(threadId)) }
       catch (error) {
         // The exact echo can arrive while this required reconciliation read is
         // in flight. Keep its receipt; an unconfirmed command still fails here.
@@ -1913,11 +2180,8 @@ export class AgentControl {
       await this.persist()
       if (this.outbox.some(item => item.id === command.commandId)) throw new Error((command.type === 'send' || command.type === 'steer')
         ? 'The provider has not confirmed this user message in its state. Refresh to reconcile the existing send; it will not be replayed.'
-        : 'The provider has not confirmed these thread settings in its state. Refresh to reconcile the existing save; it will not be replayed.')
+        : THREAD_SETTINGS_UNRECONCILED)
       return
-    }
-    if ((command.type === 'send' || command.type === 'steer') && !result.accepted && !result.uncertain && command.attachments?.length) {
-      await this.attachmentPreviews.forget(command.threadId, command.messageId, command.commandId)
     }
     if (command.type === 'answer' && result.accepted) {
       if (!result.uncertain && answerIntent) this.recordAnsweredRequest(answerIntent)
@@ -1926,8 +2190,20 @@ export class AgentControl {
     }
     this.outbox = this.outbox.filter(o => o.id !== command.commandId)
     await this.persist()
-    if (!result.accepted && !result.uncertain) throw new Error('The provider rejected this action. Check its current permissions and account status.')
+    if (!result.accepted && !result.uncertain) throw new Error(PROVIDER_REJECTED_ACTION)
     this.acceptSnapshot(await this.readThread(threadId, provider))
+  }
+  /**
+   * Keeps the images of a prompt the provider has taken, without holding the send on the disk write. A failed
+   * write leaves the preview unavailable, which is all a lost thumbnail costs; the message was already sent.
+   */
+  private rememberPreviews(threadId: string, messageId: string, commandId: string, attachments: AgentAttachment[]): void {
+    void this.attachmentPreviews.remember(threadId, messageId, commandId, attachments).catch(() => undefined)
+    // The provider's echo of this message can land while it is still being sent, and a window that already
+    // holds it undecorated would never be sent it again: the thread goes out whole on the next publish.
+    if (this.state.host.threads.find(thread => thread.id === threadId)?.messages.some(message => message.id === messageId)) {
+      this.publishedDetail.delete(threadId); this.detailSnapshots.delete(threadId); this.publish()
+    }
   }
   private async sendManual(threadId: string, text: string, turn?: ActiveTurn, retryId?: string, attachments: AgentAttachment[] = [], draftId?: string, skills?: AgentSkillReference[], files?: AgentFileReference[]): Promise<void> {
     if (draftId && this.state.deliveredDrafts?.some(receipt => receipt.threadId === threadId && receipt.draftId === draftId)) return
@@ -2179,7 +2455,9 @@ export class AgentControl {
     if (!snapshot.connected) {
       if (!snapshot.providers && !connecting && this.state.configuration.enabled && enabledThreadProviders(this.state.configuration).length && !this.reconnect) this.reconnect = setTimeout(() => {
         this.reconnect = null
-        void this.command({ type: 'connect' }).then(s => { if (s.connection !== 'connected') this.acceptSnapshot({ ...s.host, connected: false }) })
+        // The answer is the shell, whose threads carry no history: marking the host disconnected reads
+        // the live host instead, so a failed reconnect never empties the histories it holds.
+        void this.commandShell({ type: 'connect' }).then(s => { if (s.connection !== 'connected') this.acceptSnapshot({ ...this.state.host, connected: false }) })
       }, 5000)
       this.publish(); return
     }
@@ -2204,6 +2482,7 @@ export class AgentControl {
             ? thread !== undefined && isThreadProviderConnected(snapshot, thread) && thread.historyStatus !== 'loading' && thread.historyStatus !== 'error'
               && !thread.requests.some(r => r.id === item.requestId) : thread?.status === 'idle'
       if (!confirmed) continue
+      if (item.type === 'configure-thread' && this.settingsDispatching.has(item.id)) this.settledSettings.add(item.id)
       // A disappeared question does not prove that our answer was accepted.
       // Only the exact adapter acknowledgement above can retire retained content.
       const turn = this.dispatchTurns.get(item.id)
@@ -2410,7 +2689,9 @@ export class AgentControl {
     this.state.connection = 'disconnected'; this.state.host.connected = false
   }
   private scheduleProviderReconnects(): void {
-    const retryable = (provider: ProviderId): boolean => !this.disposed
+    // A client being replaced is disconnected on purpose. Retrying it while npm runs starts the old
+    // binary again, and the update's own reconnect then finds that one connected and reads its version.
+    const retryable = (provider: ProviderId): boolean => !this.disposed && this.updatingClient !== provider
       && enabledThreadProviders(this.state.configuration).includes(provider)
       && this.state.host.providers?.find(status => status.id === provider)?.connection === 'disconnected'
     for (const provider of providerIdSchema.options) {
@@ -2422,10 +2703,15 @@ export class AgentControl {
         // A stopped transport retries independently; account/discovery errors remain manual Retry.
         this.providerReconnect.set(provider, setTimeout(() => {
           this.providerReconnect.delete(provider)
-          if (retryable(provider)) void this.command({ type: 'connect', provider })
+          if (retryable(provider)) void this.commandShell({ type: 'connect', provider })
         }, 5000))
       }
     }
+  }
+  /** Called after disconnecting providers, before the headless process releases its stores. */
+  async closed(): Promise<void> {
+    await Promise.allSettled([...this.activeCommands, this.serial, ...this.threadActions.values(), ...this.titleWrites])
+    await this.persist(true)
   }
   dispose(): void {
     this.disposed = true
@@ -2518,7 +2804,9 @@ export function coalesceAgentThreadDetailPublishes(send: (update: AgentThreadDet
   options: { intervalMs?: number; schedule?: PublishScheduler } = {}): CoalescedThreadDetailPublisher {
   const intervalMs = options.intervalMs ?? AGENT_STATE_PUBLISH_INTERVAL_MS
   const schedule = options.schedule ?? realPublishScheduler
-  const lanes = new Map<string, { cancel: (() => void) | null; pending: AgentThreadDetailUpdate[] }>()
+  // `sending` holds back an update published while the lane is sending, such as the change a whole read
+  // made inside `send` flushes first: sent at once it would reach later listeners ahead of the one being sent.
+  const lanes = new Map<string, { cancel: (() => void) | null; pending: AgentThreadDetailUpdate[]; sending?: boolean }>()
   let disposed = false
   const flushLane = (threadId: string): void => {
     const lane = lanes.get(threadId) ?? { cancel: null, pending: [] }
@@ -2526,14 +2814,16 @@ export function coalesceAgentThreadDetailPublishes(send: (update: AgentThreadDet
     lane.cancel?.()
     const queued = lane.pending
     lane.pending = []
-    for (const update of queued) send(update)
+    lane.sending = true
+    try { for (const update of queued) send(update) } finally { lane.sending = false }
+    if (disposed) return
     lane.cancel = schedule(() => { lane.cancel = null; if (lane.pending.length > 0) flushLane(threadId); else lanes.delete(threadId) }, intervalMs)
   }
   return {
     publish: update => {
       if (disposed) return
       const lane = lanes.get(update.threadId)
-      if (lane?.cancel) {
+      if (lane?.cancel || lane?.sending) {
         const held = lane.pending.at(-1)
         const merged = held === undefined ? null : mergeAgentThreadDetailUpdates(held, update)
         if (merged === null) lane.pending.push(update)

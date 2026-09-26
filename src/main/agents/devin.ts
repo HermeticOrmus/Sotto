@@ -9,6 +9,7 @@ import { AtomicJsonStore } from '../storage/atomicJsonStore'
 import type { AgentHost, AgentHostCommand, AgentHostResult, ThreadHistorySource, ThreadHostEvent } from './host'
 import { ThreadMessageLog } from './threadMessageLog'
 import { cloneHostSnapshot } from './cloneHostSnapshot'
+import { cloneActivitySnapshot, immutableActivities, isImmutableActivities } from './activitySnapshots'
 import { ProviderSnapshotPublisher } from './providerSnapshotPublisher'
 import { SessionReaper } from './sessionReaper'
 import { existingWorkingDirectory } from './threadWorktrees'
@@ -96,7 +97,7 @@ type DevinMode = (typeof DEVIN_MODES)[number]
 function offeredModes(reported: ReadonlyMap<string, { readonly name: string; readonly description?: string | undefined }>): AgentProviderMode[] {
   return DEVIN_MODES.filter(mode => reported.has(mode.devinMode)).map(mode => {
     const own = mode.id === mode.devinMode ? reported.get(mode.devinMode) : undefined
-    return { id: mode.id, name: own?.name ?? mode.name, description: own?.description ?? mode.description, asks: mode.asks }
+    return { id: mode.id, name: own?.name ?? mode.name, description: own?.description ?? mode.description, asks: mode.asks, allows: mode.allows }
   })
 }
 /** An unknown or missing mode is the asking one, never a more permissive guess. */
@@ -148,12 +149,16 @@ export class DevinAcpHost implements AgentHost {
   private readonly dispatching = new Set<string>()
   private readonly observed = new Set<string>()
   private readonly listeners = new Set<(snapshot: AgentHostSnapshot) => void>()
+  private readonly activityListeners = new Set<(snapshot: AgentHostSnapshot) => void>()
   private readonly allProcesses = new Set<DevinRpc>()
   private readonly log = new ThreadMessageLog()
   private history: ThreadHistorySource | undefined
   private readonly publisher = new ProviderSnapshotPublisher(() => {
-    const snapshot = this.current()
-    for (const listener of this.listeners) listener(snapshot)
+    for (const listener of this.listeners) listener(this.current())
+    if (this.activityListeners.size) {
+      const snapshot = this.activitySnapshot()
+      for (const listener of this.activityListeners) listener(cloneActivitySnapshot(snapshot))
+    }
   })
   private readonly reaper: SessionReaper
   private state: AgentHostSnapshot = {
@@ -198,9 +203,18 @@ export class DevinAcpHost implements AgentHost {
   private current(): AgentHostSnapshot {
     return cloneHostSnapshot({ ...this.state, threads: [...this.threads.values()].map(thread => this.log.publishedThread(thread)) })
   }
+  private activitySnapshot(): AgentHostSnapshot {
+    for (const thread of this.threads.values()) if (thread.activities && !isImmutableActivities(thread.activities)) {
+      thread.activities = immutableActivities(thread.activities)
+    }
+    return { ...this.state, threads: [...this.threads.values()].map(thread => this.log.publishedThread(thread)) }
+  }
   private emit(streaming = false): void { this.publisher.publish(streaming) }
   subscribe(listener: (snapshot: AgentHostSnapshot) => void): () => void {
     this.listeners.add(listener); return () => this.listeners.delete(listener)
+  }
+  subscribeActivitySnapshots(listener: (snapshot: AgentHostSnapshot) => void): () => void {
+    this.activityListeners.add(listener); return () => this.activityListeners.delete(listener)
   }
   subscribeEvents(listener: (event: ThreadHostEvent) => void): () => void { return this.log.subscribeEvents(listener) }
   useThreadHistory(source: ThreadHistorySource): void { this.history = source }
@@ -664,7 +678,8 @@ export class DevinAcpHost implements AgentHost {
         if (!alias?.devinSessionId) throw new Error('Devin did not confirm this session. Your thread is kept.')
         const mode = DEVIN_MODES.find(candidate => candidate.id === command.providerMode)
         if (!mode) throw new Error('Devin does not offer that permission setting.')
-        if (modeOf(alias.providerMode).id === mode.id) return { accepted: true }
+        // Already the recorded mode: the snapshot says so, and nothing is stopped or read.
+        if (modeOf(alias.providerMode).id === mode.id) return { accepted: true, snapshot: this.current() }
         // A session being opened or sent to has already chosen its profile; changing the mode under it would
         // leave the two out of step, so the change waits until the thread is quiet.
         if (this.active.has(command.threadId) || this.loading.has(command.threadId) || this.dispatching.has(command.threadId)
@@ -683,6 +698,9 @@ export class DevinAcpHost implements AgentHost {
         projected.providerMode = mode.id; projected.runtimeMode = RUNTIME_OF_ALLOWANCE[mode.allows]
         await this.stopSession(command.threadId)
         this.emit()
+        // The profile is confirmed and recorded, and the session resumes under it on the thread's next action
+        // (ADR-0022). The snapshot says so; reading the thread now would start that session only to be read.
+        if (generation === this.generation) return { accepted: true, snapshot: this.current() }
       } else if (command.type === 'steer' || command.type === 'compact-thread') {
         throw new Error('This Devin action is not supported. Start a new thread to choose a model, or queue a text follow-up.')
       } else {

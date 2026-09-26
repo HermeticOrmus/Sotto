@@ -15,6 +15,18 @@ if (args.includes('--help')) {
   console.log('--safe-mode --tools --permission-prompts --no-session-persistence --input-format --output-format --system-prompt --model --effort --verbose'); process.exit(0)
 }
 if (args.includes('auth')) { console.log(JSON.stringify({ loggedIn: true, authMethod: 'claude.ai', subscriptionType: 'max' })); process.exit(0) }
+// Sotto's side writing (ADR-0026): one print run with no tools and no session file. It records what it was
+// given in oneshot.jsonl, never in requests.jsonl or a session log, and answers from oneshot.json.
+if (args.includes('--no-session-persistence') && value('--output-format') === 'json') {
+  const input = await new Promise(resolve => { let text = ''; process.stdin.setEncoding('utf8'); process.stdin.on('data', chunk => { text += chunk }); process.stdin.on('end', () => resolve(text)) })
+  const script = existsSync(join(root, 'oneshot.json')) ? JSON.parse(readFileSync(join(root, 'oneshot.json'), 'utf8')) : {}
+  appendFileSync(join(root, 'oneshot.jsonl'), JSON.stringify({ args, cwd: process.cwd(), input }) + '\n')
+  if (value('--tools') !== '' || !args.includes('--safe-mode') || value('--permission-prompts') !== 'none') appendFileSync(join(root, 'violations.jsonl'), 'Side writing must run with no tools, no customisations and nobody to prompt\n')
+  if (script.fail) process.exit(1)
+  if (script.delayMs) await new Promise(resolve => setTimeout(resolve, script.delayMs))
+  process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: script.text ?? 'Fixture title' }))
+  process.exit(0)
+}
 const metadata = args.includes('--no-session-persistence')
 const session = metadata ? 'metadata' : value(args.includes('--resume') ? '--resume' : '--session-id')
 if (!metadata && (args.includes('--tools') || args.includes('--safe-mode') || value('--permission-prompts') !== 'host' || !['default', 'acceptEdits', 'auto', 'bypassPermissions'].includes(value('--permission-mode')))) throw new Error('Coding threads must retain tools and host permission decisions')
@@ -31,8 +43,25 @@ let parentUuid = existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').
 const persist = frame => { mkdirSync(folder, { recursive: true }); appendFileSync(log, JSON.stringify({ ...frame, parentUuid, isSidechain: false, cwd: process.cwd(), sessionId: session, timestamp: frame.timestamp ?? new Date().toISOString() }) + '\n'); parentUuid = frame.uuid ?? parentUuid }
 const pending = new Map()
 const violation = reason => appendFileSync(join(root, 'violations.jsonl'), reason + '\n')
+// One CLI per session. Two would both write the session's transcript, so Sotto must not start one while another it
+// let go is still exiting. The running one keeps its pid in alive-<session>.json and removes it as it exits.
+const alive = join(root, `alive-${session}.json`)
+if (!metadata) {
+  const other = existsSync(alive) ? Number(readFileSync(alive, 'utf8')) : 0
+  let running = false
+  try { if (other && other !== process.pid) { process.kill(other, 0); running = true } } catch { running = false }
+  if (running) violation('Two CLIs ran on one session at once')
+  writeFileSync(alive, String(process.pid))
+}
+const leave = () => { try { if (!metadata && readFileSync(alive, 'utf8') === String(process.pid)) unlinkSync(alive) } catch { /* already gone */ } }
 let lastAction = ''
 let initialized = false
+// The settings this process runs: what it was launched with, then whatever a settings request changed. Written to
+// settings-<session>.json on every change so a test reads what the running CLI would use for its next turn.
+const bypassAllowed = args.includes('--allow-dangerously-skip-permissions')
+const settings = { model: value('--model'), effort: args.includes('--effort') ? value('--effort') : null, mode: value('--permission-mode') }
+const saveSettings = () => { if (!metadata) writeFileSync(join(root, `settings-${session}.json`), JSON.stringify({ ...settings, pid: process.pid })) }
+saveSettings()
 const timer = setInterval(() => {
   const control = join(root, `control-${session}.json`)
   if (!existsSync(control)) return
@@ -44,15 +73,42 @@ const timer = setInterval(() => {
   if (action.type === 'exit') { process.exit(1) }
   if (action.type === 'raw-burst') { process.stdout.write(action.frames.map(frame => JSON.stringify(frame) + '\n').join('')); return }
   if (action.type === 'raw') { if (action.persist) persist(action.frame); output(action.frame); return }
+  if (action.type === 'subagent') {
+    // Claude Code 2.1.280: a workflow (with `runId`) or a background Agent call reports one task and no
+    // sidechain message. The real launch result names a background agent's `resolvedModel`; this one
+    // leaves it out, so the agent's own transcript is the only place its model is written.
+    const workflow = typeof action.runId === 'string'
+    const dir = workflow ? join(folder, session, 'subagents', 'workflows', action.runId) : join(folder, session, 'subagents')
+    const agentId = workflow ? action.agentId : action.taskId
+    output({ type: 'assistant', uuid: randomUUID(), session_id: session, parent_tool_use_id: null, message: { id: randomUUID(), role: 'assistant', content: [{ type: 'tool_use', id: action.toolId, name: workflow ? 'Workflow' : 'Agent', input: workflow ? { script: 'export default async () => {}' } : { description: action.description, prompt: action.description, run_in_background: true } }] } })
+    output({ type: 'system', subtype: 'task_started', session_id: session, task_id: action.taskId, tool_use_id: action.toolId, description: action.description, task_type: workflow ? 'local_workflow' : 'local_agent', ...(workflow ? { workflow_name: 'fixture' } : { subagent_type: 'general-purpose', is_backgrounded: true }) })
+    output({ type: 'user', uuid: randomUUID(), session_id: session, parent_tool_use_id: null, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: action.toolId, content: 'Launched' }] },
+      tool_use_result: workflow ? { status: 'async_launched', taskId: action.taskId, taskType: 'local_workflow', workflowName: 'fixture', runId: action.runId, transcriptDir: dir } : { status: 'async_launched', isAsync: true, agentId } })
+    mkdirSync(dir, { recursive: true })
+    const line = frame => JSON.stringify({ ...frame, isSidechain: true, agentId, sessionId: session, cwd: process.cwd(), timestamp: new Date().toISOString() })
+    writeFileSync(join(dir, `agent-${agentId}.jsonl`), [
+      line({ type: 'user', uuid: randomUUID(), message: { role: 'user', content: action.task ?? 'Fixture subagent task' } }),
+      line({ type: 'attachment', uuid: randomUUID(), attachment: { type: 'fixture' } }),
+      ...(action.model ? [line({ type: 'assistant', uuid: randomUUID(), message: { id: randomUUID(), model: action.model, role: 'assistant', content: [{ type: 'text', text: 'Fixture subagent reply' }] } })] : []),
+    ].join('\n') + '\n')
+    return
+  }
   if (action.type === 'dialog') {
     const request = { subtype: 'request_user_dialog', dialog_kind: 'resume_return', payload: action.payload }
     pending.set(action.requestId, request); output({ type: 'control_request', request_id: action.requestId, request }); return
   }
   if (action.type === 'complete') {
     const id = randomUUID()
+    // A turn that leaves a subagent running launches it from a root tool call, as Claude 2.1.280 does with
+    // `run_in_background`. The task_started follows the tool call inside the turn, as in a live capture, and
+    // nothing ends it before the result, so the work must outlive the result to be seen afterwards.
+    const agent = action.background ? { tool: randomUUID(), task: action.background.taskId ?? randomUUID() } : undefined
     output({ type: 'stream_event', session_id: session, event: { type: 'message_start', message: { id, role: 'assistant' } } })
+    if (agent) output({ type: 'stream_event', session_id: session, parent_tool_use_id: null, event: { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: agent.tool, name: 'Agent', input: {} } } })
     output({ type: 'stream_event', session_id: session, event: { type: 'content_block_delta', delta: { type: 'text_delta', text: action.text } } })
     const frame = { type: 'assistant', uuid: randomUUID(), session_id: session, message: { id, role: 'assistant', content: [{ type: 'text', text: action.text }] } }
+    if (agent) output({ type: 'system', subtype: 'task_started', session_id: session, uuid: randomUUID(), task_id: agent.task, tool_use_id: agent.tool,
+      description: action.background.description, subagent_type: 'general-purpose', is_backgrounded: true, spawn_depth: 1, task_type: 'local_agent' })
     persist(frame); output(frame); output({ type: 'result', subtype: 'success', session_id: session, is_error: false, result: action.text }); return
   }
   if (action.type === 'permission' || action.type === 'question') {
@@ -81,6 +137,37 @@ lines.on('line', line => {
         writeFileSync(join(root, 'initialize-waiting'), session)
         const gate = setInterval(() => { if (existsSync(join(root, 'initialize-release'))) { clearInterval(gate); respond() } }, 5)
       } else respond()
+    }
+    else if (['set_model', 'apply_flag_settings', 'set_permission_mode'].includes(frame.request.subtype)) {
+      // settings-script.json: `refuse` answers every settings request with an error, or those of the subtypes it
+      // lists; `silent` answers none, as a CLI whose acknowledgement was lost. Each holds while the file is there,
+      // or for one refusal with `once`.
+      const script = existsSync(join(root, 'settings-script.json')) ? JSON.parse(readFileSync(join(root, 'settings-script.json'), 'utf8')) : {}
+      if (script.silent) return
+      const request = frame.request
+      const refuse = error => output({ type: 'control_response', response: { subtype: 'error', request_id: frame.request_id, error } })
+      if (script.refuse === true || script.refuse?.includes?.(request.subtype)) {
+        if (script.once) unlinkSync(join(root, 'settings-script.json'))
+        refuse('Synthetic settings refusal'); return
+      }
+      if (request.subtype === 'set_model') {
+        // Claude Code runs a long-context variant (`opus[1m]`) of a model it lists by its base alone.
+        const listed = typeof request.model === 'string' ? request.model.replace(/\[\d+[km]\]$/iu, '') : null
+        if (listed === null || !models.some(model => model.value === request.model || model.value === listed)) { refuse('Unknown model'); return }
+        settings.model = request.model
+      } else if (request.subtype === 'apply_flag_settings') {
+        const keys = Object.keys(request.settings ?? {})
+        if (keys.length !== 1 || keys[0] !== 'effortLevel') violation('Settings requests may only carry effortLevel')
+        settings.effort = request.settings.effortLevel
+      } else {
+        if (!['default', 'acceptEdits', 'auto', 'bypassPermissions'].includes(request.mode)) violation('Unknown permission mode')
+        // The native CLI refuses bypassPermissions unless bypassing was allowed at launch.
+        if (request.mode === 'bypassPermissions' && !bypassAllowed) { refuse('Cannot set permission mode to bypassPermissions'); return }
+        settings.mode = request.mode
+      }
+      saveSettings()
+      // A success with no body, which the SDK reads as empty.
+      output({ type: 'control_response', response: { subtype: 'success', request_id: frame.request_id } })
     }
     else if (frame.request.subtype === 'interrupt') {
       output({ type: 'control_response', response: { subtype: 'success', request_id: frame.request_id, response: {} } })
@@ -114,4 +201,10 @@ lines.on('line', line => {
   } else violation('Unknown input frame')
 })
 // Recorded so a test can see a session end, whether Sotto disconnected or the reaper stopped it.
-lines.on('close', () => { clearInterval(timer); record('exit', { session }); process.exit(0) })
+// exit-delay.json: the `ms` this process takes to exit once its input closes, as a real CLI still finishing its
+// writes may.
+lines.on('close', () => {
+  clearInterval(timer)
+  const delayMs = existsSync(join(root, 'exit-delay.json')) ? JSON.parse(readFileSync(join(root, 'exit-delay.json'), 'utf8')).ms : 0
+  setTimeout(() => { record('exit', { session }); leave(); process.exit(0) }, delayMs)
+})

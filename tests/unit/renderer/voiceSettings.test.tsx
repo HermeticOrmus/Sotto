@@ -157,6 +157,38 @@ describe('Grok speech API setup', () => {
     ])
   })
 
+  it('previews and keeps a voice picked just before the press, while the saved configuration still names the old one', async () => {
+    // Where each pick is saved through main, the configuration comes back with it a moment later, not at once.
+    vi.stubGlobal('sotto', { agents: { grokVoices: vi.fn(async () => [{ id: 'ara', name: 'Ara' }, { id: 'account-custom-voice', name: 'My custom voice' }]) } })
+    const command = vi.fn<(request: AgentCommand) => Promise<AgentState>>(async () => ({ error: null } as AgentState))
+    const change = vi.fn()
+    const saved = { ...defaultAgentConfiguration(), speechProvider: 'grok' as const }
+    const { rerender } = render(<VoiceSettings configuration={saved} change={change} command={command} grokKeySaved />)
+    await screen.findByRole('option', { name: 'My custom voice' })
+    fireEvent.change(screen.getByLabelText('Grok voice'), { target: { value: 'account-custom-voice' } })
+    expect(change).toHaveBeenCalledWith('grokSpeechVoice', 'account-custom-voice')
+    expect(screen.getByLabelText('Grok voice')).toHaveValue('account-custom-voice')
+    fireEvent.click(screen.getByRole('button', { name: 'Use and preview voice' }))
+    await waitFor(() => expect(command).toHaveBeenCalledTimes(2))
+    expect(command.mock.calls[0]).toEqual([{ type: 'configure', patch: { speechProvider: 'grok', grokSpeechVoice: 'account-custom-voice', speak: true } }])
+    // A second pick outlasts the first pick's configuration arriving, and is the one a preview saves.
+    fireEvent.change(screen.getByLabelText('Grok voice'), { target: { value: 'ara' } })
+    rerender(<VoiceSettings configuration={{ ...saved, grokSpeechVoice: 'account-custom-voice' }} change={change} command={command} grokKeySaved />)
+    expect(screen.getByLabelText('Grok voice')).toHaveValue('ara')
+    fireEvent.click(screen.getByRole('button', { name: 'Use and preview voice' }))
+    await waitFor(() => expect(command).toHaveBeenCalledTimes(4))
+    expect(command.mock.calls[2]).toEqual([{ type: 'configure', patch: { speechProvider: 'grok', grokSpeechVoice: 'ara', speak: true } }])
+  })
+
+  it('goes back to the saved voice when main refuses the pick', async () => {
+    vi.stubGlobal('sotto', { agents: { grokVoices: vi.fn(async () => [{ id: 'ara', name: 'Ara' }]) } })
+    const command = vi.fn<(request: AgentCommand) => Promise<AgentState>>(async () => ({ error: null } as AgentState))
+    render(<VoiceSettings configuration={{ ...defaultAgentConfiguration(), speechProvider: 'grok' }} change={async () => false} command={command} grokKeySaved />)
+    await screen.findByRole('option', { name: 'Ara' })
+    fireEvent.change(screen.getByLabelText('Grok voice'), { target: { value: 'ara' } })
+    await waitFor(() => expect(screen.getByLabelText('Grok voice')).toHaveValue('altair'))
+  })
+
   it('loads voices only after choosing Grok and gives an actionable refresh after discovery fails', async () => {
     const h = harness(false, { keySaved: true })
     expect(h.grokVoices).not.toHaveBeenCalled()

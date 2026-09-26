@@ -39,7 +39,7 @@ import {
   type WidgetSnapshot,
 } from '../../../shared/dictation'
 import type { SottoPlatform } from '../../../shared/platform'
-import { DEFAULT_WIDGET_PALETTE, WIDGET_THEME_ROLES, type WidgetThemeRole } from '../../../shared/themeBranding'
+import { APP_ICON_BRAND_ATTRIBUTE, DEFAULT_WIDGET_PALETTE, WIDGET_THEME_ROLES, type WidgetThemeRole } from '../../../shared/themeBranding'
 import { isCanonicalThemeColor } from '../../../shared/themes/color'
 import type { ThemeAppearance } from '../../../shared/themes/palettes'
 import { ListeningBars } from '../components/ListeningBars'
@@ -47,6 +47,7 @@ import { SottoMark } from '../components/SottoMark'
 import { platformCopy, type PlatformCopy } from '../platformCopy'
 import { useWidgetDragGesture } from './useWidgetDragGesture'
 import { useAgentConnection, type AgentConnection } from '../agents/AgentContext'
+import { wrapAgentBridge } from '../agents/agentStateCatalogs'
 import { WidgetThreads } from './WidgetThreads'
 
 const IDLE_HOVER_SETTLE_MS = 220
@@ -98,6 +99,18 @@ function errorCopyFor(
     TRANSCRIPTION_OFFLINE: {
       title: 'Connection unavailable',
       detail: TRANSCRIPTION_ERROR_DETAIL.TRANSCRIPTION_OFFLINE,
+    },
+    TRANSCRIPTION_BILLING: {
+      title: 'Out of credit',
+      detail: TRANSCRIPTION_ERROR_DETAIL.TRANSCRIPTION_BILLING,
+    },
+    TRANSCRIPTION_RATE_LIMITED: {
+      title: 'Too many requests',
+      detail: TRANSCRIPTION_ERROR_DETAIL.TRANSCRIPTION_RATE_LIMITED,
+    },
+    TRANSCRIPTION_SERVICE_ERROR: {
+      title: 'OpenRouter error',
+      detail: TRANSCRIPTION_ERROR_DETAIL.TRANSCRIPTION_SERVICE_ERROR,
     },
     TRANSCRIPTION_FAILED: {
       title: 'Couldn’t transcribe',
@@ -604,6 +617,8 @@ export function applyRootPresentation(
   const scheme = resolveWidgetScheme(presentation.theme, systemDark)
   root.setAttribute('data-theme', scheme)
   const colors = presentation.palette[scheme]
+  if (presentation.palette.appIcon[scheme]) root.dataset.brand = APP_ICON_BRAND_ATTRIBUTE
+  else delete root.dataset.brand
   for (const role of WIDGET_THEME_ROLES) {
     const value = colors[role]
     const variable = themeRoleVariable(role)
@@ -614,6 +629,7 @@ export function applyRootPresentation(
 
   return () => {
     root.removeAttribute('data-theme')
+    root.removeAttribute('data-brand')
     root.removeAttribute('data-reduced-motion')
     for (const role of WIDGET_THEME_ROLES) root.style.removeProperty(themeRoleVariable(role))
   }
@@ -626,8 +642,12 @@ export interface WidgetEntryProps {
 }
 
 export function WidgetEntry({ bridge, preview, platform }: WidgetEntryProps): ReactNode {
-  const agents = useAgentConnection(preview === null ? bridge?.agents : undefined)
   const [liveSnapshot, setLiveSnapshot] = useState<WidgetSnapshot | null>(null)
+  // The widget draws nothing from the agent state while the voice coordinator is gated off, so it holds
+  // no connection either: no shell per streaming frame, no reconciliation, no cache write. Turning the
+  // setting on hands the hook a bridge again, which opens a fresh session and fetches the state whole.
+  const widgetAgentsBridge = preview === null && liveSnapshot?.voiceCoordinator === true ? bridge?.agents : undefined
+  const agents = useAgentConnection(widgetAgentsBridge && wrapAgentBridge(widgetAgentsBridge))
   const snapshot = preview ?? liveSnapshot
   const [now, setNow] = useState(() => (preview === null ? Date.now() : PREVIEW_NOW))
   const [dragCancellationVersion, setDragCancellationVersion] = useState(0)

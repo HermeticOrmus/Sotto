@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { Archive, ArchiveRestore, Columns2, Pencil, Plug, Shrink, Sparkles, Square, X } from 'lucide-react'
-import { capabilitiesForThread, isThreadBusy, supportsAgentSupervision, type AgentState } from '../../../shared/agents'
+import { capabilitiesForThread, isThreadBusy, providerWritesShortText, supportsAgentSupervision, type AgentState } from '../../../shared/agents'
 import { isThreadArchived, isThreadClosed } from '../../../shared/threadActivity'
 import { ThreadNameField } from './ThreadName'
 import { Button } from '../components/Button'
@@ -8,6 +8,7 @@ import { useVoiceCoordinatorEnabled } from '../state/voiceCoordinator'
 import type { AgentConnection } from './AgentContext'
 import { AgentComposer } from './AgentView'
 import { PaneMenu, type PaneMenuItem } from './PaneMenu'
+import { GitActionButton } from './GitActionButton'
 import { ProviderMark } from './ProviderMark'
 import { AgentRequestCard } from './requests/AgentRequestCard'
 import { RequestDraftRecovery } from './requests/RequestDraftRecovery'
@@ -15,13 +16,13 @@ import { requestAnswerOwnerKey, requestAnswerStore, requestMode } from './reques
 import { ThreadComposer, sendThreadRevision } from './ThreadComposer'
 import { ThreadFollowups } from './ThreadFollowups'
 import { ThreadOptions } from './ThreadOptions'
-import { hasDraftContent, submissionStatus, useSubmissions, useThreadComposer, type ThreadDraftStore } from './threadDraftStore'
+import { usePendingSettings } from './pendingSettings'
+import { hasDraftContent, submissionStatus, useSubmissions, type ThreadDraftStore } from './threadDraftStore'
 import { ThreadBranchNotice, useSettleThread } from './ThreadWorkingCopy'
 import type { ThreadRow } from './threadFacts'
 import { ThreadTranscript } from './ThreadTranscript'
 import { ThreadWebLinks } from '../tools/webLinks'
-import { ThreadUsage } from './ThreadUsage'
-import { ThreadMonitor, ThreadHeld, useHeldAction } from './ThreadMonitor'
+import { ThreadMonitor, ThreadHeld, ThreadWaitingCommand, ThreadWorking, useHeldAction } from './ThreadMonitor'
 import { compactionBusy, compactionOffered, ThreadCompaction } from './ThreadCompaction'
 
 type Command = AgentConnection['command']
@@ -67,8 +68,8 @@ export interface ThreadPaneProps {
   readonly onClose?: (() => void) | undefined
   /** An unfocused managed pane asks to take the selection before writing. */
   readonly onFocusPane?: (() => void) | undefined
-  /** Placed after the project title in the header. */
-  readonly crumb?: ReactNode
+  /** The working-copy control, placed after the project title in the header. */
+  readonly workingCopy?: ReactNode
   /** Placed at the end of the header actions. */
   readonly actions?: ReactNode
   /** Placed directly above the composer. */
@@ -83,27 +84,30 @@ export interface ThreadPaneProps {
  * One thread's view: header and controls, its own transcript position and its own composer.
  * Everything here acts on `row.thread.id`; a split workspace mounts one per open thread.
  */
-export function ThreadPane({ row, state, command, store, focused, promptId, error, onOpenThread, onClose, onFocusPane, onOpenBeside, crumb, actions, notice, now }: ThreadPaneProps): ReactNode {
+export function ThreadPane({ row, state, command, store, focused, promptId, error, onOpenThread, onClose, onFocusPane, onOpenBeside, workingCopy, actions, notice, now }: ThreadPaneProps): ReactNode {
   const [followSignal, setFollowSignal] = useState(0)
   const [handingOff, setHandingOff] = useState(false)
   const [renaming, setRenaming] = useState(false)
   const [holdingWriteHere, setHoldingWriteHere] = useState(false)
+  /** A Git refusal the branch toolbar shows under its row; the pane's own error line leaves it to the row. */
+  const [toolbarExplained, setToolbarExplained] = useState<string | null>(null)
+  /** The same for the Git action's notice above the composer. */
+  const [gitExplained, setGitExplained] = useState<string | null>(null)
+  /** Where the Git action draws its notice: above the composer, in the pane's own flow. */
+  const [gitNoticeSlot, setGitNoticeSlot] = useState<HTMLElement | null>(null)
   const compose = useRef<HTMLDivElement>(null)
   const head = useRef<HTMLElement>(null)
   /** Keyboard focus waiting for the composer that a handoff (Manage, Stop managing, Write here) mounts. */
   const handoff = useRef<{ readonly managed: boolean; readonly focused?: true; readonly until: number } | null>(null)
   const submissions = useSubmissions(store)
-  const paneDraft = useThreadComposer(store, row.thread.id)
+  // The pane only needs to know whether a draft exists. Subscribing to its text
+  // re-renders the transcript and header synchronously on every keystroke.
+  const paneHasDraft = useSyncExternalStore(store.subscribe, () => hasDraftContent(store.draft(row.thread.id)))
   // Management is the voice coordinator's own work, so with it hidden a managed thread still composes by hand.
   const coordinated = useVoiceCoordinatorEnabled()
   const thread = row.thread
   const closed = isThreadClosed(thread)
   const connected = state.connection === 'connected'
-  const pending = thread.requests[0]
-  const workspaceRow = !closed && pending && !row.request ? { ...row, request: {
-    id: `${thread.id}:${pending.id}`, threadId: thread.id, requestId: pending.id,
-    kind: pending.kind, text: pending.text, createdAt: '', deferred: false,
-  } } : row
   const assigned = coordinated ? row.assignment : undefined
   const managed = assigned?.mode === 'managed' && !closed
   const rowConnected = row.connected
@@ -112,14 +116,21 @@ export function ThreadPane({ row, state, command, store, focused, promptId, erro
   const monitoringBlocked = state.queue.some(item => item.threadId === thread.id && item.kind !== 'ready')
   const ornamentAllowed = rowConnected && !closed && !monitoringBlocked && thread.status !== 'error' && thread.requests.length === 0
   const liveMonitors = ornamentAllowed ? thread.monitoring ?? [] : []
-  const monitor = liveMonitors.length ? <ThreadMonitor key={`monitor:${thread.id}`} tasks={liveMonitors} /> : undefined
-  // Waiting is the weaker claim of the two, so a confirmed watch keeps the track: it names the task, and this
-  // only names the clock. One ornament either way, because the composer reserves room for exactly one.
-  const held = useHeldAction(thread, ornamentAllowed && monitor === undefined, now)
-  const ornament = monitor ?? (held === undefined ? undefined
-    : <ThreadHeld key={`held:${thread.id}`} action={held} now={now} />)
+  const liveWork = ornamentAllowed ? thread.backgroundWork ?? [] : []
+  const liveCommands = liveWork.filter(task => task.type === 'command')
+  // One ornament, because the composer reserves room for exactly one, taken by the strongest claim. A watch
+  // says the provider is looking at something; background agents say only that work it started still runs;
+  // waiting says only that time is passing, so the two confirmed states keep the track ahead of the clock.
+  const confirmed = liveMonitors.length ? <ThreadMonitor key={`monitor:${thread.id}`} tasks={liveMonitors} />
+    : liveWork.length > liveCommands.length ? <ThreadWorking key={`working:${thread.id}`} work={liveWork} /> : undefined
+  const held = useHeldAction(thread, ornamentAllowed && confirmed === undefined, now)
+  // A command left running in the background waits once the turn is over; while it is live, the turn's
+  // own held action already holds the glass.
+  const ornament = confirmed ?? (held !== undefined ? <ThreadHeld key={`held:${thread.id}`} action={held} now={now} />
+    : liveCommands.length && thread.status !== 'running' ? <ThreadWaitingCommand key={`command:${thread.id}`} commands={liveCommands} now={now} />
+    : undefined)
   // Sotto's own composer holds a managed thread's draft; every other pane keeps its own.
-  const composing = hasDraftContent(paneDraft.draft)
+  const composing = paneHasDraft
     || (managed && state.draftThreadId === thread.id && Boolean(state.draft.trim() || state.draftAttachments?.length))
   const capabilities = capabilitiesForThread(state.host, thread)
   /** This thread's own lane. Work on another thread leaves every control here live. */
@@ -135,7 +146,13 @@ export function ThreadPane({ row, state, command, store, focused, promptId, erro
   const answerExplains = useSyncExternalStore(requestAnswerStore.subscribe,
     () => error !== null && thread.requests.some(request => requestAnswerStore.get(requestAnswerOwnerKey(thread.id, request,
       { kind: 'thread', ownerId: thread.id, providerId: row.providerId ?? state.configuration.provider }), request.id).error === error))
-  const options = <ThreadOptions key={thread.id} thread={thread} state={state} command={command} />
+  // A settings change the provider refused or never answered is told under the option chips; the banner would say it twice.
+  const settings = usePendingSettings(thread.id)
+  const settingsExplains = error !== null && (Object.values(settings.refusals).some(refusal => refusal?.error === error)
+    || Object.values(settings.pending).some(pending => pending?.error === error))
+  // The managed composer's row for what the chips have to say, under its footer so the footer never moves.
+  const [settingsNotices, setSettingsNotices] = useState<HTMLDivElement | null>(null)
+  const options = <ThreadOptions key={thread.id} thread={thread} state={state} command={command} noticeSlot={settingsNotices} />
   useLayoutEffect(() => {
     const pending = handoff.current
     if (pending === null) return
@@ -181,8 +198,9 @@ export function ThreadPane({ row, state, command, store, focused, promptId, erro
   /* Renaming is Sotto's own record of the thread: it neither waits for a running turn nor tells the provider. */
   const naming: PaneMenuItem[] = [
     ...(!isThreadArchived(thread) && !renaming ? [{ id: 'rename', label: 'Rename', icon: <Pencil size={15} aria-hidden="true" />, run: () => setRenaming(true) }] : []),
-    // Sotto writes the name from the thread's first exchange; a name typed by hand is left alone and offers no rewrite.
-    ...(!isThreadArchived(thread) && !renaming && thread.titleSource !== 'user'
+    // The thread's own provider writes the name from its first exchange (ADR-0026); a name typed by hand is left
+    // alone and offers no rewrite, and neither does a Devin thread, whose provider writes nothing.
+    ...(!isThreadArchived(thread) && !renaming && thread.titleSource !== 'user' && providerWritesShortText(thread.providerId)
       ? [{ id: 'regenerate', label: 'Regenerate title', icon: <Sparkles size={15} aria-hidden="true" />, disabled: threadBusy, run: () => void command({ type: 'regenerate-thread-title', threadId: thread.id }) }] : []),
     ...(onOpenBeside ? [{ id: 'beside', label: 'Open beside', icon: <Columns2 size={15} aria-hidden="true" />, run: onOpenBeside }] : []),
   ]
@@ -222,20 +240,22 @@ export function ThreadPane({ row, state, command, store, focused, promptId, erro
           ? <h2><ThreadNameField title={thread.title} label={`Rename ${thread.title}`} className="thread-workspace__rename tt-focusable"
             onRename={next => void command({ type: 'rename-thread', threadId: thread.id, title: next })} onDone={() => setRenaming(false)} /></h2>
           : <h2>{thread.title}</h2>}
-        <span className="thread-workspace__crumb"><span>{row.project?.title ?? row.provider}</span>{crumb}
+        <span className="thread-workspace__crumb" data-has-working-copy={Boolean(workingCopy) || undefined}><span>{row.project?.title ?? row.provider}</span>{workingCopy}
           {row.settledBy === 'thread' || row.settledBy === 'project' ? <span className="thread-workspace__tag">Settled</span> : null}
           {!rowConnected ? <span className="thread-workspace__tag" data-tone="warning">{row.provider} disconnected</span> : null}
         </span>
       </div>
       <div className="thread-workspace__actions">
+        {/* T3's Git action: the quick action its status decides, the chevron with the rest (ADR-0027). */}
+        {!closed ? <GitActionButton thread={thread} command={command} noticeSlot={gitNoticeSlot} onExplainedError={setGitExplained} /> : null}
         {actions}
         <PaneMenu groups={[naming, context, shelf, supervision, recovery]} />
       </div>
       {onClose ? <button type="button" className="pane-action thread-pane__close tt-focusable" data-pane-close aria-label={`Close ${thread.title} pane`} title="Close pane" onClick={onClose}><X size={16} aria-hidden="true" /></button> : null}
     </header>
     {settleDialog}
-    {error && !deliveryExplains && !answerExplains ? <p className="agent-error thread-workspace__error" role="alert">{error}</p> : null}
-    <ThreadWebLinks threadId={thread.id} threadTitle={thread.title}><ThreadTranscript row={row} state={state} command={command} store={store} followSignal={followSignal}>
+    {error && !deliveryExplains && !answerExplains && !settingsExplains && error !== toolbarExplained && error !== gitExplained ? <p className="agent-error thread-workspace__error" role="alert">{error}</p> : null}
+    <ThreadWebLinks threadId={thread.id} threadTitle={thread.title} focused={focused}><ThreadTranscript row={row} state={state} command={command} store={store} followSignal={followSignal}>
       <ThreadRequests kind="permission" row={row} state={state} command={command} blocked={threadBusy ? 'Waiting for Sotto…' : !rowConnected ? `Reconnect ${row.provider} to answer.` : null}
         onAnswer={focusAnswerComposer} />
       {/* Answers saved for questions no live card shows, such as ones the provider closed while Sotto was shut. */}
@@ -246,10 +266,11 @@ export function ThreadPane({ row, state, command, store, focused, promptId, erro
     </ThreadTranscript></ThreadWebLinks>
     <div className="thread-workspace__compose" ref={compose}>
       {notice}
+      <div className="git-action-notice-slot" ref={setGitNoticeSlot} />
       {/* The branch under this thread moved since its last send. Nothing is refused; the notice waits for a draft to continue. */}
       <ThreadBranchNotice thread={thread} project={row.project} command={command} composing={composing} />
-      {managed ? <ThreadFollowups row={workspaceRow} state={state} command={command} store={store}
-        onRetryAdmission={draftId => { void sendThreadRevision(store, workspaceRow, command, performance.now(), 'queue', draftId) }} /> : null}
+      {managed ? <ThreadFollowups row={row} state={state} command={command} store={store}
+        onRetryAdmission={draftId => { void sendThreadRevision(store, row, command, performance.now(), 'queue', draftId) }} /> : null}
       <ThreadRequests kind="question" row={row} state={state} command={command} blocked={threadBusy ? 'Waiting for Sotto…' : !rowConnected ? `Reconnect ${row.provider} to answer.` : null}
         onAnswer={focusAnswerComposer} />
       {managed && (!focused || holdingWriteHere) ? <div className="thread-draft-notice"><p>Sotto is managing this thread.</p><Button variant="secondary"
@@ -259,14 +280,14 @@ export function ThreadPane({ row, state, command, store, focused, promptId, erro
         onPointerDownCapture={writeHere} onFocusCapture={() => setHoldingWriteHere(true)} onBlur={() => setHoldingWriteHere(false)}
         onClick={() => { writeHere(); setHoldingWriteHere(false); onFocusPane?.() }}>Write here</Button></div>
         : foreignDraft && managed ? <div className="thread-draft-notice"><p>Your saved draft belongs to <strong>{foreignDraft.title}</strong>.</p><Button variant="secondary" onClick={() => onOpenThread(foreignDraft.id)}>Open draft thread</Button>{options}</div>
-          : managed ? <AgentComposer state={state} command={command} ornament={ornament} enterToSend footerControls={capabilities.configureThread || thread.nativeSessionStarted === false ? options : undefined} />
-            : <ThreadComposer key={thread.id} ornament={ornament} row={workspaceRow} state={state} command={command} store={store} composerId={promptId} handingOff={handingOff} onSend={() => setFollowSignal(signal => signal + 1)} />}
-      {/* One row under the composer: what compaction has to say at its start, the two usage figures at its end. One row,
-          so panes side by side keep their composers at the same height whether or not one has been compacted. */}
+          : managed ? <AgentComposer state={state} command={command} ornament={ornament} enterToSend footerControls={capabilities.configureThread || thread.nativeSessionStarted === false ? options : undefined}
+            footerAfter={<div ref={setSettingsNotices} className="thread-options-notices" />} />
+            : <ThreadComposer key={thread.id} ornament={ornament} row={row} state={state} command={command} store={store} composerId={promptId} handingOff={handingOff} focused={focused} onExplainedError={setToolbarExplained} onSend={() => setFollowSignal(signal => signal + 1)} />}
+      {/* The row under the composer is compaction's alone. Side by side it keeps one line even when compaction has
+          nothing to say, so panes keep their composers at the same height whether or not one has been compacted. */}
       <div className="thread-pane__meta">
         <ThreadCompaction thread={thread} supported={compactionOffered(capabilities, thread)}
           connected={rowConnected && !closed} blocked={threadBusy || handingOff} command={command} />
-        <ThreadUsage usage={thread.usage} modelId={thread.modelId} />
       </div>
     </div>
   </>

@@ -1,16 +1,19 @@
 import { readFileSync } from 'node:fs'
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import React, { StrictMode } from 'react'
+import React, { Profiler, StrictMode } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import type { AgentBridge, AgentState } from '../../../src/shared/agents'
 import type {
   SottoWidgetBridge,
   WidgetPresentation,
 } from '../../../src/shared/contracts'
 import { MICROPHONE_NOT_SET_UP_DETAIL, type WidgetErrorCode, type WidgetSnapshot } from '../../../src/shared/dictation'
 import { platformCopy } from '../../../src/renderer/src/platformCopy'
-import { DEFAULT_WIDGET_PALETTE, themeBrand, widgetPaletteFor } from '../../../src/shared/themeBranding'
+import { APP_ICON_BRAND, APP_ICON_BRAND_ATTRIBUTE, DEFAULT_WIDGET_PALETTE, themeBrand, widgetPaletteFor } from '../../../src/shared/themeBranding'
+import { DEFAULT_THEME_ID } from '../../../src/shared/themes/library'
+import { threadsStateFixture } from './liveAgentState'
 import {
   WidgetApp,
   WidgetEntry,
@@ -44,6 +47,7 @@ function setWindowSize(width: number, height: number): void {
 afterEach(() => {
   cleanup()
   document.documentElement.removeAttribute('data-theme')
+  document.documentElement.removeAttribute('data-brand')
   document.documentElement.removeAttribute('data-reduced-motion')
   setWindowSize(1_024, 768)
   vi.useRealTimers()
@@ -180,10 +184,13 @@ describe('WidgetApp', () => {
     ['MIC_NOT_SET_UP', 'No microphone set up', MICROPHONE_NOT_SET_UP_DETAIL],
     ['RECORDING_FAILED', 'Recording stopped', 'Check your microphone and try again.'],
     ['NO_SPEECH', 'No speech detected', 'Speak closer to the microphone and try again.'],
-    ['TRANSCRIPTION_UNCONFIGURED', 'API key needed', 'Add your OpenRouter API key in Settings to transcribe.'],
-    ['TRANSCRIPTION_UNAUTHORIZED', 'API key rejected', 'OpenRouter rejected the API key. Check it in Settings.'],
-    ['TRANSCRIPTION_OFFLINE', 'Connection unavailable', 'Sotto could not reach OpenRouter. Check your connection and try again.'],
-    ['TRANSCRIPTION_FAILED', 'Couldn’t transcribe', 'Transcription failed. Try again.'],
+    ['TRANSCRIPTION_UNCONFIGURED', 'API key needed', 'Sotto has no OpenRouter API key yet. The recording was not kept. Add your key in Settings, then dictate again.'],
+    ['TRANSCRIPTION_UNAUTHORIZED', 'API key rejected', 'OpenRouter rejected the API key. The recording was not kept. Check the key in Settings.'],
+    ['TRANSCRIPTION_OFFLINE', 'Connection unavailable', 'Sotto could not reach OpenRouter. The recording was not kept. Check your connection and try again.'],
+    ['TRANSCRIPTION_BILLING', 'Out of credit', 'OpenRouter has no credit left for this key. The recording was not kept. Add credit at openrouter.ai, then dictate again.'],
+    ['TRANSCRIPTION_RATE_LIMITED', 'Too many requests', 'OpenRouter is limiting requests on this key. The recording was not kept. Wait a minute, then dictate again.'],
+    ['TRANSCRIPTION_SERVICE_ERROR', 'OpenRouter error', 'OpenRouter’s transcription service returned an error. The recording was not kept. Dictate again in a moment.'],
+    ['TRANSCRIPTION_FAILED', 'Couldn’t transcribe', 'Sotto did not get usable text back. The recording was not kept. Dictate again.'],
     ['OUTPUT_UNAVAILABLE', 'Output unavailable', 'Open Sotto and try again.'],
     ['OUTPUT_FAILED', 'Couldn’t copy text', 'Try again from the Sotto app.'],
     ['HISTORY_FAILED', 'Saved to clipboard', 'Local history was not updated.'],
@@ -375,8 +382,8 @@ describe('WidgetApp', () => {
     ['cancelled', snapshot({ status: 'cancelled', sessionId: 'mark' })],
     ['error', snapshot({ status: 'error', sessionId: 'mark', code: 'NO_SPEECH' })],
   ] as const)('leads the %s capsule with the decorative app mark', (_name, activeSnapshot) => {
-    const ember = widgetPaletteFor({ lightTheme: 'ember', darkTheme: 'ember', customThemes: [] })
-    const release = applyRootPresentation({ theme: 'dark', palette: ember, reducedMotion: 'system' }, true)
+    const tropic = widgetPaletteFor({ lightTheme: 'tropic', darkTheme: 'tropic', customThemes: [] })
+    const release = applyRootPresentation({ theme: 'dark', palette: tropic, reducedMotion: 'system' }, true)
     const { container } = render(
       <WidgetApp snapshot={activeSnapshot} platform="win32" now={1_000} />,
     )
@@ -386,12 +393,33 @@ describe('WidgetApp', () => {
     expect(glyph).toHaveAttribute('aria-hidden', 'true')
     expect(container.querySelector('.widget-capsule')?.firstElementChild).toBe(glyph)
     // The mark wears the painted theme half: its accent tile and a readable glyph.
-    const brand = themeBrand(ember.dark, 'dark')
+    const brand = themeBrand(tropic.dark, 'dark')
     expect([...glyph.querySelectorAll('stop')].map((stop) => stop.getAttribute('stop-color')))
       .toEqual([brand.tile, brand.tile])
     expect(glyph.querySelector('rect[x="26"]')).toHaveAttribute('fill', brand.glyph)
     expect(glyph.querySelector('path')).toHaveAttribute('stroke', brand.glyph)
     release()
+  })
+
+  it('wears the app icon on the half the default theme paints, and gives the attribute back on release', () => {
+    const root = document.documentElement
+    // One half on the default theme, the other on a built-in, so the two answers show in one palette.
+    const split = widgetPaletteFor({ lightTheme: DEFAULT_THEME_ID, darkTheme: 'tropic', customThemes: [] })
+    expect(split.appIcon).toEqual({ light: true, dark: false })
+
+    const release = applyRootPresentation({ theme: 'light', palette: split, reducedMotion: 'system' }, false)
+    expect(root.dataset.brand).toBe(APP_ICON_BRAND_ATTRIBUTE)
+    render(<WidgetApp snapshot={snapshot({ status: 'listening', sessionId: 'icon', startedAt: 0, level: 0.4 })} platform="win32" now={1_000} />)
+    const mark = screen.getByTestId('widget-glyph').querySelector('svg')
+    expect(mark).toHaveAttribute('data-tile', APP_ICON_BRAND.tile)
+    expect(mark).toHaveAttribute('data-glyph', APP_ICON_BRAND.glyph)
+
+    // The dark half belongs to another theme, so the mark goes back to that theme's accent.
+    applyRootPresentation({ theme: 'dark', palette: split, reducedMotion: 'system' }, true)
+    expect(root.dataset.brand).toBeUndefined()
+
+    release()
+    expect(root).not.toHaveAttribute('data-brand')
   })
 
   it('leaves the resting sliver free of the app mark', () => {
@@ -770,28 +798,28 @@ describe('WidgetEntry', () => {
   it('repaints the mark, voice bars and surfaces live when a new palette arrives, without a new session', async () => {
     const { bridge, emit } = liveBridge()
     render(<WidgetEntry bridge={bridge} platform="win32" preview={null} />)
-    const ocean = widgetPaletteFor({ lightTheme: 'ocean', darkTheme: 'ocean', customThemes: [] })
-    const iris = widgetPaletteFor({ lightTheme: 'ocean', darkTheme: 'iris', customThemes: [] })
+    const nocturne = widgetPaletteFor({ lightTheme: 'nocturne', darkTheme: 'nocturne', customThemes: [] })
+    const citrine = widgetPaletteFor({ lightTheme: 'nocturne', darkTheme: 'citrine', customThemes: [] })
     const listening = { status: 'listening', sessionId: 'live', startedAt: Date.now(), level: 0.4, cancellable: true } as const
     const root = document.documentElement
 
-    emit(snapshot({ ...listening, theme: 'dark', palette: ocean }))
+    emit(snapshot({ ...listening, theme: 'dark', palette: nocturne }))
     expect(screen.getByTestId('listening-bars')).toBeInTheDocument()
-    expect(root.style.getPropertyValue('--theme-accent')).toBe(ocean.dark.accent)
-    expect(screen.getByTestId('widget-glyph').querySelector('svg')).toHaveAttribute('data-tile', themeBrand(ocean.dark, 'dark').tile)
+    expect(root.style.getPropertyValue('--theme-accent')).toBe(nocturne.dark.accent)
+    expect(screen.getByTestId('widget-glyph').querySelector('svg')).toHaveAttribute('data-tile', themeBrand(nocturne.dark, 'dark').tile)
 
     // Same session, next level update carries the newly selected dark half.
-    emit(snapshot({ ...listening, level: 0.5, theme: 'dark', palette: iris }))
-    expect(root.style.getPropertyValue('--theme-accent')).toBe(iris.dark.accent)
-    expect(root.style.getPropertyValue('--theme-surface-raised')).toBe(iris.dark.surfaceRaised)
-    expect(root.style.getPropertyValue('--theme-error-foreground')).toBe(iris.dark.errorForeground)
-    await waitFor(() => expect(screen.getByTestId('widget-glyph').querySelector('svg')).toHaveAttribute('data-tile', themeBrand(iris.dark, 'dark').tile))
-    expect(themeBrand(iris.dark, 'dark').tile).not.toBe(themeBrand(ocean.dark, 'dark').tile)
+    emit(snapshot({ ...listening, level: 0.5, theme: 'dark', palette: citrine }))
+    expect(root.style.getPropertyValue('--theme-accent')).toBe(citrine.dark.accent)
+    expect(root.style.getPropertyValue('--theme-surface-raised')).toBe(citrine.dark.surfaceRaised)
+    expect(root.style.getPropertyValue('--theme-error-foreground')).toBe(citrine.dark.errorForeground)
+    await waitFor(() => expect(screen.getByTestId('widget-glyph').querySelector('svg')).toHaveAttribute('data-tile', themeBrand(citrine.dark, 'dark').tile))
+    expect(themeBrand(citrine.dark, 'dark').tile).not.toBe(themeBrand(nocturne.dark, 'dark').tile)
 
     // Back to idle keeps the theme; the resting sliver paints from the same roles.
-    emit(snapshot({ status: 'idle', theme: 'dark', palette: iris }))
+    emit(snapshot({ status: 'idle', theme: 'dark', palette: citrine }))
     expect(screen.getByTestId('widget-sliver')).toBeInTheDocument()
-    expect(root.style.getPropertyValue('--theme-accent')).toBe(iris.dark.accent)
+    expect(root.style.getPropertyValue('--theme-accent')).toBe(citrine.dark.accent)
   })
 
   it('follows the system scheme live by painting the matching theme half', async () => {
@@ -805,7 +833,7 @@ describe('WidgetEntry', () => {
     try {
       const { bridge, emit } = liveBridge()
       render(<WidgetEntry bridge={bridge} platform="win32" preview={null} />)
-      const palette = widgetPaletteFor({ lightTheme: 'ember', darkTheme: 'iris', customThemes: [] })
+      const palette = widgetPaletteFor({ lightTheme: 'tropic', darkTheme: 'citrine', customThemes: [] })
       emit(snapshot({ status: 'requesting-permission', sessionId: 'scheme', theme: 'system', palette, cancellable: true }))
       const root = document.documentElement
       expect(root).toHaveAttribute('data-theme', 'light')
@@ -1180,7 +1208,7 @@ describe('WidgetEntry', () => {
 
     emit(snapshot({ status: 'error', sessionId: 'announce', code: 'TRANSCRIPTION_FAILED' }))
     expect(polite).toBeEmptyDOMElement()
-    expect(assertive).toHaveTextContent('Couldn’t transcribe. Transcription failed. Try again.')
+    expect(assertive).toHaveTextContent('Couldn’t transcribe. Sotto did not get usable text back. The recording was not kept. Dictate again.')
     expect(assertive.querySelector('[role="meter"], time, [role="progressbar"]')).toBeNull()
 
     emit(snapshot({ status: 'idle' }))
@@ -1240,6 +1268,48 @@ describe('WidgetEntry', () => {
     await act(async () => Promise.resolve())
     expect(container).not.toHaveTextContent('private stop failure')
     expect(container).not.toHaveTextContent('private cancel failure')
+  })
+
+  it('holds no agent connection while the voice coordinator is off, and a whole one when it turns on', async () => {
+    const shells = new Set<(state: AgentState) => void>()
+    let agentState = threadsStateFixture()
+    const agents: AgentBridge = {
+      get: vi.fn(async () => agentState),
+      command: vi.fn(async () => agentState),
+      onState: vi.fn((listener: (state: AgentState) => void) => { shells.add(listener); return () => { shells.delete(listener) } }),
+    }
+    const { bridge, emit } = liveBridge()
+    let commits = 0
+    render(<Profiler id="widget" onRender={() => { commits += 1 }}><WidgetEntry bridge={{ ...bridge, agents }} platform="win32" preview={null} /></Profiler>)
+    /** One streamed chunk per shell, each a new state, the way main publishes while an agent works. */
+    const stream = (count: number): void => {
+      for (let index = 0; index < count; index += 1) {
+        agentState = { ...agentState, notice: `chunk ${index}` }
+        act(() => { for (const listener of shells) listener(agentState) })
+      }
+    }
+
+    emit(snapshot({ status: 'idle' }))
+    emit(snapshot({ status: 'idle', voiceCoordinator: false }))
+    await act(async () => Promise.resolve())
+    const before = commits
+    stream(100)
+    expect(agents.onState).not.toHaveBeenCalled()
+    expect(agents.get).not.toHaveBeenCalled()
+    expect(commits - before).toBe(0)
+
+    // Turning the coordinator on connects afresh: one subscription, one whole fetch, every shell drawn.
+    emit(snapshot({ status: 'idle', voiceCoordinator: true }))
+    await waitFor(() => expect(agents.get).toHaveBeenCalledTimes(1))
+    expect(agents.onState).toHaveBeenCalledTimes(1)
+    await act(async () => Promise.resolve())
+    const connected = commits
+    stream(100)
+    expect(commits - connected).toBe(100)
+
+    // And off again lets go of it.
+    emit(snapshot({ status: 'idle', voiceCoordinator: false }))
+    expect(shells.size).toBe(0)
   })
 })
 

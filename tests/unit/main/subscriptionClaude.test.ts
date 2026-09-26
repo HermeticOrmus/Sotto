@@ -85,6 +85,30 @@ afterEach(async () => {
   }
 })
 
+describe('Claude reasoning shutdown', () => {
+  it('cancels a running native decision and waits for its process to close', async () => {
+    const f = await fixture({ mode: 'timeout' })
+    const shutdown = new AbortController()
+    const result = f.client.complete('Return JSON.', { text: 'Synthetic shutdown prompt' }, 'sonnet', undefined, shutdown.signal)
+    const rejected = expect(result).rejects.toThrow('Sotto reasoning stopped.')
+    try {
+      let pid = 0
+      await expect.poll(async () => {
+        const calls = await f.calls().catch(() => [])
+        const completion = calls.find(call => call.args.includes('--output-format') && call.args.includes('json'))
+        pid = completion?.pid ?? 0
+        return pid > 0
+      }).toBe(true)
+      shutdown.abort()
+      await rejected
+      expect(() => process.kill(pid, 0)).toThrow()
+      const count = (await f.calls()).length
+      await expect(f.client.complete('Return JSON.', {}, 'sonnet', undefined, shutdown.signal)).rejects.toThrow()
+      expect(await f.calls()).toHaveLength(count)
+    } finally { shutdown.abort(); await result.catch(() => undefined) }
+  })
+})
+
 describe('Claude native subscription client', () => {
   it('reports only public account readiness and keeps prompts in stdin with all native tools disabled', async () => {
     const f = await fixture()
@@ -143,6 +167,16 @@ describe('Claude native subscription client', () => {
     expect(completion.args[completion.args.indexOf('--model') + 1]).toBe('claude-future[1m]')
     expect(completion.args[completion.args.indexOf('--effort') + 1]).toBe('xhigh')
     expect(completion.overrides).toEqual([])
+  })
+
+  it('runs a long-context model the catalog lists only by its base, with the base model’s efforts', async () => {
+    // Claude Code 2.1.283 lists `opus` and no `opus[1m]`, though it still runs `--model opus[1m]` (#344).
+    const f = await fixture({ models: [{ value: 'opus', displayName: 'Opus', supportsEffort: true, supportedEffortLevels: ['low', 'high', 'max'] }] })
+    await f.client.complete('JSON only', {}, 'opus[1m]', 'max')
+    const completion = (await f.calls()).at(-1)!
+    expect(completion.args[completion.args.indexOf('--model') + 1]).toBe('opus[1m]')
+    expect(completion.args[completion.args.indexOf('--effort') + 1]).toBe('max')
+    await expect(f.client.complete('JSON only', {}, 'opus[1m]', 'xhigh')).rejects.toThrow(/effort/iu)
   })
 
   it('names a model with the version its description carries and leaves the account default its own name', async () => {

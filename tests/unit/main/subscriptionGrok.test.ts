@@ -11,7 +11,7 @@ const catalog = { currentModelId: 'grok-native-new', availableModels: [
   { modelId: 'grok-native-fast', name: 'Native fast model' },
 ] }
 interface Scenario { auth?: boolean; mode?: 'invalid' | 'timeout' | 'large' | 'permission' | 'tool'; models?: unknown; wrongEffort?: boolean; wrongModel?: boolean }
-interface Call { method: string; params: Record<string, unknown>; args: string[]; env: Record<string, string>; cwd: string; policy: string }
+interface Call { pid: number; method: string; params: Record<string, unknown>; args: string[]; env: Record<string, string>; cwd: string; policy: string }
 async function fixture(scenario: Scenario = {}, timeoutMs = 3_000) {
   const root = await mkdtemp(join(tmpdir(), 'sotto-grok-route-'))
   roots.push(root)
@@ -24,7 +24,7 @@ const scenario = JSON.parse(fs.readFileSync(${JSON.stringify(scenarioPath)}, 'ut
 const reply = (id, result) => process.stdout.write(JSON.stringify({jsonrpc:'2.0',id,result})+'\\n');
 rl.createInterface({input:process.stdin}).on('line', line => {
  const request = JSON.parse(line);
- fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({method:request.method,params:request.params,args:process.argv.slice(2),env:Object.fromEntries(Object.entries(process.env).filter(([k])=>/^(GROK_|XAI_|NODE_OPTIONS)/i.test(k))),cwd:process.cwd(),policy:fs.readFileSync(require('node:path').join(process.env.GROK_HOME,'requirements.toml'),'utf8')})+'\\n');
+ fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({pid:process.pid,method:request.method,params:request.params,args:process.argv.slice(2),env:Object.fromEntries(Object.entries(process.env).filter(([k])=>/^(GROK_|XAI_|NODE_OPTIONS)/i.test(k))),cwd:process.cwd(),policy:fs.readFileSync(require('node:path').join(process.env.GROK_HOME,'requirements.toml'),'utf8')})+'\\n');
  if(request.method==='initialize') return reply(request.id,{protocolVersion:1,authMethods:[{id:'cached_token'},{id:'grok.com'}]});
  if(request.method==='authenticate') return scenario.auth ? reply(request.id,{}) : process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:request.id,error:{code:-32000,message:'fixture-private-auth-error'}})+'\\n');
  if(request.method==='session/new') {
@@ -53,6 +53,30 @@ rl.createInterface({input:process.stdin}).on('line', line => {
   return { root, nativeHome, client, configure, async calls(): Promise<Call[]> { return (await readFile(log, 'utf8')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line) as Call) } }
 }
 afterEach(async () => { for (const root of roots.splice(0)) { if (dirname(resolve(root)) !== resolve(tmpdir()) || !root.includes('sotto-grok-route-')) throw new Error('Unexpected temporary Grok directory'); await rm(root, { recursive: true, force: true }) } })
+describe('Grok reasoning shutdown', () => {
+  it('cancels a running native prompt, reaps its process and removes its temporary home', async () => {
+    const f = await fixture({ mode: 'timeout' }, 180_000)
+    const shutdown = new AbortController()
+    const result = f.client.complete('Return JSON.', { text: 'Synthetic shutdown prompt' }, '', undefined, shutdown.signal)
+    const rejected = expect(result).rejects.toThrow('Sotto reasoning stopped.')
+    try {
+      let pid = 0
+      await expect.poll(async () => {
+        const calls = await f.calls().catch(() => [])
+        pid = calls.find(call => call.method === 'session/prompt')?.pid ?? 0
+        return pid > 0
+      }).toBe(true)
+      shutdown.abort()
+      await rejected
+      expect(() => process.kill(pid, 0)).toThrow()
+      expect(await readdir(join(f.root, 'isolated'))).toEqual([])
+      const count = (await f.calls()).length
+      await expect(f.client.complete('Return JSON.', {}, '', undefined, shutdown.signal)).rejects.toThrow()
+      expect(await f.calls()).toHaveLength(count)
+    } finally { shutdown.abort(); await result.catch(() => undefined) }
+  })
+})
+
 describe('Grok native subscription client', () => {
   it('discovers native models and effort using only cached authentication and no inference', async () => {
     const f = await fixture()
@@ -67,6 +91,19 @@ describe('Grok native subscription client', () => {
     expect(calls[0]!.args).toEqual(expect.arrayContaining(['--tools', '', '--no-subagents', '--disable-web-search', '--no-leader']))
     expect(calls[0]!.args).toEqual(expect.arrayContaining(['--deny', '*']))
     expect(calls.every(call => call.policy === '[permission]\nrules = [{ action = "deny", tool = "any" }]\n')).toBe(true)
+  })
+  it("puts Grok's highest-first effort list into Sotto's order and keeps its default", async () => {
+    // Modelled on the levels and default Grok 1.0.5 reported in docs/verification/subscription-reasoning-routes-2026-09-09.md.
+    // The repeated high, the per-level default flags and grok-4.5's missing session level are added here
+    // so the case exercises dropping a repeat and finding the default from the flag.
+    const f = await fixture({ models: { currentModelId: 'grok-4.6', availableModels: [
+      { modelId: 'grok-4.6', name: 'Grok 4.6', _meta: { supportsReasoningEffort: true, reasoningEffort: 'high', reasoningEfforts: [{ id: 'xhigh', value: 'xhigh' }, { id: 'high', value: 'high', default: true }, { id: 'medium', value: 'medium' }, { id: 'low', value: 'low' }, { id: 'high', value: 'high' }] } },
+      { modelId: 'grok-4.5', name: 'Grok 4.5', _meta: { supportsReasoningEffort: true, reasoningEfforts: [{ id: 'high', value: 'high', default: true }, { id: 'medium', value: 'medium' }, { id: 'low', value: 'low' }] } },
+    ] } })
+    expect((await f.client.status()).models).toEqual([
+      { id: 'grok-4.6', name: 'Grok 4.6', reasoningEfforts: ['low', 'medium', 'high', 'xhigh'], defaultReasoningEffort: 'high' },
+      { id: 'grok-4.5', name: 'Grok 4.5', reasoningEfforts: ['low', 'medium', 'high'], defaultReasoningEffort: 'high' },
+    ])
   })
   it('uses the discovered native default without requiring an API key or manually entered model', async () => {
     const f = await fixture()

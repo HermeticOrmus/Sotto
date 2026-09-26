@@ -4,6 +4,11 @@ import { AGENT_MAX_ATTACHMENT_BYTES } from '../../shared/agents'
 
 export type ClaudeFrame = Record<string, unknown>
 class ClaudeUncertain extends Error {}
+/**
+ * The CLI answered a control request with an error: it heard the request and did not do it. Unlike a lost or
+ * unreadable answer, nothing about the request is unknown, so a caller may try another way.
+ */
+export class ClaudeRejected extends Error {}
 // Native user replay and transcript entries include base64 image data. Honor the
 // shared aggregate attachment limit plus room for prompt/protocol metadata.
 export const CLAUDE_MAX_FRAME_BYTES = Math.ceil(AGENT_MAX_ATTACHMENT_BYTES / 3) * 4 + 1024 * 1024
@@ -19,27 +24,40 @@ export class ClaudeProtocol {
     onFrame: (frame: ClaudeFrame) => void, onExit: () => void) {
     this.child = spawn(executable, args, { cwd, env, windowsHide: true, shell: false, stdio: 'pipe' })
     this.closed = new Promise(resolve => this.child.once('close', () => { this.fail(); resolve(); if (!this.stopping) onExit() }))
-    let buffer = ''; let stderrBytes = 0
+    // The unfinished line is kept as fragments with a running byte count, so a large frame arriving in
+    // many chunks costs one pass over each chunk and one join, not a rescan of everything so far.
+    let fragments: string[] = []; let pendingBytes = 0; let stderrBytes = 0
     this.child.stdout.setEncoding('utf8')
     this.child.stdout.on('data', (chunk: string) => {
-      buffer += chunk
-      if (Buffer.byteLength(buffer) > CLAUDE_MAX_FRAME_BYTES) { this.abort(); return }
-      let newline: number
-      while ((newline = buffer.indexOf('\n')) >= 0) {
-        const line = buffer.slice(0, newline); buffer = buffer.slice(newline + 1)
-        if (!line.trim()) continue
-        let frame: ClaudeFrame
-        try { frame = JSON.parse(line) as ClaudeFrame; if (!frame || typeof frame !== 'object') throw new Error() } catch { this.abort(); return }
-        if (frame.type === 'control_response') {
-          const response = object(frame.response); const id = response?.request_id
-          const waiter = typeof id === 'string' ? this.waiters.get(id) : undefined
-          if (waiter) {
-            clearTimeout(waiter.timer); this.waiters.delete(id as string)
-            if (response?.subtype === 'success' && object(response.response)) waiter.resolve(response.response as ClaudeFrame)
-            else waiter.reject(new Error('Claude rejected a control request. Check the native client.'))
+      pendingBytes += Buffer.byteLength(chunk)
+      if (pendingBytes > CLAUDE_MAX_FRAME_BYTES) { fragments = []; this.abort(); return }
+      let start = 0
+      try {
+        let newline: number
+        while ((newline = chunk.indexOf('\n', start)) >= 0) {
+          let line = chunk.slice(start, newline); start = newline + 1
+          if (fragments.length) { fragments.push(line); line = fragments.join(''); fragments = [] }
+          if (!line.trim()) continue
+          let frame: ClaudeFrame
+          try { frame = JSON.parse(line) as ClaudeFrame; if (!frame || typeof frame !== 'object') throw new Error() } catch { this.abort(); return }
+          if (frame.type === 'control_response') {
+            const response = object(frame.response); const id = response?.request_id
+            const waiter = typeof id === 'string' ? this.waiters.get(id) : undefined
+            if (waiter) {
+              clearTimeout(waiter.timer); this.waiters.delete(id as string)
+              // A success may carry no body, and the SDK reads a missing one as empty.
+              if (response?.subtype === 'success' && (response.response === undefined || object(response.response))) waiter.resolve((response.response ?? {}) as ClaudeFrame)
+              else if (response?.subtype === 'error') waiter.reject(new ClaudeRejected('Claude rejected a control request. Check the native client.'))
+              else waiter.reject(new ClaudeUncertain('Claude Code answered in a form Sotto could not read, so whether it acted is unknown. Sotto did not send it again. Check for a Sotto or Claude Code update.'))
+            }
           }
+          onFrame(frame)
         }
-        onFrame(frame)
+      } finally {
+        // Whatever this chunk did not consume stays pending, as the rest of the old buffer did, even
+        // when a malformed line or a throwing listener ends the loop early.
+        if (start === 0) fragments.push(chunk)
+        else { const rest = chunk.slice(start); fragments = rest ? [rest] : []; pendingBytes = Buffer.byteLength(rest) }
       }
     })
     this.child.stderr.on('data', (chunk: Buffer) => { stderrBytes += chunk.length; if (stderrBytes > 1024 * 1024) this.abort() })

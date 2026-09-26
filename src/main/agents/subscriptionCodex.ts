@@ -6,6 +6,7 @@ import { delimiter, isAbsolute, join } from 'node:path'
 
 import { z } from 'zod'
 
+import { orderReasoningEfforts } from '../../shared/reasoningEfforts'
 import type { SubscriptionAccount, SubscriptionClient } from './subscriptionTypes'
 
 const UNAVAILABLE = 'Codex subscription request failed. Check Codex sign-in, model access and usage limits, then retry.'
@@ -19,16 +20,22 @@ const DISABLED_FEATURES = [
   'sleep_tool', 'workspace_dependencies',
 ] as const
 
-const configArguments = [
+/**
+ * What every one-off Codex call Sotto makes switches off, for reasoning and for side writing alike: every tool
+ * and integration a turn could reach (skills and MCP through the orchestrator as well as directly), the
+ * project's instruction files, web search and history. `notify` is emptied so the user's own turn-complete
+ * program is never started and handed Sotto's prompt and the reply, and OpenTelemetry never logs the prompt.
+ */
+const isolationArguments = [
   ...DISABLED_FEATURES.map((name) => `features.${name}=false`),
   'features.skip_host_skill_discovery=true', 'web_search="disabled"',
   'skills.include_instructions=false', 'skills.bundled.enabled=false',
   'orchestrator.skills.enabled=false', 'orchestrator.mcp.enabled=false',
   'project_doc_max_bytes=0', 'mcp_servers={}', 'instructions=""',
-  'history.persistence="none"',
-  'model_provider="openai"',
-  'approval_policy="on-request"', 'sandbox_mode="read-only"',
-].flatMap((value) => ['-c', value])
+  'history.persistence="none"', 'notify=[]', 'otel.log_user_prompt=false',
+  'model_provider="openai"', 'sandbox_mode="read-only"',
+]
+const configArguments = [...isolationArguments, 'approval_policy="on-request"'].flatMap((value) => ['-c', value])
 
 const outputSchema = {
   type: 'object', properties: { json: { type: 'string' } },
@@ -85,9 +92,12 @@ export async function findExecutable(): Promise<string | null> {
 /** One owned, bounded child. No shell, persistent daemon, retries or raw error output. */
 function childOperation<T>(executable: string, args: string[], cwd: string, timeout: number,
   operation: (child: ChildProcessWithoutNullStreams, finish: (value: T) => void, fail: (detail?: string) => void) => (line: string) => void,
+  signal?: AbortSignal,
+  env: NodeJS.ProcessEnv = nativeEnvironment(),
 ): Promise<T> {
   return new Promise((resolve, reject) => {
-    const child = spawn(executable, args, { cwd, env: nativeEnvironment(), windowsHide: true, shell: false, stdio: 'pipe' })
+    signal?.throwIfAborted()
+    const child = spawn(executable, args, { cwd, env, windowsHide: true, shell: false, stdio: 'pipe' })
     let finishing = false
     let closed = false
     let result: T | undefined
@@ -99,6 +109,7 @@ function childOperation<T>(executable: string, args: string[], cwd: string, time
     const settle = () => {
       clearTimeout(timer)
       clearTimeout(reapTimer)
+      signal?.removeEventListener('abort', stop)
       if (rejected) reject(new Error(failureDetail))
       else resolve(result as T)
     }
@@ -124,6 +135,8 @@ function childOperation<T>(executable: string, args: string[], cwd: string, time
       if (detail) failureDetail = detail
       finish(undefined, true)
     }
+    const stop = () => fail('Sotto reasoning stopped.')
+    signal?.addEventListener('abort', stop, { once: true })
     const timer = setTimeout(fail, timeout)
     let consume: (line: string) => void
     try { consume = operation(child, (value) => finish(value), fail) } catch { fail(); return }
@@ -152,6 +165,49 @@ function childOperation<T>(executable: string, args: string[], cwd: string, time
 }
 
 /**
+ * A side call (ADR-0026) switches off everything the reasoning path does, and it matters more here because
+ * the call runs in the thread's real project folder rather than an empty scratch one. Only the approval
+ * policy differs: the shell tool is off as well as the sandbox being read-only, so there is nothing an
+ * approval could be asked for and nobody is waiting to answer one.
+ */
+const sideWritingArguments = [...isolationArguments, 'approval_policy="never"'].flatMap((value) => ['-c', value])
+const execEvent = z.object({ type: z.string(), item: z.object({ type: z.string(), text: z.string().optional() }).passthrough().optional() }).passthrough()
+/**
+ * The items a side call may produce. `error` items are Codex's own warnings (an unknown model's metadata,
+ * a feature still in development), said before the turn and harmless; every other kind is a tool.
+ */
+const SIDE_WRITING_ITEMS = new Set(['agent_message', 'reasoning', 'error'])
+
+/**
+ * Short text written by the user's own Codex on the thread's model, for Sotto's side writing (ADR-0026).
+ * `codex exec --ephemeral` writes no session file, so neither Codex's own thread list nor the adapter's
+ * session-log watcher can learn of the call, and the thread's app-server session is never asked anything.
+ * The instruction and the material go in on stdin, never argv. The last agent message is the whole answer;
+ * a tool item of any kind stops the call rather than being allowed to run.
+ */
+export function writeWithCodexExec(request: {
+  executable: string; prefixArgs?: readonly string[]; codexHome: string
+  instruction: string; material: string; model: string; effort?: string; workingDirectory: string; timeoutMs: number; signal?: AbortSignal
+}): Promise<string> {
+  if (!/^[a-z0-9][a-z0-9._:/-]{0,159}$/iu.test(request.model) || (request.effort !== undefined && !/^[a-z][a-z0-9_-]{0,31}$/u.test(request.effort))) {
+    return Promise.reject(new Error('Choose a valid Codex model before asking it to write.'))
+  }
+  const args = [...(request.prefixArgs ?? []), 'exec', '--ephemeral', '--skip-git-repo-check', '--sandbox', 'read-only', '--json', '--color', 'never',
+    '--cd', request.workingDirectory, '--model', request.model, ...(request.effort ? ['-c', `model_reasoning_effort="${request.effort}"`] : []), ...sideWritingArguments, '-']
+  return childOperation<string>(request.executable, args, request.workingDirectory, request.timeoutMs, (child, finish, fail) => {
+    let text: string | undefined
+    child.stdin.end(`${request.instruction}\n\n${request.material}`)
+    return (line) => {
+      const event = execEvent.parse(JSON.parse(line))
+      if ((event.type === 'item.started' || event.type === 'item.completed') && event.item && !SIDE_WRITING_ITEMS.has(event.item.type)) { fail('Codex tried to use a tool while writing. Sotto stopped the call.'); return }
+      if (event.type === 'item.completed' && event.item?.type === 'agent_message' && typeof event.item.text === 'string') text = event.item.text
+      if (event.type === 'turn.failed' || event.type === 'error') { fail(); return }
+      if (event.type === 'turn.completed') { if (text === undefined) fail(); else finish(text) }
+    }
+  }, request.signal, { ...nativeEnvironment(), CODEX_HOME: request.codexHome })
+}
+
+/**
  * Native managed ChatGPT auth only. Sotto never reads/copies OAuth credentials.
  * Official protocol: https://learn.chatgpt.com/docs/app-server
  * Each decision uses an ephemeral thread with no execution environments,
@@ -166,7 +222,7 @@ export class CodexSubscriptionClient implements SubscriptionClient {
     return { provider: 'codex', label: 'ChatGPT through Codex', installed, ready, detail, models }
   }
 
-  private async session(completion?: { system: string; prompt: string; model: string; effort: string }): Promise<{ account: SubscriptionAccount; value?: unknown }> {
+  private async session(completion?: { system: string; prompt: string; model: string; effort: string }, signal?: AbortSignal): Promise<{ account: SubscriptionAccount; value?: unknown }> {
     const executable = await findExecutable()
     if (!executable) return { account: this.account(false, 'Install the Codex CLI and sign in with ChatGPT to connect this subscription.', false) }
     if (!isAbsolute(this.workingDirectory)) throw new Error(UNAVAILABLE)
@@ -226,7 +282,7 @@ export class CodexSubscriptionClient implements SubscriptionClient {
           for (const model of page.data) {
             if (model.hidden) continue
             catalog.set(model.model, { id: model.model, name: model.displayName,
-              ...(model.supportedReasoningEfforts ? { reasoningEfforts: model.supportedReasoningEfforts.map((item) => item.reasoningEffort) } : {}),
+              ...(model.supportedReasoningEfforts ? { reasoningEfforts: orderReasoningEfforts(model.supportedReasoningEfforts.map((item) => item.reasoningEffort)) } : {}),
               ...(model.defaultReasoningEffort ? { defaultReasoningEffort: model.defaultReasoningEffort } : {}),
             })
             if (model.isDefault) defaultModelId = model.model
@@ -306,24 +362,25 @@ export class CodexSubscriptionClient implements SubscriptionClient {
             finish({ account, value })
           }
         }
-      })
+      }, signal)
     } finally {
       if (completion) await rmdir(directory).catch(() => undefined)
     }
   }
 
-  async status(): Promise<SubscriptionAccount> {
-    try { return (await this.session()).account }
+  async status(signal?: AbortSignal): Promise<SubscriptionAccount> {
+    try { return (await this.session(undefined, signal)).account }
     catch { return this.account(false, UNAVAILABLE) }
   }
 
-  async complete(system: string, input: unknown, model: string, effort = ''): Promise<unknown> {
+  async complete(system: string, input: unknown, model: string, effort = '', signal?: AbortSignal): Promise<unknown> {
+    signal?.throwIfAborted()
     if (this.completing) throw new Error('A Codex subscription decision is already running. Wait for it to finish.')
     const prompt = JSON.stringify(input)
     if (!prompt || Buffer.byteLength(prompt) > 180_000 || Buffer.byteLength(system) > 20_000) throw new Error('The Sotto reasoning context is too large for this subscription request.')
     this.completing = true
     try {
-      const response = await this.session({ system, prompt, model, effort })
+      const response = await this.session({ system, prompt, model, effort }, signal)
       if (!response.account.ready) throw new Error(response.account.detail)
       return response.value
     } finally {

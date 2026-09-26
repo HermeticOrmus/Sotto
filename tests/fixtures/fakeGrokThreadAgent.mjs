@@ -8,13 +8,44 @@ const root = process.argv[2]
 const path = name => join(root, name)
 const read = (name, fallback) => { try { return JSON.parse(readFileSync(path(name), 'utf8')) } catch { return fallback } }
 if (process.argv.includes('inspect')) { process.stdout.write(JSON.stringify(read('skills.json', { skills: [] }))); process.exit(0) }
+// Sotto's side writing (ADR-0026): its own `agent --no-leader stdio` process on a throwaway home, never the
+// thread's leader. It records each frame it was sent in oneshot.jsonl as it arrives (the client kills it
+// on close), never in requests.jsonl or the native sessions, and answers from oneshot.json.
+if (process.argv.includes('--no-leader')) {
+ const script = read('oneshot.json', {})
+ const reply = frame => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...frame }) + '\n')
+ const call = { args: process.argv.slice(3), cwd: process.cwd(), home: process.env.GROK_HOME }
+ const catalog = { currentModelId: 'fixture-model', availableModels: [{ modelId: 'fixture-model', name: 'Fixture Grok', _meta: { supportsReasoningEffort: true, reasoningEffort: 'high', reasoningEfforts: [{ id: 'high' }, { id: 'low' }] } }] }
+ createInterface({ input: process.stdin }).on('line', line => {
+  const frame = JSON.parse(line); appendFileSync(path('oneshot.jsonl'), JSON.stringify({ ...call, frame }) + '\n')
+  const p = frame.params ?? {}
+  if (frame.method === 'initialize') reply({ id: frame.id, result: { protocolVersion: 1, authMethods: [{ id: 'cached_token' }] } })
+  else if (frame.method === 'authenticate') reply({ id: frame.id, result: {} })
+  else if (frame.method === 'session/new') {
+   const profile = p._meta?.agentProfile
+   if (!profile || profile.injectDefaultTools !== false || profile.tools?.length !== 0 || p.mcpServers?.length !== 0) appendFileSync(path('violations.jsonl'), JSON.stringify({ reason: 'Side writing must open a tool-free session' }) + '\n')
+   reply({ id: frame.id, result: { sessionId: 'side-writing-session', models: catalog } })
+  } else if (frame.method === 'session/set_model') {
+   reply({ id: frame.id, result: { _meta: { model: { Ok: p.modelId } } } })
+   reply({ method: '_x.ai/session_notification', params: { sessionId: p.sessionId, update: { sessionUpdate: 'model_changed', model_id: p.modelId, reasoning_effort: p._meta?.reasoningEffort } } })
+  } else if (frame.method === 'session/prompt') {
+   if (script.fail) { reply({ id: frame.id, error: { code: -32603, message: 'Scripted failure' } }); return }
+   reply({ method: 'session/update', params: { sessionId: p.sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: script.text ?? 'Fixture title' } } } })
+   reply({ id: frame.id, result: { stopReason: 'end_turn' } })
+  } else if (frame.id !== undefined) reply({ id: frame.id, error: { code: -32601, message: 'Not in this fixture' } })
+ }).on('close', () => process.exit(0))
+ // The thread agent below never starts in this process: module evaluation waits here until the call ends.
+ await new Promise(() => {})
+}
 const sessions = read('native-sessions.json', {})
 // Leader work survives proxy restart, but replies for the departed proxy are not rerouted.
 for (const session of Object.values(sessions)) delete session.promptId
 const save = () => writeFileSync(path('native-sessions.json'), JSON.stringify(sessions))
 const send = frame => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...frame }) + '\n')
 const record = frame => appendFileSync(path('requests.jsonl'), JSON.stringify(frame) + '\n')
-const catalog = { currentModelId: 'fixture-model', availableModels: [{ modelId: 'fixture-model', name: 'Fixture Grok', _meta: { supportsReasoningEffort: true, reasoningEffort: 'high', reasoningEfforts: [{ id: 'high' }] } }] }
+const defaultCatalog = { currentModelId: 'fixture-model', availableModels: [{ modelId: 'fixture-model', name: 'Fixture Grok', _meta: { supportsReasoningEffort: true, reasoningEffort: 'high', reasoningEfforts: [{ id: 'high' }] } }] }
+// script.json may carry a whole catalog, so a case can reproduce Grok's own highest-first level list.
+const catalogOf = script => script.catalog ?? defaultCatalog
 const pending = new Map(); let serial = 5000
 // Mirrors Grok 1.0.5 as probed through SessionStart hooks: _meta applies when a session starts or is
 // loaded while not resident; loading a resident session can add always-approve but never removes it.
@@ -62,12 +93,12 @@ createInterface({input:process.stdin}).on('line', line => {
   pending.delete(frame.id); return
  }
  const p = frame.params ?? {}; const script = read('script.json', {})
- if (frame.method === 'initialize') send({id:frame.id,result:{protocolVersion:script.protocolVersion ?? 1,agentCapabilities:{loadSession:true,mcpCapabilities:{http:script.browserHttp ?? true},promptCapabilities:{image:false,audio:false,embeddedContext:true}},authMethods:[{id:'cached_token'}],_meta:{agentVersion:script.cliVersion ?? '1.0.5',modelState:catalog}}})
+ if (frame.method === 'initialize') send({id:frame.id,result:{protocolVersion:script.protocolVersion ?? 1,agentCapabilities:{loadSession:true,mcpCapabilities:{http:script.browserHttp ?? true},promptCapabilities:{image:false,audio:false,embeddedContext:true}},authMethods:[{id:'cached_token'}],_meta:{agentVersion:script.cliVersion ?? '1.0.5',modelState:catalogOf(script)}}})
  else if (frame.method === 'authenticate') { if (!script.ignoreAuthenticate) send({id:frame.id,result:{}}) }
  else if (frame.method === 'session/new') {
   checkPolicy(p._meta)
   const sessionId = randomUUID(); sessions[sessionId] = {cwd:p.cwd,updates:[],permissionMode:nativeMode(p._meta)}; resident.add(sessionId); save()
-  const reply = () => send({id:frame.id,result:{sessionId,models:catalog}})
+  const reply = () => send({id:frame.id,result:{sessionId,models:catalogOf(script)}})
   if (script.delayCreate) setTimeout(reply,script.delayCreate); else reply()
  }
  else if (frame.method === 'session/load') {
@@ -79,7 +110,7 @@ createInterface({input:process.stdin}).on('line', line => {
    if (!resident.has(p.sessionId)) session.permissionMode = nativeMode(p._meta)
    else if (p._meta?.yoloMode) session.permissionMode = 'bypassPermissions'
    resident.add(p.sessionId); save()
-   send({id:frame.id,result:{models:catalog,_meta:{sessionId:p.sessionId}}})
+   send({id:frame.id,result:{models:catalogOf(script),_meta:{sessionId:p.sessionId}}})
   }
  }
  else if (frame.method === '_x.ai/session/close') {
@@ -132,7 +163,7 @@ const control = setInterval(() => {
  if (command.type === 'inherited-exit') {spawn(process.execPath,['-e','setTimeout(()=>{},1000)'],{stdio:['ignore',process.stdout,process.stderr],windowsHide:true});process.exit(0)}
  if (command.type === 'permission' || command.type === 'question') {
   const id = ++serial; pending.set(id,{kind:command.type,text:command.text})
-  if (command.type === 'permission') send({id,method:'session/request_permission',params:{sessionId:command.sessionId,toolCall:{toolCallId:String(id),title:command.text},options:[{optionId:'yes',name:'Allow once',kind:'allow_once'},{optionId:'no',name:'Deny',kind:'reject_once'}]}})
+  if (command.type === 'permission') send({id,method:'session/request_permission',params:{sessionId:command.sessionId,toolCall:{toolCallId:String(id),title:command.text,...(command.rawInput===undefined?{}:{rawInput:command.rawInput})},options:[{optionId:'yes',name:'Allow once',kind:'allow_once'},{optionId:'no',name:'Deny',kind:'reject_once'}]}})
   // 1.0.40 puts a question's own parameters straight under the underscored method; earlier clients
   // wrapped them in an envelope naming the method again. Both are the same request.
   else {

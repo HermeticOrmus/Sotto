@@ -4,7 +4,8 @@ import { join } from 'node:path'
 import { z } from 'zod'
 import type { AgentHostSnapshot } from '../../shared/agents'
 import { AtomicJsonStore } from '../storage/atomicJsonStore'
-import type { AgentHost, AgentHostCommand, AgentHostResult, AgentSkillScope, RestoredThreadHistory, ThreadHistorySource, ThreadHostEvent } from './host'
+import type { AgentHost, AgentHostCommand, AgentHostResult, AgentSkillScope, RestoredThreadHistory, ShortTextPrompt, ThreadHistorySource, ThreadHostEvent } from './host'
+import { subscribeActivitySnapshots } from './activitySnapshots'
 
 const bindingSchema = z.object({
   threadId: z.string().min(1), provider: z.string().min(1), sessionId: z.string().min(1),
@@ -178,6 +179,15 @@ export class SottoThreadHost implements AgentHost {
     return this.read(() => this.inner.refreshThread?.(binding.sessionId) ?? this.inner.snapshot())
   }
 
+  /** The adapter is asked about its own session; a thread bound to another provider is none of its business. */
+  async writeShortText(threadId: string, prompt: ShortTextPrompt, signal?: AbortSignal): Promise<string | null> {
+    if (!this.inner.writeShortText) return null
+    await this.registry.load()
+    const binding = this.registry.byThread(threadId)
+    if (!binding || binding.provider !== this.provider) return null
+    return this.inner.writeShortText(binding.sessionId, prompt, signal)
+  }
+
   /** Bindings for newly discovered threads reach disk before the coordinator can persist a reference to them. */
   private async read(source: () => Promise<AgentHostSnapshot>): Promise<AgentHostSnapshot> {
     const snapshot = this.mapSnapshot(await source())
@@ -196,6 +206,11 @@ export class SottoThreadHost implements AgentHost {
     // An event before the durable bindings are loaded would mint IDs the disk then contradicts.
     // Nothing is lost: connect and snapshot deliver the same state once loaded.
     return this.inner.subscribe(snapshot => { if (this.registry.loaded) listener(this.mapSnapshot(snapshot)) })
+  }
+  subscribeActivitySnapshots(listener: (snapshot: AgentHostSnapshot) => void): () => void {
+    return subscribeActivitySnapshots(this.inner, snapshot => {
+      if (this.registry.loaded) listener(this.mapSnapshot(snapshot))
+    })
   }
 
   /** The store answers about Sotto's thread; the adapter inside asks about its own session. */
@@ -234,8 +249,10 @@ export class SottoThreadHost implements AgentHost {
     // Persist creation identity before dispatch, including when the provider loses its acknowledgment.
     await this.registry.flush()
     const result = await this.inner.execute(translated)
+    // A settings change's snapshot crosses this boundary the way every snapshot does: under Sotto's thread IDs.
+    const mapped = result.snapshot ? { ...result, snapshot: this.mapSnapshot(result.snapshot) } : result
     await this.registry.flush()
-    return result
+    return mapped
   }
 
   observeThreads(threadIds: readonly string[]): void {

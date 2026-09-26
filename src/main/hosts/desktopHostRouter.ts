@@ -1,0 +1,211 @@
+import { agentCommandSchema, agentShell, isThreadProviderConnected, type AgentCommand, type AgentState, type AgentThreadDetail, type AgentThreadDetailUpdate, type AgentAttachmentPreviewRequest, type AgentAttachmentPreviewResult } from '../../shared/agents'
+import { clientAgentState, hostEntityKey, mapHostReferences, parseHostEntityKey } from '../../shared/clientIdentity'
+import type { ClientIdentity, HostService } from '../agents/hostService'
+import type { GitRefsPage, GitRefsRequest } from '../../shared/gitRefs'
+import type { GitChangedFiles, GitChangedFilesRequest } from '../../shared/gitChangedFiles'
+import type { GitPullRequestDetail, GitPullRequestRequest } from '../../shared/gitPullRequests'
+
+export interface DesktopHostConnection {
+  hostId: string
+  name: string
+  kind: 'local' | 'remote'
+  service: Pick<HostService, 'shell' | 'command' | 'subscribe'>
+  detail(threadId: string): AgentThreadDetail | null | Promise<AgentThreadDetail | null>
+  preview(request: AgentAttachmentPreviewRequest): AgentAttachmentPreviewResult | Promise<AgentAttachmentPreviewResult>
+  gitRefs?(request: GitRefsRequest): Promise<GitRefsPage>
+  gitChangedFiles?(request: GitChangedFilesRequest): Promise<GitChangedFiles>
+  gitPullRequest?(request: GitPullRequestRequest): Promise<GitPullRequestDetail | null>
+  observe?(threadIds: string[]): Promise<unknown>
+  subscribeDetail?(listener: (detail: AgentThreadDetailUpdate) => void): () => void
+  available?: () => boolean
+}
+
+/**
+ * The commands whose point is to move the host's selection: Later and Next go to another queued thread, a new thread or
+ * project opens, an attention item or a paused draft is taken up, a spoken request picks a thread. Selecting a thread
+ * or a project is the window's own and is handled on its own.
+ */
+const SELECTING_COMMANDS: ReadonlySet<AgentCommand['type']> = new Set(['later', 'next', 'create-thread', 'create-project', 'select-attention', 'resume-draft', 'utterance'])
+
+/** Routing happens in main, before host-local IDs or privileged command schemas are decoded. */
+export class DesktopHostRouter {
+  private readonly hosts = new Map<string, { connection: DesktopHostConnection; off: (() => void)[] }>()
+  private readonly listeners = new Set<(state: AgentState) => void>()
+  private readonly detailListeners = new Set<(detail: AgentThreadDetailUpdate) => void>()
+  private selectedHostId: string | undefined
+  private selectedThreadId: string | null | undefined
+  private selectedProjectId: string | null = null
+  private notice: string | undefined
+  /** Counts the window's own selections, so a command that ends after one does not undo it. */
+  private selections = 0
+
+  constructor(private readonly empty: () => AgentState) {}
+
+  add(connection: DesktopHostConnection): void {
+    if (this.hosts.has(connection.hostId)) throw new Error('This host is already connected.')
+    const off = [connection.service.subscribe(() => this.emit())]
+    if (connection.subscribeDetail) off.push(connection.subscribeDetail(detail => {
+      const scoped = mapHostReferences(detail, id => hostEntityKey(connection.hostId, id))
+      for (const listener of this.detailListeners) listener(scoped)
+    }))
+    this.hosts.set(connection.hostId, { connection, off })
+    this.selectedHostId ??= connection.hostId
+    this.emit()
+  }
+  remove(hostId: string): void {
+    this.hosts.get(hostId)?.off.forEach(off => off())
+    this.hosts.delete(hostId)
+    if (this.selectedHostId === hostId) this.selectedHostId = this.hosts.keys().next().value
+    if (this.selectedThreadId && parseHostEntityKey(this.selectedThreadId)?.hostId === hostId) this.selectedThreadId = null
+    this.emit()
+  }
+  select(hostId: string): void {
+    if (!this.hosts.has(hostId)) throw new Error('Connect this host before selecting it.')
+    this.selectedHostId = hostId; this.selectedThreadId = null; this.selectedProjectId = null; this.selections++; this.emit()
+  }
+  /** A saved host was renamed: its threads and badges take the new name at once. */
+  rename(hostId: string, name: string): void {
+    const entry = this.hosts.get(hostId)
+    if (!entry) return
+    entry.connection = { ...entry.connection, name }
+    this.emit()
+  }
+  subscribe(listener: (state: AgentState) => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener) }
+  subscribeThreadDetail(listener: (detail: AgentThreadDetailUpdate) => void): () => void { this.detailListeners.add(listener); return () => this.detailListeners.delete(listener) }
+  get(): AgentState { return this.shell() }
+  shell(): AgentState {
+    const entries = [...this.hosts.values()].map(({ connection }) => {
+      const original = connection.service.shell()
+      return { connection, original, state: clientAgentState(original) }
+    })
+    const base = entries.find(item => item.connection.hostId === this.selectedHostId)?.state ?? this.empty()
+    const multiple = entries.length > 1
+    const threads = entries.flatMap(({ connection, original, state }) => state.host.threads.map((thread, index) => ({
+      ...thread, hostId: connection.hostId, hostLabel: multiple ? connection.name : undefined, remoteHost: connection.kind === 'remote',
+      clientConnected: connection.available?.() !== false && isThreadProviderConnected(original.host, original.host.threads[index]!),
+    })))
+    return {
+      ...base, clientScoped: true,
+      connections: entries.map(({ connection }) => ({ hostId: connection.hostId, name: connection.name, kind: connection.kind, connected: connection.available?.() !== false })),
+      host: { ...base.host, connected: threads.some(thread => thread.clientConnected) || entries.some(item => item.state.host.connected),
+        projects: entries.flatMap(item => item.state.host.projects), threads,
+        // The selected host's catalog is the same array as `host.models`, which structured clone sends once:
+        // a copy here would put every model on the wire twice with each publish.
+        clientHosts: entries.map(({ connection, original, state }) => ({ hostId: connection.hostId,
+          connected: connection.available?.() !== false && original.host.connected,
+          models: state.host.models, capabilities: original.host.capabilities,
+          ...(original.host.providers ? { providers: original.host.providers } : {}),
+        })),
+      },
+      assignments: entries.flatMap(item => item.state.assignments), queue: entries.flatMap(item => item.state.queue),
+      threadDrafts: entries.flatMap(item => item.state.threadDrafts ?? []),
+      threadDraftPersistence: entries.flatMap(item => item.state.threadDraftPersistence ?? []),
+      deliveries: entries.flatMap(item => item.state.deliveries ?? []), followups: entries.flatMap(item => item.state.followups ?? []),
+      busyThreadIds: entries.flatMap(item => item.state.busyThreadIds ?? []),
+      ...(entries.some(item => item.state.unconfirmedSettings?.length) ? { unconfirmedSettings: entries.flatMap(item => item.state.unconfirmedSettings ?? []) } : {}),
+      activeThreadId: this.selectedThreadId === undefined ? base.activeThreadId : this.selectedThreadId,
+      activeProjectId: this.selectedProjectId ?? base.activeProjectId,
+      ...(this.notice ? { error: this.notice } : {}),
+    }
+  }
+  private target(id?: string): { connection: DesktopHostConnection; id: string | undefined } {
+    const key = id ? parseHostEntityKey(id) : null
+    const hostId = key?.hostId ?? this.selectedHostId
+    const entry = hostId ? this.hosts.get(hostId) : undefined
+    if (!entry) throw new Error('Connect a host in Settings > Hosts to continue.')
+    return { connection: entry.connection, id: key?.id ?? id }
+  }
+  async threadDetail(threadId: string): Promise<AgentThreadDetail | null> {
+    const { connection, id } = this.target(threadId)
+    const detail = await connection.detail(id!)
+    return detail ? mapHostReferences(detail, value => hostEntityKey(connection.hostId, value)) : null
+  }
+  async attachmentPreview(request: AgentAttachmentPreviewRequest): Promise<AgentAttachmentPreviewResult> {
+    const { connection, id } = this.target(request.threadId)
+    return connection.preview({ ...request, threadId: id! })
+  }
+  async gitRefs(request: GitRefsRequest): Promise<GitRefsPage> {
+    const { connection, id } = this.target(request.threadId)
+    if (!connection.gitRefs) throw new Error('Branches are unavailable on this host.')
+    if (connection.available?.() === false) throw new Error('This host is disconnected. Connect again to read its branches.')
+    return connection.gitRefs({ ...request, threadId: id! })
+  }
+  async gitChangedFiles(request: GitChangedFilesRequest): Promise<GitChangedFiles> {
+    const { connection, id } = this.target(request.threadId)
+    if (!connection.gitChangedFiles) throw new Error('Changed files are unavailable on this host.')
+    if (connection.available?.() === false) throw new Error('This host is disconnected. Connect again to read its changes.')
+    return connection.gitChangedFiles({ ...request, threadId: id! })
+  }
+  async gitPullRequest(request: GitPullRequestRequest): Promise<GitPullRequestDetail | null> {
+    const { connection, id } = this.target(request.threadId)
+    if (!connection.gitPullRequest) throw new Error('Pull requests are unavailable on this host.')
+    if (connection.available?.() === false) throw new Error('This host is disconnected. Connect again to read its pull requests.')
+    return connection.gitPullRequest({ ...request, threadId: id! })
+  }
+  async command(input: unknown, client: ClientIdentity): Promise<AgentState> {
+    this.notice = undefined
+    const references = new Set<string>()
+    mapHostReferences(input, value => { const key = parseHostEntityKey(value); if (key) references.add(key.hostId); return value })
+    const type = input && typeof input === 'object' && 'type' in input ? input.type : undefined
+    if (type === 'observe-threads') {
+      const parsed = agentCommandSchema.parse(mapHostReferences(input, id => parseHostEntityKey(id)?.id ?? id))
+      if (parsed.type !== 'observe-threads') throw new Error('The viewed threads could not be read.')
+      const rawIds = (input as { threadIds: string[] }).threadIds
+      await Promise.all([...this.hosts.values()].map(async ({ connection }) => {
+        if (connection.available?.() === false) return
+        const ids = rawIds.filter(id => (parseHostEntityKey(id)?.hostId ?? this.selectedHostId) === connection.hostId).map(id => parseHostEntityKey(id)?.id ?? id)
+        if (connection.observe) await connection.observe(ids)
+        else await connection.service.command({ type: 'observe-threads', threadIds: ids }, client)
+      }))
+      return this.shell()
+    }
+    if (references.size > 1) throw new Error('This action includes items from different hosts. Select items from one host.')
+    const hostId = [...references][0] ?? this.selectedHostId
+    const { connection } = this.target(hostId ? hostEntityKey(hostId, '_') : undefined)
+    const command = agentCommandSchema.parse(mapHostReferences(input, id => parseHostEntityKey(id)?.id ?? id))
+    if (command.type === 'select-thread' || command.type === 'select-project') {
+      this.selectedHostId = connection.hostId; this.selections++
+      if (command.type === 'select-thread') {
+        this.selectedThreadId = command.threadId ? hostEntityKey(connection.hostId, command.threadId) : null
+        this.selectedProjectId = this.shell().host.threads.find(thread => thread.id === this.selectedThreadId)?.projectId ?? null
+      } else {
+        this.selectedProjectId = command.projectId ? hostEntityKey(connection.hostId, command.projectId) : null; this.selectedThreadId = null
+      }
+      // The window's selection is client-local, but the owning host keeps its own active thread:
+      // without the forward, compose and send would still target the previous one.
+      if (connection.available?.() !== false) {
+        const result = await connection.service.command(command, client)
+        if (result.error) this.notice = result.error
+      }
+      this.emit(); return this.shell()
+    }
+    if (connection.available?.() === false) throw new Error('This host is disconnected. Connect again before sending. No command was sent.')
+    if (connection.kind === 'remote' && ['open-thread-folder', 'open-folder'].includes(command.type)) throw new Error('This folder is on the host machine. Open it there.')
+    // Read as values: a host's shell can be its live state, which the command is about to change.
+    const { activeThreadId, activeProjectId } = connection.service.shell()
+    const selections = this.selections
+    try {
+      const result = await connection.service.command(command as AgentCommand, client)
+      if (result.error) this.notice = result.error
+    } finally {
+      if (SELECTING_COMMANDS.has(command.type) && selections === this.selections) this.follow(connection, { activeThreadId, activeProjectId })
+    }
+    this.emit()
+    return agentShell(this.shell())
+  }
+  /**
+   * The window goes where one of its selecting commands took the host, so the thread it shows is the one the host
+   * composes and sends to. It does not follow a move it did not ask for: another thread's turn ending, another
+   * client's selection, or the host presenting its next queued thread after an answer. A selection the user made
+   * while the command ran wins over the command.
+   */
+  private follow(connection: DesktopHostConnection, before: Pick<AgentState, 'activeThreadId' | 'activeProjectId'>): void {
+    const after = connection.service.shell()
+    if (after.activeThreadId === before.activeThreadId && after.activeProjectId === before.activeProjectId) return
+    this.selectedHostId = connection.hostId
+    this.selectedThreadId = after.activeThreadId === null ? null : hostEntityKey(connection.hostId, after.activeThreadId)
+    this.selectedProjectId = after.activeProjectId === null ? null : hostEntityKey(connection.hostId, after.activeProjectId)
+  }
+  private emit(): void { const state = this.shell(); for (const listener of this.listeners) listener(state) }
+  dispose(): void { for (const hostId of [...this.hosts.keys()]) this.remove(hostId); this.listeners.clear(); this.detailListeners.clear() }
+}

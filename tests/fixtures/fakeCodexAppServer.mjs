@@ -38,6 +38,29 @@ const responseChecks = {
 const directory = process.env.SOTTO_FAKE_CODEX_DIR ?? process.argv[2]
 const file = name => join(directory, name)
 const read = (name, fallback) => { try { return JSON.parse(readFileSync(file(name), 'utf8')) } catch { return fallback } }
+// Sotto's side writing (ADR-0026): `codex exec --ephemeral`, prompt on stdin, JSONL events out. It records
+// what it was given in oneshot.jsonl, never in requests.jsonl or state.json, and answers from oneshot.json.
+if (process.argv.includes('exec')) {
+  const args = process.argv.slice(process.argv.indexOf('exec') + 1)
+  const input = await new Promise(resolve => { let text = ''; process.stdin.setEncoding('utf8'); process.stdin.on('data', chunk => { text += chunk }); process.stdin.on('end', () => resolve(text)) })
+  const script = read('oneshot.json', {})
+  appendFileSync(file('oneshot.jsonl'), JSON.stringify({ args, cwd: process.cwd(), input }) + '\n')
+  const flag = name => args[args.indexOf(name) + 1]
+  const isolated = ['features.shell_tool=false', 'orchestrator.skills.enabled=false', 'orchestrator.mcp.enabled=false', 'mcp_servers={}', 'notify=[]'].every(value => args.includes(value))
+  if (!args.includes('--ephemeral') || flag('--sandbox') !== 'read-only' || !isolated || args.at(-1) !== '-') {
+    appendFileSync(file('violations.jsonl'), JSON.stringify({ method: 'exec', reason: 'Side writing must be ephemeral, read-only, tool-free and read its prompt from stdin' }) + '\n')
+  }
+  const line = event => process.stdout.write(JSON.stringify(event) + '\n')
+  line({ type: 'thread.started', thread_id: randomUUID() })
+  // Codex says its own warnings as `error` items before the turn; they are not tools and stop nothing.
+  line({ type: 'item.completed', item: { id: 'item_w', type: 'error', message: 'Model metadata for `fixture-model` not found.' } })
+  line({ type: 'turn.started' })
+  if (script.tool) line({ type: 'item.started', item: { id: 'item_0', type: 'command_execution', command: 'ls' } })
+  if (script.fail) { line({ type: 'turn.failed', error: { message: 'Scripted failure' } }); process.exit(1) }
+  line({ type: 'item.completed', item: { id: 'item_1', type: 'agent_message', text: script.text ?? 'Fixture title' } })
+  line({ type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } })
+  process.exit(0)
+}
 const state = read('state.json', { threads: {} })
 const loadedThreads = new Set()
 const save = () => { writeFileSync(file('state.tmp'), JSON.stringify(state)); renameSync(file('state.tmp'), file('state.json')) }
@@ -103,11 +126,17 @@ createInterface({ input: process.stdin }).on('line', line => {
   if (method === 'skills/list' && script.skillsMalformed) { reply({ data: null }); return }
   if (script.reject === method) { delete script.reject; writeFileSync(file('script.json'), JSON.stringify(script)); setTimeout(() => emit({ id, error: script.rejection ?? { code: -32000, message: 'Synthetic rejection' } }), delay); return }
   if (method === 'skills/list') { reply({ data: params.cwds.map(cwd => ({ cwd, skills: script.skills ?? [], errors: script.skillErrors ?? [] })) }); return }
+  if (method === 'config/read') {
+    reply(script.configReadMalformed ? { config: null, origins: {}, layers: null }
+      : { config: { developer_instructions: script.developerInstructions ?? null }, origins: {}, layers: null })
+    return
+  }
   if (method === 'initialize') reply({ userAgent: 'codex/0.154.0', codexHome: process.env.CODEX_HOME, platformFamily: 'windows', platformOs: 'windows' })
   else if (method === 'model/list') reply(script.modelPages?.[params.cursor ?? 'first'] ?? { data: script.models ?? [{ id: 'model', model: 'fixture-model', displayName: 'Fixture Codex', isDefault: true,
     defaultReasoningEffort: 'low', supportedReasoningEfforts: [{ reasoningEffort: 'low' }, { reasoningEffort: 'high' }] }], nextCursor: null })
   else if (method === 'thread/start') {
     const thread = { id: randomUUID(), cwd: params.cwd, model: params.model, createdAt: Math.floor(Date.now() / 1000), status: { type: 'idle' }, turns: [],
+      defaultModeRequestUserInput: params.config?.['features.default_mode_request_user_input'] === true,
       approvalPolicy: params.approvalPolicy, approvalsReviewer: params.approvalsReviewer, sandbox: params.sandbox, reasoningEffort: params.config?.model_reasoning_effort ?? 'low' }
     state.threads[thread.id] = thread
     loadedThreads.add(thread.id)
@@ -128,6 +157,7 @@ createInterface({ input: process.stdin }).on('line', line => {
       if (method === 'thread/resume' && !loadedThreads.has(thread.id)) {
         for (const key of ['model', 'approvalPolicy', 'approvalsReviewer', 'sandbox']) if (params[key] !== undefined) thread[key] = params[key]
         if (params.config && 'model_reasoning_effort' in params.config) thread.reasoningEffort = params.config.model_reasoning_effort ?? 'low'
+        if (params.config && 'features.default_mode_request_user_input' in params.config) thread.defaultModeRequestUserInput = params.config['features.default_mode_request_user_input'] === true
         loadedThreads.add(thread.id)
         save()
       }
@@ -180,6 +210,10 @@ createInterface({ input: process.stdin }).on('line', line => {
       notify('item/completed', { threadId: thread.id, turnId: turn.id, item })
     }
     reply({ turn })
+    // The installed Codex client gates request_user_input in Default mode behind this feature.
+    // Its request is non-blocking there, so the turn remains active while Sotto shows the question.
+    if (script.questionWhenAvailable && thread.defaultModeRequestUserInput) raise(thread, 'question', script.questionWhenAvailable,
+      'item/tool/requestUserInput', { isBlocking: false, ...script.questionParams })
     if (script.question) raise(thread, 'question', script.question)
     if (script.permission) raise(thread, 'permission', script.permission)
     if (script.reply || script.fail) complete(thread, script.reply ?? 'Failed', script.fail ? 'failed' : 'completed')

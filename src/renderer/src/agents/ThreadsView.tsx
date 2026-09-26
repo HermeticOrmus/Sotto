@@ -20,7 +20,7 @@ import { SidebarChromeProvider, useSidebarMode } from './SidebarFrame'
 import { useShared } from './stateSharing'
 import { takeNewThreadIntent } from './threadIntent'
 import { TerminalWorkspace, type TerminalWorkspaceProps } from '../terminals/TerminalWorkspace'
-import { isSplit, prune, retarget, setFocused, splitLayoutStore, threadPromptId, useSplitLayout, type SplitLayoutStore } from './splitLayout'
+import { qualifyLegacyLayout, isSplit, prune, retarget, setFocused, splitLayoutStore, threadPromptId, useSplitLayout, type SplitLayoutStore } from './splitLayout'
 
 type Command = AgentConnection['command']
 
@@ -56,8 +56,8 @@ export interface ThreadsViewProps {
   readonly tools?: ThreadToolsSlot | undefined
   /** Once, at the end of the focused pane's header actions (the tools panel's toggle). */
   readonly focusedPaneActions?: ReactNode
-  /** In each pane's header, after the project title. */
-  readonly paneCrumb?: ThreadPaneSlot | undefined
+  /** The working-copy control in each pane's header, after the project title. */
+  readonly paneWorkingCopy?: ThreadPaneSlot | undefined
   /** In each pane, directly above its composer. */
   readonly paneNotice?: ThreadPaneSlot | undefined
   /**
@@ -72,7 +72,7 @@ export interface ThreadsViewProps {
   readonly paneAreaWidth?: number | undefined
   readonly paneAreaHeight?: number | undefined
 }
-export function ThreadsView({ onOpenAgents, now: fixedNow, updateControl, tools, focusedPaneActions, paneCrumb, paneNotice, onPaneThreadsChange, layoutStore = splitLayoutStore, terminals, paneAreaWidth, paneAreaHeight }: ThreadsViewProps): ReactNode {
+export function ThreadsView({ onOpenAgents, now: fixedNow, updateControl, tools, focusedPaneActions, paneWorkingCopy, paneNotice, onPaneThreadsChange, layoutStore = splitLayoutStore, terminals, paneAreaWidth, paneAreaHeight }: ThreadsViewProps): ReactNode {
   const agents = useAgents()
   const app = useOptionalApp()
   // Voice is hidden for the beta, and the Agents room is a voice surface: without it the page offers only a new thread.
@@ -104,7 +104,9 @@ export function ThreadsView({ onOpenAgents, now: fixedNow, updateControl, tools,
   const rowsById = useMemo(() => new Map(rows.map(row => [row.thread.id, row] as const)), [rows])
   const labels = useShared(useMemo(() => new Map<string, PaneLabel>(rows.map(row => [row.thread.id, { title: row.thread.title, providerId: row.providerId, provider: row.provider }] as const)), [rows]))
   const organization = useShared(useMemo(() => state === null ? { open: [], settled: [], matching: 0 } : organizeWorkspace(state, rows, query, state.activeProjectId), [state, rows, query]))
-  const stored = useSplitLayout(layoutStore)
+  const originalStored = useSplitLayout(layoutStore)
+  const stored = useMemo(() => qualifyLegacyLayout(originalStored, state?.hostId), [originalStored, state?.hostId])
+  useEffect(() => { if (stored !== originalStored) layoutStore.set(stored) }, [stored, originalStored, layoutStore])
   const activeId = state?.activeThreadId != null && rowsById.has(state.activeThreadId) ? state.activeThreadId : null
   const pendingFocus = pending?.threadId ?? null
   const focusedId = pendingFocus !== null && rowsById.has(pendingFocus) ? pendingFocus : activeId
@@ -195,7 +197,7 @@ export function ThreadsView({ onOpenAgents, now: fixedNow, updateControl, tools,
     return <ThreadPane row={row} state={state} command={command} store={store} focused={focused}
       promptId={split ? threadPromptId(threadId) : THREAD_PROMPT_ID} error={focused ? error : null} onOpenThread={openThread}
       onFocusPane={() => focusPane(threadId)} onOpenBeside={() => openBeside(threadId)} now={fixedNow}
-      crumb={paneCrumb?.(slot)} notice={paneNotice?.(slot)} actions={focused ? focusedPaneActions : undefined} />
+      workingCopy={paneWorkingCopy?.(slot)} notice={paneNotice?.(slot)} actions={focused ? focusedPaneActions : undefined} />
   }
 
   return <SidebarChromeProvider updateControl={updateControl}><div className={page} onKeyDown={grid.onKeyDown}>

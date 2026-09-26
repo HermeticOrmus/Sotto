@@ -5,9 +5,9 @@ Sotto is an Electron desktop app: a dictation tool that is becoming a voice deve
 ## What Sotto is
 
 - **Private.** No analytics, no crash upload, no account. Dictation audio is never written to disk. Prompt text, transcripts, provider protocol bodies and keys never reach a log; adapters log stable event names only. The hosts Sotto contacts are the ones the README's "Privacy and cost" section names, each there for something the user asked for. A feature that would add a host, or send what the user said anywhere for any other reason, is an ADR and a README change before it is a patch.
-- **The user answers every permission.** Authority lives only in policy records (ADR-0004). A memory, a repetition, an import or a provider's own confirmation is evidence, never a grant, and supervision may send follow-ups within its limits but approves nothing. A feature that would answer a request on the user's behalf is an ADR before it is a branch.
+- **The user answers every permission.** Authority lives only in policy records (ADR-0004). A memory, a repetition, an import or a provider's own confirmation is evidence, never a grant, and supervision may send follow-ups within its limits but approves nothing. A feature that would answer a request on the user's behalf is an ADR before it is a branch. The one standing exception is ADR-0029: by default a thread may open, navigate, click and type in Sotto's own browser without asking, until the user stops it for that thread or turns it off in Settings.
 - **Threads are Sotto's.** Everything outside a provider adapter addresses a thread by its Sotto thread ID (ADR-0002). When you need the provider's own identifier, ask the adapter that owns it.
-- **One key.** Main holds the OpenRouter key in the credential store (the `formatting` slot) and hands back only results. It pays for transcription, cleanup, the writing model and OpenRouter-hosted reasoning (ADR-0006). Asking for a second key is a product decision, the way the xAI reply voice got one.
+- **One key.** Main holds the OpenRouter key in the credential store (the `formatting` slot) and hands back only results. It pays for transcription, cleanup and OpenRouter-hosted reasoning (ADR-0006). Thread titles, branch names and commit and pull request drafts are not on it: each is a side call to the thread's own provider (ADR-0026). Asking for a second key is a product decision, the way the xAI reply voice got one.
 - **Plain words.** A control's name says what a press does. An error says what happened, whether anything was lost and what to do next. Nothing announces itself unasked. Write UI copy and docs the way `CONTEXT.md` and `README.md` are written: short sentences, the glossary's nouns, no marketing, no error codes.
 - **Windows first, Apple silicon macOS second.** CI, the design captures and the release procedure are built around those two. A third platform is unbudgeted rather than forbidden. It needs an ADR covering the release path, the runtime manifest and the design gate before a target goes into `electron-builder.yml`.
 
@@ -15,7 +15,7 @@ Sotto is an Electron desktop app: a dictation tool that is becoming a voice deve
 
 - `CONTEXT.md` is the glossary and the nearest thing to a description of how Sotto thinks. Write in its terms. When the work gives Sotto an idea it has no word for, coin one and add the entry in the same PR; reusing a word that already means something else is the failure this rule exists to prevent.
 - `docs/adr/` records decisions. Read the ones that touch your area before changing it. When a change contradicts one, say so in the PR and amend or supersede the ADR. `docs/agents/domain.md` has the rules.
-- For anything a user sees, `README.md`. For threads and the coordinator, `docs/agent-control.md`.
+- For anything a user sees, `README.md` for the overview and `docs/guide.md` for the detail. For threads and the coordinator, `docs/agent-control.md`.
 
 ## Where things are
 
@@ -23,6 +23,7 @@ Only what the tree does not say for itself.
 
 - `src/main/agents/` is the coordinator (`control.ts`) and the three provider adapters (`claude.ts`, `codex.ts`, `grok.ts`). `src/main/ipc/registerIpc.ts` registers every channel.
 - `src/renderer/src/agents/` is the Threads page: panes, composer, sidebar, pickers. `features/` holds the other pages, `state/` the app context and hooks, `widget/` the floating widget's own renderer.
+- `src/host/` is the headless host entry, its socket server and the remote command allow-list. It runs under plain Node, is built on its own by `scripts/build-host.mjs`, and must never import Electron. `src/main/hosts/` is the desktop's side of remote hosts: saved hosts, the SSH launcher, the launch script it runs on the host machine, and the router that joins every connected host's threads.
 - `apps/ios/` is the native iPhone client: a SwiftUI app and a SottoCore Swift package with its own XCTest suite, outside npm. Only the macOS CI job compiles it, and it speaks host protocol version 1 and nothing else from the desktop.
 - `src/shared/` is what both processes use: types, zod schemas, `settings.ts`, `channels.ts`, `themes/`. The renderer reaches main only through `src/preload/` (`window.sotto`).
 - Tests live under `tests/`, never in `src/`: `unit/` mirrored by source area, `integration/` over real child processes and the fake providers in `fixtures/`, `e2e/` Playwright specs that launch the built app locally, `perf/` benchmarks. Every adapter passes `tests/integration/adapterContract.ts`.
@@ -66,7 +67,7 @@ npm run notices:verify
 
 Then the Playwright specs that touch the changed surface (`npm run build && npx playwright test tests/e2e/<spec>`), and a two-axis review of the diff: once for standards against this file, once for spec against the issue. The `/code-review` skill does both where it is available. Fix every finding you can and name the ones you could not.
 
-These documents are how Sotto remembers itself, so a change that makes one wrong fixes it in the same PR: `CONTEXT.md` when a term is new or has moved, an ADR when you decided something rather than followed something, `README.md` for anything a user sees, `docs/ci.md` for a gate, and a note in `docs/verification/` with its screenshots in `artifacts/<slug>/` when you proved the work in the running app.
+These documents are how Sotto remembers itself, so a change that makes one wrong fixes it in the same PR: `CONTEXT.md` when a term is new or has moved, an ADR when you decided something rather than followed something, `README.md` and `docs/guide.md` for anything a user sees, `docs/ci.md` for a gate, and a note in `docs/verification/` with its screenshots in `artifacts/<slug>/` when you proved the work in the running app.
 
 ## Commits
 
@@ -79,6 +80,7 @@ These documents are how Sotto remembers itself, so a change that makes one wrong
 - Branch from `main` as `feat/`, `fix/`, `chore/`, `perf/`, `test/` or `prototype/` plus a short slug (`fix/ci-fixture-deadlines`). One PR closes one issue or one explicit batch of issues.
 - Title: the commit subject, or one sentence covering the batch. Body: the template in `docs/agents/pull-requests.md`.
 - CI (`Gates (Windows)`) is green before merge, and a red gate is fixed at its cause. Merges into `main` are merge commits; release commits are `Release X.Y.Z` on `main`.
+- Once the PR merges, delete its branch on GitHub (`git push origin --delete <branch>`). Its commits are in `main` and the PR keeps the history; a branch with work `main` does not have stays.
 
 ## Issues and releases
 

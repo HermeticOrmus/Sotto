@@ -1,3 +1,7 @@
+import { HOSTS_GET, HOSTS_COMMAND, HOSTS_CHANGED, HOSTS_SSH_SUGGESTIONS, hostsCommandSchema, type HostsState, type SshHostSuggestion } from '../shared/hosts'
+import { mapHostReferences, parseHostEntityKey } from '../shared/clientIdentity'
+
+import { hostClientBridge } from './hostClientBridge'
 import { PERSONAL_CHAT_GET, PERSONAL_CHAT_COMMAND, PERSONAL_CHAT_SKILLS, PERSONAL_CHAT_STATE, personalChatStateSchema, personalChatCommandSchema, personalSkillsInputSchema, type PersonalChatBridge, type PersonalChatCommand } from '../shared/personalChats'
 import { REQUEST_DRAFT_GET, REQUEST_DRAFT_SAVE, REQUEST_DRAFT_CHECK, REQUEST_DRAFT_LIST, REQUEST_DRAFT_DISCARD, requestDraftSchema, requestDraftTargetSchema, requestDraftOwnerSchema, requestDraftDiscardSchema, type RequestDraftBridge } from '../shared/requestDrafts'
 import { agentSkillCatalogSchema } from '../shared/agentSkills'
@@ -9,6 +13,9 @@ import { createTerminalWorkspaceBridge } from './terminals'
 import { createThemesBridge } from './themes'
 import { FILES_LIST, FILES_PREVIEW, FILES_COPY_PATH, FILES_REVEAL, fileListRequestSchema, fileRequestSchema, fileListingSchema, filePreviewSchema, filePathSchema, filesResultSchema, type FilesBridge } from '../shared/files'
 import { AGENT_CHOOSE_PROJECT_DIRECTORY, AGENT_WORKING_COPY_OPTIONS, agentWorkingCopyOptionsSchema, agentWorkingCopyOptionsRequestSchema } from '../shared/agents'
+import { AGENT_GIT_REFS, gitRefsPageSchema, gitRefsRequestSchema } from '../shared/gitRefs'
+import { AGENT_GIT_CHANGED_FILES, gitChangedFilesRequestSchema, gitChangedFilesSchema } from '../shared/gitChangedFiles'
+import { AGENT_GIT_PULL_REQUEST, gitPullRequestRequestSchema, gitPullRequestResultSchema } from '../shared/gitPullRequests'
 import { z } from 'zod'
 import { externalLinkSchema } from '../shared/externalLinks'
 import { MEMORY_GET, MEMORY_COMMAND, MEMORY_CHANGED, memorySnapshotSchema, memoryCommandSchema, type MemoryBridge } from '../shared/memory'
@@ -233,6 +240,11 @@ function createPersonalChatBridge(renderer: IpcRendererAdapter): PersonalChatBri
   })
 }
 
+function validatedRoutedCommand(command: import('../shared/agents').AgentCommand): import('../shared/agents').AgentCommand {
+  agentCommandSchema.parse(mapHostReferences(command, id => parseHostEntityKey(id)?.id ?? id))
+  return command
+}
+
 function createAgentBridge(renderer: IpcRendererAdapter, role: 'main' | 'widget'): import('../shared/agents').AgentBridge {
   return Object.freeze({
     get: () => invokeParsed(renderer, AGENT_GET, agentStateSchema),
@@ -241,6 +253,9 @@ function createAgentBridge(renderer: IpcRendererAdapter, role: 'main' | 'widget'
     ...(role === 'main' ? {
     chooseProjectDirectory: () => invokeParsed(renderer, AGENT_CHOOSE_PROJECT_DIRECTORY, z.string().min(1).max(4_096).nullable()),
     workingCopyOptions: (projectId: string) => invokeParsed(renderer, AGENT_WORKING_COPY_OPTIONS, agentWorkingCopyOptionsSchema, agentWorkingCopyOptionsRequestSchema.parse(projectId)),
+    gitRefs: (request: import('../shared/gitRefs').GitRefsRequest) => invokeParsed(renderer, AGENT_GIT_REFS, gitRefsPageSchema, gitRefsRequestSchema.parse(request)),
+    gitChangedFiles: (request: import('../shared/gitChangedFiles').GitChangedFilesRequest) => invokeParsed(renderer, AGENT_GIT_CHANGED_FILES, gitChangedFilesSchema, gitChangedFilesRequestSchema.parse(request)),
+    gitPullRequest: (request: import('../shared/gitPullRequests').GitPullRequestRequest) => invokeParsed(renderer, AGENT_GIT_PULL_REQUEST, gitPullRequestResultSchema, gitPullRequestRequestSchema.parse(request)),
     synthesizeSpeech: (text: string) => invokeParsed(renderer, AGENT_SPEECH, agentSpeechSchema, text),
     cancelSpeech: () => invokeParsed(renderer, AGENT_SPEECH_CANCEL, voidSchema),
     grokVoices: () => invokeParsed(renderer, AGENT_GROK_VOICES, agentSpeechVoicesSchema),
@@ -254,9 +269,14 @@ function createAgentBridge(renderer: IpcRendererAdapter, role: 'main' | 'widget'
     onThreadDetail: (listener: (update: import('../shared/agents').AgentThreadDetailUpdate) => void) => subscribe(renderer, AGENT_THREAD_DETAIL,
       trustedState<import('../shared/agents').AgentThreadDetailUpdate>('threadId'), listener),
     } : {}),
-    command: (command: import('../shared/agents').AgentCommand) => invokeParsed(renderer, AGENT_COMMAND, agentStateSchema, agentCommandSchema.parse(command)),
+    command: (command: import('../shared/agents').AgentCommand) => invokeParsed(renderer, AGENT_COMMAND, agentStateSchema, validatedRoutedCommand(command)),
+    // The broadcast may omit a model catalog this window already has (issue #286), coded as
+    // AgentStateBroadcast rather than AgentState. This crosses to the page unreassembled on purpose:
+    // contextBridge copies whatever a listener is called with back across the isolated-world boundary,
+    // so putting the catalog back here would clone it again on the way out, defeating most of what
+    // omitting it saved. The page puts it back; see src/renderer/src/agents/agentStateCatalogs.ts.
     onState: (listener: (state: import('../shared/agents').AgentState) => void) => subscribe(renderer, AGENT_STATE,
-      trustedState<import('../shared/agents').AgentState>('host'), listener),
+      trustedState<Record<string, unknown>>('host'), raw => listener(raw as import('../shared/agents').AgentState)),
   })
 }
 
@@ -289,6 +309,7 @@ export function createSottoBridge(
     1,
   )
   const bridge: SottoBridge = {
+    hosts: Object.freeze<import('../shared/hosts').HostsBridge>({ get: () => renderer.invoke(HOSTS_GET) as Promise<HostsState>, command: command => renderer.invoke(HOSTS_COMMAND, hostsCommandSchema.parse(command)) as Promise<HostsState>, onChanged: listener => subscribe(renderer, HOSTS_CHANGED, trustedState<HostsState>('hosts'), listener), sshSuggestions: () => renderer.invoke(HOSTS_SSH_SUGGESTIONS) as Promise<SshHostSuggestion[]> }),
     ...createToolsBridges(renderer),
     terminals: createTerminalWorkspaceBridge(renderer),
     themes: createThemesBridge(renderer),
@@ -378,7 +399,7 @@ export function createSottoBridge(
     onWindowMaximized: listener => subscribe(renderer, APP_MAXIMIZED, z.boolean(), listener),
     quitApp: () => invokeParsed(renderer, APP_QUIT, voidSchema),
   }
-  return Object.freeze(bridge)
+  return hostClientBridge(bridge)
 }
 
 export function createSottoWidgetBridge(
@@ -480,7 +501,13 @@ export function exposeE2EBridge(
   if (!scenario.success) return
   const bridge: SottoE2EBridge = Object.freeze({
     browserAgent: (request: Parameters<NonNullable<SottoE2EBridge['browserAgent']>>[0]) => invokeParsed(renderer, E2E_BROWSER_AGENT_CHANNEL, e2eBrowserAgentResultSchema, e2eBrowserAgentSchema.parse(request)),
-    agentEvent: (event: Parameters<NonNullable<SottoE2EBridge['agentEvent']>>[0]) => invokeParsed(renderer, AGENT_E2E, voidSchema, event),
+    agentEvent: async (event: Parameters<NonNullable<SottoE2EBridge['agentEvent']>>[0]) => {
+      const key = parseHostEntityKey(event.threadId)
+      if (key === null) return invokeParsed(renderer, AGENT_E2E, voidSchema, event)
+      const state = await invokeParsed(renderer, AGENT_GET, agentStateSchema)
+      if (key.hostId !== (state.hostId ?? state.host.hostId)) throw new Error('This test event belongs to another host.')
+      return invokeParsed(renderer, AGENT_E2E, voidSchema, { ...event, threadId: key.id })
+    },
     scenario: scenario.data,
     snapshot: () => invokeParsed(renderer, E2E_SNAPSHOT_CHANNEL, e2eSnapshotSchema),
     triggerShortcut: () => invokeParsed(renderer, E2E_TRIGGER_SHORTCUT_CHANNEL, voidSchema),

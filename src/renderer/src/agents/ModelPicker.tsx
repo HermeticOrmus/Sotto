@@ -1,7 +1,9 @@
 import React, { useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Check, ChevronDown, Search, X } from 'lucide-react'
 import type { AgentModel } from '../../../shared/agents'
+import { catalogEntry, resolveModel } from '../../../shared/modelCatalog'
 import { moveListboxFocus } from './listboxKeys'
+import { OPTION_CHIP_NAMES } from './optionChipNames'
 import { ProviderMark } from './ProviderMark'
 import './threadChips.css'
 import './modelPicker.css'
@@ -31,14 +33,16 @@ export function newestModelsFirst(models: readonly AgentModel[]): AgentModel[] {
  * names, so the menu costs the same whatever a provider is called; the name is the tile's accessible name
  * and its tooltip. On the right the chosen provider's models under a search line, with `note` beneath them
  * -- the reminder that a new thread may still change provider, or that this one may not. A single provider
- * has no rail. Escape or a click outside closes the menu and returns focus to the chip; after a choice the
- * owner restores focus once the change is confirmed.
+ * has no rail. Escape, a click outside or a choice closes the menu and returns focus to the chip; a choice
+ * shows on the chip at once while the owner saves it.
  */
 export function ModelPicker({ models, modelId, disabled, onChange, note }: {
   readonly models: AgentModel[]; readonly modelId: string; readonly disabled: boolean; readonly onChange: (id: string) => void
   readonly note?: string | undefined
 }): ReactNode {
-  const current = models.find(model => model.id === modelId)
+  // A long-context variant the catalog does not list (`opus[1m]`) shows as its base model's entry, by that name.
+  const current = resolveModel(models, modelId)
+  const currentEntryId = catalogEntry(models, modelId)?.id
   const [open, setOpen] = useState(false)
   const [provider, setProvider] = useState('')
   const [query, setQuery] = useState('')
@@ -49,10 +53,15 @@ export function ModelPicker({ models, modelId, disabled, onChange, note }: {
   const rail = useRef<HTMLDivElement>(null)
   const dialogId = useId()
   const groups = useMemo(() => {
+    if (!open) return []
     const result = new Map<string, AgentModel[]>()
-    for (const model of models) result.set(model.provider, [...(result.get(model.provider) ?? []), model])
+    for (const model of models) {
+      const group = result.get(model.provider)
+      if (group) group.push(model)
+      else result.set(model.provider, [model])
+    }
     return [...result].map(([name, items]) => ({ name, providerId: items[0]?.providerId, models: newestModelsFirst(items) }))
-  }, [models])
+  }, [models, open])
   const selectedProvider = groups.find(group => group.name === provider) ?? groups.find(group => group.name === current?.provider) ?? groups[0]
   const filtered = selectedProvider?.models.filter(model => `${model.name} ${model.id}`.toLowerCase().includes(query.toLowerCase())) ?? []
   useLayoutEffect(() => {
@@ -79,7 +88,7 @@ export function ModelPicker({ models, modelId, disabled, onChange, note }: {
   }, [open])
   const name = current?.name ?? (modelId || 'Choose a model')
   return <div className="model-picker">
-    <button ref={trigger} type="button" className="model-picker__trigger thread-chip tt-focusable" role="combobox" aria-label="Thread model" aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? dialogId : undefined}
+    <button ref={trigger} type="button" className="model-picker__trigger thread-chip tt-focusable" role="combobox" aria-label={OPTION_CHIP_NAMES.model} aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? dialogId : undefined}
       title={name} disabled={disabled} onClick={() => { setProvider(current?.provider ?? groups[0]?.name ?? ''); setQuery(''); setOpen(true) }}>
       {current ? <ProviderMark provider={current.providerId} name={current.provider} size={13} /> : null}<span>{name}</span><ChevronDown size={12} aria-hidden="true" />
     </button>
@@ -105,8 +114,8 @@ export function ModelPicker({ models, modelId, disabled, onChange, note }: {
           <button type="button" aria-label="Close model picker" title="Close model picker" onClick={() => setOpen(false)}><X size={15} aria-hidden="true" /></button>
         </header>
         <div ref={list} role="listbox" aria-label={`${selectedProvider?.name ?? ''} models`} className="model-picker__models" onKeyDown={event => moveListboxFocus(event, list.current)}>
-          {filtered.map(model => <button type="button" role="option" key={model.id} aria-selected={model.id === modelId} disabled={disabled || !model.ready}
-            onClick={() => { onChange(model.id); setOpen(false) }}><span>{model.name}{!model.ready && <small>Unavailable</small>}</span>{model.id === modelId && <Check size={14} aria-hidden="true" />}</button>)}
+          {filtered.map(model => <button type="button" role="option" key={model.id} aria-selected={model.id === currentEntryId} disabled={disabled || !model.ready}
+            onClick={() => { onChange(model.id); setOpen(false) }}><span>{model.name}{!model.ready && <small>Unavailable</small>}</span>{model.id === currentEntryId && <Check size={14} aria-hidden="true" />}</button>)}
           {!filtered.length && <p className="model-picker__empty">No matching models.</p>}
         </div>
         {note ? <p className="model-picker__note">{note}</p> : null}

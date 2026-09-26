@@ -92,7 +92,8 @@ async function assertProductionOutputRestored(): Promise<void> {
 test.describe.configure({ mode: 'serial' })
 
 test.beforeAll(async () => {
-  test.setTimeout(120_000)
+  // Five full builds, each slower on a busy machine. The deadline only stops a hung build, so it is generous.
+  test.setTimeout(600_000)
   await rm(buildRoot, { force: true, recursive: true })
   await mkdir(buildRoot, { recursive: true })
   try {

@@ -76,8 +76,10 @@ it.each(['{"chats":[', '', 'null', '{"chats":{}}'])('preserves unreadable origin
   expect((await restored.connect()).error).toMatch(/storage/i)
   await stop(restored)
   expect(await readFile(path, 'utf8')).toBe(contents)
-  expect(await readdir(join(fixture.root, 'personal-chat'))).toEqual(['chats.json'])
-  expect((await fixture.driver.requests()).length).toBe(0)
+  // The healthy setup() above connects at launch and creates the neutral native
+  // workspace; storage recovery itself must add nothing beyond that.
+  expect((await readdir(join(fixture.root, 'personal-chat'))).sort()).toEqual(['chats.json', 'native-workspace'])
+  expect((await fixture.driver.requests()).some(r => r.method === 'thread/start' || r.method === 'thread/resume' || r.method === 'turn/start')).toBe(false)
 })
 
 it('recovers valid chats and identities/drafts around invalid observational fields without rewriting the original', async () => {
@@ -126,12 +128,17 @@ it.each([
   { field: 'status', label: 'unknown status', bad: 'unknown-native-status' },
 ] as const)('rejects invalid live $field ($label) without poisoning unrelated state or authorizing native work', async ({ field, bad }) => {
   const { fixture, service, path } = await setup()
+  await service.connect()
   const chat = (await service.create()).chats[0]!
   await service.create()
   const native: CodexPersonalConversation = { ...chat, messages: [{ id: 'answer', role: 'assistant', text: 'Valid previous answer', createdAt: 'now' }] }
   vi.spyOn(fixture.adapter, 'personalSnapshot').mockReturnValue([native])
   vi.spyOn(fixture.adapter, 'refreshThread').mockImplementation(() => fixture.adapter.snapshot())
+  // Connect is a no-op once startup has connected. Reconnect after installing the
+  // snapshot so the valid history is accepted before the invalid observation.
+  await service.disconnect(); await fixture.adapter.closed()
   await service.connect(); await service.settled()
+  expect(serialized(service).chats.find(c => c.id === chat.id)?.messages).toEqual(native.messages)
   Object.assign(native, { [field]: bad })
   await service.refresh(chat.id); await service.settled()
   const state = serialized(service)
@@ -167,7 +174,11 @@ it('creates normally from a missing file and preserves redaction/uncertain inten
   const restored = makeService(fixture, false); await restored.start()
   expect(serialized(restored).chats[0]).toMatchObject({ id: chat.id, nativeState: 'uncertain', draft: { text: 'Keep unsent draft' }, submissions: [{ status: 'uncertain' }] })
   expect(await readFile(path, 'utf8')).not.toContain('Private')
-  expect((await fixture.driver.requests()).length).toBe(0)
+  // Connecting at launch reaches the native process (a content-free handshake); it must
+  // never resume or start the uncertain thread this cached submission belongs to.
+  const requests = await fixture.driver.requests()
+  expect(requests.some(r => r.method === 'thread/start' || r.method === 'thread/resume' || r.method === 'turn/start')).toBe(false)
+  expect(JSON.stringify(requests)).not.toContain('Private')
 })
 
 it('retains decision delivery identity despite a malformed cached request, redacts the transcript view and preserves the original', async () => {
@@ -186,7 +197,9 @@ it('retains decision delivery identity despite a malformed cached request, redac
   await expect(restored.privacyChanged()).rejects.toThrow(/storage/i)
   await stop(restored)
   expect(await readFile(path, 'utf8')).toBe(original)
-  expect(await readdir(join(fixture.root, 'personal-chat'))).toEqual(['chats.json'])
+  // setup() above connects at launch and creates the neutral native workspace;
+  // storage recovery itself must add nothing beyond that.
+  expect((await readdir(join(fixture.root, 'personal-chat'))).sort()).toEqual(['chats.json', 'native-workspace'])
 })
 
 it('keeps ambiguous duplicate IDs on disk while recovering an unrelated identity', async () => {

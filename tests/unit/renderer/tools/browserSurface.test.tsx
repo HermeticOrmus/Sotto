@@ -6,6 +6,7 @@ import type { BrowserBridge, BrowserEvent, BrowserPage } from '../../../../src/s
 import type { ToolsResult } from '../../../../src/shared/tools'
 import { MessageContent } from '../../../../src/renderer/src/agents/MessageContent'
 import { ToolsPanel } from '../../../../src/renderer/src/tools/ToolsPanel'
+import { BrowserPlayerStore } from '../../../../src/renderer/src/tools/browserPlayerStore'
 import { BrowserStore, normalizeAddress } from '../../../../src/renderer/src/tools/browserStore'
 import { ToolsPanelStore } from '../../../../src/renderer/src/tools/toolsPanelStore'
 import { ThreadWebLinks } from '../../../../src/renderer/src/tools/webLinks'
@@ -27,7 +28,7 @@ function fakeBrowser(initial: BrowserPage[] = []) {
     share: vi.fn(async ({ pageId, enabled }) => ok(page(pageId, { sharedOrigin: enabled ? 'http://localhost:5173' : null }))),
     viewport: vi.fn(async request => ok(page(request.pageId, { viewport: 'reset' in request ? null : { width: request.width, height: request.height } }))),
     capture: vi.fn(async () => ok({ image: 'data:image/png;base64,YWJj', url: 'http://localhost:5173/', width: 1280, height: 800, element: null })),
-    controlTask: vi.fn(), answerAction: vi.fn(),
+    controlTask: vi.fn(), answerAction: vi.fn(), stopGrant: vi.fn(async () => ok(undefined)),
     list: vi.fn(async () => ok({ workspace, pages })),
     create: vi.fn(async ({ url }) => { const created = page(pages.length ? PAGE_2 : PAGE_1, { url, title: '', status: 'loading' }); pages = [...pages, created]; return ok(created) }),
     navigate: vi.fn(async ({ pageId, url }) => ok(page(pageId, { url, canGoBack: true }))),
@@ -112,6 +113,37 @@ describe('Browser surface', () => {
     expect(browser.bridge.close).not.toHaveBeenCalled()
   })
 
+  it('offers a way back to the floating player for the focused thread’s own task, and never pins', async () => {
+    const browser = fakeBrowser([page(PAGE_1)])
+    browser.bridge.tasks = vi.fn(async () => ok([{
+      id: 'task-1', threadId: 'visual-gate', workspaceId: TOKEN_A, pageId: PAGE_1, status: 'working' as const,
+      description: 'Checking the docs', steps: [], thumbnail: null, summary: null, unchecked: [], updatedAt: 1, pendingAction: null, output: null,
+    }]))
+    const store = new ToolsPanelStore(); const playerStore = new BrowserPlayerStore()
+    act(() => { store.setOpen(true); store.setSurface('browser') })
+    const files = fakeFilesBridge({ 'visual-gate': { root: 'D:\\work\\workshop', token: TOKEN_A, tree: {} } })
+    render(<ToolsPanel focusedThreadId="visual-gate" state={threadsStateFixture()} files={files} browser={browser.bridge} store={store} playerStore={playerStore} />)
+    const float = await within(panel()).findByRole('button', { name: 'Float the browser over the thread' })
+    await userEvent.click(float)
+    expect(screen.queryByRole('complementary', { name: 'Tools' })).not.toBeInTheDocument()
+    expect(playerStore.visibilityFor('visual-gate')).toBe('open')
+    expect(store.getSnapshot().pinnedThreadId).toBeNull()
+  })
+
+  it('never offers the way back while Tools shows a thread other than the one focused', async () => {
+    const browser = fakeBrowser([page(PAGE_1)])
+    browser.bridge.tasks = vi.fn(async () => ok([{
+      id: 'task-1', threadId: 'visual-gate', workspaceId: TOKEN_A, pageId: PAGE_1, status: 'working' as const,
+      description: 'Checking the docs', steps: [], thumbnail: null, summary: null, unchecked: [], updatedAt: 1, pendingAction: null, output: null,
+    }]))
+    const store = new ToolsPanelStore()
+    act(() => { store.setOpen(true); store.setSurface('browser'); store.pin('visual-gate') })
+    const files = fakeFilesBridge({ 'visual-gate': { root: 'D:\\work\\workshop', token: TOKEN_A, tree: {} } })
+    render(<ToolsPanel focusedThreadId="grok-previews" state={threadsStateFixture()} files={files} browser={browser.bridge} store={store} />)
+    await within(panel()).findByRole('button', { name: 'New page' })
+    expect(within(panel()).queryByRole('button', { name: 'Float the browser over the thread' })).not.toBeInTheDocument()
+  })
+
   it('shows an unavailable page as an explanation with Try again and the system browser, not an empty viewport', async () => {
     const browser = fakeBrowser([page(PAGE_1)])
     setup(browser)
@@ -146,6 +178,41 @@ describe('Browser surface', () => {
     await userEvent.click(within(panel()).getByRole('button', { name: 'Close page: Vite App' }))
     expect(browser.bridge.close).toHaveBeenCalledWith({ ...target, pageId: PAGE_1 })
     expect(await within(panel()).findByText('Open a page')).toBeInTheDocument()
+  })
+})
+
+describe('browser grant', () => {
+  it('says the thread uses the browser without asking, and Stop ends it and returns focus to the address', async () => {
+    const browser = fakeBrowser([page(PAGE_1)])
+    vi.mocked(browser.bridge.list).mockResolvedValue(ok({ workspace, pages: [page(PAGE_1)], grant: { grantedAt: 1, source: 'settings' } }))
+    setup(browser)
+    const stop = await within(panel()).findByRole('button', { name: 'Stop letting this thread use the browser without asking' })
+    expect(within(panel()).getByText('This thread uses the browser without asking')).toBeInTheDocument()
+    fireEvent.click(stop)
+    await waitFor(() => expect(browser.bridge.stopGrant).toHaveBeenCalledWith(target))
+    await waitFor(() => expect(within(panel()).queryByText('This thread uses the browser without asking')).not.toBeInTheDocument())
+    await waitFor(() => expect(within(panel()).getByRole('textbox', { name: 'Address' })).toHaveFocus())
+  })
+  it('says the grant may still be live when Stop fails, and keeps the line', async () => {
+    const browser = fakeBrowser([page(PAGE_1)])
+    vi.mocked(browser.bridge.list).mockResolvedValue(ok({ workspace, pages: [page(PAGE_1)], grant: { grantedAt: 1, source: 'user' } }))
+    vi.mocked(browser.bridge.stopGrant).mockResolvedValueOnce({ ok: false, error: { code: 'busy', message: 'The browser is busy.' } })
+    setup(browser)
+    fireEvent.click(await within(panel()).findByRole('button', { name: 'Stop letting this thread use the browser without asking' }))
+    expect(await within(panel()).findByText('Could not stop this thread using the browser without asking; try Stop again. The browser is busy.')).toBeInTheDocument()
+    expect(within(panel()).getByText('This thread uses the browser without asking')).toBeInTheDocument()
+  })
+  it('follows main when the answer is given or ends elsewhere', async () => {
+    const browser = fakeBrowser([page(PAGE_1)])
+    setup(browser)
+    await within(panel()).findByRole('tab', { name: 'Vite App' })
+    expect(within(panel()).queryByText('This thread uses the browser without asking')).not.toBeInTheDocument()
+    act(() => browser.emit({ type: 'browser-grant', threadId: 'visual-gate', grant: { grantedAt: 2, source: 'user' } }))
+    expect(within(panel()).getByText('This thread uses the browser without asking')).toBeInTheDocument()
+    act(() => browser.emit({ type: 'browser-grant', threadId: 'another-thread', grant: null }))
+    expect(within(panel()).getByText('This thread uses the browser without asking')).toBeInTheDocument()
+    act(() => browser.emit({ type: 'browser-grant', threadId: 'visual-gate', grant: null }))
+    expect(within(panel()).queryByText('This thread uses the browser without asking')).not.toBeInTheDocument()
   })
 })
 
@@ -286,8 +353,8 @@ describe('Browser page placement', () => {
 })
 
 describe('web links in a thread', () => {
-  function transcript(browser: ReturnType<typeof fakeBrowser>, store: ToolsPanelStore) {
-    render(<ThreadWebLinks threadId="visual-gate" threadTitle="Visual gate flake" bridge={browser.bridge} store={store}>
+  function transcript(browser: ReturnType<typeof fakeBrowser>, store: ToolsPanelStore, focused = true) {
+    render(<ThreadWebLinks threadId="visual-gate" threadTitle="Visual gate flake" bridge={browser.bridge} store={store} focused={focused}>
       <MessageContent text="See [the docs](https://example.com/docs) or [mail us](mailto:team@example.com)." />
     </ThreadWebLinks>)
   }
@@ -304,8 +371,19 @@ describe('web links in a thread', () => {
     store.setOpen(false)
     store.pin('grok-previews')
     await userEvent.click(screen.getByRole('link', { name: 'the docs' }))
-    expect(await screen.findByText('Opened in Visual gate flake’s browser. The tools panel is pinned to another thread.')).toBeInTheDocument()
+    expect(await screen.findByText('Opened in Visual gate flake’s browser, and Tools is pinned to another thread. Unpin it to see the page.')).toBeInTheDocument()
     expect(store.getSnapshot()).toMatchObject({ open: false, pinnedThreadId: 'grok-previews' })
+  })
+
+  it('adopts the page but never opens Tools when the click came from a pane that is not focused (#331)', async () => {
+    const browser = fakeBrowser()
+    const store = new ToolsPanelStore()
+    transcript(browser, store, false)
+    await userEvent.click(screen.getByRole('link', { name: 'the docs' }))
+    await waitFor(() => expect(browser.bridge.openLink).toHaveBeenCalledWith({ url: 'https://example.com/docs', target }))
+    expect(await screen.findByText('Opened in Visual gate flake’s browser. Open Tools > Browser in that thread to see it.')).toBeInTheDocument()
+    expect(store.getSnapshot()).toMatchObject({ open: false })
+    expect(store.browser.thread('visual-gate')?.activePageId).toBe(PAGE_2)
   })
 
   it('offers a per-link choice from the keyboard and returns focus to the link', async () => {

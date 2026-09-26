@@ -29,21 +29,6 @@ export type HistoryRetention = 25 | 100 | 500 | 'unlimited'
 export type LlmQuality = 'low' | 'medium' | 'value' | 'high'
 
 /**
- * The models offered for Sotto's short writing jobs: thread titles, commit
- * message drafts and pull request drafts. They are the same cheap, fast
- * OpenRouter models the cleanup tiers use, named here so the choice is one
- * setting rather than one per job.
- */
-export const WRITING_MODELS = [
-  { id: 'google/gemini-3.1-flash-lite', label: 'Gemini 3.1 Flash Lite — fastest' },
-  { id: 'inception/mercury-2', label: 'Mercury 2' },
-  { id: 'amazon/nova-2-lite-v1', label: 'Nova 2 Lite' },
-  { id: 'anthropic/claude-haiku-4.5', label: 'Claude Haiku 4.5 — best writing' },
-] as const
-export type WritingModelId = (typeof WRITING_MODELS)[number]['id']
-export const WRITING_MODEL_IDS = WRITING_MODELS.map(model => model.id) as unknown as [WritingModelId, ...WritingModelId[]]
-
-/**
  * The rules under which Sotto reclaims a thread's worktree on its own (ADR-0019), the same four
  * T3 Code offers. `afterDays` counts idle days since the thread's last activity; `null` is never.
  * `unchanged` means the folder's commits are all in the repository's default branch already;
@@ -63,6 +48,42 @@ export const worktreeCleanupRulesSchema = z.object({
   merged: z.boolean(), onSettle: z.boolean(), unchanged: z.boolean(),
 }) satisfies z.ZodType<WorktreeCleanupRules>
 export const DEFAULT_WORKTREE_CLEANUP: WorktreeCleanupRules = { afterDays: null, merged: false, onSettle: false, unchanged: false }
+
+/** Seconds between background fetches of a project's origin remote, while the window is in front. Zero turns the fetch off. */
+export type GitFetchIntervalSeconds = 0 | 15 | 30 | 60 | 300
+export const GIT_FETCH_INTERVAL_SECONDS = [0, 15, 30, 60, 300] as const satisfies readonly GitFetchIntervalSeconds[]
+
+/** How GitHub merges a pull request, in `gh pr merge`'s own terms. */
+export type GitMergeMethod = 'merge' | 'squash' | 'rebase'
+export const GIT_MERGE_METHODS = ['merge', 'squash', 'rebase'] as const satisfies readonly GitMergeMethod[]
+export const GIT_MERGE_METHOD_LABELS: Record<GitMergeMethod, string> = { merge: 'Merge', squash: 'Squash and merge', rebase: 'Rebase and merge' }
+/** The merge method a pull request's merge starts on; `last` reuses the one chosen last on this computer, as T3 Code does. */
+export type DefaultMergeMethod = 'last' | GitMergeMethod
+export const DEFAULT_MERGE_METHODS = ['last', ...GIT_MERGE_METHODS] as const satisfies readonly DefaultMergeMethod[]
+/** How Changes lays out a file's diff: one column, or before and after side by side. */
+export type DiffLayout = 'stacked' | 'split'
+/** Whether each file in Changes starts open or folded to its header. */
+export type DiffFileState = 'expanded' | 'collapsed'
+/**
+ * The style commit messages and pull request text are written in: the repository's own (its recent
+ * subjects and its `AGENTS.md`), Conventional Commits, or the user's own instructions, T3 Code's three.
+ */
+export type GitWritingStyle = 'repository' | 'conventional' | 'custom'
+export const GIT_WRITING_STYLES = ['repository', 'conventional', 'custom'] as const satisfies readonly GitWritingStyle[]
+export const GIT_WRITING_INSTRUCTIONS_MAX_CHARACTERS = 2_000
+
+/** The merge method a merge starts on: the chosen default, or the one used last when the default is Last selected. */
+export function initialMergeMethod(settings: Pick<AppSettings, 'defaultMergeMethod' | 'lastMergeMethod'>): GitMergeMethod {
+  return settings.defaultMergeMethod === 'last' ? settings.lastMergeMethod : settings.defaultMergeMethod
+}
+
+/**
+ * What to save when the user merges with `method`: it is remembered only while the default is Last
+ * selected, and only when it differs from the one already remembered. Null when there is nothing to save.
+ */
+export function mergeMethodChosenPatch(settings: Pick<AppSettings, 'defaultMergeMethod' | 'lastMergeMethod'>, method: GitMergeMethod): SettingsPatch | null {
+  return settings.defaultMergeMethod === 'last' && settings.lastMergeMethod !== method ? { lastMergeMethod: method } : null
+}
 
 export const SETTINGS_VERSION = 1 as const
 
@@ -95,6 +116,10 @@ export interface AppSettings {
   webLinkDestination: 'external' | 'embedded'
   /** `live` draws assistant text as it streams; `complete` shows each reply once it is finished. Activity is always live. */
   responseStreaming: 'live' | 'complete'
+  /** Whether a browser task introduces itself in the corner of the Threads page. Off hides only the preview; the work and Tools > Browser carry on. */
+  showBrowserPreviews: boolean
+  /** On by default (ADR-0029): a thread opens, navigates, clicks and types in Sotto's browser without asking, until Stop or this turns off. */
+  browserWithoutAsking: boolean
   /** Applies only to new threads; existing provider sessions keep their working folder. */
   threadWorkingCopyDefault: 'shared' | 'independent'
   /** Explicit project overrides; an absent key inherits the global default. */
@@ -104,6 +129,39 @@ export interface AppSettings {
    * is off by default, and none of them ever removes uncommitted work.
    */
   worktreeCleanup: WorktreeCleanupRules
+  /**
+   * How often the host fetches a project's origin remote so a thread's branch knows whether it is
+   * ahead or behind, the way T3 Code does. Only while the window is in front; zero turns it off.
+   */
+  gitFetchIntervalSeconds: GitFetchIntervalSeconds
+  /**
+   * Off by default. On, the host fast-forwards a thread's folder when it is on the default branch, clean,
+   * and behind with nothing of its own ahead, each time it reads the remote status (T3 Code's rule).
+   */
+  gitAutoPull: boolean
+  /** The merge method a pull request's merge starts on; `last` reuses `lastMergeMethod`. */
+  defaultMergeMethod: DefaultMergeMethod
+  /** The merge method chosen last, kept while `defaultMergeMethod` is `last`. */
+  lastMergeMethod: GitMergeMethod
+  /** How Changes lays out a diff until the user changes it there. */
+  diffLayout: DiffLayout
+  /** Whether Changes hides whitespace-only edits until the user changes it there. */
+  diffHideWhitespace: boolean
+  /** Whether each file in Changes starts expanded or collapsed. */
+  diffFileState: DiffFileState
+  /** The style commit messages and pull request text are written in (ADR-0026's side calls). */
+  gitWritingStyle: GitWritingStyle
+  /** The user's own instructions for that writing, used while the style is `custom`. */
+  gitWritingInstructions: string
+  /** Whether pull request text fills in the repository's pull request template when it has one. */
+  followPullRequestTemplates: boolean
+  /**
+   * Off by default. On, a thread whose branch's pull request GitHub reports merged is settled, checked on
+   * the worktree cleanup's hourly schedule. Settling removes no folder unless a cleanup rule says so.
+   */
+  autoSettleMergedThreads: boolean
+  /** Off by default. On, Changes opens on its own after a turn that changed at least 3 files or 50 lines. */
+  proactivePanels: boolean
   reducedMotion: ReducedMotion
   microphoneId: string | null
   hotkey: string
@@ -134,16 +192,24 @@ export interface AppSettings {
   llmQuality: LlmQuality
   llmTimeoutMs: number
   llmMinWords: number
-  /** The OpenRouter model that writes Sotto's short text, starting with thread titles. */
-  writingModel: WritingModelId
-  /** Off stops thread-title and temporary-worktree-branch naming requests. */
+  /**
+   * Off stops thread-title and temporary-worktree-branch naming requests. Sotto's short writing is a
+   * side call to the thread's own provider (ADR-0026); the OpenRouter writing model and its
+   * `writingModel` setting are gone, and a settings file that still carries the key parses and drops it.
+   */
   threadTitles: boolean
   /** Off stops every pull request draft; the form opens with the fields it would have had anyway. */
   pullRequestText: boolean
-  /** Off stops every commit-message draft; the commit form opens empty. */
+  /** Off stops every generated commit message; a commit whose dialog message was left empty takes the stand-in subject. */
   commitMessages: boolean
   streamingAsr: boolean
   autoUpdateCheck: boolean
+  /**
+   * Whether the agent runtime runs on this computer at all. Read once at
+   * startup; off starts no local host after the next restart. Remote hosts
+   * still work, dictation is unaffected and no saved data is removed.
+   */
+  localHostEnabled: boolean
   /**
    * The voice coordinator (the wake phrase, the Agents room, spoken hints, the
    * widget's voice controls and assignment) is hidden for the beta. Off keeps
@@ -181,6 +247,8 @@ const fieldSchemas = {
   customThemes: customThemesSchema as z.ZodType<ThemeDefinition[]>,
   webLinkDestination: z.enum(['external', 'embedded']),
   responseStreaming: z.enum(['live', 'complete']),
+  showBrowserPreviews: z.boolean(),
+  browserWithoutAsking: z.boolean(),
   reducedMotion: z.enum(['system', 'on']),
   microphoneId: z.string().min(1).nullable(),
   hotkey: z.string().min(1),
@@ -210,15 +278,27 @@ const fieldSchemas = {
   llmQuality: z.enum(['low', 'medium', 'value', 'high']),
   llmTimeoutMs: z.number().int().min(500).max(10_000),
   llmMinWords: z.number().int().min(0).max(50),
-  writingModel: z.enum(WRITING_MODEL_IDS),
   threadTitles: z.boolean(),
   threadWorkingCopyDefault: z.enum(['shared', 'independent']),
   projectThreadWorkingCopyDefaults: z.record(z.string().min(1).max(256), z.enum(['shared', 'independent'])),
   worktreeCleanup: worktreeCleanupRulesSchema,
+  gitFetchIntervalSeconds: z.union([z.literal(0), z.literal(15), z.literal(30), z.literal(60), z.literal(300)]),
+  gitAutoPull: z.boolean(),
+  defaultMergeMethod: z.enum(DEFAULT_MERGE_METHODS),
+  lastMergeMethod: z.enum(GIT_MERGE_METHODS),
+  diffLayout: z.enum(['stacked', 'split']),
+  diffHideWhitespace: z.boolean(),
+  diffFileState: z.enum(['expanded', 'collapsed']),
+  gitWritingStyle: z.enum(GIT_WRITING_STYLES),
+  gitWritingInstructions: z.string().max(GIT_WRITING_INSTRUCTIONS_MAX_CHARACTERS),
+  followPullRequestTemplates: z.boolean(),
+  autoSettleMergedThreads: z.boolean(),
+  proactivePanels: z.boolean(),
   pullRequestText: z.boolean(),
   commitMessages: z.boolean(),
   streamingAsr: z.boolean(),
   autoUpdateCheck: z.boolean(),
+  localHostEnabled: z.boolean(),
   voiceCoordinatorEnabled: z.boolean(),
   memoryEnabled: z.boolean(),
 } satisfies { [Key in keyof AppSettings]: z.ZodType<AppSettings[Key]> }
@@ -241,6 +321,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   customThemes: [],
   webLinkDestination: 'external',
   responseStreaming: 'live',
+  showBrowserPreviews: true,
+  browserWithoutAsking: true,
   reducedMotion: 'system',
   microphoneId: null,
   hotkey: DEFAULT_HOTKEY,
@@ -265,23 +347,43 @@ export const DEFAULT_SETTINGS: AppSettings = {
   llmQuality: 'low',
   llmTimeoutMs: 2_500,
   llmMinWords: 5,
-  writingModel: 'google/gemini-3.1-flash-lite',
-  // On by default, but nothing is ever requested without an OpenRouter key, so
-  // an install that never configures one keeps its stand-in names offline.
+  // On by default: the thread's own provider names it, on the account the thread
+  // already uses, and a provider that writes nothing (Devin) keeps the stand-in.
   threadTitles: true,
   threadWorkingCopyDefault: 'shared',
   projectThreadWorkingCopyDefaults: {},
   // Off, every rule: a folder is removed only when the user asks or has said in advance that Sotto may.
   worktreeCleanup: DEFAULT_WORKTREE_CLEANUP,
+  // T3's default. The fetch contacts only the project's own origin, with prompts off, and only while the window is in front.
+  gitFetchIntervalSeconds: 30,
+  // Off: a pull changes the user's folder, so it happens on their word until they say otherwise.
+  gitAutoPull: false,
+  // T3's defaults: the method chosen last, starting from a plain merge.
+  defaultMergeMethod: 'last',
+  lastMergeMethod: 'merge',
+  // T3's diff defaults: stacked, whitespace-only edits hidden, files collapsed to their headers.
+  diffLayout: 'stacked',
+  diffHideWhitespace: true,
+  diffFileState: 'collapsed',
+  gitWritingStyle: 'repository',
+  gitWritingInstructions: '',
+  followPullRequestTemplates: true,
+  // Off: nothing moves in the sidebar on its own until the user asks for it.
+  autoSettleMergedThreads: false,
+  // Off: nothing opens on its own until the user asks for it (ADR-0027).
+  proactivePanels: false,
   pullRequestText: true,
-  // On by default for the same reason: with no OpenRouter key nothing is ever
-  // requested, and the commit form simply opens empty.
+  // On by default: when a thread's provider writes nothing, the Git action commits
+  // under the stand-in subject "Update project files" rather than waiting.
   commitMessages: true,
   streamingAsr: true,
   // On by default: an install that never opens Settings still learns about a
   // fix. The check asks GitHub for a version number and sends nothing else,
   // and turning it off stops the request entirely.
   autoUpdateCheck: true,
+  // On by default: this computer is still the host until the owner pairs a
+  // remote one and chooses to run clients only.
+  localHostEnabled: true,
   // Off for the beta: the voice coordinator is not ready to ship, so nothing
   // voice-shaped is shown until it is turned on here.
   voiceCoordinatorEnabled: false,
@@ -333,6 +435,8 @@ export function parseSettings(input: unknown, defaults: AppSettings = DEFAULT_SE
     customThemes,
     webLinkDestination: parseField(persisted, 'webLinkDestination', defaults),
     responseStreaming: parseField(persisted, 'responseStreaming', defaults),
+    showBrowserPreviews: parseField(persisted, 'showBrowserPreviews', defaults),
+    browserWithoutAsking: parseField(persisted, 'browserWithoutAsking', defaults),
     reducedMotion: parseField(persisted, 'reducedMotion', defaults),
     microphoneId: parseField(persisted, 'microphoneId', defaults),
     hotkey: parseField(persisted, 'hotkey', defaults),
@@ -357,15 +461,27 @@ export function parseSettings(input: unknown, defaults: AppSettings = DEFAULT_SE
     llmQuality: parseField(persisted, 'llmQuality', defaults),
     llmTimeoutMs: parseField(persisted, 'llmTimeoutMs', defaults),
     llmMinWords: parseField(persisted, 'llmMinWords', defaults),
-    writingModel: parseField(persisted, 'writingModel', defaults),
     threadTitles: parseField(persisted, 'threadTitles', defaults),
     threadWorkingCopyDefault: parseField(persisted, 'threadWorkingCopyDefault', defaults),
     projectThreadWorkingCopyDefaults: parseField(persisted, 'projectThreadWorkingCopyDefaults', defaults),
     worktreeCleanup: parseField(persisted, 'worktreeCleanup', defaults),
+    gitFetchIntervalSeconds: parseField(persisted, 'gitFetchIntervalSeconds', defaults),
+    gitAutoPull: parseField(persisted, 'gitAutoPull', defaults),
+    defaultMergeMethod: parseField(persisted, 'defaultMergeMethod', defaults),
+    lastMergeMethod: parseField(persisted, 'lastMergeMethod', defaults),
+    diffLayout: parseField(persisted, 'diffLayout', defaults),
+    diffHideWhitespace: parseField(persisted, 'diffHideWhitespace', defaults),
+    diffFileState: parseField(persisted, 'diffFileState', defaults),
+    gitWritingStyle: parseField(persisted, 'gitWritingStyle', defaults),
+    gitWritingInstructions: parseField(persisted, 'gitWritingInstructions', defaults),
+    followPullRequestTemplates: parseField(persisted, 'followPullRequestTemplates', defaults),
+    autoSettleMergedThreads: parseField(persisted, 'autoSettleMergedThreads', defaults),
+    proactivePanels: parseField(persisted, 'proactivePanels', defaults),
     pullRequestText: parseField(persisted, 'pullRequestText', defaults),
     commitMessages: parseField(persisted, 'commitMessages', defaults),
     streamingAsr: parseField(persisted, 'streamingAsr', defaults),
     autoUpdateCheck: parseField(persisted, 'autoUpdateCheck', defaults),
+    localHostEnabled: parseField(persisted, 'localHostEnabled', defaults),
     voiceCoordinatorEnabled: parseField(persisted, 'voiceCoordinatorEnabled', defaults),
     memoryEnabled: parseField(persisted, 'memoryEnabled', defaults),
   }

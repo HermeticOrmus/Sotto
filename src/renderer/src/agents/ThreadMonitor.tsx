@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
-import type { AgentMonitoringTask } from '../../../shared/agentMonitoring'
+import type { AgentBackgroundWork, AgentMonitoringTask } from '../../../shared/agentMonitoring'
 import type { AgentThread } from '../../../shared/agents'
 import { formatDuration, heldAction, heldLabel, heldLongEnough, HELD_AFTER_MS, type HeldAction } from './threadActivityView'
 import './threadMonitor.css'
@@ -14,9 +14,12 @@ interface PixelFrame {
 /**
  * The loop every pixel pose shares: 30fps, held in a single pose under system or app reduced motion,
  * and stopped entirely while the window is hidden. The painter reads its own refs and writes no state.
+ * `repaintOn` names what the pose draws from its props: a change paints one frame at once, because a
+ * held pose has no next frame to pick it up on.
  */
-function usePixelLoop(actor: RefObject<HTMLDivElement | null>, paint: (frame: PixelFrame) => void): void {
+function usePixelLoop(actor: RefObject<HTMLDivElement | null>, paint: (frame: PixelFrame) => void, repaintOn?: unknown): void {
   const painter = useRef(paint)
+  const repaint = useRef<() => void>(() => undefined)
   // Assigned after the commit rather than during render, so a double-rendered pass cannot install a
   // painter whose render was thrown away. The loop below only ever reads it from a frame callback.
   useEffect(() => { painter.current = paint })
@@ -28,6 +31,7 @@ function usePixelLoop(actor: RefObject<HTMLDivElement | null>, paint: (frame: Pi
     const began = performance.now()
     let reduced = false, frame = 0, width = track.clientWidth, previous = -Infinity
     const render = (now: number): void => { painter.current({ time: (now - began) / 1000, still: reduced, width }) }
+    repaint.current = () => render(performance.now())
     const tick = (now: number): void => {
       frame = 0
       if (now - previous >= 1000 / 30) { render(now); previous = now }
@@ -47,11 +51,12 @@ function usePixelLoop(actor: RefObject<HTMLDivElement | null>, paint: (frame: Pi
     document.addEventListener('visibilitychange', refresh)
     refresh()
     return () => {
-      cancelAnimationFrame(frame); resize.disconnect(); motion.disconnect()
+      cancelAnimationFrame(frame); resize.disconnect(); motion.disconnect(); repaint.current = () => undefined
       preference.removeEventListener('change', refresh)
       document.removeEventListener('visibilitychange', refresh)
     }
   }, [actor])
+  useEffect(() => { repaint.current() }, [repaintOn])
 }
 
 /** The body every pose shares, so both read as the same creature. Ears, tail and belly never animate. */
@@ -174,6 +179,66 @@ function HeldCreature(): ReactNode {
   </div>
 }
 
+/** A small agent: the creature's silhouette at a third of the size, on a 12 × 10 grid. */
+const MINI = 'M3 2h2v2H3z M7 1h2v3H7z M2 4h8v5H2z M1 6h10v2H1z M3 9h2v1H3z M7 9h2v1H7z'
+const MINI_EYES = 'M4 5h1v1H4z M7 5h1v1H7z'
+const MINI_WIDTH = 24
+/** No more small agents than the track can show without crowding it; the readout carries the real count. */
+const MAX_WORKING_MINIS = 6
+
+/**
+ * The same creature stood at the readout end facing the room, sending small agents out along the track:
+ * one per task the provider says is still running, filing off the left edge on a loop while the near arm
+ * waves them on. Under reduced motion they stand spaced along the track instead. Nothing here claims more
+ * than that the work is running, and it grants no authority.
+ */
+function WorkingCreature({ agents }: { readonly agents: number }): ReactNode {
+  const actor = useRef<HTMLDivElement>(null)
+  const eyes = useRef<SVGPathElement>(null)
+  const arm = useRef<SVGPathElement>(null)
+  const minis = useRef<(HTMLDivElement | null)[]>([])
+  const count = Math.min(MAX_WORKING_MINIS, Math.max(1, agents))
+  usePixelLoop(actor, ({ time, still, width }) => {
+    const reach = Math.max(0, width - 80)
+    if (actor.current) actor.current.style.transform = `translateX(${Math.round(reach / 2) * 2}px)`
+    // A mini leaves from under the raised arm and walks until it is past the track's clipped left edge.
+    const start = Math.max(0, width - 96), span = start + MINI_WIDTH
+    // Held still, they stand in a line a step apart: a stride clear of each other where the track allows,
+    // closing up on the narrowest track so the last never falls off the end.
+    const stride = Math.min(MINI_WIDTH + 12, Math.max(0, start - 12) / count)
+    minis.current.forEach((mini, index) => {
+      if (!mini) return
+      const x = still ? Math.max(0, start - 12 - index * stride) : start - span * ((time * 0.09 + index * 0.17) % 1)
+      mini.style.transform = `translate(${Math.round(x / 2) * 2}px, ${!still && Math.floor(time * 6 + index) % 2 ? -1 : 0}px)`
+    })
+    arm.current?.setAttribute('transform', !still && Math.floor(time * 2) % 2 ? 'translate(0 -1)' : '')
+    eyes.current?.setAttribute('d', !still && time % 5 > 4.86 ? SHUT_EYES : OPEN_EYES)
+  }, count)
+  return <>
+    {/* Drawn before the creature, so each one steps out from behind it rather than across it. */}
+    {Array.from({ length: count }, (_, index) => <div key={index} className="thread-monitor__mini" aria-hidden="true"
+      ref={node => { minis.current[index] = node }}>
+      <svg viewBox="0 0 12 10" width="24" height="20" focusable="false" shapeRendering="crispEdges">
+        <path className="thread-monitor__color" d={MINI} />
+        <path className="thread-monitor__ink" d={MINI_EYES} />
+      </svg>
+    </div>)}
+    <div className="thread-monitor__actor" ref={actor} aria-hidden="true">
+      <svg className="thread-monitor__creature" viewBox="0 0 40 32" width="80" height="64" focusable="false" shapeRendering="crispEdges">
+        <g transform="translate(40 0) scale(-1 1)">
+          <path className="thread-monitor__color" d="M11 29h5v3h-5z M21 29h5v3h-5z" />
+          <path className="thread-monitor__color" d={BODY} />
+          <path className="thread-monitor__shine" opacity=".24" d="M10 14h3v9h-3z" />
+          <path className="thread-monitor__ink" opacity=".24" d="M13 25h10v3H13z" />
+          <path ref={eyes} className="thread-monitor__ink" d={OPEN_EYES} />
+          <path ref={arm} className="thread-monitor__color" d="M28 16h4v2h-4z" />
+          <path className="thread-monitor__color" d="M25 25h5v2h-5z" />
+        </g>
+      </svg>
+    </div>
+  </>
+}
+
 /** Counts up in its own element so a waiting thread never re-renders its transcript to show a clock. */
 function WaitedFor({ startedAt, now }: { readonly startedAt: string; readonly now: number | undefined }): ReactNode {
   const ref = useRef<HTMLSpanElement>(null)
@@ -213,17 +278,19 @@ export function useHeldAction(thread: Pick<AgentThread, 'status' | 'activities' 
 }
 
 /**
- * The one shape both poses wear: a creature on its track, and a readout naming what it stands for.
+ * The one shape every pose wears: a creature on its track, and a readout naming what it stands for.
  * `kind` marks which pose is up; the composer reserves its room from the ornament's presence alone.
  */
-function ThreadOrnament({ kind, creature, label, title, status }: {
-  readonly kind: 'monitoring' | 'held'
+function ThreadOrnament({ kind, creature, label, title, status, wide = false }: {
+  readonly kind: 'monitoring' | 'working' | 'held'
   readonly creature: ReactNode
   readonly label: string
   readonly title: string
   readonly status: ReactNode
+  /** The readout carries more than a word and a count, so it gets the wider column. */
+  readonly wide?: boolean
 }): ReactNode {
-  return <div className="thread-monitor" data-ornament={kind} role="status" aria-live="polite" aria-atomic="true">
+  return <div className="thread-monitor" data-ornament={kind} data-readout={wide ? 'wide' : undefined} role="status" aria-live="polite" aria-atomic="true">
     <div className="thread-monitor__track">{creature}</div>
     <div className="thread-monitor__task" title={title}>
       <span className="thread-monitor__label">{label}</span>
@@ -239,6 +306,41 @@ export function ThreadMonitor({ tasks }: { readonly tasks: readonly AgentMonitor
   return <ThreadOrnament kind="monitoring" creature={<MonitoringCreature key={first.id} />}
     label={first.label} title={tasks.map(task => task.label).join('\n')}
     status={tasks.length === 1 ? 'Monitoring' : `Monitoring ${tasks.length} tasks`} />
+}
+
+const commandCount = (count: number): string => `${count} command${count === 1 ? '' : 's'}`
+
+/** The readout's second line: the word for the state, how many agents when there is more than one, and any commands beside them. */
+const workingStatus = (agents: number, commands: number): string =>
+  ['Working', ...agents > 1 ? [`${agents} agents`] : [], ...commands > 0 ? [commandCount(commands)] : []].join(' · ')
+
+/**
+ * Observational only. The caller supplies this thread's live background work, provider-confirmed, and has
+ * already judged that nothing stronger holds the track. Agents lead; a command running beside them is
+ * counted rather than drawn. Every task is named in the hover title.
+ */
+export function ThreadWorking({ work }: { readonly work: readonly AgentBackgroundWork[] }): ReactNode {
+  const agents = work.filter(task => task.type !== 'command')
+  const commands = work.filter(task => task.type === 'command')
+  const first = agents[0]
+  if (!first) return null
+  return <ThreadOrnament kind="working" creature={<WorkingCreature agents={agents.length} />}
+    label={first.label} title={[...agents, ...commands].map(task => task.label).join('\n')} status={workingStatus(agents.length, commands.length)}
+    wide={commands.length > 0} />
+}
+
+/**
+ * Observational only. The turn has ended and a command it left running in the background is still going,
+ * provider-confirmed; the caller judged that nothing stronger holds the track. It wears the held pose,
+ * because a command is waited on rather than worked, and counts from when Sotto saw it start.
+ */
+export function ThreadWaitingCommand({ commands, now }: { readonly commands: readonly AgentBackgroundWork[]; readonly now: number | undefined }): ReactNode {
+  const first = commands[0]
+  if (!first) return null
+  return <ThreadOrnament kind="held" creature={<HeldCreature key={first.id} />} label={first.label}
+    title={commands.map(task => task.label).join('\n')} wide={commands.length > 1}
+    status={<>Waiting{commands.length > 1 ? ` · ${commandCount(commands.length)}` : ''}
+      {first.startedAt ? <WaitedFor startedAt={first.startedAt} now={now} /> : null}</>} />
 }
 
 /**
