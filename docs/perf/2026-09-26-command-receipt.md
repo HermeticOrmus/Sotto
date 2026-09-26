@@ -22,15 +22,18 @@ catalog four times. It now remembers the last pair of arrays it compared, by ide
 
 `tests/perf/commandReceipt.perf.test.ts` saves a draft the way the main window does. It goes through the
 page's wrapped bridge, the preload's bridge and its schema, the `AGENT_COMMAND` handler, the desktop host
-router and the local host service over the fixture coordinator. The host lists its own model and 608
-synthetic ones (`tests/fixtures/modelCatalog.ts`), 540 KB serialized, against 649 KB for the owner's real
-catalog in ADR-0028. The window was sent the catalog once by the broadcast first. `node:v8`'s `serialize`
+router and the local host service over the fixture coordinator, joined in
+`tests/fixtures/commandReceiptWindow.ts`, which the unit tests share. The host lists its own model and 608
+synthetic ones (`tests/fixtures/modelCatalog.ts`), 540 KB serialized. ADR-0028 measured the owner's real
+608-model catalog at 649 KB, so the sizes here are not directly comparable with that ADR's. The window was sent the catalog once by the broadcast first. `node:v8`'s `serialize`
 stands in for Electron's structured clone, as it did for ADR-0028. It reads only byte counts and durations.
 
 Medians of 40 saves after 5 warm-up saves, three runs each, on the development machine (Windows 11, Intel
 Core Ultra 9 275HX, Node v24.14.1). Other agents' builds and suites were running on it, so read them as
-sizes rather than budgets. "Before" is the same benchmark with `agentStateBroadcast.ts`, `ipc.ts`,
-`src/preload/index.ts`, `src/shared/agents.ts` and `agentStateCatalogs.ts` taken from `origin/main`.
+sizes rather than budgets. "Before" is the same benchmark run once, before it was committed, with
+`agentStateBroadcast.ts`, `ipc.ts`, `src/preload/index.ts`, `src/shared/agents.ts` and `agentStateCatalogs.ts`
+taken from `origin/main` and the handler registered without a receipt encoder. The committed benchmark
+measures only the code as it now is.
 
 | What was measured | Before | After |
 | --- | ---: | ---: |
@@ -48,19 +51,25 @@ sizes rather than budgets. "Before" is the same benchmark with `agentStateBroadc
   the renderer's side as well as main's.
 - **Parsing the reply** is `invokeParsed` with the schema the preload uses: `agentStateSchema` over 609 models
   before, `agentCommandReceiptSchema` over two revision markers after. It runs on the window's own thread.
+  The receipt schema accepts a catalog only as a revision, so a whole list on this channel is refused.
 - **Save sent to reply resolved** is the page's `command()` promise, with the stand-in copy on the way in and
   out. After the change it includes putting the catalogs back from the cache, which is a lookup per catalog.
 
 A catalog that changes costs the window one `AGENT_GET` of the whole shell, the size the reply used to be,
 the first time a receipt names the new revision before the broadcast carrying it lands. The broadcast then
-carries that revision in full as before, and later receipts resolve from the cache.
+carries that revision in full as before, and later receipts resolve from the cache. A receipt that names an
+older revision than the window holds, because main built it before a broadcast the window already has,
+resolves from the newer catalog without a read. A reply shell built before a catalog change and encoded after
+its broadcast takes a revision of its own and costs one read and one more full broadcast; ADR-0028's
+amendment says why that is left as it is.
 
 ## What was not measured here
 
 The window's copy of the reply back across `contextBridge` into the page is not in these numbers: the
 benchmark calls the preload's bridge directly. Before, that crossing copied the 609-model catalog a second
-time; after, it copies two markers, so the saving in the app is larger than the table shows. The installed
-app was not run for this change, and nothing a user sees changes.
+time; after, it copies two markers, so the saving in the app is larger than the table shows. Nothing a user
+sees changes. The built app was run through the Playwright specs that drive commands through the bridge
+(listed in the pull request); no timing was taken there.
 
 ## Tests
 
@@ -72,11 +81,13 @@ app was not run for this change, and nothing a user sees changes.
   revision, that a receipt advances the revision without marking anything sent, and that one comparison
   serves a shared catalog across both windows and a receipt.
 - `tests/unit/renderer/agentStateCatalogs.test.ts` checks the page's side: the cache the broadcast fills,
-  the receipt's own fields kept over the recovery's, a recovered catalog serving the next broadcast, the
-  held catalog standing in when a recovery fails, a recovery for an older revision never filed over a newer
-  one, and a whole reply passed through.
+  the receipt's own fields kept over the recovery's, a recovered catalog serving the next broadcast, a
+  receipt naming an older revision resolved from the newer one without a read, a recovery for an older
+  revision never filed over a newer one, a receipt for another host recovered on its own at the same
+  revision, a failed recovery asked once more, the held catalog standing in when both fail, and a whole
+  reply passed through.
 - `tests/unit/preload/agentStateForwarding.test.ts` checks that the preload accepts a receipt and refuses a
-  catalog that is neither a list nor a revision.
+  catalog that is anything but a revision, a whole list included.
 
 ## Re-run
 

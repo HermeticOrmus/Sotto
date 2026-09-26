@@ -75,7 +75,7 @@ broadcast names. `AGENT_GET` still returns the catalog in full, because it is th
 command's own answer is a command receipt (issue #323, ADR-0028's September 26 amendment): it names each
 catalog by the same revision and never lists it, and the page puts it back from the same cache, so a draft
 save's reply on a 608-model catalog fell from 542 KB to 2.3 KB (`docs/perf/2026-09-26-command-receipt.md`).
-Measured on the same owner catalog (`node:v8`'s `serialize`, which
+The broadcast's omission was measured on the owner's catalog (`node:v8`'s `serialize`, which
 approximates what Electron's structured clone puts on the wire): an unchanged repeat fell from 649 KB to
 1.1 KB, and detecting "unchanged" costs about 0.5 ms per publish across both windows.
 

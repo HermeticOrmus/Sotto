@@ -59,18 +59,40 @@ the exception: `host.models` and each `host.clientHosts[].models` cross as `{ re
 their catalog revision. `AgentStateBroadcaster.receipt` encodes it with the same revision counter the broadcast
 uses, so there is one ordering for a catalog, not a second one for replies. A receipt records nothing as sent,
 so the next broadcast to that window is what it would have been without the receipt. The preload parses it
-with `agentCommandReceiptSchema`.
+with `agentCommandReceiptSchema`, which accepts a catalog only as a revision. The preload's own bridge is typed
+as what crosses (`AgentWireBridge`: a receipt from `command`, an `AgentStateBroadcast` from `onState`), so code
+that reads it without the page's wrapper cannot read a catalog from it by mistake.
 
 **The page puts the catalog back from the cache the broadcast fills.** `wrapAgentBridge` now wraps `command` as
 well as `onState`, and the two share one cache per page. A receipt whose revisions the window holds resolves
-at once. One whose revisions it does not hold (nothing broadcast yet, or a catalog this command changed whose
-broadcast has not landed) recovers through `bridge.get()` once. Receipts naming the same revisions while that
-is in flight wait for the same answer. The recovered catalog is filed under the receipt's revisions, where the
-next receipt or broadcast naming them finds it. The caller always gets the receipt's own fields, never the
-recovery's. If the recovery fails, the catalog the window last held stands in until the next broadcast; with
-nothing held at all, the reply fails the way a lost reply does. Where the reply is committed against
-broadcasts is unchanged: `AgentContext` still drops a reply that a broadcast overtook (issue #306 is open and
-may change that). The catalog revision orders only catalogs.
+at once. So does one naming an older revision than the window holds: revisions only advance, so that receipt
+was built before a broadcast the window already has, and the newer catalog is the one to show. One whose
+revisions the window does not hold at all (nothing broadcast yet, or a catalog this command changed whose
+broadcast has not landed) recovers through `bridge.get()`. Receipts naming the same hosts at the same revisions
+while that is in flight wait for the same answer; the host is part of that match because main counts revisions
+per host. The recovered catalog is filed under the receipt's revisions, where the next receipt or broadcast
+naming them finds it, and a catalog the cache still cannot name is taken from the recovery's own answer. The
+caller always gets the receipt's own fields, never the recovery's. A recovery that fails is asked once more
+before anything else, because main has already run the command and a failed reply tells the user it may not
+have. If that fails too, the catalog the window last held stands in until the next broadcast; with nothing held
+at all, the reply fails the way a lost reply does. Where the reply is committed against broadcasts is
+unchanged: `AgentContext` still drops a reply that a broadcast overtook. The catalog revision orders only
+catalogs. Issue #306 is open; if it gives the state its own revision, the receipt carries that revision too.
+
+Two sentences of the Decision above no longer hold. The page's cache no longer "lives exactly as long as the
+subscription does": it lives as long as the page, and every `onState` listener and every command share it, so
+a listener that subscribes again finds what an earlier one was sent rather than recovering. And it is no longer
+true that "nothing downstream of the wrapper knows the wire ever changed shape" for code that calls the
+preload's bridge directly: its `command` answers with a receipt. Everything the app reads goes through the
+wrapper, which still hands back a whole `AgentState`.
+
+The broadcast and the receipts advance one counter from two places with no order between them. A reply shell
+built before a catalog changed can be encoded after the broadcast of that change: it takes a new revision for
+the old content, and the next broadcast takes another for the new content. The window then reads `AGENT_GET`
+once for that reply and is sent the catalog in full once more. Nothing wrong reaches the screen, because the
+recovery answers with main's current catalog. Naming the old content by its old revision instead was
+considered and not done: main cannot tell that reply from a catalog that really went back to what it was,
+such as a provider that reconnects, and a window holding the newer revision would then keep showing it.
 
 `AGENT_GET` is unchanged and still answers whole: it is the one recovery path for both. The remote host socket
 protocol is untouched. A content comparison now serves every key that holds the same array: `host.models` and
