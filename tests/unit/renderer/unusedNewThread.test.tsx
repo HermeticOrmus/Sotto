@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { unusedNewThread } from '../../../src/renderer/src/agents/newThread'
 import { defaultAgentConfiguration, type AgentState, type AgentThread } from '../../../src/shared/agents'
 
-const project = { id: 'project', title: 'Project', path: 'C:\project' }
+const project = { id: 'project', title: 'Project', path: 'C:/project' }
 const thread = (patch: Partial<AgentThread>): AgentThread => ({ id: 'thread', projectId: project.id, title: 'New thread', titleSource: 'default',
   modelId: 'codex:model', status: 'idle', requests: [], messages: [], ...patch })
 const state = (threads: AgentThread[]): AgentState => ({
