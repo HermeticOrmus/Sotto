@@ -21,11 +21,9 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { CodexAppServerHost } from '../../src/main/agents/codex'
-import { AgentControl } from '../../src/main/agents/control'
-import { AgentCredentials } from '../../src/main/agents/credentials'
 import { codexFixture } from '../fixtures/codexFixture'
+import { manualSendCoordinator } from '../fixtures/manualSendCoordinator'
 import { median, PERF_BENCH, round } from '../fixtures/perfBench'
-import { immediatePublishScheduler } from '../fixtures/publishScheduler'
 
 const SENDS = 5
 const SIZES = [50, 500, 2000] as const
@@ -89,7 +87,8 @@ async function replies(root: string): Promise<{ method: string; bytes: number }[
 
 /**
  * A fixture whose Codex holds a thread with `turns` completed turns, not yet connected. `wrapped` puts the adapter
- * behind the Sotto thread IDs the coordinator uses, as the app composes it.
+ * behind the Sotto thread host, so the coordinator addresses it by Sotto thread ID. The workspace and provider hosts
+ * the app also puts between them hand a read's purpose on unchanged (threadReadPurpose.test.ts) and are left out.
  */
 async function seededFixture(turns: number, wrapped = false): Promise<{ f: Fixture; id: string }> {
   const first = await codexFixture(undefined, wrapped, 60_000)
@@ -121,14 +120,6 @@ async function seeded(turns: number): Promise<{ f: Fixture; id: string; openMs: 
   return { f, id, openMs: await opened(f, id, startedAt) }
 }
 
-/** A coordinator over the fixture's host with no reasoning and no membership, which a manual send needs neither of. */
-async function coordinator(f: Fixture): Promise<AgentControl> {
-  const credentials = new AgentCredentials(join(f.root, 'vault'), { isEncryptionAvailable: () => false, encryptString: value => Buffer.from(value), decryptString: value => value.toString() })
-  await credentials.load()
-  return new AgentControl({ schedule: immediatePublishScheduler, directory: f.root, host: f.host, credentials,
-    reasoner: { intent: async () => ({ type: 'clarify', text: 'Choose a thread' }), decide: async () => ({ decision: 'human', text: 'Review' }) },
-    membership: { status: async () => ({ status: 'beta', label: 'Fixture', expiresAt: null }), action: async () => ({ status: 'beta', label: 'Fixture', expiresAt: null }) } })
-}
 /** The whole reads a send made before its `turn/start` and after it. */
 async function wholeReads(f: Fixture, from: number): Promise<{ before: number; after: number }> {
   const sent = (await f.driver.requests()).slice(from)
@@ -185,7 +176,7 @@ describe.skipIf(!PERF_BENCH)('Codex send-time read on a long thread', () => {
   for (const turns of SIZES) {
     it(`from the Threads page at ${turns} turns`, async () => {
       const { f, id } = await seededFixture(turns, true)
-      const control = await coordinator(f)
+      const control = await manualSendCoordinator(f.root, f.host)
       try {
         await control.start(); await control.command({ type: 'connect' })
         const startedAt = performance.now()

@@ -10,10 +10,9 @@ import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { AgentControl } from '../../src/main/agents/control'
-import { AgentCredentials } from '../../src/main/agents/credentials'
+import type { AgentControl } from '../../src/main/agents/control'
 import { codexFixture, type RecordedRpc } from '../fixtures/codexFixture'
-import { immediatePublishScheduler } from '../fixtures/publishScheduler'
+import { manualSendCoordinator } from '../fixtures/manualSendCoordinator'
 
 type Fixture = Awaited<ReturnType<typeof codexFixture>>
 const fixtures: Fixture[] = []
@@ -207,14 +206,14 @@ describe('Codex send checks the newest turn before reading the whole transcript'
 })
 
 describe('A send from the Threads page uses the newest-turn check', () => {
-  /** The coordinator over the wrapped adapter, as the app composes it, with one answered thread. */
+  /**
+   * The coordinator over the adapter behind the Sotto thread host, with one answered thread. The workspace and
+   * provider hosts the app also puts between them hand the read's purpose on unchanged; threadReadPurpose.test.ts
+   * shows that.
+   */
   async function coordinated(): Promise<{ f: Fixture; id: string; control: AgentControl }> {
     const f = await codexFixture(undefined, true); fixtures.push(f)
-    const credentials = new AgentCredentials(join(f.root, 'vault'), { isEncryptionAvailable: () => false, encryptString: value => Buffer.from(value), decryptString: value => value.toString() })
-    await credentials.load()
-    const control = new AgentControl({ schedule: immediatePublishScheduler, directory: f.root, host: f.host, credentials,
-      reasoner: { intent: async () => ({ type: 'clarify', text: 'Choose a thread' }), decide: async () => ({ decision: 'human', text: 'Review' }) },
-      membership: { status: async () => ({ status: 'beta', label: 'Fixture', expiresAt: null }), action: async () => ({ status: 'beta', label: 'Fixture', expiresAt: null }) } })
+    const control = await manualSendCoordinator(f.root, f.host)
     controls.push(control)
     await f.host.connect()
     await f.host.execute({ type: 'create-project', commandId: randomUUID(), projectId: f.projectId, title: 'Project', path: f.root })
