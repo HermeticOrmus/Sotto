@@ -29,12 +29,34 @@
 .subagents-older { margin-top: 18px; }
 .subagents-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; min-height: 190px; padding: 30px; color: var(--tt-text-muted); text-align: center; }
 .subagents-empty p { margin: 0; font-size: 14px; }
+/* A workflow stays one row (#339): a strip of one segment per agent under its title, and its count. */
+.subagent-strip { display: flex; gap: 3px; min-width: 0; height: 6px; margin-top: 10px; overflow: hidden; }
+.subagent-strip > i { flex: 1 1 0; min-width: 0; border-radius: 3px; background: var(--tt-border); }
+.subagent-strip > i[data-status='running'] { background: var(--tt-activity); }
+.subagent-strip > i[data-status='completed'] { background: var(--tt-text-muted); }
+.subagent-strip > i[data-status='failed'] { background: var(--tt-error); }
+.subagent-strip > i[data-status='interrupted'] { background: var(--tt-warning); }
+.subagent-kind { flex: none; color: var(--tt-text-2); font-weight: 500; }
+.subagent-count { flex: none; white-space: nowrap; }
+/* The workflow page: the run's strip, its facts, its task and latest word, then its agents as roster rows. */
+.subagents-back { margin-left: -8px; }
+.subagents-back__rule { flex: none; width: 1px; height: 18px; background: var(--tt-hairline); }
+.subagent-workflow { margin: 4px 6px 10px 4px; padding: 6px 0 16px; border-bottom: 1px solid var(--tt-hairline); }
+.subagent-workflow > .subagent-strip { height: 8px; margin: 0 0 10px; }
+.subagent-workflow__facts { display: flex; flex-wrap: wrap; gap: 4px 10px; margin: 0; color: var(--tt-text-muted); font-size: 12px; line-height: 18px; font-variant-numeric: tabular-nums; }
+.subagent-workflow__facts > strong { color: var(--tt-text-2); font-weight: 500; }
+.subagent-workflow__facts > span { overflow-wrap: anywhere; }
+.subagent-details.subagent-workflow__details { margin: 4px 0 0; padding: 0; animation: none; }
+.subagent-workflow__heading { margin: 4px 4px 0; color: var(--tt-text-muted); font-size: 12px; font-weight: 600; }
+.subagent-workflow__empty { margin: 12px 4px; color: var(--tt-text-muted); font-size: 14px; }
 .tools-toggle { position: relative; }
 .tools-toggle__agents-dot { position: absolute; top: 3px; left: 3px; width: 7px; height: 7px; border-radius: 50%; background: var(--tt-activity); box-shadow: 0 0 0 2px var(--tt-canvas); pointer-events: none; }
 @media (prefers-reduced-motion: no-preference) {
-  :root:not([data-reduced-motion='on']) .subagent-details { animation: subagent-reveal .14s ease-out; }
+  :root:not([data-reduced-motion='on']) .subagent-details:not(.subagent-workflow__details) { animation: subagent-reveal .14s ease-out; }
+  :root:not([data-reduced-motion='on']) .subagent-strip > i[data-status='running'] { animation: subagent-breathe 1.6s ease-in-out infinite alternate; }
 }
 @keyframes subagent-reveal { from { opacity: 0; transform: translateY(-3px); } }
+@keyframes subagent-breathe { to { opacity: .45; } }
 @container tools-body (max-width: 439px) {
   .subagents-roster { padding-inline: 10px; }
   .subagent-head { column-gap: 7px; }

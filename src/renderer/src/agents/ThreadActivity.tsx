@@ -174,8 +174,9 @@ function ActivityDetails({ record, provider, connected }: { readonly record: Age
       {changes.length > 1 || record.kind !== 'file-change' ? <p className="thread-activity__fact">{changeVerb(change.kind)} <code>{change.path}</code></p> : null}
       {change.diff ? <MessageContent text={fenced(displayDiff(change.diff), 'diff')} /> : null}
     </div>)}
-    {record.agents?.length ? <ol className="thread-activity__agents" aria-label="Agents" data-connected={connected || undefined}>
-      {record.agents.map((agent, index) => <li key={agent.id} data-status={agent.status}>
+    {/* A workflow's own entry stands for its run; the list is its agents. */}
+    {record.agents?.some(agent => agent.kind !== 'workflow') ? <ol className="thread-activity__agents" aria-label="Agents" data-connected={connected || undefined}>
+      {record.agents.filter(agent => agent.kind !== 'workflow').map((agent, index) => <li key={agent.id} data-status={agent.status}>
         <span className="thread-activity__agent">Agent {index + 1}</span>
         <span className="thread-activity__agent-status">{agentStatusLabel(agent.status)}</span>
         {agent.message ? <span className="thread-activity__agent-message">{agent.message}</span> : null}

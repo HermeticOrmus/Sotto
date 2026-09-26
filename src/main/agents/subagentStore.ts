@@ -12,6 +12,8 @@ const blankWork = (): SubagentStoreWork => ({ indexedReads: 0, rowWrites: 0, ass
 const blankThread = (): ThreadState => ({ revision: 0, sequence: 0, summary: { ...EMPTY_SUBAGENT_SUMMARY } })
 const terminal = (status: Status): boolean => status !== 'running' && status !== 'unknown'
 const counter = (status: Status): keyof SubagentSummary => status === 'running' ? 'working' : status
+/** A workflow's row stands for its run, not an agent: its agents are counted on their own rows. */
+const counted = (row: Pick<SubagentRow, 'kind'>): boolean => row.kind !== 'workflow'
 function privacyIdentity(threadId: string, agentId: string, assignmentId?: string): string {
   return createHash('sha256').update(JSON.stringify([threadId, agentId, assignmentId ?? null])).digest('hex')
 }
@@ -27,6 +29,7 @@ export function subagentActivityClassification(activity: AgentActivity): AgentAc
     ...(activity.taskUpdatesExcluded !== undefined ? { taskUpdatesExcluded: activity.taskUpdatesExcluded } : {}),
     ...(activity.agents ? { agents: activity.agents.map(agent => ({
       id: agent.id, status: agent.status,
+      ...(agent.kind !== undefined ? { kind: agent.kind } : {}),
       ...(agent.assignmentId !== undefined ? { assignmentId: agent.assignmentId } : {}),
       ...(agent.parentId !== undefined ? { parentId: agent.parentId } : {}),
       ...(agent.aliasIds ? { aliasIds: agent.aliasIds.filter(id => /^claude-agent-alias-[a-f0-9]{64}$/u.test(id)).slice(0, 8) } : {}),
@@ -193,10 +196,11 @@ export class SubagentStore {
           ...(assignment.startedAt ? { startedAt: assignment.startedAt } : {}),
           ...(assignment.completedAt ? { completedAt: assignment.completedAt } : {}),
           ...(assignment.durationMs !== undefined ? { durationMs: assignment.durationMs } : {}),
+          ...(observation.kind ?? old?.kind ? { kind: observation.kind ?? old?.kind } : {}),
+          ...(observation.progress ?? old?.progress ? { progress: observation.progress ?? old?.progress } : {}),
         } : { ...old, revision: old.revision + 1 }
-        if (old) state.summary[counter(old.status)]--
-        else state.summary.total++
-        state.summary[counter(row.status)]++
+        if (old && counted(old)) { state.summary[counter(old.status)]--; state.summary.total-- }
+        if (counted(row)) { state.summary[counter(row.status)]++; state.summary.total++ }
         this.saveRow(threadId, row); changed.set(row.id, row)
       }
       if (changed.size || reset) state.revision++
@@ -221,7 +225,8 @@ export class SubagentStore {
         this.saveAssignment(threadId, row.id, { ...value, status: 'unknown' }, String(assignmentRecord.fingerprint), String(assignmentRecord.observed_at))
         return unknown
       })
-      state.summary.working -= rows.length; state.summary.unknown += rows.length; state.revision++
+      const agents = rows.filter(counted).length
+      state.summary.working -= agents; state.summary.unknown += agents; state.revision++
       this.saveThread(threadId, state); db.exec('COMMIT')
       return { threadId, revision: state.revision, rows, summary: state.summary }
     } catch (error) { db.exec('ROLLBACK'); throw error }
@@ -236,6 +241,8 @@ export class SubagentStore {
       return {
         id: row.id, assignmentId: row.assignmentId, status: row.status, title: 'Agent task', observedAt: row.lastObservedAt,
         ...(row.parentId !== undefined ? { parentId: row.parentId } : {}),
+        ...(row.kind !== undefined ? { kind: row.kind } : {}),
+        ...(row.progress !== undefined ? { progress: row.progress } : {}),
         ...(row.model !== undefined ? { model: row.model } : {}),
         ...(row.startedAt !== undefined ? { startedAt: row.startedAt } : {}),
         ...(row.durationMs !== undefined ? { durationMs: row.durationMs } : {}),
@@ -269,7 +276,17 @@ export class SubagentStore {
     const records = this.requireOpen().prepare('SELECT value FROM subagent_rows WHERE thread_id = ? AND sequence < ? ORDER BY sequence DESC LIMIT ?').all(request.threadId, request.before ?? Number.MAX_SAFE_INTEGER, SUBAGENT_PAGE_SIZE + 1)
     this.counts.pageRowsRead += records.length
     const rows = records.slice(0, SUBAGENT_PAGE_SIZE).map(record => JSON.parse(String(record.value)) as SubagentRow).reverse()
-    return { threadId: request.threadId, revision: state.revision, rows, summary: state.summary, ...(records.length > SUBAGENT_PAGE_SIZE ? { before: rows[0]!.sequence } : {}) }
+    // A page that splits a parent from its agents brings the parent along, so a workflow's agents are never
+    // shown loose in the roster for want of the workflow's own row.
+    const ids = new Set(rows.map(row => row.id))
+    const missing = [...new Set(rows.flatMap(row => row.parentId && !ids.has(row.parentId) ? [row.parentId] : []))].slice(0, SUBAGENT_PAGE_SIZE)
+    const parents = missing.flatMap(id => {
+      this.counts.indexedReads++
+      const record = this.requireOpen().prepare('SELECT value FROM subagent_rows WHERE thread_id = ? AND agent_id = ?').get(request.threadId, id)
+      return record ? [JSON.parse(String(record.value)) as SubagentRow] : []
+    })
+    this.counts.pageRowsRead += parents.length
+    return { threadId: request.threadId, revision: state.revision, rows: [...parents, ...rows].sort((a, b) => a.sequence - b.sequence), summary: state.summary, ...(records.length > SUBAGENT_PAGE_SIZE ? { before: rows[0]!.sequence } : {}) }
   }
   assignments(request: SubagentAssignmentsRequest): SubagentAssignmentsPage {
     const records = this.requireOpen().prepare('SELECT value FROM subagent_assignments WHERE thread_id = ? AND agent_id = ? AND sequence < ? ORDER BY sequence DESC LIMIT ?').all(request.threadId, request.agentId, request.before ?? Number.MAX_SAFE_INTEGER, SUBAGENT_ASSIGNMENT_PAGE_SIZE + 1)

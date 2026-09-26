@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto'
-import { MAX_ACTIVITY_TEXT, compactAgentIdentity, isTerminalActivity, mergeAgentActivities, planSteps, type AgentActivity, type ObservedAgent } from '../../shared/agentActivity'
+import { MAX_ACTIVITY_TEXT, compactAgentIdentity, isTerminalActivity, mergeAgentActivities, planSteps, type AgentActivity, type ObservedAgent, type WorkflowProgress } from '../../shared/agentActivity'
+import { observedSubagentStatus } from '../../shared/subagents'
 import { object, type ClaudeFrame } from './claudeProtocol'
 import { claudeText } from './claudeSessionLog'
-import { CLAUDE_TRANSCRIPT_ID, claudeWorkflowModels, type ClaudeModelTarget, type ClaudeSubagentTranscript } from './claudeSubagentModels'
+import { CLAUDE_TRANSCRIPT_ID, type ClaudeModelTarget, type ClaudeSubagentTranscript } from './claudeSubagentModels'
 
 const text = (value: unknown): string | undefined => typeof value === 'string' ? value.slice(0, MAX_ACTIVITY_TEXT) : undefined
 const agentAliasId = (id: string): string => `claude-agent-alias-${createHash('sha256').update(id).digest('hex')}`
@@ -11,6 +12,50 @@ const json = (value: unknown): string | undefined => value === undefined ? undef
 const MAX_TRANSCRIPT_TARGETS = 64
 /** The tool call and task an agent is known by, either of which may be missing. */
 type AgentKeys = { tool?: string | undefined; task?: string | undefined }
+/** An activity row holds at most 200 agents: the workflow's own and this many of its agents. */
+const MAX_WORKFLOW_AGENTS = 199
+const iso = (value: unknown): string | undefined => typeof value === 'number' && Number.isFinite(value) && value > 0 ? new Date(value).toISOString() : undefined
+
+/**
+ * One of a workflow's agents from its `workflow_progress` entry (Claude Code 2.1.280: `type: "workflow_agent"`,
+ * `index`, `label`, `agentId`, `model`, `state` of start, progress, done or error, `startedAt` and `durationMs` in
+ * milliseconds, `promptPreview`, `resultPreview`, `error`, `attempt`). Its row is keyed by its index, which the entry has
+ * from the moment the agent is queued; `agentId` comes only once it starts, and a retry gets a new one. A retry is a
+ * new assignment of the same row, so it reads as working again (Run 2) rather than keeping the failed attempt.
+ */
+function workflowAgent(entry: Record<string, unknown>, workflow: ObservedAgent, known: ObservedAgent | undefined, observedAt: string | undefined): ObservedAgent | undefined {
+  if (entry.type !== 'workflow_agent' || typeof entry.index !== 'number' || !Number.isInteger(entry.index) || entry.index < 0) return undefined
+  const id = `${workflow.id}:agent-${entry.index}`
+  const attempt = typeof entry.attempt === 'number' && Number.isInteger(entry.attempt) && entry.attempt > 1 ? entry.attempt : undefined
+  const assignmentId = `${workflow.assignmentId ?? workflow.id}:agent-${entry.index}${attempt ? `:attempt-${attempt}` : ''}`
+  // An earlier attempt's result, times and finish belong to that attempt; its label and model carry over.
+  if (known && known.assignmentId !== assignmentId) known = { id: known.id, status: 'running', ...(known.title ? { title: known.title } : {}), ...(known.model ? { model: known.model } : {}) }
+  const status = entry.state === 'done' ? 'completed' : entry.state === 'error' ? entry.skipped === true ? 'interrupted' : 'failed'
+    : entry.state === 'start' || entry.state === 'progress' ? 'running' : known?.status ?? 'running'
+  const label = text(entry.label)?.replace(/\s+/gu, ' ').trim()
+  const prompt = text(entry.promptPreview)
+  const result = status === 'failed' ? text(entry.error) ?? text(object(entry.error)?.message) ?? text(entry.resultPreview) : text(entry.resultPreview)
+  const model = text(entry.model)
+  const startedAt = iso(entry.startedAt) ?? known?.startedAt
+  const durationMs = typeof entry.durationMs === 'number' && Number.isFinite(entry.durationMs) && entry.durationMs >= 0 ? entry.durationMs : known?.durationMs
+  const completedAt = status !== 'running' ? known?.completedAt ?? (startedAt && durationMs !== undefined ? new Date(Date.parse(startedAt) + durationMs).toISOString() : observedAt) : undefined
+  return { ...known, id, assignmentId, parentId: workflow.id, status,
+    ...(label ? { title: label } : {}), ...(prompt ? { prompt } : {}), ...(result ? { message: result } : {}),
+    // The latest model named is the one it ran on: a resolved name replaces the launch's alias.
+    ...(model && model !== '<synthetic>' ? { model: model.slice(0, 512) } : {}),
+    ...(startedAt ? { startedAt, timingSource: 'provider' as const } : {}), ...(durationMs !== undefined ? { durationMs } : {}),
+    ...(completedAt ? { completedAt } : {}), ...(observedAt ? { observedAt } : {}) }
+}
+
+/** How far a workflow's agents have got, as its row's count and strip show it. */
+function workflowProgress(agents: readonly ObservedAgent[], queued: number): WorkflowProgress {
+  const progress: WorkflowProgress = { total: agents.length + queued, working: 0, completed: 0, failed: 0, interrupted: 0, ...(queued ? { queued } : {}) }
+  for (const agent of agents) {
+    const status = observedSubagentStatus(agent.status)
+    progress[status === 'running' || status === 'unknown' ? 'working' : status]++
+  }
+  return progress
+}
 
 /** Same projector for native transcript snapshots and the streaming CLI. No execution. */
 export class ClaudeActivity {
@@ -26,6 +71,10 @@ export class ClaudeActivity {
   private readonly runsByTool = new Map<string, string>()
   /** Agents with no model yet whose own transcript can name one, by observed agent id. */
   private readonly transcripts = new Map<string, { transcript: ClaudeSubagentTranscript } & AgentKeys>()
+  /** A workflow's agents by observed id, so a model read from one's transcript finds it. */
+  private readonly workflowMembers = new Map<string, ObservedAgent>()
+  /** How many of each workflow's agents are waiting for a place to start, by the workflow's observed id. */
+  private readonly queuedAgents = new Map<string, number>()
   constructor(private readonly readActivity?: (activityId: string) => AgentActivity | undefined) {}
   apply(previous: AgentActivity[], frame: ClaudeFrame, turnId: string, afterMessageId: string | undefined, cwd: string, live = false): AgentActivity[] {
     const rows: AgentActivity[] = []
@@ -45,7 +94,9 @@ export class ClaudeActivity {
         const task = this.taskByTool.get(parentTool)
         if (task) this.agentsByTask.set(task, compactAgentIdentity(agent))
         const old = previous.findLast(row => row.agents?.some(child => child.id === agent.id))
-        rows.push({ ...(old ?? { id: `claude-agent-model-${parentTool}`, turnId, sequence: 0, kind: 'subagent', title: agent.title ?? 'Subagent', status: 'unknown' }), agents: [agent] })
+        // Only this agent changes; a row that shows others (a workflow's) keeps them.
+        rows.push(old ? { ...old, agents: old.agents!.map(child => child.id === agent.id ? agent : child) }
+          : { id: `claude-agent-model-${parentTool}`, turnId, sequence: 0, kind: 'subagent', title: agent.title ?? 'Subagent', status: 'unknown', agents: [agent] })
       }
     }
     // A live stream frame carries no timestamp of its own, so the moment Sotto received it is the only
@@ -123,9 +174,9 @@ export class ClaudeActivity {
           if (named) this.patchModel(previous, rows, child.id, model)
           this.agentsByTool.set(block.tool_use_id, compactAgentIdentity(child))
           if (task) this.agentsByTask.set(task, compactAgentIdentity(child))
-          // A background launch names the agent's own transcript by its agent id, a workflow launch by its run.
+          // A background launch names the agent's own transcript by its agent id. A workflow's launch names its
+          // run, whose folder holds each of its agents' transcripts; those are watched per agent.
           if (typeof launch?.agentId === 'string') this.watchTranscript(child, { agentId: launch.agentId }, block.tool_use_id, task)
-          else if (run && task) this.watchTranscript(child, { runId: run }, block.tool_use_id, task)
         }
         rows.push({ ...base, ...old, id: `claude-tool-${block.tool_use_id}`, kind: old?.kind ?? 'tool', title: old?.title ?? 'Tool result',
           ...(child ? { agents: [child] } : {}),
@@ -180,11 +231,15 @@ export class ClaudeActivity {
       const toolId = typeof frame.tool_use_id === 'string' ? frame.tool_use_id : this.toolByTask.get(frame.task_id)
       const prior = this.agentsByTask.get(frame.task_id) ?? (toolId ? this.agentsByTool.get(toolId) : undefined) ?? old?.agents?.[0]
       const taskDescription = text(frame.description)
-      // No CLI up to 2.1.280 names a model on the task itself; a workflow's progress names each of its agents'.
-      const progress = Array.isArray(frame.workflow_progress) ? frame.workflow_progress.map(value => text(object(value)?.model)).filter((model): model is string => !!model && model !== '<synthetic>') : []
-      const taskModel = text(frame.model) ?? (progress.length ? claudeWorkflowModels(prior?.model, progress) : undefined)
+      // A workflow's progress frames describe whichever of its agents reported last, so only its start names it.
+      const workflow = frame.task_type === 'local_workflow' || prior?.kind === 'workflow' || old?.agents?.[0]?.kind === 'workflow'
+      const named = taskDescription && (!workflow || frame.subtype === 'task_started')
+      const workflowName = workflow && frame.subtype === 'task_started' ? text(frame.workflow_name) : undefined
+      // No CLI up to 2.1.280 names a model on the task itself. A workflow's agents name their own, on their own rows.
+      const taskModel = text(frame.model)
       const child: ObservedAgent = { ...prior, id: prior?.id ?? (toolId ? `claude-agent-${toolId}` : `claude-agent-task-${frame.task_id}`), assignmentId: prior?.assignmentId ?? `claude-task-${frame.task_id}`, status,
-        ...(taskDescription ? { title: taskDescription, description: taskDescription } : {}),
+        ...(workflow ? { kind: 'workflow' as const } : {}),
+        ...(named ? workflow ? { title: taskDescription, prompt: taskDescription, ...(workflowName ? { description: workflowName } : {}) } : { title: taskDescription, description: taskDescription } : {}),
         ...(taskModel ? { model: taskModel } : {}),
         ...(text(frame.summary) ? { message: text(frame.summary) } : {}),
         ...(observedAt ? { observedAt } : {}),
@@ -195,25 +250,60 @@ export class ClaudeActivity {
       if (prior && isTerminalActivity(prior.status as AgentActivity['status']) && status === 'running' && frame.subtype !== 'task_started') return mergeAgentActivities(previous, rows)
       if (frame.subtype === 'task_notification') this.closedTasks.add(frame.task_id)
       if (taskModel && taskModel !== prior?.model) this.patchModel(previous, rows, child.id, taskModel)
+      const run = toolId ? this.runsByTool.get(toolId) : undefined
+      const agents = workflow ? this.workflowAgents(child, old?.agents?.slice(1) ?? [], frame, observedAt, run) : []
+      if (workflow) child.progress = workflowProgress(agents, this.queuedAgents.get(child.id) ?? 0)
       this.agentsByTask.set(frame.task_id, compactAgentIdentity(child))
       if (toolId) {
         this.agentsByTool.set(toolId, compactAgentIdentity(child))
         this.taskByTool.set(toolId, frame.task_id)
         this.toolByTask.set(frame.task_id, toolId)
       }
-      // A spawned agent's task id is its native agent id, which names its transcript file; a workflow's
-      // task names nothing on disk, so its run folder comes from the launch result.
-      if (frame.subtype === 'task_started') {
-        const run = toolId ? this.runsByTool.get(toolId) : undefined
-        if (frame.task_type === 'local_agent') this.watchTranscript(child, { agentId: frame.task_id }, toolId, frame.task_id)
-        else if (frame.task_type === 'local_workflow' && run) this.watchTranscript(child, { runId: run }, toolId, frame.task_id)
-      }
-      rows.push({ ...base, ...old, id: `claude-task-${frame.task_id}`, kind: 'subagent', status, ...(frame.subtype === 'task_notification' ? { taskUpdatesExcluded: true } : frame.subtype === 'task_started' && old ? { taskUpdatesExcluded: false } : {}), title: text(frame.description) ?? old?.title ?? 'Subagent',
+      // A spawned agent's task id is its native agent id, which names its transcript file. A workflow's
+      // agents each name their own file under the run's folder, watched as their progress names them.
+      if (frame.subtype === 'task_started' && frame.task_type === 'local_agent') this.watchTranscript(child, { agentId: frame.task_id }, toolId, frame.task_id)
+      rows.push({ ...base, ...old, id: `claude-task-${frame.task_id}`, kind: 'subagent', status, ...(frame.subtype === 'task_notification' ? { taskUpdatesExcluded: true } : frame.subtype === 'task_started' && old ? { taskUpdatesExcluded: false } : {}),
+        title: (workflow && frame.subtype !== 'task_started' ? prior?.title ?? old?.title : undefined) ?? text(frame.description) ?? old?.title ?? 'Subagent',
         ...(typeof frame.tool_use_id === 'string' ? { parentId: `claude-tool-${frame.tool_use_id}` } : {}),
         ...(text(frame.summary ?? frame.last_tool_name) ? { text: text(frame.summary ?? frame.last_tool_name) } : {}),
-        agents: [child] })
+        agents: [child, ...agents] })
     }
     return mergeAgentActivities(previous, rows)
+  }
+  /**
+   * A workflow's agents after this frame. Each progress frame lists every agent the run has queued; one without
+   * the list (Claude Code throttles them) keeps the agents already known. An agent still waiting for a place to start
+   * (`state: "start"` with no `startedAt`, or no state while rate limited) is counted, not shown, until it starts.
+   * The workflow's own notification settles any agent still working, since no later frame will report it: finished
+   * when the run completed, interrupted otherwise, so a failed run does not count agents it never heard from as failed.
+   */
+  private workflowAgents(workflow: ObservedAgent, known: readonly ObservedAgent[], frame: ClaudeFrame, observedAt: string | undefined, run: string | undefined): ObservedAgent[] {
+    const agents = new Map(known.filter(agent => agent.parentId === workflow.id).map(agent => [agent.id, agent]))
+    if (Array.isArray(frame.workflow_progress)) {
+      let queued = 0
+      for (const value of frame.workflow_progress) {
+        const entry = object(value)
+        if (entry?.type !== 'workflow_agent') continue
+        const id = typeof entry.index === 'number' ? `${workflow.id}:agent-${entry.index}` : undefined
+        const prior = id ? agents.get(id) ?? this.workflowMembers.get(id) : undefined
+        if (!prior && (entry.state === undefined || (entry.state === 'start' && entry.startedAt === undefined))) { queued++; continue }
+        const agent = workflowAgent(entry, workflow, prior, observedAt)
+        if (!agent) continue
+        agents.set(agent.id, agent)
+        // An agent the stream names no model for has its own transcript under the run's folder.
+        if (!agent.model && run && typeof entry.agentId === 'string') this.watchTranscript(agent, { runId: run, agentId: entry.agentId }, undefined, undefined)
+      }
+      this.queuedAgents.set(workflow.id, queued)
+      for (const id of this.queuedAgents.keys()) { if (this.queuedAgents.size <= MAX_TRANSCRIPT_TARGETS) break; this.queuedAgents.delete(id) }
+    }
+    const settle = frame.subtype === 'task_notification' && isTerminalActivity(workflow.status as AgentActivity['status'])
+    const settled = workflow.status === 'completed' ? 'completed' : 'interrupted'
+    const list = [...agents.values()].slice(0, MAX_WORKFLOW_AGENTS).map(agent => settle && observedSubagentStatus(agent.status) === 'running'
+      ? { ...agent, status: settled, ...(observedAt ? { completedAt: agent.completedAt ?? observedAt, observedAt } : {}) } : agent)
+    // Re-inserting keeps the newest workflow's agents at the end, so the bound drops the oldest.
+    for (const agent of list) { this.workflowMembers.delete(agent.id); this.workflowMembers.set(agent.id, compactAgentIdentity(agent)) }
+    for (const id of this.workflowMembers.keys()) { if (this.workflowMembers.size <= MAX_TRANSCRIPT_TARGETS * 4) break; this.workflowMembers.delete(id) }
+    return list
   }
   /** Agents still missing a model whose own transcript may name it, newest first. */
   modelTargets(): ClaudeModelTarget[] {
@@ -237,13 +327,11 @@ export class ClaudeActivity {
   private current(id: string, entry: AgentKeys): ObservedAgent | undefined {
     const byTask = entry.task ? this.agentsByTask.get(entry.task) : undefined
     const byTool = entry.tool ? this.agentsByTool.get(entry.tool) : undefined
-    return byTask?.id === id ? byTask : byTool?.id === id ? byTool : undefined
+    return byTask?.id === id ? byTask : byTool?.id === id ? byTool : this.workflowMembers.get(id)
   }
   private watchTranscript(agent: ObservedAgent, transcript: ClaudeSubagentTranscript, tool: string | undefined, task: string | undefined): void {
-    if (agent.model || !CLAUDE_TRANSCRIPT_ID.test('agentId' in transcript ? transcript.agentId : transcript.runId)) return
+    if (agent.model || !CLAUDE_TRANSCRIPT_ID.test(transcript.agentId) || (transcript.runId !== undefined && !CLAUDE_TRANSCRIPT_ID.test(transcript.runId))) return
     const known = this.transcripts.get(agent.id)
-    // An agent's own file names one agent; a run folder may hold several, so it never replaces a file.
-    if (known && 'agentId' in known.transcript && 'runId' in transcript) return
     this.transcripts.delete(agent.id)
     this.transcripts.set(agent.id, { transcript, tool: tool ?? known?.tool, task: task ?? known?.task })
     for (const id of this.transcripts.keys()) { if (this.transcripts.size <= MAX_TRANSCRIPT_TARGETS) break; this.transcripts.delete(id) }
@@ -257,6 +345,8 @@ export class ClaudeActivity {
       const known = key ? map.get(key) : undefined
       if (key && known?.id === id) map.set(key, compactAgentIdentity({ ...known, model }))
     }
+    const member = this.workflowMembers.get(id)
+    if (member) this.workflowMembers.set(id, { ...member, model })
     for (const row of previous) {
       if (row.agents?.some(agent => agent.id === id)) rows.push({ ...row, agents: row.agents.map(agent => agent.id === id ? { ...agent, model } : agent) })
     }

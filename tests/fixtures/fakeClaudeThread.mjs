@@ -84,6 +84,9 @@ const timer = setInterval(() => {
     output({ type: 'system', subtype: 'task_started', session_id: session, task_id: action.taskId, tool_use_id: action.toolId, description: action.description, task_type: workflow ? 'local_workflow' : 'local_agent', ...(workflow ? { workflow_name: 'fixture' } : { subagent_type: 'general-purpose', is_backgrounded: true }) })
     output({ type: 'user', uuid: randomUUID(), session_id: session, parent_tool_use_id: null, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: action.toolId, content: 'Launched' }] },
       tool_use_result: workflow ? { status: 'async_launched', taskId: action.taskId, taskType: 'local_workflow', workflowName: 'fixture', runId: action.runId, transcriptDir: dir } : { status: 'async_launched', isAsync: true, agentId } })
+    // A workflow reports each of its agents in its progress; this one names no model, as a queued agent's may not.
+    if (workflow) output({ type: 'system', subtype: 'task_progress', session_id: session, task_id: action.taskId, tool_use_id: action.toolId, description: `Fixture: ${action.label}`, last_tool_name: action.label,
+      workflow_progress: [{ type: 'workflow_agent', index: 1, label: action.label, agentId, state: 'progress', startedAt: Date.now(), promptPreview: 'Fixture preview' }] })
     mkdirSync(dir, { recursive: true })
     const line = frame => JSON.stringify({ ...frame, isSidechain: true, agentId, sessionId: session, cwd: process.cwd(), timestamp: new Date().toISOString() })
     writeFileSync(join(dir, `agent-${agentId}.jsonl`), [
