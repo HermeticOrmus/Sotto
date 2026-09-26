@@ -22,7 +22,7 @@ What each provider read on September 26, 2026, from its primary sources (links a
 
 The bound is one long edge, not a per-provider size. Codex still scales past 2048 itself, and a squarer image at 2576 px can still be over Claude's token budget; the provider does the rest. That way the composer never removes a pixel any model Sotto sends screenshots to would read.
 
-Each attachment records its original and sent sizes in pixels, and nothing else about the image, so the chip can say **Resized** and give both sizes.
+Each attachment records its original and sent sizes in pixels, and nothing else about the image, so the chip can say **Resized to** and the sent size, and give both sizes in its tooltip and to a screen reader.
 
 The work happens in the renderer on Chromium's own decoder and an offscreen canvas. It touches no host and adds no dependency.
 

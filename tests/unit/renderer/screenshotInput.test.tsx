@@ -140,7 +140,9 @@ describe('scaling screenshots down to the bound', () => {
     expect(attachment.dataUrl.startsWith('data:image/png;base64,')).toBe(true)
     expect(decodedBytes(attachment.dataUrl)).toBe(12)
     rerender([attachment])
-    expect(screen.getByText('Resized', { exact: true }).parentElement).toHaveAttribute('title', 'Resized from 3840 by 2160 to 2576 by 1449 pixels')
+    // The sent size is on the chip itself, where a keyboard user sees it too; the tooltip adds the size before.
+    expect(screen.getByText('Resized to 2576 x 1449', { exact: true })).toBeVisible()
+    expect(screen.getByText('Resized to 2576 x 1449', { exact: true }).parentElement).toHaveAttribute('title', 'Resized from 3840 by 2160 to 2576 by 1449 pixels')
     expect(screen.getByText('Resized from 3840 by 2160 to 2576 by 1449 pixels')).toHaveClass('tt-visually-hidden')
   })
   it('hands a 1200x800 PNG on byte for byte and shows no note', async () => {
@@ -151,7 +153,7 @@ describe('scaling screenshots down to the bound', () => {
     expect(attachment.dimensions).toEqual({ original: { width: 1200, height: 800 }, sent: { width: 1200, height: 800 } })
     rerender([attachment])
     expect(screen.getByRole('img', { name: 'small.png' })).toBeVisible()
-    expect(screen.queryByText('Resized', { exact: true })).not.toBeInTheDocument()
+    expect(screen.queryByText(/^Resized/u)).not.toBeInTheDocument()
   })
   it('keeps a JPEG a JPEG', async () => {
     const drawn = stubCanvas({ 'photo.jpg': { width: 4032, height: 3024 } })

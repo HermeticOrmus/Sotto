@@ -24,7 +24,7 @@ If Sotto starts sending Codex images with `original` detail, or Codex turns its 
 
 A screenshot of Sotto's own browser added as browser feedback goes through the same steps (`prepareScreenshotDataUrl`) before it joins the draft. Screenshots still being read when the user moves to another thread are added to the draft of the thread they were pasted into, instead of being dropped.
 
-Each attachment now records `dimensions: { original, sent }` in pixels, sizes and nothing else. The chip under a scaled-down screenshot says "Resized", with "Resized from 3840 by 2160 to 2576 by 1449 pixels" as its tooltip and as the text a screen reader reads. The adapters build their attachment references field by field and ignore the new one.
+Each attachment now records `dimensions: { original, sent }` in pixels, sizes and nothing else. The chip under a scaled-down screenshot says "Resized to 2576 x 1449", with "Resized from 3840 by 2160 to 2576 by 1449 pixels" as its tooltip and as the text a screen reader reads. The adapters build their attachment references field by field and ignore the new one.
 
 The per-image 10 MB and 20 MB total refusals still check the files as the user attached them, before anything is read, so they refuse exactly what they refused before.
 

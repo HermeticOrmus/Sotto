@@ -20,7 +20,7 @@ async function readImage(file: File): Promise<AgentAttachment> {
   return { id: crypto.randomUUID(), name: file.name || 'Screenshot.png', mimeType: file.type as AgentAttachment['mimeType'], dataUrl, ...(dimensions ? { dimensions } : {}) }
 }
 
-/** "Resized from 3840 by 2160 to 2576 by 1449 pixels": sizes only, for the chip's tooltip and accessible name. */
+/** "Resized from 3840 by 2160 to 2576 by 1449 pixels": sizes only, for the chip's tooltip and what a screen reader reads. */
 function resizedDescription({ original, sent }: AgentAttachmentDimensions): string {
   return `Resized from ${original.width} by ${original.height} to ${sent.width} by ${sent.height} pixels`
 }
@@ -96,7 +96,7 @@ export function ScreenshotInput({ attachments, onChange, onAddAfterClose, disabl
     {attachments.length > 0 && <div className="screenshot-previews" aria-label="Attached screenshots">{attachments.map(attachment => <figure key={attachment.id}>
       <img src={attachment.dataUrl} alt={attachment.name} /><figcaption title={attachment.name}>{attachment.name}</figcaption>
       {wasResized(attachment.dimensions) && <small className="screenshot-previews__resized" title={resizedDescription(attachment.dimensions)}>
-        <span aria-hidden="true">Resized</span><span className="tt-visually-hidden">{resizedDescription(attachment.dimensions)}</span></small>}
+        <span aria-hidden="true">Resized to {attachment.dimensions.sent.width} x {attachment.dimensions.sent.height}</span><span className="tt-visually-hidden">{resizedDescription(attachment.dimensions)}</span></small>}
       <button type="button" title={`Remove ${attachment.name}`} aria-label={`Remove ${attachment.name}`} disabled={disabled || busy} onClick={() => onChange(current.current.filter(item => item.id !== attachment.id))}><X size={12} /></button>
     </figure>)}</div>}
     <div className="screenshot-input__tools"><input ref={picker} type="file" accept={AGENT_IMAGE_MIME_TYPES.join(',')} multiple aria-label="Screenshot files" hidden onChange={event => { const files = [...(event.target.files ?? [])]; event.target.value = ''; void add(files) }} />
