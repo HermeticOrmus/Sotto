@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { fitLongEdge, prepareScreenshot, SCREENSHOT_MAX_LONG_EDGE, wasResized, type ImageSize, type ScreenshotDecoder } from '../../../src/renderer/src/agents/screenshotResize'
+import { fitLongEdge, prepareScreenshot, prepareScreenshotDataUrl, readImageHeader, SCREENSHOT_MAX_LONG_EDGE, wasResized, type ImageSize, type ScreenshotDecoder } from '../../../src/renderer/src/agents/screenshotResize'
 
 /** A decoder that reports `size` and writes a blob of `encodedBytes` bytes in whatever type it is asked for. */
 function fakeDecoder(size: ImageSize, encodedBytes = 10) {
@@ -84,5 +84,91 @@ describe('preparing a screenshot to hand on', () => {
     const original = file('image/png')
     expect(await prepareScreenshot(original, async () => null)).toEqual({ blob: original })
     expect(await prepareScreenshot(original, async () => { throw new Error('not an image') })).toEqual({ blob: original })
+  })
+})
+
+const bytes = (...parts: (number[] | string | Uint8Array)[]): Uint8Array<ArrayBuffer> => new Uint8Array(parts.flatMap(part =>
+  typeof part === 'string' ? [...part].map(char => char.charCodeAt(0)) : [...part]))
+const be32 = (value: number) => [value >>> 24 & 255, value >>> 16 & 255, value >>> 8 & 255, value & 255]
+const le16 = (value: number) => [value & 255, value >>> 8 & 255]
+const le24 = (value: number) => [value & 255, value >>> 8 & 255, value >>> 16 & 255]
+const le32 = (value: number) => [...le16(value & 0xffff), ...le16(value >>> 16)]
+/** A PNG's signature, header and the chunks named before its image data, which is left empty. */
+const png = (width: number, height: number, ...before: string[]) => bytes([137, 80, 78, 71, 13, 10, 26, 10],
+  be32(13), 'IHDR', be32(width), be32(height), [8, 6, 0, 0, 0], be32(0),
+  ...before.flatMap(type => [be32(8), type, new Array<number>(8).fill(0), be32(0)]), be32(0), 'IDAT', be32(0))
+/** A JPEG with a JFIF segment, an EXIF orientation when given, and then a baseline frame header. */
+const jpeg = (width: number, height: number, orientation?: number) => {
+  const tiff = orientation === undefined ? null : bytes('II', le16(42), le32(8), le16(1), le16(0x0112), le16(3), le32(1), le16(orientation), [0, 0], le32(0))
+  const app1 = tiff ? bytes([0xff, 0xe1], [(tiff.length + 8) >> 8, (tiff.length + 8) & 255], 'Exif', [0, 0], tiff) : bytes()
+  return bytes([0xff, 0xd8], [0xff, 0xe0, 0, 16], 'JFIF', new Array<number>(10).fill(0), app1,
+    [0xff, 0xc0, 0, 17, 8, height >> 8, height & 255, width >> 8, width & 255, 3], new Array<number>(9).fill(0), [0xff, 0xda, 0, 2])
+}
+const webp = (chunk: string, body: number[]) => bytes('RIFF', le32(4 + 8 + body.length), 'WEBP', chunk, le32(body.length), body)
+
+describe('reading the size an image names in its first bytes', () => {
+  it('reads a PNG, and knows an animated one by its animation chunk', () => {
+    expect(readImageHeader(png(3840, 2160))).toEqual({ size: { width: 3840, height: 2160 }, animated: false })
+    expect(readImageHeader(png(3840, 2160, 'iCCP', 'acTL'))).toEqual({ size: { width: 3840, height: 2160 }, animated: true })
+  })
+  it('reads a JPEG past its metadata, with a quarter-turned orientation swapping its sides as the decoder shows it', () => {
+    expect(readImageHeader(jpeg(4032, 3024))).toEqual({ size: { width: 4032, height: 3024 }, animated: false })
+    expect(readImageHeader(jpeg(4032, 3024, 1))).toEqual({ size: { width: 4032, height: 3024 }, animated: false })
+    expect(readImageHeader(jpeg(4032, 3024, 6))).toEqual({ size: { width: 3024, height: 4032 }, animated: false })
+  })
+  it('reads a WebP of each kind, and knows an animated one by its flag', () => {
+    expect(readImageHeader(webp('VP8 ', [0, 0, 0, 0x9d, 0x01, 0x2a, ...le16(3000), ...le16(2000), 0, 0]))).toEqual({ size: { width: 3000, height: 2000 }, animated: false })
+    expect(readImageHeader(webp('VP8L', [0x2f, ...le32((3000 - 1) | (2000 - 1) << 14), 0, 0, 0, 0, 0]))).toEqual({ size: { width: 3000, height: 2000 }, animated: false })
+    expect(readImageHeader(webp('VP8X', [0, 0, 0, 0, ...le24(2999), ...le24(1999)]))).toEqual({ size: { width: 3000, height: 2000 }, animated: false })
+    expect(readImageHeader(webp('VP8X', [0x02, 0, 0, 0, ...le24(2999), ...le24(1999)]))).toEqual({ size: { width: 3000, height: 2000 }, animated: true })
+  })
+  it('reads a GIF', () => {
+    expect(readImageHeader(bytes('GIF89a', le16(640), le16(480), [0, 0, 0]))).toEqual({ size: { width: 640, height: 480 }, animated: false })
+  })
+  it('reads nothing from bytes that are not an image, are cut short, or name no plausible size', () => {
+    expect(readImageHeader(bytes('not an image at all, just some text'))).toBeNull()
+    expect(readImageHeader(png(3840, 2160).subarray(0, 30))).toBeNull()
+    expect(readImageHeader(jpeg(4032, 3024).subarray(0, 24))).toBeNull()
+    expect(readImageHeader(png(0, 2160))).toBeNull()
+    expect(readImageHeader(png(70_000, 2160))).toBeNull()
+  })
+})
+
+describe('preparing a screenshot whose first bytes name its size', () => {
+  const never: ScreenshotDecoder = async () => { throw new Error('decoded a screenshot that fits') }
+  it('hands on one that fits without decoding it', async () => {
+    const decode = vi.fn(never)
+    const original = new File([png(1920, 1080)], 'shot.png', { type: 'image/png' })
+    expect(await prepareScreenshot(original, decode)).toEqual({ blob: original, dimensions: { original: { width: 1920, height: 1080 }, sent: { width: 1920, height: 1080 } } })
+    expect(decode).not.toHaveBeenCalled()
+  })
+  it('never scales an animated PNG or WebP, which would keep only its first frame', async () => {
+    for (const [data, type] of [[png(3840, 2160, 'acTL'), 'image/png'], [webp('VP8X', [0x02, 0, 0, 0, ...le24(3839), ...le24(2159)]), 'image/webp']] as const) {
+      const decode = vi.fn(never)
+      const original = new File([data], 'moving', { type })
+      expect(await prepareScreenshot(original, decode)).toEqual({ blob: original, dimensions: { original: { width: 3840, height: 2160 }, sent: { width: 3840, height: 2160 } } })
+      expect(decode).not.toHaveBeenCalled()
+    }
+  })
+  it('decodes one past the bound and scales it down', async () => {
+    const { decode, encode } = fakeDecoder({ width: 3840, height: 2160 })
+    const prepared = await prepareScreenshot(new File([png(3840, 2160), new Uint8Array(1000)], 'big.png', { type: 'image/png' }), decode)
+    expect(encode).toHaveBeenCalledWith({ width: 2576, height: 1449 }, 'image/png')
+    expect(prepared.dimensions?.sent).toEqual({ width: 2576, height: 1449 })
+  })
+})
+
+describe('preparing a screenshot held as a data URL', () => {
+  const dataUrl = (data: Uint8Array, type = 'image/png') => `data:${type};base64,${btoa(String.fromCharCode(...data))}`
+  it('gives the same data URL back when nothing needs scaling', async () => {
+    const source = dataUrl(png(1280, 800))
+    expect(await prepareScreenshotDataUrl(source)).toEqual({ dataUrl: source, dimensions: { original: { width: 1280, height: 800 }, sent: { width: 1280, height: 800 } } })
+    expect(await prepareScreenshotDataUrl('not a data URL')).toEqual({ dataUrl: 'not a data URL' })
+  })
+  it('scales a capture past the bound down to a data URL of its own type', async () => {
+    const { decode } = fakeDecoder({ width: 5120, height: 2880 })
+    const prepared = await prepareScreenshotDataUrl(dataUrl(bytes(png(5120, 2880), new Uint8Array(1000))), decode)
+    expect(prepared.dataUrl).toBe(`data:image/png;base64,${btoa(String.fromCharCode(...new Uint8Array(10)))}`)
+    expect(prepared.dimensions).toEqual({ original: { width: 5120, height: 2880 }, sent: { width: 2576, height: 1449 } })
   })
 })
