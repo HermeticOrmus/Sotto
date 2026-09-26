@@ -28,6 +28,7 @@ import { AGENT_COMMAND, type AgentCommand, type AgentHostSnapshot, type AgentMes
 import { median, PERF_BENCH, round } from '../fixtures/perfBench'
 
 vi.mock('electron', () => ({ app: { isPackaged: false, getAppPath: () => 'D:/fixture' } }))
+import { AgentStateBroadcaster } from '../../src/main/agents/agentStateBroadcast'
 import { registerAgentIpc } from '../../src/main/agents/ipc'
 
 const THREADS = 8
@@ -98,7 +99,7 @@ describe.skipIf(!PERF_BENCH)('command reply cost', () => {
     const url = 'file:///main.html'
     const main: TrustedIpcSender = { role: 'main', url, webContents: { mainFrame: { parent: null, url }, isDestroyed: () => false, getURL: () => url } }
     const unregister = registerAgentIpc(ipc, router, router, () => [main], 'win32', { status: vi.fn(), download: vi.fn() },
-      { synthesize: vi.fn(), voices: vi.fn(), cancel: vi.fn() }, { synthesize: vi.fn(), cancel: vi.fn() })
+      { synthesize: vi.fn(), voices: vi.fn(), cancel: vi.fn() }, { synthesize: vi.fn(), cancel: vi.fn() }, { receipts: new AgentStateBroadcaster() })
     dispose = () => { unregister(); router.dispose() }
     const send = (command: AgentCommand) =>
       listeners.get(AGENT_COMMAND)!({ sender: main.webContents, senderFrame: main.webContents.mainFrame }, command) as Promise<AgentState>

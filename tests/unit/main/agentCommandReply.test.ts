@@ -21,6 +21,7 @@ import { emptyDesktopState } from '../../../src/main/hosts/inactiveLocalHost'
 import { immediatePublishScheduler } from '../../fixtures/publishScheduler'
 
 vi.mock('electron', () => ({ app: { isPackaged: false, getAppPath: () => 'D:/fixture' } }))
+import { AgentStateBroadcaster } from '../../../src/main/agents/agentStateBroadcast'
 import { registerAgentIpc } from '../../../src/main/agents/ipc'
 
 const HOST_ID = '11111111-1111-4111-8111-111111111111'
@@ -58,7 +59,7 @@ async function fixture() {
   const url = 'file:///main.html'
   const main: TrustedIpcSender = { role: 'main', url, webContents: { mainFrame: { parent: null, url }, isDestroyed: () => false, getURL: () => url } }
   disposables.push(registerAgentIpc(ipc, router, router, () => [main], 'win32', { status: vi.fn(), download: vi.fn() },
-    { synthesize: vi.fn(), voices: vi.fn(), cancel: vi.fn() }, { synthesize: vi.fn(), cancel: vi.fn() }))
+    { synthesize: vi.fn(), voices: vi.fn(), cancel: vi.fn() }, { synthesize: vi.fn(), cancel: vi.fn() }, { receipts: new AgentStateBroadcaster() }))
   const send = (command: AgentCommand) =>
     listeners.get(AGENT_COMMAND)!({ sender: main.webContents, senderFrame: main.webContents.mainFrame }, command) as Promise<AgentState>
   return { control, send }

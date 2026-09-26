@@ -311,7 +311,7 @@ export interface SottoBridge {
   readonly subagents?: import('./subagents').SubagentsBridge
   readonly files?: import('./files').FilesBridge
   readonly memory?: import('./memory').MemoryBridge
-  readonly agents?: import('./agents').AgentBridge
+  readonly agents?: import('./agents').AgentWireBridge
   readonly platform: SottoPlatform
 
   listRecoveryNotices(): Promise<readonly RecoveryNotice[]>
@@ -369,7 +369,7 @@ export interface SottoBridge {
 
 /** Least-privilege surface exposed only inside the non-focusing widget renderer. */
 export interface SottoWidgetBridge {
-  readonly agents?: import('./agents').AgentBridge
+  readonly agents?: import('./agents').AgentWireBridge
   readonly platform: SottoPlatform
 
   onWidgetState(listener: (state: WidgetSnapshot) => void): Unsubscribe

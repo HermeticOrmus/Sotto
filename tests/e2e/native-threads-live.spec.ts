@@ -49,7 +49,8 @@ for (const provider of ['codex', 'claude', 'grok'] as const) {
       if (result.error) throw new Error(result.error)
       const connected = await window.sotto!.agents!.command({ type: 'connect', provider })
       if (connected.error) throw new Error(connected.error)
-      const ready = connected.host.models.filter(model => model.providerId === provider && model.ready)
+      // A command answers with a receipt that names the model catalog by revision; the whole list is read here.
+      const ready = (await window.sotto!.agents!.get()).host.models.filter(model => model.providerId === provider && model.ready)
       const model = ready.find(model => /luna|mini|haiku/i.test(model.name)) ?? ready[0]
       if (!model) throw new Error(`No ready ${provider} model; no native turn initiated.`)
       const configured = await window.sotto!.agents!.command({ type: 'configure', patch: { defaultModelId: model.id } })
