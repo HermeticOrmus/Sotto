@@ -2,11 +2,12 @@ import { createHash, randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { z } from 'zod'
 import { agentAttachmentHandleSchema, agentAttachmentSchema, agentFollowupSchema, agentDeliveryReceiptsSchema, MAX_DELIVERED_DRAFTS,
-  type AgentAttachment, type AgentAttachmentHandle, type AgentFollowup } from '../../shared/agents'
+  type AgentAttachmentHandle, type AgentFollowup } from '../../shared/agents'
 import { AtomicJsonStore } from '../storage/atomicJsonStore'
+import type { StageInline } from './attachmentStore'
 
-/** Why a follow-up came back from a restart without an image it had. */
-export const LOST_IMAGES = 'An image in this follow-up was not kept after Sotto restarted, because history is off. Attach it again or remove the follow-up.'
+/** Why a follow-up came back from a restart without an image it had, whatever the reason the image was not kept. */
+export const LOST_IMAGES = 'An image in this follow-up was no longer kept when Sotto started, so the follow-up was paused rather than sent without it. Attach the image again or remove the follow-up.'
 export function followupDigest(input: Pick<AgentFollowup, 'text' | 'attachments' | 'skills' | 'files'>): string {
   const base = input.skills?.length ? [input.text.trim(), input.attachments, input.skills] : [input.text.trim(), input.attachments]
   // Mentioned files join the digest only when there are any, so revisions without them keep their existing identity.
@@ -20,8 +21,6 @@ type State = { items: AgentFollowup[]; receipts: z.infer<typeof receiptsSchema> 
  */
 const storedSchema = z.object({ items: z.array(agentFollowupSchema.extend({ attachments: z.array(z.union([agentAttachmentHandleSchema, agentAttachmentSchema])) })), receipts: receiptsSchema })
 type Stored = z.infer<typeof storedSchema>
-/** Stages one image a follow-up held inline, answering with its handle, or null for one that is not the image it claims. */
-export type StageInline = (attachment: AgentAttachment) => Promise<AgentAttachmentHandle | null>
 /** The durable queue as it stands, for reading only. */
 export interface FollowupView {
   readonly items: readonly Readonly<State['items'][number]>[]
@@ -38,12 +37,13 @@ export class FollowupStore {
   }
   /**
    * Reads the queue, staging any image an older version kept inline. `kept` says whether a follow-up's content is
-   * still there; one that lost an image (kept in memory while history was off) is paused and says so, never sent
-   * without it.
+   * still there. One that lost an image, because its content is gone or an inline one was not the image it claimed,
+   * is paused and says so, never sent without it.
    */
   async load(stage?: StageInline, kept: (handle: AgentAttachmentHandle) => boolean = () => true): Promise<void> {
     const stored = await this.store.read()
     const items: State['items'] = []
+    const lost = new Set<string>()
     for (const item of stored.items) {
       const attachments: AgentAttachmentHandle[] = []
       for (const attachment of item.attachments) {
@@ -51,6 +51,7 @@ export class FollowupStore {
         if (!stage) throw new Error('This queue holds images from an earlier version and cannot be read without staging them.')
         const handle = await stage(attachment)
         if (handle) attachments.push(handle)
+        else lost.add(item.id)
       }
       items.push(agentFollowupSchema.parse({ ...item, attachments }))
     }
@@ -58,7 +59,7 @@ export class FollowupStore {
     await this.change(state => {
       for (const item of state.items) {
         const remaining = item.attachments.filter(kept)
-        if (remaining.length === item.attachments.length) continue
+        if (remaining.length === item.attachments.length && !lost.has(item.id)) continue
         item.attachments = remaining
         if (['queued', 'paused', 'failed'].includes(item.status)) { item.status = 'paused'; item.error = LOST_IMAGES }
       }

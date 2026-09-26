@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { z } from 'zod'
 import { AGENT_IMAGE_MIME_TYPES, AGENT_MAX_IMAGE_BYTES, agentAttachmentHandleSchema, attachmentDigestSchema, bytesHaveRasterSignature,
-  type AgentAttachmentHandle } from '../../shared/agents'
+  type AgentAttachment, type AgentAttachmentHandle } from '../../shared/agents'
 import { AtomicJsonStore } from '../storage/atomicJsonStore'
 
 type ImageType = typeof AGENT_IMAGE_MIME_TYPES[number]
@@ -29,8 +29,23 @@ interface Held extends Entry { memory?: Buffer; unownedSince: number | null }
 /** Content staging refuses for what it is (its type, its size, its signature), not for a failure to keep it. */
 export class RefusedImage extends Error {}
 
+/**
+ * Stages one image a file from before ADR-0030 kept inline, answering with its handle under the image's own ID, or
+ * null for one that is not the image it claims. Failing to keep one is thrown: that is storage, not the image.
+ */
+export type StageInline = (attachment: AgentAttachment) => Promise<AgentAttachmentHandle | null>
+export function inlineStager(store: Pick<AttachmentStore, 'stage'>): StageInline {
+  return async attachment => {
+    const bytes = Buffer.from(attachment.dataUrl.slice(attachment.dataUrl.indexOf(',') + 1), 'base64')
+    try { return { ...await store.stage({ name: attachment.name, mimeType: attachment.mimeType, bytes }), id: attachment.id } }
+    catch (error) { if (error instanceof RefusedImage) return null; throw error }
+  }
+}
+
 export const MISSING_ATTACHMENT = 'An image in this message is no longer kept on this computer. Remove it and attach it again. Nothing else was changed.'
+/** The same, from a headless host: the desktop reading it is not the machine that lost the image. */
 export const MISSING_REMOTE_ATTACHMENT = 'An image in this message is no longer kept on its host. Remove it and attach it again. Nothing else was changed.'
+export const MISMATCHED_ATTACHMENT = 'An image in this message does not match the copy Sotto kept. Remove it and attach it again. Nothing was sent.'
 
 /**
  * One host's staged images (ADR-0030). Each distinct content is one file named by its SHA-256, beside a small index
@@ -43,7 +58,12 @@ export class AttachmentStore {
   private readonly folder: string
   private readonly index: AtomicJsonStore<Index>
   private serial: Promise<unknown> = Promise.resolve()
-  constructor(directory: string, private readonly historyEnabled: () => boolean = () => true, private readonly now: () => number = () => Date.now()) {
+  /**
+   * `missing` is the sentence a handle whose content is gone is refused with: this computer's on the desktop,
+   * MISSING_REMOTE_ATTACHMENT on a headless host, whose refusals a desktop shows.
+   */
+  constructor(directory: string, private readonly historyEnabled: () => boolean = () => true, private readonly now: () => number = () => Date.now(),
+    readonly missing: string = MISSING_ATTACHMENT) {
     this.folder = join(directory, 'attachments')
     this.index = new AtomicJsonStore(join(this.folder, INDEX_FILE), value => {
       const saved = z.object({ version: z.literal(1), entries: z.array(z.unknown()) }).parse(value)
@@ -157,20 +177,33 @@ export class AttachmentStore {
    * Refuses handles whose content this store does not keep, or whose type or size disagree with it, before a
    * command that carries them does anything. A window's handle is a claim; the store is what it is checked against.
    */
-  verify(handles: readonly Pick<AgentAttachmentHandle, 'digest' | 'mimeType' | 'sizeBytes'>[] | undefined, missing = MISSING_ATTACHMENT): void {
+  verify(handles: readonly Pick<AgentAttachmentHandle, 'digest' | 'mimeType' | 'sizeBytes'>[] | undefined): void {
     for (const handle of handles ?? []) {
       const held = this.held.get(handle.digest)
-      if (!held) throw new Error(missing)
-      if (held.mimeType !== handle.mimeType || held.sizeBytes !== handle.sizeBytes) throw new Error('The image content does not match its file type.')
+      if (!held) throw new Error(this.missing)
+      if (held.mimeType !== handle.mimeType || held.sizeBytes !== handle.sizeBytes) throw new Error(MISMATCHED_ATTACHMENT)
     }
   }
-  /** The bytes a digest names, or null when this store no longer keeps them. */
+  /** Whether a handle names content this store keeps, as the handle describes it: what `verify` asks of each one. */
+  keeps(handle: Pick<AgentAttachmentHandle, 'digest' | 'mimeType' | 'sizeBytes'>): boolean {
+    const held = this.held.get(handle.digest)
+    return held !== undefined && held.mimeType === handle.mimeType && held.sizeBytes === handle.sizeBytes
+  }
+  /**
+   * The bytes a digest names, or null when this store no longer keeps them. Bytes read from disk are hashed first:
+   * a file truncated, damaged or replaced since it was staged is not the image the user attached, so it is treated
+   * as gone rather than sent under their digest. Staging the same image again writes it afresh.
+   */
   async read(digest: string): Promise<Buffer | null> {
     const held = this.held.get(digest)
     if (!held) return null
     if (held.memory) return held.memory
-    try { return await readFile(this.file(held)) }
+    let bytes: Buffer
+    try { bytes = await readFile(this.file(held)) }
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error }
+    if (createHash('sha256').update(bytes).digest('hex') === digest) return bytes
+    if (this.held.get(digest) === held) this.held.delete(digest)
+    return null
   }
   /** The type a digest was staged as, so a reader can say what the bytes are. */
   mimeType(digest: string): ImageType | null { return this.held.get(digest)?.mimeType ?? null }
@@ -180,12 +213,14 @@ export class AttachmentStore {
    * next time nothing owns it. Content in `releaseNow` that nothing owns goes at once, without a grace: that is what
    * turning history off asks for the content only previews kept.
    */
-  sweep(owned: ReadonlySet<string>, graceMs = UNOWNED_ATTACHMENT_GRACE_MS, releaseNow: ReadonlySet<string> = new Set()): Promise<void> {
+  sweep(owned: ReadonlySet<string> | (() => ReadonlySet<string>), graceMs = UNOWNED_ATTACHMENT_GRACE_MS, releaseNow: ReadonlySet<string> = new Set()): Promise<void> {
     return this.enqueue(async () => {
+      // Asked when the sweep runs, not when it was queued: whatever came to own content meanwhile keeps it.
+      const kept = typeof owned === 'function' ? owned() : owned
       const now = this.now()
       const expired: Held[] = []
       for (const held of this.held.values()) {
-        if (owned.has(held.digest)) { held.unownedSince = null; continue }
+        if (kept.has(held.digest)) { held.unownedSince = null; continue }
         held.unownedSince ??= now
         if (releaseNow.has(held.digest) || now - held.unownedSince >= graceMs) expired.push(held)
       }

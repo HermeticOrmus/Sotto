@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AttachmentPreviews, ATTACHMENT_PREVIEW_RETENTION_MS, MAX_ATTACHMENT_PREVIEW_BYTES } from '../../../src/main/agents/attachmentPreviews'
-import { AttachmentStore } from '../../../src/main/agents/attachmentStore'
+import { AttachmentStore, inlineStager } from '../../../src/main/agents/attachmentStore'
 import { AgentControl } from '../../../src/main/agents/control'
 import { AgentCredentials } from '../../../src/main/agents/credentials'
 import { AtomicJsonStore } from '../../../src/main/storage/atomicJsonStore'
@@ -157,7 +157,7 @@ describe('app-owned submitted attachment previews', () => {
       { threadId: 'workshop', messageId: 'message', commandId: 'command', storedAt: Date.now(), attachments: [inline] },
       { threadId: 'workshop', messageId: 'unsafe', commandId: 'unsafe', storedAt: Date.now(), attachments: [{ ...inline, dataUrl: 'file:///private' }] },
     ] }))
-    await store.load()
+    await store.load(inlineStager(content))
     expect(await saved(root)).toEqual({ version: 2, entries: [expect.objectContaining({ messageId: 'message', attachments: [image] })] })
     expect(content.has(image.digest)).toBe(true)
     const state = await snapshot(); expect(await store.preview(state, 'workshop', 'message', image.id)).toBe(PIXEL_DATA_URL)

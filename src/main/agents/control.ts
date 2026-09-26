@@ -10,7 +10,7 @@ import { z } from 'zod'
 import {
   agentAssignmentSchema, agentConfigurationSchema, agentQueueItemSchema, agentAttachmentHandlesSchema, agentAttachmentHandleSchema, agentAttachmentSchema, attachmentDigestSchema, AGENT_MAX_ATTACHMENTS, agentThreadOptionsSchema, agentThreadDraftSchema, agentDeliverySchema,
   providerUpgradeSchema, defaultAgentConfiguration, PROVIDER_REJECTED_ACTION, PROVIDER_RESULT_UNCONFIRMED, THREAD_SETTINGS_UNRECONCILED, EMPTY_AGENT_HOST, PROVIDER_LABELS, supportsAgentSupervision, isSubscriptionReasoning, agentDeliveryReceiptsSchema, MAX_DELIVERED_DRAFTS, enabledThreadProviders, defaultThreadModelId, capabilitiesForThread, isThreadProviderConnected, providerIdSchema, threadSummaryOf,
-  type AgentMessage, type AgentThreadDetail, type AgentThreadDetailDelta, type AgentThreadDetailUpdate, type ProviderId, type AgentAttachment, type AgentAttachmentHandle, type AgentAttachmentContent, type AgentAttachmentPreviewRequest, type AgentAttachmentPreviewResult, type AgentAssignment, type AgentCommand, type AgentConfiguration, type AgentDelivery, type AgentThreadDraft, type AgentHostSnapshot, type AgentProject, type AgentQueueItem, type AgentState, type AgentThread, type ProviderClientUpdate, type SubscriptionProvider,
+  type AgentMessage, type AgentThreadDetail, type AgentThreadDetailDelta, type AgentThreadDetailUpdate, type ProviderId, type AgentAttachmentHandle, type AgentAttachmentContent, type AgentAttachmentPreviewRequest, type AgentAttachmentPreviewResult, type AgentAssignment, type AgentCommand, type AgentConfiguration, type AgentDelivery, type AgentThreadDraft, type AgentHostSnapshot, type AgentProject, type AgentQueueItem, type AgentState, type AgentThread, type ProviderClientUpdate, type SubscriptionProvider,
 } from '../../shared/agents'
 import { AtomicJsonStore } from '../storage/atomicJsonStore'
 import type { MemoryProfile } from '../memory/profile'
@@ -28,7 +28,7 @@ import { locateClient as locateClientOnDisk, ProviderClients } from './providerC
 import { resolveModel } from '../../shared/modelCatalog'
 import { validatePromptAttachments, validateThreadOptions } from './threadOptions'
 import { AttachmentPreviews } from './attachmentPreviews'
-import { AttachmentStore, MISSING_ATTACHMENT, RefusedImage } from './attachmentStore'
+import { AttachmentStore, inlineStager, type StageInline } from './attachmentStore'
 import type { ThreadTitleExchange } from '../llm/threadTitle'
 import { requestQuestionsDigest, type BindRequestDraftDecision } from './requestDrafts'
 import { requestDraftProvider, requestDraftQuestions } from '../../shared/requestDrafts'
@@ -48,9 +48,13 @@ const RECORDED_COMMAND_TYPES: ReadonlySet<AgentCommand['type']> = new Set([
 
 /** A draft's images as the coordinator saves them: handles, or inline as versions before ADR-0030 saved them, staged at start. */
 const savedAttachmentsSchema = z.array(z.union([agentAttachmentHandleSchema, agentAttachmentSchema])).max(AGENT_MAX_ATTACHMENTS)
-/** What `dispatch` is handed: a host command whose images are still handles. It reads them only at the provider boundary. */
-type DispatchCommand = AgentHostCommand extends infer C ? C extends { readonly attachments?: readonly PromptImage[] }
-  ? Omit<C, 'attachments'> & { readonly attachments?: readonly AgentAttachmentHandle[] } : C : never
+type WithHandles<C> = Omit<C, 'attachments'> & { readonly attachments?: readonly AgentAttachmentHandle[] }
+/** A send or steer as `dispatch` holds it: its images still handles, read only at the provider boundary. */
+type PromptWithHandles = WithHandles<Extract<AgentHostCommand, { type: 'send' }>> | WithHandles<Extract<AgentHostCommand, { type: 'steer' }>>
+/** What `dispatch` is handed: any host command, with a send's or steer's images as handles. */
+type DispatchCommand = Exclude<AgentHostCommand, { type: 'send' | 'steer' }> | PromptWithHandles
+/** A draft saved without an image its window still showed: the text is kept, the image is not. */
+export const DRAFT_IMAGE_NOT_SAVED = 'An image in this draft is no longer kept, so the draft was saved without it. Your text was saved. Remove the image and attach it again.'
 const savedSchema = z.object({
   providerUpgrade: providerUpgradeSchema.nullable().default(null),
   configuration: z.preprocess(value => typeof value === 'object' && value !== null
@@ -254,6 +258,8 @@ export class AgentControl {
      * handed back the way to take it again after. Personal chats hold their own copy of each client.
      */
     releaseClient?: (provider: ProviderId) => Promise<() => Promise<void>>
+    /** The sentence a send is refused with when an image it names is no longer kept; a headless host names itself. */
+    missingAttachment?: string
   }) {
     this.followupStore = new FollowupStore(dependencies.directory)
     this.clients = dependencies.clients ?? new ProviderClients()
@@ -269,7 +275,8 @@ export class AgentControl {
       membership: { status: 'free', label: 'Free dictation', expiresAt: null },
     }
     this.store = new AtomicJsonStore(join(dependencies.directory, 'agents.json'), savedSchema.parse, () => this.saved())
-    this.attachments = new AttachmentStore(dependencies.directory, () => dependencies.historyEnabled?.() !== false)
+    this.attachments = new AttachmentStore(dependencies.directory, () => dependencies.historyEnabled?.() !== false, undefined, dependencies.missingAttachment)
+    this.stageInline = inlineStager(this.attachments)
     this.attachmentPreviews = new AttachmentPreviews(dependencies.directory, this.attachments, () => dependencies.historyEnabled?.() !== false)
   }
   async start(): Promise<void> {
@@ -288,21 +295,19 @@ export class AgentControl {
     await this.attachments.load()
     const images = await this.adoptSavedImages(saved)
     this.persistedDrafts = this.draftSignatures(images.threadDrafts)
-    await this.attachmentPreviews.load()
+    await this.attachmentPreviews.load(this.stageInline)
     this.contextActivityAt = saved.contextSavedAt
-    const { outbox, contextSavedAt, coordinatorConversation, manualDraftId, deliveredPromptDigests, answeredRequests, draftAttachments, threadDrafts, ...restored } = saved
-    // The saved images were adopted above as handles; these are what the file held.
-    void draftAttachments; void threadDrafts
+    const { outbox, contextSavedAt, coordinatorConversation, manualDraftId, deliveredPromptDigests, answeredRequests, ...restored } = saved
     this.coordinatorConversation = coordinatorConversation
     this.queueSelectionPinned = coordinatorConversation
     this.deliveredPromptDigests = deliveredPromptDigests
     this.answeredRequests = answeredRequests
     this.manualDraftId = manualDraftId
-    Object.assign(this.state, restored, images)
+    // The drafts' images as adopted above replace what the file held.
+    Object.assign(this.state, restored, { draftAttachments: images.draftAttachments, threadDrafts: images.threadDrafts })
     // Upgrade the native singleton in place, never from the currently selected thread.
     this.syncLegacyDraft()
-    await this.followupStore.load(attachment => this.stageInline(attachment).catch((error: unknown) => { if (error instanceof RefusedImage) return null; throw error }),
-      handle => this.attachments.has(handle.digest))
+    await this.followupStore.load(this.stageInline, handle => this.attachments.has(handle.digest))
     this.syncFollowups()
     await this.dependencies.host.initialize?.()
     if (this.dependencies.host.workspaceSnapshot) this.state.host = this.dependencies.host.workspaceSnapshot()
@@ -352,7 +357,7 @@ export class AgentControl {
     }
     // Redaction also reaches disk when control is disabled and no reconnect will run.
     await this.persist()
-    await this.attachments.sweep(this.ownedAttachments())
+    await this.attachments.sweep(() => this.ownedAttachments())
     this.state.membership = await this.dependencies.membership.status()
     this.membershipTimer = setInterval(() => {
       const pendingPrivacy = this.privacyCleanupPending
@@ -570,11 +575,8 @@ export class AgentControl {
     // A copy of exactly these bytes: a view would carry its whole backing buffer across IPC, which for a small image can be shared.
     return mimeType && bytes ? { mimeType, bytes: new Uint8Array(bytes) } : null
   }
-  /** Stages one image an older version saved inline, keeping its attachment ID. */
-  private async stageInline(attachment: AgentAttachment): Promise<AgentAttachmentHandle> {
-    const bytes = Buffer.from(attachment.dataUrl.slice(attachment.dataUrl.indexOf(',') + 1), 'base64')
-    return { ...await this.attachments.stage({ name: attachment.name, mimeType: attachment.mimeType, bytes }), id: attachment.id }
-  }
+  /** Stages one image an older version saved inline, keeping its attachment ID: drafts, the queue and previews all use it. */
+  private readonly stageInline: StageInline
   /**
    * The saved drafts' images as handles: inline ones staged, and any whose content is gone (kept in memory while
    * history was off) dropped, so no draft comes back pointing at content that is not there. An inline image that is
@@ -584,11 +586,8 @@ export class AgentControl {
     const adopt = async (items: Saved['draftAttachments']): Promise<AgentAttachmentHandle[]> => {
       const handles: AgentAttachmentHandle[] = []
       for (const item of items) {
-        if ('dataUrl' in item) {
-          const handle = await this.stageInline(item).catch((error: unknown) => { if (error instanceof RefusedImage) return null; throw error })
-          if (handle) handles.push(handle)
-        }
-        else if (this.attachments.has(item.digest)) handles.push(item)
+        const handle = 'dataUrl' in item ? await this.stageInline(item) : this.attachments.has(item.digest) ? item : null
+        if (handle) handles.push(handle)
       }
       return handles
     }
@@ -613,14 +612,14 @@ export class AgentControl {
   private async maintainAttachments(historyOff = false): Promise<void> {
     const previewed = historyOff ? this.attachmentPreviews.named() : undefined
     await this.attachmentPreviews.maintain()
-    await this.attachments.sweep(this.ownedAttachments(), undefined, previewed)
+    await this.attachments.sweep(() => this.ownedAttachments(), undefined, previewed)
   }
   /** A staged image as the adapter receives it: the handle, and its bytes read from the store only when asked. */
   private promptImage(handle: AgentAttachmentHandle): PromptImage {
     const { id, name, mimeType, sizeBytes, digest } = handle
     return { id, name, mimeType, sizeBytes, digest, read: async () => {
       const bytes = await this.attachments.read(digest)
-      if (!bytes) throw new Error(MISSING_ATTACHMENT)
+      if (!bytes) throw new Error(this.attachments.missing)
       return bytes
     } }
   }
@@ -1029,7 +1028,10 @@ export class AgentControl {
   }
   private async saveThreadDraft(command: Extract<AgentCommand, { type: 'save-thread-draft' }>): Promise<AgentState> {
     try {
-      const draft = agentThreadDraftSchema.parse({ ...command, attachments: command.attachments ?? [],
+      // An image no longer kept (a refused prompt restored after its hour, say) is left out, and the text saved.
+      const attachments = (command.attachments ?? []).filter(handle => this.attachments.keeps(handle))
+      const lostImage = attachments.length !== (command.attachments ?? []).length
+      const draft = agentThreadDraftSchema.parse({ ...command, attachments,
         requestId: command.requestId ?? null, updatedAt: new Date().toISOString() })
       if (!this.state.threadDrafts?.some(item => item.threadId === draft.threadId)) this.thread(draft.threadId)
       if (this.state.followupReceipts?.some(item => item.threadId === draft.threadId && item.draftId === draft.draftId) || this.state.deliveredDrafts?.some(item => item.threadId === draft.threadId && item.draftId === draft.draftId)) return this.shell()
@@ -1050,7 +1052,7 @@ export class AgentControl {
         this.state.draft = draft.text; this.state.draftAttachments = draft.attachments
         this.state.draftRequestId = draft.requestId; this.manualDraftId = draft.draftId
       }
-      this.state.error = null
+      this.state.error = lostImage ? DRAFT_IMAGE_NOT_SAVED : null
       await this.persist().catch(() => { throw new Error('Could not save this thread draft. Keep your text and images and retry when storage is available.') })
     } catch (error) { this.state.error = error instanceof z.ZodError ? 'Choose valid draft text and images before saving.' : error instanceof Error ? error.message : 'Could not save this thread draft.' }
     this.publish()
@@ -1259,9 +1261,10 @@ export class AgentControl {
   commandShell(command: AgentCommand, client: ClientIdentity = this.localClient): Promise<AgentState> {
     if (this.disposed) return Promise.resolve({ ...this.shell(), error: 'Sotto is stopping. Restart it before sending another command.' })
     // A handle is the window's claim; the store is what it is checked against, before the command does anything.
-    try { this.attachments.verify('attachments' in command ? command.attachments : undefined) }
+    // A draft save is the exception: it keeps the text and drops what is gone (saveThreadDraft), so typing is never lost.
+    try { if (command.type !== 'save-thread-draft') this.attachments.verify('attachments' in command ? command.attachments : undefined) }
     catch (error) {
-      this.state.error = error instanceof Error ? error.message : MISSING_ATTACHMENT
+      this.state.error = error instanceof Error ? error.message : this.attachments.missing
       if ((command.type === 'manual-send' || command.type === 'steer' || command.type === 'queue-followup') && command.draftId) this.setDelivery(command.threadId, command.draftId, 'failed')
       this.publish()
       return Promise.resolve(this.shell())
@@ -2228,6 +2231,9 @@ export class AgentControl {
     try {
       this.canAct(); this.guardAuthority(command, turn); validate?.()
       if ((command.type === 'send' || command.type === 'steer') && command.attachments?.length) {
+        // Checked again now the outbox entry owns the content: a sweep that runs from here on keeps it, and one
+        // that ran while this waited behind a running lane is caught here rather than at the adapter.
+        this.attachments.verify(command.attachments)
         // Checked before the provider hears anything; kept as a preview only once it has.
         previewAttachments = validatePromptAttachments(this.state.host, this.thread(command.threadId).modelId, command.attachments)
       }

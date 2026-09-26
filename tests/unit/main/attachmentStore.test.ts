@@ -3,7 +3,7 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { AttachmentStore, MISSING_ATTACHMENT, UNOWNED_ATTACHMENT_GRACE_MS } from '../../../src/main/agents/attachmentStore'
+import { AttachmentStore, inlineStager, MISMATCHED_ATTACHMENT, MISSING_ATTACHMENT, MISSING_REMOTE_ATTACHMENT, UNOWNED_ATTACHMENT_GRACE_MS } from '../../../src/main/agents/attachmentStore'
 import { AtomicJsonStore } from '../../../src/main/storage/atomicJsonStore'
 import { handleOf, PIXEL_PNG, pngOfSize } from '../../fixtures/stagedImages'
 
@@ -50,8 +50,46 @@ describe('the attachment store (ADR-0030)', () => {
     expect(() => store.verify([handle])).not.toThrow()
     expect(() => store.verify(undefined)).not.toThrow()
     expect(() => store.verify([handleOf(pngOfSize(32, 9))])).toThrow(MISSING_ATTACHMENT)
-    expect(() => store.verify([{ ...handle, sizeBytes: handle.sizeBytes + 1 }])).toThrow('does not match')
-    expect(() => store.verify([{ ...handle, mimeType: 'image/gif' }])).toThrow('does not match')
+    expect(() => store.verify([{ ...handle, sizeBytes: handle.sizeBytes + 1 }])).toThrow(MISMATCHED_ATTACHMENT)
+    expect(() => store.verify([{ ...handle, mimeType: 'image/gif' }])).toThrow(MISMATCHED_ATTACHMENT)
+    expect(store.keeps(handle)).toBe(true); expect(store.keeps({ ...handle, sizeBytes: 2 })).toBe(false)
+    // A headless host names itself: the desktop showing the refusal is not the machine that lost the image.
+    const remote = new AttachmentStore(await directory(), () => true, undefined, MISSING_REMOTE_ATTACHMENT); await remote.load()
+    expect(() => remote.verify([handle])).toThrow(MISSING_REMOTE_ATTACHMENT)
+  })
+  it('treats content changed on disk since it was staged as gone, and writes it afresh when staged again', async () => {
+    const root = await directory(); const store = new AttachmentStore(root); await store.load()
+    const handle = await store.stage(png)
+    const file = join(folder(root), `${handle.digest}.png`)
+    await writeFile(file, PIXEL_PNG.subarray(0, PIXEL_PNG.length - 4))
+    expect(await store.read(handle.digest)).toBeNull()
+    expect(store.has(handle.digest)).toBe(false)
+    expect(() => store.verify([handle])).toThrow(MISSING_ATTACHMENT)
+    await store.stage(png)
+    expect(await store.read(handle.digest)).toEqual(PIXEL_PNG)
+    // Taken back at start the same way: a file that is not its digest's content is never read as it.
+    await writeFile(file, Buffer.concat([PIXEL_PNG, Buffer.from([0])]))
+    const restarted = new AttachmentStore(root); await restarted.load()
+    expect(await restarted.read(handle.digest)).toBeNull()
+  })
+  it('converts an image an earlier version kept inline through one path, and answers null for one that is not an image', async () => {
+    const root = await directory(); const store = new AttachmentStore(root); await store.load()
+    const stage = inlineStager(store)
+    const inline = { id: 'legacy', name: 'Legacy.png', mimeType: 'image/png' as const, dataUrl: `data:image/png;base64,${PIXEL_PNG.toString('base64')}` }
+    expect(await stage(inline)).toEqual(handleOf(PIXEL_PNG, 'legacy', 'Legacy.png'))
+    expect(await stage({ ...inline, dataUrl: 'data:image/png;base64,YWJj' })).toBeNull()
+  })
+  it('asks what is owned when a sweep runs, not when it was asked for', async () => {
+    const root = await directory(); let now = 1_800_000_000_000
+    const store = new AttachmentStore(root, () => true, () => now); await store.load()
+    const handle = await store.stage(png)
+    now += UNOWNED_ATTACHMENT_GRACE_MS
+    const owned = new Set<string>()
+    const sweep = store.sweep(() => owned)
+    // Something came to own the content after the sweep was queued and before it ran.
+    owned.add(handle.digest)
+    await sweep
+    expect(store.has(handle.digest)).toBe(true)
   })
   it('removes content nothing owns only once it has been unowned for the grace period', async () => {
     const root = await directory(); let now = 1_800_000_000_000

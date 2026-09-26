@@ -2,6 +2,7 @@ import { chmod, mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { createAgentRuntime, type AgentRuntimeOptions } from '../main/agents/runtime'
+import { MISSING_REMOTE_ATTACHMENT } from '../main/agents/attachmentStore'
 import { SecureSettings } from '../main/agents/secureSettings'
 import { createStorageRepositories } from '../main/storage/repositories'
 import { RecoveryNoticeCenter } from '../main/storage/recoveryNoticeCenter'
@@ -81,6 +82,8 @@ async function startHostRuntime(options: HeadlessHostOptions) {
       openExternal: async () => { throw new Error('Open account settings on the host machine to continue.') },
       openThreadFolder: async () => { throw new Error('This folder is on the host machine. Open it there to continue.') },
       logFailure: code => options.log?.(code),
+      // A desktop shows this host's refusals, so an image this host lost is named as the host's, not "this computer".
+      missingAttachment: MISSING_REMOTE_ATTACHMENT,
       // The host owns its worktrees, so it reclaims them under the rules in its own settings (ADR-0019, ADR-0025).
       worktreeCleanup: { pullRequestMerged: githubPullRequestMerged, log: event => options.log?.(event) },
       claudeSettingsLog: event => options.log?.(event),

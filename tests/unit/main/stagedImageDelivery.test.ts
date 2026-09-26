@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { serialize } from 'node:v8'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { AgentControl } from '../../../src/main/agents/control'
+import { AgentControl, DRAFT_IMAGE_NOT_SAVED } from '../../../src/main/agents/control'
 import { AgentCredentials } from '../../../src/main/agents/credentials'
 import { LOST_IMAGES } from '../../../src/main/agents/followups'
 import { MISSING_ATTACHMENT, UNOWNED_ATTACHMENT_GRACE_MS } from '../../../src/main/agents/attachmentStore'
@@ -183,11 +183,15 @@ describe('staged images through the coordinator (ADR-0030)', () => {
     await writeFile(join(f.root, 'agents.json'), JSON.stringify(saved))
     const now = new Date().toISOString()
     await writeFile(join(f.root, 'followups.json'), JSON.stringify({ items: [{ id: randomUUID(), threadId: 'workshop', draftId: randomUUID(), text: 'Old follow-up', attachments: [inline],
-      createdAt: now, updatedAt: now, status: 'paused', error: 'Paused before the upgrade.' }], receipts: [] }))
+      createdAt: now, updatedAt: now, status: 'paused', error: 'Paused before the upgrade.' },
+    // A queued follow-up that loses its image this way is paused, never sent without it.
+    { id: randomUUID(), threadId: 'workshop', draftId: randomUUID(), text: 'Broken follow-up', attachments: [broken],
+      createdAt: now, updatedAt: now, status: 'queued' }], receipts: [] }))
     await f.crash()
     const handle: AgentAttachmentHandle = { ...handleOf(bytes, 'legacy', 'Legacy.png') }
     expect(f.control.get().threadDrafts).toEqual([expect.objectContaining({ threadId: 'docs', attachments: [handle] })])
-    expect(f.control.get().followups).toEqual([expect.objectContaining({ text: 'Old follow-up', attachments: [handle] })])
+    expect(f.control.get().followups).toEqual([expect.objectContaining({ text: 'Old follow-up', attachments: [handle] }),
+      expect.objectContaining({ text: 'Broken follow-up', attachments: [], status: 'paused', error: LOST_IMAGES })])
     for (const name of ['agents.json', 'followups.json']) expect(await f.disk(name)).not.toContain(trace(bytes))
     expect(await f.files()).toEqual([`${handle.digest}.png`])
   })
@@ -214,6 +218,26 @@ describe('staged images through the coordinator (ADR-0030)', () => {
     f.setHistory(false)
     await f.control.privacyChanged()
     expect((await f.files()).sort()).toEqual([`${drafted.digest}.png`, `${pending.digest}.png`].sort())
+  })
+  it('saves a draft’s text without an image no longer kept, and says so', async () => {
+    const f = await fixture()
+    const kept = await f.stage(pngOfSize(512, 16))
+    const gone = handleOf(pngOfSize(64, 17))
+    const result = await f.control.command({ type: 'save-thread-draft', threadId: 'docs', draftId: randomUUID(), text: 'Typed after the hour', attachments: [kept, gone], requestId: null })
+    expect(result.error).toBe(DRAFT_IMAGE_NOT_SAVED)
+    expect(result.threadDrafts).toEqual([expect.objectContaining({ threadId: 'docs', text: 'Typed after the hour', attachments: [kept] })])
+    expect(await f.disk('agents.json')).toContain('Typed after the hour')
+  })
+  it('refuses a send whose content changed on disk, and the provider never receives other bytes', async () => {
+    const f = await fixture()
+    const bytes = pngOfSize(1024, 18)
+    const image = await f.stage(bytes)
+    await writeFile(join(f.root, 'attachments', `${image.digest}.png`), pngOfSize(1024, 19))
+    const draftId = randomUUID()
+    const result = await f.control.command({ type: 'manual-send', threadId: 'workshop', draftId, text: 'Look', attachments: [image] })
+    expect(result.error).toBe(MISSING_ATTACHMENT)
+    expect(f.host.received).toEqual([])
+    expect(result.deliveries).toEqual([expect.objectContaining({ draftId, status: 'failed' })])
   })
   it('refuses a command naming content this host does not keep, before anything is sent', async () => {
     const f = await fixture()

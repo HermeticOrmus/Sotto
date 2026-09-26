@@ -49,6 +49,7 @@ export interface AgentRuntimeOptions {
   /** How a Claude settings change reached its CLI, as stable event names; never a model, a level or a mode. */
   claudeSettingsLog?: (event: ClaudeSettingsEvent) => void
   releaseClient?: ControlDependencies['releaseClient']
+  missingAttachment?: ControlDependencies['missingAttachment']
   /** Desktop design fixtures replace the whole provider boundary. */
   host?: AgentHost
   /** Native process overrides keep tests on the production coordinator path. */
@@ -135,6 +136,7 @@ export async function createAgentRuntime(options: AgentRuntimeOptions) {
     ...(options.bindRequestDraftDecision ? { bindRequestDraftDecision: options.bindRequestDraftDecision } : {}),
     ...(options.logFailure ? { logFailure: options.logFailure } : {}),
     ...(options.releaseClient ? { releaseClient: options.releaseClient } : {}),
+    ...(options.missingAttachment ? { missingAttachment: options.missingAttachment } : {}),
     writeThreadTitle: threadTitleWriter(shortTextWriter, options.writingSettings),
     reasoner,
   })

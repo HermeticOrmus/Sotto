@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { agentAttachmentHandlesSchema, agentAttachmentsSchema, hasRasterImageSignature,
   type AgentAttachmentHandle, type AgentHostSnapshot } from '../../shared/agents'
 import { AtomicJsonStore } from '../storage/atomicJsonStore'
-import { RefusedImage, type AttachmentStore } from './attachmentStore'
+import type { AttachmentStore, StageInline } from './attachmentStore'
 
 export const ATTACHMENT_PREVIEW_RETENTION_MS = 7 * 86_400_000
 export const MAX_ATTACHMENT_PREVIEW_BYTES = 100 * 1024 * 1024
@@ -30,7 +30,7 @@ export class AttachmentPreviews {
   private enabled: boolean
   private dirty = false
   private readonly store: AtomicJsonStore<Read>
-  constructor(private readonly directory: string, private readonly content: Pick<AttachmentStore, 'read' | 'stage'>,
+  constructor(private readonly directory: string, private readonly content: Pick<AttachmentStore, 'read'>,
     private readonly historyEnabled: () => boolean = () => true, private readonly now: () => number = Date.now) {
     this.enabled = historyEnabled()
     this.store = new AtomicJsonStore<Read>(join(directory, 'attachment-previews.json'), value => {
@@ -43,7 +43,8 @@ export class AttachmentPreviews {
     this.serial = pending.catch(() => undefined)
     return pending
   }
-  async load(): Promise<void> {
+  /** `stage` takes in the images a version 1 file kept inline; without it, such entries are dropped. */
+  async load(stage?: StageInline): Promise<void> {
     await this.enqueue(async () => {
       // AtomicJsonStore removes failed writes; a process crash can leave its private temporary file.
       // Only this store's generated basenames qualify, and initialization precedes any writes.
@@ -61,13 +62,11 @@ export class AttachmentPreviews {
       if (this.enabled) for (const item of saved.entries) {
         if (saved.version === 2) { const parsed = entrySchema.safeParse(item); if (parsed.success) entries.push(parsed.data); continue }
         const inline = inlineEntrySchema.safeParse(item)
-        if (!inline.success) continue
+        if (!inline.success || !stage) continue
         const handles: AgentAttachmentHandle[] = []
         for (const attachment of inline.data.attachments) {
-          const bytes = Buffer.from(attachment.dataUrl.slice(attachment.dataUrl.indexOf(',') + 1), 'base64')
-          const handle = await this.content.stage({ name: attachment.name, mimeType: attachment.mimeType, bytes })
-            .catch((error: unknown) => { if (error instanceof RefusedImage) return null; throw error })
-          if (handle) handles.push({ ...handle, id: attachment.id })
+          const handle = await stage(attachment)
+          if (handle) handles.push(handle)
         }
         if (handles.length) entries.push({ ...inline.data, attachments: handles })
       }
