@@ -236,6 +236,23 @@ describe('ThreadsView workspace', () => {
     expect(command.mock.calls.filter(([request]) => (request as AgentCommand).type === 'manual-send')).toHaveLength(1)
   })
 
+  it('keeps a screenshot pasted just before moving to another thread in the draft it was pasted into', async () => {
+    const state = stateFixture(); state.assignments = []; state.activeThreadId = 'grok-previews'
+    state.host.models.forEach(model => { model.supportsImages = true })
+    const { command, rerender } = renderThreads(state)
+    const drafts = connectionStores.get(command)!
+    fireEvent.change(screen.getByLabelText('Screenshot files'), { target: { files: [new File([new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])], 'moving.png', { type: 'image/png' })] } })
+    // The user moves on before the screenshot has been read.
+    state.activeThreadId = 'release-notes'
+    rerender(<ThreadsView onOpenAgents={vi.fn()} now={NOW} />)
+    await waitFor(() => expect(drafts.draft('grok-previews').attachments).toEqual([expect.objectContaining({ name: 'moving.png' })]))
+    expect(drafts.draft('release-notes').attachments).toEqual([])
+    expect(screen.queryByRole('img', { name: 'moving.png' })).not.toBeInTheDocument()
+    state.activeThreadId = 'grok-previews'
+    rerender(<ThreadsView onOpenAgents={vi.fn()} now={NOW} />)
+    expect(await screen.findByRole('img', { name: 'moving.png' })).toBeVisible()
+  })
+
   it('reconciles a late manual receipt while a managed thread has unmounted its composer', async () => {
     const state = stateFixture(); state.activeThreadId = 'grok-previews'
     state.assignments = state.assignments.filter(assignment => assignment.threadId === 'footer-links')

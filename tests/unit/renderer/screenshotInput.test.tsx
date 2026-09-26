@@ -149,3 +149,36 @@ describe('scaling screenshots down to the bound', () => {
     expect(attachment.dataUrl.startsWith('data:image/jpeg;base64,')).toBe(true)
   })
 })
+
+describe('reading several screenshots at once', () => {
+  it('decodes one at a time, so at most one decoded image is in memory', async () => {
+    let alive = 0, most = 0
+    vi.stubGlobal('createImageBitmap', async () => {
+      alive += 1; most = Math.max(most, alive)
+      await new Promise(resolve => setTimeout(resolve, 5))
+      return { width: 3840, height: 2160, close: () => { alive -= 1 } }
+    })
+    vi.stubGlobal('OffscreenCanvas', class {
+      constructor(readonly width: number, readonly height: number) {}
+      getContext() { return { drawImage: () => undefined } }
+      async convertToBlob({ type }: { type: string }) { return new Blob([new Uint8Array(12)], { type }) }
+    })
+    const change = vi.fn()
+    render(<ScreenshotInput attachments={[]} onChange={change} disabled={false} supported><textarea aria-label="Prompt" /></ScreenshotInput>)
+    const files = ['a', 'b', 'c', 'd'].map(name => screenshotOf(`${name}.png`, 'image/png'))
+    fireEvent.change(screen.getByLabelText('Screenshot files'), { target: { files } })
+    await waitFor(() => expect(change).toHaveBeenCalledTimes(1))
+    expect((change.mock.calls[0]![0] as AgentAttachment[]).map(image => image.name)).toEqual(['a.png', 'b.png', 'c.png', 'd.png'])
+    expect(most).toBe(1)
+    expect(alive).toBe(0)
+  })
+  it('hands screenshots that finish reading after the composer closes to the draft they were attached to', async () => {
+    const change = vi.fn()
+    const late = vi.fn()
+    const view = render(<ScreenshotInput attachments={[]} onChange={change} onAddAfterClose={late} disabled={false} supported><textarea /></ScreenshotInput>)
+    fireEvent.change(screen.getByLabelText('Screenshot files'), { target: { files: [file()] } })
+    view.unmount()
+    await waitFor(() => expect(late).toHaveBeenCalledWith([expect.objectContaining({ name: 'shot.png', dataUrl: expect.stringContaining('data:image/png;base64,') })]))
+    expect(change).not.toHaveBeenCalled()
+  })
+})

@@ -1,6 +1,6 @@
 import React, { useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from 'react'
 import { ArrowUp, Laptop, ListPlus, MessageSquare, Server, Square, X } from 'lucide-react'
-import { capabilitiesForThread, isThreadBusy, type AgentState } from '../../../shared/agents'
+import { agentAttachmentsSchema, capabilitiesForThread, isThreadBusy, type AgentState } from '../../../shared/agents'
 import { isThreadClosed } from '../../../shared/threadActivity'
 import { Button } from '../components/Button'
 import type { AgentConnection } from './AgentContext'
@@ -395,7 +395,11 @@ function ThreadComposerEditor({ row, state, command, store, composerId, editable
     <FilePicker model={files} listId={fileListId} selected={draft.files} onSelect={(entry: FileEntry) => selectFile(files.options.indexOf(entry))} />
     {children}
     <ScreenshotInput key={threadId} attachments={[...draft.attachments]} disabled={!editable} supported={supported}
-      onReadingChange={onReadingChange} onChange={attachments => edit({ attachments })}>
+      onReadingChange={onReadingChange} onChange={attachments => edit({ attachments })} onAddAfterClose={images => {
+        // The user moved to another thread while these were read: they join this thread's draft as it is now.
+        const attachments = agentAttachmentsSchema.safeParse([...store.draft(threadId).attachments, ...images])
+        if (attachments.success) store.edit(threadId, { attachments: attachments.data })
+      }}>
       <textarea ref={textarea} id={composerId} rows={3} value={draft.text} disabled={!editable} spellCheck
         aria-describedby={statusId}
         aria-autocomplete={menus ? 'list' : undefined}

@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Paperclip, X } from 'lucide-react'
 import { AGENT_IMAGE_MIME_TYPES, AGENT_MAX_ATTACHMENT_BYTES, AGENT_MAX_ATTACHMENTS, AGENT_MAX_IMAGE_BYTES, agentAttachmentsSchema, attachmentSizeBytes, type AgentAttachment, type AgentAttachmentDimensions } from '../../../shared/agents'
 import { Button } from '../components/Button'
-import { prepareScreenshot, wasResized } from './screenshotResize'
+import { readScreenshot, wasResized } from './screenshotResize'
 import './screenshots.css'
 
 // The refusals a file's own type and size decide, checked before anything is read.
@@ -15,15 +15,9 @@ function checkImage(file: File): void {
   if (file.size > AGENT_MAX_IMAGE_BYTES) throw new Error(TOO_LARGE)
 }
 
-function readImage(file: File): Promise<AgentAttachment> {
-  // A screenshot larger than any model reads is scaled down before it is encoded, so the bytes past the
-  // bound never become a data URL at all (`screenshotResize.ts`).
-  return prepareScreenshot(file).then(({ blob, dimensions }) => new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onerror = () => reject(new Error('Could not read this screenshot. Try selecting it again.'))
-    reader.onload = () => resolve({ id: crypto.randomUUID(), name: file.name || 'Screenshot.png', mimeType: file.type as AgentAttachment['mimeType'], dataUrl: String(reader.result), ...(dimensions ? { dimensions } : {}) })
-    reader.readAsDataURL(blob)
-  }))
+async function readImage(file: File): Promise<AgentAttachment> {
+  const { dataUrl, dimensions } = await readScreenshot(file)
+  return { id: crypto.randomUUID(), name: file.name || 'Screenshot.png', mimeType: file.type as AgentAttachment['mimeType'], dataUrl, ...(dimensions ? { dimensions } : {}) }
 }
 
 /** "Resized from 3840 by 2160 to 2576 by 1449 pixels": sizes only, for the chip's tooltip and accessible name. */
@@ -31,9 +25,15 @@ function resizedDescription({ original, sent }: AgentAttachmentDimensions): stri
   return `Resized from ${original.width} by ${original.height} to ${sent.width} by ${sent.height} pixels`
 }
 
-export function ScreenshotInput({ attachments, onChange, disabled, supported, children, onReadingChange }: {
+export function ScreenshotInput({ attachments, onChange, onAddAfterClose, disabled, supported, children, onReadingChange }: {
   readonly attachments: AgentAttachment[]
   readonly onChange: (attachments: AgentAttachment[]) => void
+  /**
+   * Where screenshots go that finish reading after this composer has closed, as it does when the user moves to
+   * another thread while they are read. It is given only the new ones, to add to the draft they were attached
+   * to. Without it they are dropped.
+   */
+  readonly onAddAfterClose?: (images: AgentAttachment[]) => void
   readonly disabled: boolean
   readonly supported: boolean
   readonly children: ReactNode
@@ -44,6 +44,8 @@ export function ScreenshotInput({ attachments, onChange, disabled, supported, ch
   current.current = attachments
   const latestChange = useRef(onChange)
   latestChange.current = onChange
+  const latestAddAfterClose = useRef(onAddAfterClose)
+  latestAddAfterClose.current = onAddAfterClose
   const reading = useRef(false)
   const mounted = useRef(true)
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; onReadingChange?.(false) } }, [onReadingChange])
@@ -60,8 +62,10 @@ export function ScreenshotInput({ attachments, onChange, disabled, supported, ch
     if (total > AGENT_MAX_ATTACHMENT_BYTES) { setError(TOO_LARGE_IN_TOTAL); return }
     reading.current = true; setBusy(true); onReadingChange?.(true)
     try {
-      const images = await Promise.all(files.map(readImage))
-      if (!mounted.current) return
+      // One at a time, so at most one decoded image is held in memory however many are added at once.
+      const images: AgentAttachment[] = []
+      for (const file of files) images.push(await readImage(file))
+      if (!mounted.current) { latestAddAfterClose.current?.(images); return }
       // The schema stays the authority: it checks what was actually read, not what the files claimed.
       const result = agentAttachmentsSchema.safeParse([...current.current, ...images])
       if (!result.success) { setError(TOO_LARGE_IN_TOTAL); return }
