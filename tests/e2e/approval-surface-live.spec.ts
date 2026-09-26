@@ -36,7 +36,8 @@ test('claude: a real approval and a real question both reach the user', async ()
       if (configured.error) throw new Error(configured.error)
       const connected = await window.sotto!.agents!.command({ type: 'connect', provider: 'claude' })
       if (connected.error) throw new Error(connected.error)
-      const ready = connected.host.models.filter(model => model.providerId === 'claude' && model.ready)
+      // A command answers with a receipt that names the model catalog by revision; the whole list is read here.
+      const ready = (await window.sotto!.agents!.get()).host.models.filter(model => model.providerId === 'claude' && model.ready)
       const model = ready.find(model => /haiku|sonnet/i.test(model.name)) ?? ready[0]
       if (!model) throw new Error('No ready Claude model; no native turn initiated.')
       const chosen = await window.sotto!.agents!.command({ type: 'configure', patch: { defaultModelId: model.id } })

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test, type Page } from '@playwright/test'
 import { hostEntityKey } from '../../src/shared/clientIdentity'
-import type { AgentCommand, AgentState } from '../../src/shared/agents'
+import type { AgentCommand, AgentCommandReceipt, AgentState } from '../../src/shared/agents'
 import type { SottoBridge } from '../../src/shared/contracts'
 import type { SottoE2EBridge } from '../../src/shared/e2e'
 import { requireOwnedE2EProfile } from '../../scripts/e2e-profile-policy.mjs'
@@ -16,7 +16,7 @@ type HostEvent = Parameters<NonNullable<SottoE2EBridge['agentEvent']>>[0] & {
   status?: 'idle' | 'running' | 'error'
 }
 
-async function command(page: Page, value: AgentCommand): Promise<AgentState> {
+async function command(page: Page, value: AgentCommand): Promise<AgentCommandReceipt> {
   return page.evaluate(async request => {
     const bridge = (globalThis as unknown as BrowserGlobals).sotto.agents
     if (!bridge) throw new Error('Agent bridge unavailable')
@@ -32,7 +32,7 @@ async function state(page: Page): Promise<AgentState> {
   })
 }
 
-function thread(snapshot: AgentState, id: string) {
+function thread(snapshot: AgentState | AgentCommandReceipt, id: string) {
   return snapshot.host.threads.find(item => item.id === hostEntityKey(snapshot.hostId, id))
 }
 
@@ -71,7 +71,7 @@ test('composes a spoken answer across pauses and advances only after explicit su
     await event(page, workshopQuestion)
     await command(page, { type: 'utterance', text: 'Use the same layout' })
     await expect(page.locator('.agent-composer textarea')).toHaveValue('Use the same layout')
-    let snapshot = await state(page)
+    let snapshot: AgentState | AgentCommandReceipt = await state(page)
     expect(thread(snapshot, 'workshop')?.status).toBe('running')
     expect(thread(snapshot, 'workshop')?.requests.map(request => request.id)).toEqual(['layout-question'])
 
