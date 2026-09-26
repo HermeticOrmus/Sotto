@@ -20,12 +20,21 @@ import type { GrokSpeechService } from './grokSpeech'
 import type { KokoroSpeechService } from './kokoroSpeech'
 import type { AgentStateBroadcaster } from './agentStateBroadcast'
 
+export interface AgentIpcOptions {
+  /** Encodes a command's reply as a command receipt (issue #323): `AgentStateBroadcaster.receipt`, so the
+   * receipt names each catalog by the revision the broadcast uses. */
+  readonly receipts: Pick<AgentStateBroadcaster, 'receipt'>
+  /** The working-copy choices for a project; without it the window is told they are unavailable. */
+  readonly workingCopyOptions?: (projectId: string) => Promise<AgentWorkingCopyOptions>
+}
+
 /**
  * The window's end of the host boundary. Reads still go straight to the coordinator, because the
  * window is in the same process; every command goes through the host service with the identity of
  * the client that sent it, which is the line a remote client would cross (ADR-0016).
  */
-export function registerAgentIpc(ipc: IpcMainAdapter, control: Pick<AgentControl, 'get' | 'shell'> & { threadDetail: (id: string) => ReturnType<AgentControl['threadDetail']> | Promise<ReturnType<AgentControl['threadDetail']>>; attachmentPreview: (request: Parameters<AgentControl['attachmentPreview']>[0]) => ReturnType<AgentControl['attachmentPreview']> | Promise<ReturnType<AgentControl['attachmentPreview']>>; gitRefs?: (request: GitRefsRequest) => Promise<GitRefsPage>; gitChangedFiles?: (request: GitChangedFilesRequest) => Promise<GitChangedFiles>; gitPullRequest?: (request: GitPullRequestRequest) => Promise<GitPullRequestDetail | null> }, host: Pick<HostService, 'command'>, senders: () => readonly TrustedIpcSender[], platform: SottoPlatform, speechModels: Pick<NaturalSpeechModels, 'status' | 'download'>, grokSpeech: Pick<GrokSpeechService, 'synthesize' | 'voices' | 'cancel'>, kokoroSpeech: Pick<KokoroSpeechService, 'synthesize' | 'cancel'>, workingCopyOptions?: (projectId: string) => Promise<AgentWorkingCopyOptions>, receipts?: Pick<AgentStateBroadcaster, 'receipt'>): () => void {
+export function registerAgentIpc(ipc: IpcMainAdapter, control: Pick<AgentControl, 'get' | 'shell'> & { threadDetail: (id: string) => ReturnType<AgentControl['threadDetail']> | Promise<ReturnType<AgentControl['threadDetail']>>; attachmentPreview: (request: Parameters<AgentControl['attachmentPreview']>[0]) => ReturnType<AgentControl['attachmentPreview']> | Promise<ReturnType<AgentControl['attachmentPreview']>>; gitRefs?: (request: GitRefsRequest) => Promise<GitRefsPage>; gitChangedFiles?: (request: GitChangedFilesRequest) => Promise<GitChangedFiles>; gitPullRequest?: (request: GitPullRequestRequest) => Promise<GitPullRequestDetail | null> }, host: Pick<HostService, 'command'>, senders: () => readonly TrustedIpcSender[], platform: SottoPlatform, speechModels: Pick<NaturalSpeechModels, 'status' | 'download'>, grokSpeech: Pick<GrokSpeechService, 'synthesize' | 'voices' | 'cancel'>, kokoroSpeech: Pick<KokoroSpeechService, 'synthesize' | 'cancel'>, options: AgentIpcOptions): () => void {
+  const { workingCopyOptions, receipts } = options
   ipc.handle(AGENT_WORKING_COPY_OPTIONS, async (event, ...args) => {
     if (!isAuthorizedIpcSender(event, senders(), ['main'])) throw new Error('AGENT_MAIN_WINDOW_REQUIRED')
     const [projectId] = z.tuple([agentWorkingCopyOptionsRequestSchema]).parse(args)
@@ -137,8 +146,7 @@ export function registerAgentIpc(ipc: IpcMainAdapter, control: Pick<AgentControl
     // The host answers with the shell already; the coordinator builds it without copying any history.
     // The window already has the catalogs from the broadcast, so the answer names each by its catalog
     // revision rather than listing it again (issue #323); the page recovers through AGENT_GET on a mismatch.
-    const reply = host.command(payload as typeof command, windowClient)
-    return receipts ? reply.then(state => receipts.receipt(state)) : reply
+    return host.command(payload as typeof command, windowClient).then(state => receipts.receipt(state))
   })
   return () => { grokSpeech.cancel(); kokoroSpeech.cancel(); wake.dispose(); ipc.removeHandler(AGENT_WORKING_COPY_OPTIONS); ipc.removeHandler(AGENT_CHOOSE_PROJECT_DIRECTORY); ipc.removeHandler(AGENT_WAKE); ipc.removeHandler(AGENT_GET); ipc.removeHandler(AGENT_THREAD_DETAIL_GET); ipc.removeHandler(AGENT_ATTACHMENT_PREVIEW); ipc.removeHandler(AGENT_GIT_REFS); ipc.removeHandler(AGENT_GIT_CHANGED_FILES); ipc.removeHandler(AGENT_GIT_PULL_REQUEST); ipc.removeHandler(AGENT_COMMAND); ipc.removeHandler(AGENT_SPEECH); ipc.removeHandler(AGENT_SPEECH_CANCEL); ipc.removeHandler(AGENT_GROK_VOICES); ipc.removeHandler(AGENT_VOICE_MODEL) }
 }

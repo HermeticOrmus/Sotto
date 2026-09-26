@@ -524,7 +524,6 @@ export type AgentStateBroadcast = Omit<AgentState, 'host'> & { host: AgentHostSn
  */
 export const agentModelCatalogRevisionSchema = z.object({ revision: z.number().int().nonnegative(), omitted: z.literal(true) }).strict()
 export type AgentModelCatalogRevision = z.infer<typeof agentModelCatalogRevisionSchema>
-const agentReceiptCatalogSchema = z.union([agentModelCatalogRevisionSchema, z.array(agentModelSchema)])
 
 /**
  * What `AGENT_COMMAND` answers the window with (issue #323, ADR-0028's September 26 amendment): the shell
@@ -532,13 +531,12 @@ const agentReceiptCatalogSchema = z.union([agentModelCatalogRevisionSchema, z.ar
  * draft revision saved, `configuration` for the effective settings) and every other changed field whole,
  * but each model catalog named by its catalog revision instead of listed. The revisions come from the same
  * counter as the broadcast's, so the page resolves a receipt from the catalogs the broadcast already sent
- * it and recovers through `AGENT_GET` when it holds a different revision. A whole array is still accepted,
- * for a caller that registered the handler without a receipt encoder, as tests do.
+ * it and recovers through `AGENT_GET` when it holds a different revision.
  */
 export const agentCommandReceiptSchema = agentStateSchema.extend({
   host: agentHostSnapshotSchema.extend({
-    models: agentReceiptCatalogSchema,
-    clientHosts: z.array(agentClientHostSchema.extend({ models: agentReceiptCatalogSchema })).optional(),
+    models: agentModelCatalogRevisionSchema,
+    clientHosts: z.array(agentClientHostSchema.extend({ models: agentModelCatalogRevisionSchema })).optional(),
   }),
 })
 export type AgentCommandReceipt = z.infer<typeof agentCommandReceiptSchema>

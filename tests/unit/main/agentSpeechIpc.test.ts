@@ -7,6 +7,7 @@ import type { AgentControl } from '../../../src/main/agents/control'
 vi.mock('electron', () => ({ app: { isPackaged: false, getAppPath: () => 'D:/fixture' } }))
 vi.mock('../../../src/main/agents/speech', () => ({ synthesizeAgentSpeech: vi.fn(async () => ({ audioBase64: 'system-fixture', mimeType: 'audio/wav' })) }))
 import { synthesizeAgentSpeech } from '../../../src/main/agents/speech'
+import { AgentStateBroadcaster } from '../../../src/main/agents/agentStateBroadcast'
 import { registerAgentIpc } from '../../../src/main/agents/ipc'
 
 const disposables: Array<() => void> = []
@@ -31,16 +32,18 @@ function fixture() {
   disposables.push(registerAgentIpc(ipc, control, { command: command => control.command(command) }, () => [main, widget], 'win32', {
     status: async () => ({ ready: true, completedBytes: 1, totalBytes: 1 }),
     download: async () => ({ ready: true, completedBytes: 1, totalBytes: 1 }),
-  }, grok, kokoro))
+  }, grok, kokoro, { receipts: new AgentStateBroadcaster() }))
   const invoke = async (channel: string, payload?: unknown, source = main, frame = source.webContents.mainFrame) => listeners.get(channel)!({ sender: source.webContents, senderFrame: frame }, payload)
-  return { state, control, grok, kokoro, invoke, main, widget }
+  // A command answers with a receipt: the shell with its catalog named by revision (issue #323).
+  const reply = new AgentStateBroadcaster().receipt(agentShell(state))
+  return { state, reply, control, grok, kokoro, invoke, main, widget }
 }
 
 describe('agent command IPC authorization', () => {
   it.each([false, true])('allows a trusted widget to configure speak=%s', async speak => {
     const f = fixture()
     const command = { type: 'configure', patch: { speak } }
-    await expect(f.invoke(AGENT_COMMAND, command, f.widget)).resolves.toEqual(agentShell(f.state))
+    await expect(f.invoke(AGENT_COMMAND, command, f.widget)).resolves.toEqual(f.reply)
     expect(f.control.command).toHaveBeenCalledExactlyOnceWith(command)
   })
 
@@ -51,7 +54,7 @@ describe('agent command IPC authorization', () => {
         const command = { type: 'configure', patch }
         await expect(f.invoke(AGENT_COMMAND, command, f.widget)).rejects.toThrow('AGENT_MAIN_WINDOW_REQUIRED')
         expect(f.control.command).not.toHaveBeenCalled()
-        await expect(f.invoke(AGENT_COMMAND, command)).resolves.toEqual(agentShell(f.state))
+        await expect(f.invoke(AGENT_COMMAND, command)).resolves.toEqual(f.reply)
         expect(f.control.command).toHaveBeenCalledExactlyOnceWith(command)
         f.control.command.mockClear()
       }
@@ -78,7 +81,7 @@ describe('agent command IPC authorization', () => {
     const f = fixture()
     await expect(f.invoke(AGENT_COMMAND, command, f.widget)).rejects.toThrow('AGENT_MAIN_WINDOW_REQUIRED')
     expect(f.control.command).not.toHaveBeenCalled()
-    await expect(f.invoke(AGENT_COMMAND, command)).resolves.toEqual(agentShell(f.state))
+    await expect(f.invoke(AGENT_COMMAND, command)).resolves.toEqual(f.reply)
     expect(f.control.command).toHaveBeenCalledExactlyOnceWith(command)
   })
 
@@ -96,7 +99,7 @@ describe('agent command IPC authorization', () => {
   it.each(['mute', 'unmute'])('preserves widget microphone %s commands', async action => {
     const f = fixture()
     const command = { type: 'voice', action }
-    await expect(f.invoke(AGENT_COMMAND, command, f.widget)).resolves.toEqual(agentShell(f.state))
+    await expect(f.invoke(AGENT_COMMAND, command, f.widget)).resolves.toEqual(f.reply)
     expect(f.control.command).toHaveBeenCalledExactlyOnceWith(command)
   })
 })

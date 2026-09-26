@@ -18,7 +18,9 @@ const state: AgentState = {
 
 describe('workspace preload contract', () => {
   it('passes settlement commands and preserves organization/native-start metadata in replies and events', async () => {
-    const ipc = { invoke: vi.fn().mockResolvedValue(state), on: vi.fn(), removeListener: vi.fn() }
+    // A command answers with a receipt, its catalog named by revision (issue #323).
+    const receipt = { ...state, host: { ...state.host, models: { revision: 1, omitted: true } } }
+    const ipc = { invoke: vi.fn().mockResolvedValue(receipt), on: vi.fn(), removeListener: vi.fn() }
     const bridge = createSottoBridge(ipc, 'win32').agents!
     for (const command of [
       { type: 'settle-thread', threadId: 'thread' }, { type: 'restore-thread', threadId: 'thread' },

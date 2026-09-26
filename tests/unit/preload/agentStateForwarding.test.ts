@@ -40,10 +40,12 @@ describe('agent command receipt parsing', () => {
     await expect(bridge.command({ type: 'voice', action: 'mute' })).resolves.toMatchObject({ host: { models: { revision: 3, omitted: true } } })
   })
 
-  it('refuses a receipt whose catalog is neither a list nor a revision', async () => {
-    const receipt = { ...state, host: { ...state.host, models: { revision: 3 } } }
-    const ipc = { invoke: vi.fn(async () => receipt), on: vi.fn(), removeListener: vi.fn() }
-    const bridge = createSottoWidgetBridge(ipc, 'win32').agents!
-    await expect(bridge.command({ type: 'voice', action: 'mute' })).rejects.toThrow()
+  it('refuses a receipt whose catalog is anything but a revision, a whole list included', async () => {
+    for (const models of [{ revision: 3 }, []]) {
+      const receipt = { ...state, host: { ...state.host, models } }
+      const ipc = { invoke: vi.fn(async () => receipt), on: vi.fn(), removeListener: vi.fn() }
+      const bridge = createSottoWidgetBridge(ipc, 'win32').agents!
+      await expect(bridge.command({ type: 'voice', action: 'mute' })).rejects.toThrow()
+    }
   })
 })
