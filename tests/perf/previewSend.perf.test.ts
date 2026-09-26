@@ -64,7 +64,7 @@ describe.skipIf(!PERF_BENCH)('send with an image', () => {
       const previews = (control as unknown as { attachmentPreviews: AttachmentPreviews }).attachmentPreviews
       const heard: number[] = []; const acknowledged: number[] = []; const completed: number[] = []; const saved: number[] = []
       for (let index = 0; index < SENDS; index++) {
-        // Staged before the clock starts, as the window does when the image is attached (ADR-0030).
+        // Staged before the clock starts, as the window does when the image is attached (ADR-0031).
         const sent = Buffer.from(png(MiB, `sent-${index}`).dataUrl.split(',')[1]!, 'base64'); sent[8] = index
         const image = await control.stageAttachment({ name: `sent-${index}.png`, mimeType: 'image/png', bytes: sent })
         const admittedAt = performance.now()

@@ -5,7 +5,7 @@ import { validatePromptAttachments } from '../../src/main/agents/threadOptions'
 /** Provider-facing fake: session IDs deliberately differ from Sotto thread IDs. */
 export class FakeProviderHost implements AgentHost {
   readonly commands: AgentHostCommand[] = []
-  /** The bytes of every image a send or steer carried, read at this boundary the way an adapter reads them (ADR-0030). */
+  /** The bytes of every image a send or steer carried, read at this boundary the way an adapter reads them (ADR-0031). */
   readonly images: Uint8Array[] = []
   /** Every side call this provider was asked for, under its own session ID (ADR-0026). */
   readonly sideWrites: { sessionId: string; prompt: ShortTextPrompt }[] = []

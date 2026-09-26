@@ -11,7 +11,7 @@ import type { GitPullRequestAction, GitPullRequestDetail, GitPullRequestLink, Gi
 import type { ThreadEvent } from '../../shared/threadEvents'
 
 /**
- * A staged image as an adapter receives it (ADR-0030): its handle, and its bytes read from this host's attachment
+ * A staged image as an adapter receives it (ADR-0031): its handle, and its bytes read from this host's attachment
  * store when the adapter builds the provider's own form of it. Nothing before the adapter holds the bytes.
  */
 export interface PromptImage extends AgentAttachmentHandle { read(): Promise<Uint8Array> }

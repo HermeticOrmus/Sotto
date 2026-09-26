@@ -344,7 +344,7 @@ export class CodexAppServerHost implements AgentHost {
   async prepareSkillInput(threadId: string, text: string, skills: readonly AgentSkillReference[] = [], files: readonly AgentFileReference[] = [], attachments: readonly PromptImage[] = []) {
     verifyFileMentions(text, files)
     const input = skills.length ? codexSkillInput(text, skills, await this.listThreadSkills(threadId, true)) : [{ type: 'text' as const, text }]
-    // A data URL, as before: Codex's `localImage` scales an image to its own limits, which is #321's decision (ADR-0030).
+    // A data URL, as before: Codex's `localImage` scales an image to its own limits, which is #321's decision (ADR-0031).
     const images = await Promise.all(attachments.map(async image => ({ type: 'image' as const,
       url: `data:${image.mimeType};base64,${Buffer.from(await image.read()).toString('base64')}` })))
     return [...input, ...images]

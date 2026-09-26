@@ -1,6 +1,6 @@
 // @vitest-environment node
 /**
- * What an 8 MiB screenshot in a thread's draft costs everything that mentions the draft (issue #320, ADR-0030):
+ * What an 8 MiB screenshot in a thread's draft costs everything that mentions the draft (issue #320, ADR-0031):
  * the draft save the window sends and its answer, the shell main broadcasts to each window, the write of
  * `agents.json`, and the preview file a send with the image writes. Drives the real coordinator and stores on a
  * temporary folder, with the in-process E2E provider. Counters and timers only: nothing about the prompt or the

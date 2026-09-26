@@ -12,7 +12,7 @@ export interface DesktopHostConnection {
   service: Pick<HostService, 'shell' | 'command' | 'subscribe'>
   detail(threadId: string): AgentThreadDetail | null | Promise<AgentThreadDetail | null>
   preview(request: AgentAttachmentPreviewRequest): AgentAttachmentPreviewResult | Promise<AgentAttachmentPreviewResult>
-  /** Stages on this host, the one that runs the thread (ADR-0030). */
+  /** Stages on this host, the one that runs the thread (ADR-0031). */
   stage?(image: AgentAttachmentUpload): Promise<AgentAttachmentHandle>
   content?(digest: string): Promise<AgentAttachmentContent | null>
   gitRefs?(request: GitRefsRequest): Promise<GitRefsPage>
@@ -132,7 +132,7 @@ export class DesktopHostRouter {
     const { connection } = this.target(request.threadId ?? undefined)
     if (!connection.stage) throw new Error('This host cannot keep screenshots. Update Sotto there, then attach them again. Nothing was attached.')
     if (connection.available?.() === false) throw new Error('This host is disconnected. Connect again before attaching images. Nothing was attached.')
-    return connection.stage({ name: request.name, mimeType: request.mimeType, bytes: request.bytes })
+    return connection.stage({ name: request.name, mimeType: request.mimeType, bytes: request.bytes, ...(request.dimensions ? { dimensions: request.dimensions } : {}) })
   }
   async attachmentContent(request: AgentAttachmentContentRequest): Promise<AgentAttachmentContent | null> {
     const { connection } = this.target(request.threadId ?? undefined)

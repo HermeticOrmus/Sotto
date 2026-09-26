@@ -13,7 +13,7 @@ const identity = {
   storedAt: z.number().finite(),
 }
 const entrySchema = z.object({ ...identity, attachments: agentAttachmentHandlesSchema })
-/** Version 1 kept each image's bytes inline; they are staged into the attachment store when it is read (ADR-0030). */
+/** Version 1 kept each image's bytes inline; they are staged into the attachment store when it is read (ADR-0031). */
 const inlineEntrySchema = z.object({ ...identity, attachments: agentAttachmentsSchema.refine(items => items.every(hasRasterImageSignature)) })
 type Entry = z.infer<typeof entrySchema>
 type Read = { version: 1 | 2; entries: unknown[] }

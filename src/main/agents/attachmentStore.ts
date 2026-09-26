@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { z } from 'zod'
 import { AGENT_IMAGE_MIME_TYPES, AGENT_MAX_IMAGE_BYTES, agentAttachmentHandleSchema, attachmentDigestSchema, bytesHaveRasterSignature,
-  type AgentAttachment, type AgentAttachmentHandle } from '../../shared/agents'
+  type AgentAttachment, type AgentAttachmentDimensions, type AgentAttachmentHandle } from '../../shared/agents'
 import { AtomicJsonStore } from '../storage/atomicJsonStore'
 
 type ImageType = typeof AGENT_IMAGE_MIME_TYPES[number]
@@ -14,7 +14,7 @@ const CONTENT_FILE = /^([a-f0-9]{64})\.(png|jpg|gif|webp)$/u
 const INDEX_FILE = 'index.json'
 const WINDOWS_RENAME_RETRY_DELAYS_MS = [10, 20, 40, 80, 160] as const
 /**
- * How long content nothing owns is kept (ADR-0030). It is what lets a refused prompt go back to its composer, or be
+ * How long content nothing owns is kept (ADR-0031). It is what lets a refused prompt go back to its composer, or be
  * sent again from the window's own copy, without staging again; after it the content is removed.
  */
 export const UNOWNED_ATTACHMENT_GRACE_MS = 60 * 60_000
@@ -30,14 +30,14 @@ interface Held extends Entry { memory?: Buffer; unownedSince: number | null }
 export class RefusedImage extends Error {}
 
 /**
- * Stages one image a file from before ADR-0030 kept inline, answering with its handle under the image's own ID, or
+ * Stages one image a file from before ADR-0031 kept inline, answering with its handle under the image's own ID, or
  * null for one that is not the image it claims. Failing to keep one is thrown: that is storage, not the image.
  */
 export type StageInline = (attachment: AgentAttachment) => Promise<AgentAttachmentHandle | null>
 export function inlineStager(store: Pick<AttachmentStore, 'stage'>): StageInline {
   return async attachment => {
     const bytes = Buffer.from(attachment.dataUrl.slice(attachment.dataUrl.indexOf(',') + 1), 'base64')
-    try { return { ...await store.stage({ name: attachment.name, mimeType: attachment.mimeType, bytes }), id: attachment.id } }
+    try { return { ...await store.stage({ name: attachment.name, mimeType: attachment.mimeType, bytes, ...(attachment.dimensions ? { dimensions: attachment.dimensions } : {}) }), id: attachment.id } }
     catch (error) { if (error instanceof RefusedImage) return null; throw error }
   }
 }
@@ -48,7 +48,7 @@ export const MISSING_REMOTE_ATTACHMENT = 'An image in this message is no longer 
 export const MISMATCHED_ATTACHMENT = 'An image in this message does not match the copy Sotto kept. Remove it and attach it again. Nothing was sent.'
 
 /**
- * One host's staged images (ADR-0030). Each distinct content is one file named by its SHA-256, beside a small index
+ * One host's staged images (ADR-0031). Each distinct content is one file named by its SHA-256, beside a small index
  * of digest, type, size and staging time: no names, no thread IDs, no text. Staging commits the bytes and the index
  * before it answers, so nothing can be saved pointing at content that is not on disk. What to keep is the caller's:
  * `sweep` is handed every digest something still owns.
@@ -116,14 +116,18 @@ export class AttachmentStore {
    * sent them. With history on the bytes are on disk, and in the index, before this resolves; with it off they are
    * kept in memory and nothing is written.
    */
-  stage(input: { readonly name: string; readonly mimeType: string; readonly bytes: Uint8Array }): Promise<AgentAttachmentHandle> {
+  stage(input: { readonly name: string; readonly mimeType: string; readonly bytes: Uint8Array; readonly dimensions?: AgentAttachmentDimensions | undefined }): Promise<AgentAttachmentHandle> {
     const mimeType = input.mimeType as ImageType
     if (!(AGENT_IMAGE_MIME_TYPES as readonly string[]).includes(input.mimeType)) return Promise.reject(new RefusedImage('Choose PNG, JPEG, GIF, or WebP screenshots.'))
     if (input.bytes.byteLength < 1 || input.bytes.byteLength > AGENT_MAX_IMAGE_BYTES) return Promise.reject(new RefusedImage('Each screenshot must be 10 MB or smaller.'))
     if (!bytesHaveRasterSignature(mimeType, input.bytes)) return Promise.reject(new RefusedImage('The image content does not match its file type.'))
     const bytes = Buffer.from(input.bytes.buffer, input.bytes.byteOffset, input.bytes.byteLength)
     const digest = createHash('sha256').update(bytes).digest('hex')
-    const handle = agentAttachmentHandleSchema.parse({ id: randomUUID(), name: input.name.trim() || 'Screenshot', mimeType, sizeBytes: bytes.byteLength, digest })
+    // The sizes are the composer's word for what it attached and staged; they describe, and are never read as content.
+    const parsed = agentAttachmentHandleSchema.safeParse({ id: randomUUID(), name: input.name.trim() || 'Screenshot', mimeType, sizeBytes: bytes.byteLength, digest,
+      ...(input.dimensions ? { dimensions: input.dimensions } : {}) })
+    if (!parsed.success) return Promise.reject(new RefusedImage('Could not read this screenshot’s name or size. Nothing was attached. Try again.'))
+    const handle = parsed.data
     return this.enqueue(async () => {
       const now = this.now()
       const existing = this.held.get(digest)

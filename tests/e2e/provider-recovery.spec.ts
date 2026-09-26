@@ -11,7 +11,7 @@ import { closeSotto, launchSotto, openThreads, userMessageTexts } from './suppor
 const draft = 'Review this synthetic recovered drawing before deciding what to send.'
 const attachment = { id: 'synthetic-image', name: 'recovered-drawing.png', mimeType: 'image/png',
   dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a5FoAAAAASUVORK5CYII=' }
-/** The recovered image as the coordinator carries it once it has staged the inline bytes an older version saved (ADR-0030). */
+/** The recovered image as the coordinator carries it once it has staged the inline bytes an older version saved (ADR-0031). */
 const staged = { id: attachment.id, name: attachment.name, mimeType: attachment.mimeType, sizeBytes: Buffer.from(attachment.dataUrl.split(',')[1]!, 'base64').length,
   digest: createHash('sha256').update(Buffer.from(attachment.dataUrl.split(',')[1]!, 'base64')).digest('hex') }
 

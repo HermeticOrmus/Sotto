@@ -216,7 +216,7 @@ describe('ThreadsView workspace', () => {
       if (request.type === 'manual-send') draftId = request.draftId!
       return { ...state, error: 'Delivery not yet confirmed' }
     })
-    // The composer stages each screenshot with main; this stands in for main's answer (ADR-0030).
+    // The composer stages each screenshot with main; this stands in for main's answer (ADR-0031).
     const bridge = window.sotto
     vi.stubGlobal('sotto', { ...bridge, agents: { ...bridge?.agents, stageAttachment: async (request: AgentAttachmentStageRequest) => handleOf(request.bytes, crypto.randomUUID(), request.name) } })
     onTestFinished(() => { vi.unstubAllGlobals() })
@@ -240,6 +240,61 @@ describe('ThreadsView workspace', () => {
     await waitFor(() => expect(screen.getByRole('textbox', { name: 'Prompt' })).toHaveValue(edited ? 'And review this too' : ''))
     expect(screen.queryAllByRole('img', { name: 'same-name.png' })).toHaveLength(edited ? 1 : 0)
     expect(command.mock.calls.filter(([request]) => (request as AgentCommand).type === 'manual-send')).toHaveLength(1)
+  })
+
+  it('keeps a screenshot pasted just before moving to another thread in the draft it was pasted into', async () => {
+    // The composer stages each screenshot with main; this stands in for main's answer (ADR-0031).
+    const bridge = window.sotto
+    vi.stubGlobal('sotto', { ...bridge, agents: { ...bridge?.agents, stageAttachment: async (request: AgentAttachmentStageRequest) => handleOf(request.bytes, crypto.randomUUID(), request.name) } })
+    onTestFinished(() => { vi.unstubAllGlobals() })
+    const state = stateFixture(); state.assignments = []; state.activeThreadId = 'grok-previews'
+    state.host.models.forEach(model => { model.supportsImages = true })
+    const { command, rerender } = renderThreads(state)
+    const drafts = connectionStores.get(command)!
+    fireEvent.change(screen.getByLabelText('Screenshot files'), { target: { files: [new File([new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])], 'moving.png', { type: 'image/png' })] } })
+    // The user moves on before the screenshot has been read.
+    state.activeThreadId = 'release-notes'
+    rerender(<ThreadsView onOpenAgents={vi.fn()} now={NOW} />)
+    await waitFor(() => expect(drafts.draft('grok-previews').attachments).toEqual([expect.objectContaining({ name: 'moving.png' })]))
+    expect(drafts.draft('release-notes').attachments).toEqual([])
+    expect(screen.queryByRole('img', { name: 'moving.png' })).not.toBeInTheDocument()
+    state.activeThreadId = 'grok-previews'
+    rerender(<ThreadsView onOpenAgents={vi.fn()} now={NOW} />)
+    // The chip names the image while its thumbnail is drawn, then shows the thumbnail under the same name.
+    await waitFor(() => expect(screen.getByRole('img', { name: 'moving.png' })).toBeVisible())
+  })
+
+  it('holds Send on a thread left and returned to until the screenshot pasted before leaving has landed', async () => {
+    // The decode waits until the test lets it finish, so the read outlasts the move away and back.
+    let decoded: () => void = () => undefined
+    const bridge = window.sotto
+    vi.stubGlobal('sotto', { ...bridge, agents: { ...bridge?.agents, stageAttachment: async (request: AgentAttachmentStageRequest) => handleOf(request.bytes, crypto.randomUUID(), request.name) } })
+    onTestFinished(() => { vi.unstubAllGlobals() })
+    vi.stubGlobal('createImageBitmap', async () => { await new Promise<void>(resolve => { decoded = resolve }); return { width: 3840, height: 2160, close: () => undefined } })
+    vi.stubGlobal('OffscreenCanvas', class {
+      constructor(readonly width: number, readonly height: number) {}
+      getContext() { return { drawImage: () => undefined } }
+      async convertToBlob({ type }: { type: string }) { return new Blob([new Uint8Array(4)], { type }) }
+    })
+    try {
+      const state = stateFixture(); state.assignments = []; state.activeThreadId = 'grok-previews'
+      state.host.models.forEach(model => { model.supportsImages = true })
+      const { command, rerender } = renderThreads(state)
+      const drafts = connectionStores.get(command)!
+      fireEvent.change(screen.getByRole('textbox', { name: /prompt/i }), { target: { value: 'Look at this' } })
+      fireEvent.change(screen.getByLabelText('Screenshot files'), { target: { files: [new File([new Uint8Array(64)], 'moving.png', { type: 'image/png' })] } })
+      state.activeThreadId = 'release-notes'
+      rerender(<ThreadsView onOpenAgents={vi.fn()} now={NOW} />)
+      state.activeThreadId = 'grok-previews'
+      rerender(<ThreadsView onOpenAgents={vi.fn()} now={NOW} />)
+      // Back on the thread with the screenshot still being read: the text alone must not go out without it.
+      expect(await screen.findByText('Adding screenshots...')).toBeVisible()
+      expect(screen.getByRole('button', { name: 'Send prompt' })).toBeDisabled()
+      decoded()
+      expect(await screen.findByRole('img', { name: 'moving.png' })).toBeVisible()
+      expect(drafts.draft('grok-previews').attachments).toEqual([expect.objectContaining({ name: 'moving.png' })])
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Send prompt' })).toBeEnabled())
+    } finally { vi.unstubAllGlobals() }
   })
 
   it('reconciles a late manual receipt while a managed thread has unmounted its composer', async () => {

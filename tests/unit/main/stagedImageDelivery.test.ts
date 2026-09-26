@@ -87,7 +87,7 @@ async function afterGrace(control: AgentControl) {
   await control.privacyChanged()
 }
 
-describe('staged images through the coordinator (ADR-0030)', () => {
+describe('staged images through the coordinator (ADR-0031)', () => {
   it('keeps the bytes out of draft saves, the shell, every broadcast while a thread streams, and the saved state', async () => {
     const f = await fixture()
     const bytes = pngOfSize(256 * 1024, 5)

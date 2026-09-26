@@ -499,12 +499,13 @@ describe('thread detail over the socket', () => {
   })
 })
 
-describe('staged images over the socket (ADR-0030)', () => {
+describe('staged images over the socket (ADR-0031)', () => {
   it('stages an image on the host that runs the thread, sends the handle with the draft, and hands the bytes back by digest', async () => {
     const { client } = await pair()
     const bytes = Buffer.alloc(300 * 1024, 3); Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(bytes)
-    const handle = await client.stageAttachment({ name: 'Remote.png', mimeType: 'image/png', bytes })
-    expect(handle).toMatchObject({ name: 'Remote.png', mimeType: 'image/png', sizeBytes: bytes.length, digest: createHash('sha256').update(bytes).digest('hex') })
+    const dimensions = { original: { width: 3840, height: 2160 }, sent: { width: 2576, height: 1449 } }
+    const handle = await client.stageAttachment({ name: 'Remote.png', mimeType: 'image/png', bytes, dimensions })
+    expect(handle).toMatchObject({ name: 'Remote.png', mimeType: 'image/png', sizeBytes: bytes.length, digest: createHash('sha256').update(bytes).digest('hex'), dimensions })
     // The content is the host's, in its own data folder; the desktop keeps none of it.
     expect(await readFile(join(root, 'attachments', `${handle.digest}.png`))).toEqual(bytes)
     await client.command({ type: 'configure', patch: { enabledProviders: ['codex'], provider: 'codex' } })

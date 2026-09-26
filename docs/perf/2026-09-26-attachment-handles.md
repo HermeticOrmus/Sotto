@@ -1,6 +1,6 @@
 # Staged images carry a handle - September 26, 2026
 
-Issue #320, [ADR-0030](../adr/0030-images-are-staged-once-and-carried-by-handle.md). An image attached to a draft used to travel as a base64 data URL inside everything that mentioned the draft: the window's debounced save and main's answer to it, the shell main pushes to the main window and the widget, every write of `agents.json`, and the preview file a send rewrote. Now the window hands the bytes to main once, main keeps them as one file in the host's attachment store, and everything else carries a handle of about 150 bytes.
+Issue #320, [ADR-0031](../adr/0031-images-are-staged-once-and-carried-by-handle.md). An image attached to a draft used to travel as a base64 data URL inside everything that mentioned the draft: the window's debounced save and main's answer to it, the shell main pushes to the main window and the widget, every write of `agents.json`, and the preview file a send rewrote. Now the window hands the bytes to main once, main keeps them as one file in the host's attachment store, and everything else carries a handle of about 150 bytes.
 
 ## Numbers
 

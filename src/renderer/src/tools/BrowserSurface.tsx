@@ -206,12 +206,12 @@ export function BrowserSurface({ threadId, store, bridge, onStatus, onFloat }: B
     {active?.error && active.status !== 'unavailable' && !task?.pendingAction ? <p className="browser-problem" role="status">{active.error}</p> : null}
     {browser.notice ? <p className="terminal-notice" role="alert">{browser.notice}</p> : null}
 
-    {feedback && active && bridge ? <BrowserFeedback key={active.id} page={active} initial={feedback} bridge={bridge} onClose={() => { setFeedback(null); requestAnimationFrame(() => address.current?.focus()) }} onAdd={async (capture, comment) => {
+    {feedback && active && bridge ? <BrowserFeedback key={active.id} page={active} initial={feedback} bridge={bridge} onClose={() => { setFeedback(null); requestAnimationFrame(() => address.current?.focus()) }} onAdd={async (capture, comment, signal) => {
       if (!agents) return 'The draft for this thread is not available.'
       const thread = agents.state?.host.threads.find(item => item.id === threadId)
       const model = resolveModel(agents.state?.host.models ?? [], thread?.modelId)
-      const error = await appendBrowserFeedback(agents.threadDrafts, threadId, capture, comment, model?.supportsImages === true)
-      if (!error) onStatus(`Added to the draft for ${thread?.title ?? 'this thread'}`)
+      const error = await appendBrowserFeedback(agents.threadDrafts, threadId, capture, comment, model?.supportsImages === true, { signal })
+      if (!error && !signal.aborted) onStatus(`Added to the draft for ${thread?.title ?? 'this thread'}`)
       return error
     }} /> : newPage ? <div className="files-problem browser-empty" role="status">
       <strong>{pages.length === 0 ? 'Open a page' : 'Open another page'}</strong>

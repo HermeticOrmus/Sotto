@@ -162,7 +162,7 @@ export function describeAdapterContract(name: string, factory: (session?: Adapte
       expect((await thread()).messages.map(message => message.id)).toEqual(messages)
       expect(events.slice(published).filter(event => event.threadId === sessionId).map(event => event.event.kind)).toEqual([])
     })
-    it('sends a staged image through the handle contract, reading its bytes only at the provider boundary (ADR-0030)', async () => {
+    it('sends a staged image through the handle contract, reading its bytes only at the provider boundary (ADR-0031)', async () => {
       const snapshot = await f.host.snapshot()
       const supported = resolveModel(snapshot.models, f.modelId)?.supportsImages === true
       const handle = handleOf(PIXEL_PNG, 'contract-image', 'Contract.png')

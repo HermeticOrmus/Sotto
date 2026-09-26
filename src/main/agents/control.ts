@@ -10,7 +10,7 @@ import { z } from 'zod'
 import {
   agentAssignmentSchema, agentConfigurationSchema, agentQueueItemSchema, agentAttachmentHandlesSchema, agentAttachmentHandleSchema, agentAttachmentSchema, attachmentDigestSchema, AGENT_MAX_ATTACHMENTS, agentThreadOptionsSchema, agentThreadDraftSchema, agentDeliverySchema,
   providerUpgradeSchema, defaultAgentConfiguration, PROVIDER_REJECTED_ACTION, PROVIDER_RESULT_UNCONFIRMED, THREAD_SETTINGS_UNRECONCILED, EMPTY_AGENT_HOST, PROVIDER_LABELS, supportsAgentSupervision, isSubscriptionReasoning, agentDeliveryReceiptsSchema, MAX_DELIVERED_DRAFTS, enabledThreadProviders, defaultThreadModelId, capabilitiesForThread, isThreadProviderConnected, providerIdSchema, threadSummaryOf,
-  type AgentMessage, type AgentThreadDetail, type AgentThreadDetailDelta, type AgentThreadDetailUpdate, type ProviderId, type AgentAttachmentHandle, type AgentAttachmentContent, type AgentAttachmentPreviewRequest, type AgentAttachmentPreviewResult, type AgentAssignment, type AgentCommand, type AgentConfiguration, type AgentDelivery, type AgentThreadDraft, type AgentHostSnapshot, type AgentProject, type AgentQueueItem, type AgentState, type AgentThread, type ProviderClientUpdate, type SubscriptionProvider,
+  type AgentMessage, type AgentThreadDetail, type AgentThreadDetailDelta, type AgentThreadDetailUpdate, type ProviderId, type AgentAttachmentHandle, type AgentAttachmentUpload, type AgentAttachmentContent, type AgentAttachmentPreviewRequest, type AgentAttachmentPreviewResult, type AgentAssignment, type AgentCommand, type AgentConfiguration, type AgentDelivery, type AgentThreadDraft, type AgentHostSnapshot, type AgentProject, type AgentQueueItem, type AgentState, type AgentThread, type ProviderClientUpdate, type SubscriptionProvider,
 } from '../../shared/agents'
 import { AtomicJsonStore } from '../storage/atomicJsonStore'
 import type { MemoryProfile } from '../memory/profile'
@@ -46,7 +46,7 @@ const RECORDED_COMMAND_TYPES: ReadonlySet<AgentCommand['type']> = new Set([
   'cancel-draft', 'pause-draft', 'resume-draft', 'cancel-request', 'configure-thread-working-copy', 'configure-thread', 'compact-thread',
 ])
 
-/** A draft's images as the coordinator saves them: handles, or inline as versions before ADR-0030 saved them, staged at start. */
+/** A draft's images as the coordinator saves them: handles, or inline as versions before ADR-0031 saved them, staged at start. */
 const savedAttachmentsSchema = z.array(z.union([agentAttachmentHandleSchema, agentAttachmentSchema])).max(AGENT_MAX_ATTACHMENTS)
 type WithHandles<C> = Omit<C, 'attachments'> & { readonly attachments?: readonly AgentAttachmentHandle[] }
 /** A send or steer as `dispatch` holds it: its images still handles, read only at the provider boundary. */
@@ -78,7 +78,7 @@ const savedSchema = z.object({
     threadId: z.string().optional(), messageId: z.string().optional(), entityId: z.string().optional(), requestId: z.string().optional(),
     options: agentThreadOptionsSchema.optional(), draftDigest: z.string().optional(), draftId: z.uuid().optional(),
     questionsDigest: z.string().optional(),
-    /** The images a send or steer carried: while its result is unknown, it owns their content (ADR-0030). */
+    /** The images a send or steer carried: while its result is unknown, it owns their content (ADR-0031). */
     attachmentDigests: z.array(attachmentDigestSchema).max(AGENT_MAX_ATTACHMENTS).optional(),
   })),
 })
@@ -165,7 +165,7 @@ export class AgentControl {
    */
   private readonly settledSettings = new Set<string>()
   private readonly attachmentPreviews: AttachmentPreviews
-  /** This host's staged images (ADR-0030); what keeps each one is `ownedAttachments()`. */
+  /** This host's staged images (ADR-0031); what keeps each one is `ownedAttachments()`. */
   private readonly attachments: AttachmentStore
   private readonly listeners = new Set<(state: AgentState) => void>()
   private readonly deciding = new Set<string>()
@@ -291,7 +291,7 @@ export class AgentControl {
     }
     const saved = await this.store.read()
     // The store comes first: previews, drafts and the queue each name content it keeps, and older files carry
-    // their images inline, which are staged here before anything reads them (ADR-0030).
+    // their images inline, which are staged here before anything reads them (ADR-0031).
     await this.attachments.load()
     const images = await this.adoptSavedImages(saved)
     this.persistedDrafts = this.draftSignatures(images.threadDrafts)
@@ -563,9 +563,9 @@ export class AgentControl {
   }
   /**
    * Keeps an image's bytes once, on this host, and answers with the handle a draft carries instead of them
-   * (ADR-0030). The content is unowned until a draft or follow-up that names it is saved.
+   * (ADR-0031). The content is unowned until a draft or follow-up that names it is saved.
    */
-  stageAttachment(image: { readonly name: string; readonly mimeType: string; readonly bytes: Uint8Array }): Promise<AgentAttachmentHandle> {
+  stageAttachment(image: AgentAttachmentUpload): Promise<AgentAttachmentHandle> {
     return this.attachments.stage(image)
   }
   /** A staged image's bytes, for a composer restoring a chip it holds no copy of; null once this host no longer keeps it. */
@@ -2243,7 +2243,7 @@ export class AgentControl {
         this.canAct(); this.guardAuthority(command, turn); validate?.()
       }
       const providerStartedAt = Date.now()
-      // The images become the adapter's to read here, at the provider boundary, and not before (ADR-0030).
+      // The images become the adapter's to read here, at the provider boundary, and not before (ADR-0031).
       const hostCommand = ((command.type === 'send' || command.type === 'steer') && command.attachments?.length
         ? { ...command, attachments: command.attachments.map(image => this.promptImage(image)) } : command) as AgentHostCommand
       try { this.canAct(); result = await this.dependencies.host.execute(hostCommand) }

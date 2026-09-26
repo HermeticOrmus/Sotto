@@ -539,7 +539,7 @@ export class ClaudeStreamJsonHost implements AgentHost {
         }
         const runtime = await this.start(id)
         verifyFileMentions(command.text, command.files)
-        // The provider's own form of each staged image, read from the store at the protocol boundary (ADR-0030).
+        // The provider's own form of each staged image, read from the store at the protocol boundary (ADR-0031).
         const images = await Promise.all((command.attachments ?? []).map(async image => ({ type: 'image', source: { type: 'base64', media_type: image.mimeType,
           data: Buffer.from(await image.read()).toString('base64') } })))
         const nativePrompt = command.skills?.length ? claudeSkillPrompt(command.text, command.skills, await this.listThreadSkills(id, true)) : command.text

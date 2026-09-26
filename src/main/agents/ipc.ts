@@ -120,7 +120,7 @@ export function registerAgentIpc(ipc: IpcMainAdapter, control: Pick<AgentControl
     if (!isAuthorizedIpcSender(event, senders(), ['main', 'widget'])) throw new Error('AGENT_SENDER_REJECTED')
     return control.attachmentPreview(agentAttachmentPreviewRequestSchema.parse(payload))
   })
-  // Both windows have a composer that takes screenshots, so both stage them and read back a chip's image (ADR-0030).
+  // Both windows have a composer that takes screenshots, so both stage them and read back a chip's image (ADR-0031).
   ipc.handle(AGENT_ATTACHMENT_STAGE, (event, payload) => {
     if (!isAuthorizedIpcSender(event, senders(), ['main', 'widget'])) throw new Error('AGENT_SENDER_REJECTED')
     if (!control.stageAttachment) throw new Error('Screenshots cannot be attached in this window. Nothing was attached.')

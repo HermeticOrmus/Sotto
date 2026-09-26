@@ -39,7 +39,8 @@ export function AgentComposer({ state, command, compact = false, footerControls,
   const sourceAttachments = pausedDraft?.attachments ?? state.draftAttachments
   const [draft, setDraft] = useState(sourceDraft)
   const [attachments, setAttachments] = useState<AgentAttachmentHandle[]>(sourceAttachments ?? [])
-  const [readingImages, setReadingImages] = useState(false)
+  const [screenshotReads, setScreenshotReads] = useState(0)
+  const readingImages = screenshotReads > 0
   const writes = useRef(0)
   const version = useRef(0)
   const sourceKey = JSON.stringify([sourceDraft, state.draftThreadId, state.draftRequestId, pausedDraft?.draftId, (sourceAttachments ?? []).map(image => image.id)])
@@ -91,7 +92,7 @@ export function AgentComposer({ state, command, compact = false, footerControls,
       <span>{target === undefined ? 'Select a thread' : `${project?.title ?? 'Project'} / ${target.title}`}</span></div>
     {target !== undefined && target.id !== state.activeThreadId ? <div className="agent-draft-target"><span>This draft stays with {target.title}.</span><Button variant="ghost" onClick={() => void command({ type: 'select-thread', threadId: target.id })}>Return to draft thread</Button></div> : null}
     {!assigned && !pausedDraft ? <p className="agent-muted">This saved draft is paused. {target === undefined ? 'Its thread is unavailable.' : <Button variant="secondary" disabled={state.globalLaneBusy || !isThreadProviderConnected(state.host, target) || !supportsAgentSupervision(capabilitiesForThread(state.host, target))} onClick={() => void command({ type: 'assign', threadId: target.id })}>Manage draft thread</Button>}</p> : null}
-    <ScreenshotInput key={target?.id ?? 'no-thread'} target={target?.id ?? null} attachments={attachments} onChange={updateImages} onReadingChange={setReadingImages}
+    <ScreenshotInput key={target?.id ?? 'no-thread'} target={target?.id ?? null} attachments={attachments} onChange={updateImages} onRead={() => { setScreenshotReads(count => count + 1); return () => setScreenshotReads(count => count - 1) }}
       disabled={Boolean(pausedDraft) || state.globalLaneBusy || target === undefined || !assigned} supported={!answering && Boolean(target && resolveModel(hostForThread(state.host, target).models, target.modelId)?.supportsImages === true)}>
     <textarea id={compact ? 'widget-agent-prompt' : 'agent-prompt'} value={draft} onChange={(event) => update(event.target.value)}
       rows={compact ? 3 : 5} placeholder={target === undefined ? 'Select a thread to start a prompt.' : answering ? 'Dictate or type your answer. It stays saved until you send or clear it.' : 'Dictate or type your prompt. Pauses won’t send it.'}

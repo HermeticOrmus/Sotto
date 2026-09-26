@@ -34,7 +34,7 @@ beforeEach(() => { vi.useFakeTimers() })
 afterEach(() => { vi.useRealTimers() })
 
 describe('ThreadDraftStore revisions and saves', () => {
-  it('saves a text edit beside an 8 MiB screenshot with the handle alone, no image bytes (ADR-0030)', () => {
+  it('saves a text edit beside an 8 MiB screenshot with the handle alone, no image bytes (ADR-0031)', () => {
     const held = heldCommand()
     const store = new ThreadDraftStore(held.command, 250, uuids())
     const screenshot = { id: 'shot', name: 'Screenshot.png', mimeType: 'image/png' as const, sizeBytes: 8 * 1024 * 1024, digest: 'e'.repeat(64) }
@@ -377,5 +377,39 @@ describe('ThreadDraftStore skills and follow-up queue ownership', () => {
     expect(store.submissions()).toHaveLength(1)
     expect(store.draft('thread').text).toBe('Queue me')
     expect(store.draft('thread').draftId).toBe(store.submissions()[0]!.restoredAs)
+  })
+})
+
+describe('screenshots read for a draft', () => {
+  const image = (id: string, bytes = 3) => ({ id, name: `${id}.png`, mimeType: 'image/png' as const, sizeBytes: bytes, digest: 'a'.repeat(64) })
+  it('counts reads until each one says its screenshots were handed on, once', () => {
+    const store = new ThreadDraftStore(vi.fn(async () => null))
+    const first = store.beginScreenshotRead('thread')
+    const second = store.beginScreenshotRead('thread')
+    expect(store.screenshotReads('thread').pending).toBe(2)
+    expect(store.screenshotReads('other').pending).toBe(0)
+    first(); first()
+    expect(store.screenshotReads('thread').pending).toBe(1)
+    second()
+    expect(store.screenshotReads('thread')).toEqual({ pending: 0, problem: null })
+  })
+  it('adds late screenshots that fit to the draft as it is now, and names the ones that do not', () => {
+    const store = new ThreadDraftStore(vi.fn(async () => null))
+    store.edit('thread', { text: 'Typed meanwhile', attachments: Array.from({ length: 7 }, (_, index) => image(`kept-${index}`)) })
+    store.addLateScreenshots('thread', [image('late-a'), image('late-b'), image('late-c')])
+    expect(store.draft('thread').text).toBe('Typed meanwhile')
+    expect(store.draft('thread').attachments.map(item => item.id)).toEqual([...Array.from({ length: 7 }, (_, index) => `kept-${index}`), 'late-a'])
+    expect(store.screenshotReads('thread').problem).toBe('2 screenshots added before you moved to another thread did not fit in this draft and were not added. Remove an attachment and add them again.')
+    // The next read starts clean.
+    store.beginScreenshotRead('thread')()
+    expect(store.screenshotReads('thread').problem).toBeNull()
+  })
+  it('says so when the one late screenshot does not fit', () => {
+    const store = new ThreadDraftStore(vi.fn(async () => null))
+    store.edit('thread', { attachments: Array.from({ length: 8 }, (_, index) => image(`kept-${index}`)) })
+    const before = store.draft('thread')
+    store.addLateScreenshots('thread', [image('late')])
+    expect(store.draft('thread')).toBe(before)
+    expect(store.screenshotReads('thread').problem).toBe('A screenshot added before you moved to another thread did not fit in this draft and was not added. Remove an attachment and add it again.')
   })
 })

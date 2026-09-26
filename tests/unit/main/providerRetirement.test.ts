@@ -13,7 +13,7 @@ import { FakeProviderHost } from '../../fixtures/fakeProviderHost'
 import { immediatePublishScheduler } from '../../fixtures/publishScheduler'
 import { handleOf, PIXEL_DATA_URL, PIXEL_PNG } from '../../fixtures/stagedImages'
 
-/** The recovered draft's inline image as the coordinator carries it once staged at start (ADR-0030). */
+/** The recovered draft's inline image as the coordinator carries it once staged at start (ADR-0031). */
 const staged = handleOf(PIXEL_PNG, 'image', 'image.png')
 
 vi.mock('node:fs/promises', async () => { const actual = await vi.importActual<typeof fs>('node:fs/promises'); return { ...actual, link: vi.fn(actual.link) } })

@@ -1,6 +1,6 @@
 # Stage images once and carry a handle
 
-Issue #320. Branch: `perf/attachment-handles`. Decision: [ADR-0030](../adr/0030-images-are-staged-once-and-carried-by-handle.md).
+Issue #320. Branch: `perf/attachment-handles`. Decision: [ADR-0031](../adr/0031-images-are-staged-once-and-carried-by-handle.md).
 
 ## What was asked
 

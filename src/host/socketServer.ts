@@ -238,7 +238,10 @@ export async function startSocketServer(options: SocketServerOptions) {
       case 'stage-attachment': {
         if (!service.stageAttachment) throw new Refusal('invalid_request')
         const bytes = Buffer.from(request.image.data, 'base64')
-        try { return await service.stageAttachment({ name: request.image.name, mimeType: request.image.mimeType, bytes: new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength) }) }
+        try {
+          return await service.stageAttachment({ name: request.image.name, mimeType: request.image.mimeType, bytes: new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength),
+            ...(request.image.dimensions ? { dimensions: request.image.dimensions } : {}) })
+        }
         catch (error) {
           // An image refused for what it is says so; anything else is the host's failure to keep it.
           if (error instanceof RefusedImage) throw new Refusal('invalid_request', error.message)

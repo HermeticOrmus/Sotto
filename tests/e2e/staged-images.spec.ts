@@ -22,7 +22,7 @@ async function thumbnail(page: Page, name: string): Promise<{ src: string; width
   return chip.evaluate(image => ({ src: (image as HTMLImageElement).src, width: (image as HTMLImageElement).naturalWidth, height: (image as HTMLImageElement).naturalHeight }))
 }
 
-test('stages a pasted screenshot once, carries its handle, and restores its chip after a reload and a restart (ADR-0030)', async () => {
+test('stages a pasted screenshot once, carries its handle, and restores its chip after a reload and a restart (ADR-0031)', async () => {
   test.setTimeout(120_000)
   await mkdir(RUN, { recursive: true })
   const icon = await readFile('build/icon.png')

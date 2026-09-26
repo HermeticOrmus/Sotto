@@ -20,7 +20,7 @@ const folder = (root: string) => join(root, 'attachments')
 const index = async (root: string) => JSON.parse(await readFile(join(folder(root), 'index.json'), 'utf8')) as { version: 1; entries: { digest: string }[] }
 const png = { name: 'Screenshot.png', mimeType: 'image/png', bytes: PIXEL_PNG }
 
-describe('the attachment store (ADR-0030)', () => {
+describe('the attachment store (ADR-0031)', () => {
   it('commits the bytes and the index before it answers with a handle, and keeps the same content once', async () => {
     const root = await directory(); const store = new AttachmentStore(root); await store.load()
     const handle = await store.stage(png)
@@ -78,6 +78,17 @@ describe('the attachment store (ADR-0030)', () => {
     const inline = { id: 'legacy', name: 'Legacy.png', mimeType: 'image/png' as const, dataUrl: `data:image/png;base64,${PIXEL_PNG.toString('base64')}` }
     expect(await stage(inline)).toEqual(handleOf(PIXEL_PNG, 'legacy', 'Legacy.png'))
     expect(await stage({ ...inline, dataUrl: 'data:image/png;base64,YWJj' })).toBeNull()
+    // An inline image an earlier build saved with the sizes the composer scaled it to keeps them (ADR-0030).
+    const dimensions = { original: { width: 3840, height: 2160 }, sent: { width: 2576, height: 1449 } }
+    expect(await stage({ ...inline, dimensions })).toEqual({ ...handleOf(PIXEL_PNG, 'legacy', 'Legacy.png'), dimensions })
+  })
+  it('carries the sizes the composer attached and sent an image at on its handle, and nothing else about them', async () => {
+    const root = await directory(); const store = new AttachmentStore(root); await store.load()
+    const dimensions = { original: { width: 3840, height: 2160 }, sent: { width: 2576, height: 1449 } }
+    const handle = await store.stage({ ...png, dimensions })
+    expect(handle.dimensions).toEqual(dimensions)
+    expect(JSON.stringify(await index(root))).not.toContain('2576')
+    await expect(store.stage({ ...png, dimensions: { original: { width: 0, height: 1 }, sent: { width: 1, height: 1 } } })).rejects.toThrow()
   })
   it('asks what is owned when a sweep runs, not when it was asked for', async () => {
     const root = await directory(); let now = 1_800_000_000_000

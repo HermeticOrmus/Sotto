@@ -250,7 +250,7 @@ function createAgentBridge(renderer: IpcRendererAdapter, role: 'main' | 'widget'
     get: () => invokeParsed(renderer, AGENT_GET, agentStateSchema),
     attachmentPreview: (request: import('../shared/agents').AgentAttachmentPreviewRequest) =>
       invokeParsed(renderer, AGENT_ATTACHMENT_PREVIEW, agentAttachmentPreviewResultSchema, agentAttachmentPreviewRequestSchema.parse(request)),
-    // Each window's composer stages a screenshot once and carries its handle; a chip reads its image back (ADR-0030).
+    // Each window's composer stages a screenshot once and carries its handle; a chip reads its image back (ADR-0031).
     stageAttachment: (request: import('../shared/agents').AgentAttachmentStageRequest) =>
       invokeParsed(renderer, AGENT_ATTACHMENT_STAGE, agentAttachmentHandleSchema, agentAttachmentStageRequestSchema.parse(request)),
     attachmentContent: (request: import('../shared/agents').AgentAttachmentContentRequest) =>

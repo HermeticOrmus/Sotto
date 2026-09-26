@@ -40,7 +40,7 @@ export interface HostService {
   command(command: AgentCommand, client: ClientIdentity): Promise<AgentState>
   subscribeThreadDetail?(listener: (update: AgentThreadDetailUpdate) => void): () => void
   attachmentPreview?(request: AgentAttachmentPreviewRequest): AgentAttachmentPreviewResult | Promise<AgentAttachmentPreviewResult>
-  /** Keeps an image's bytes on this host once and answers with the handle a draft carries instead (ADR-0030). */
+  /** Keeps an image's bytes on this host once and answers with the handle a draft carries instead (ADR-0031). */
   stageAttachment?(image: AgentAttachmentUpload): Promise<AgentAttachmentHandle>
   /** A staged image's bytes, for a composer restoring a chip it has no copy of; null once the host no longer keeps it. */
   attachmentContent?(digest: string): Promise<AgentAttachmentContent | null>

@@ -10,7 +10,7 @@ let staged: AgentAttachmentStageRequest[] = []
 beforeEach(() => {
   staged = []
   vi.stubGlobal('sotto', { agents: { stageAttachment: vi.fn(async (request: AgentAttachmentStageRequest) => {
-    staged.push(request); return handleOf(request.bytes, crypto.randomUUID(), request.name)
+    staged.push(request); return { ...handleOf(request.bytes, crypto.randomUUID(), request.name, request.mimeType), ...(request.dimensions ? { dimensions: request.dimensions } : {}) }
   }) } })
 })
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
@@ -62,12 +62,12 @@ describe('screenshot attachment input', () => {
   })
   it('refuses dropped screenshots that total more than 20 MB before staging any of them', () => {
     const change = vi.fn()
-    const reading = vi.fn()
-    render(<ScreenshotInput target="workshop" attachments={[]} onChange={change} onReadingChange={reading} disabled={false} supported><textarea aria-label="Prompt" /></ScreenshotInput>)
+    const read = vi.fn(() => () => undefined)
+    render(<ScreenshotInput target="workshop" attachments={[]} onChange={change} onRead={read} disabled={false} supported><textarea aria-label="Prompt" /></ScreenshotInput>)
     fireEvent.drop(screen.getByRole('textbox'), { dataTransfer: { files: [sized('a.png', 8 * MB), sized('b.png', 8 * MB), sized('c.png', 8 * MB)], types: ['Files'] } })
     expect(screen.getByRole('alert')).toHaveTextContent('Screenshots must total 20 MB or less. Remove an image or choose smaller files.')
     expect(staged).toEqual([])
-    expect(reading).not.toHaveBeenCalledWith(true)
+    expect(read).not.toHaveBeenCalled()
     expect(change).not.toHaveBeenCalled()
   })
   it('counts the screenshots already attached toward the 20 MB total', () => {
@@ -94,12 +94,126 @@ describe('screenshot attachment input', () => {
   })
   it('does not attach an in-flight staging to a thread after the input unmounts', async () => {
     const change = vi.fn()
-    const reading = vi.fn()
-    const view = render(<ScreenshotInput target="workshop" attachments={[]} onChange={change} onReadingChange={reading} disabled={false} supported><textarea /></ScreenshotInput>)
+    const handedOn = vi.fn()
+    const view = render(<ScreenshotInput target="workshop" attachments={[]} onChange={change} onRead={() => handedOn} disabled={false} supported><textarea /></ScreenshotInput>)
     fireEvent.change(screen.getByLabelText('Screenshot files'), { target: { files: [file()] } })
     view.unmount()
-    await waitFor(() => expect(reading).toHaveBeenLastCalledWith(false))
-    await new Promise(resolve => setTimeout(resolve, 20))
+    // The read is over only once its screenshots have been handed on, or dropped for want of a draft to take them.
+    await waitFor(() => expect(handedOn).toHaveBeenCalledOnce())
+    expect(change).not.toHaveBeenCalled()
+  })
+  it('adds nothing and says it is still adding while an earlier input reads for the same draft', () => {
+    const read = vi.fn(() => () => undefined)
+    render(<ScreenshotInput target="workshop" attachments={[]} onChange={vi.fn()} onRead={read} pending disabled={false} supported><textarea aria-label="Prompt" /></ScreenshotInput>)
+    expect(screen.getByRole('status')).toHaveTextContent('Adding screenshots...')
+    expect(screen.getByRole('button', { name: 'Attach screenshots' })).toBeDisabled()
+    fireEvent.paste(screen.getByRole('textbox'), { clipboardData: { items: [{ kind: 'file', getAsFile: file }] } })
+    expect(read).not.toHaveBeenCalled()
+  })
+  it('shows what became of screenshots an earlier input read', () => {
+    render(<ScreenshotInput target="workshop" attachments={[]} onChange={vi.fn()} notice="A screenshot did not fit." disabled={false} supported><textarea aria-label="Prompt" /></ScreenshotInput>)
+    expect(screen.getByRole('alert')).toHaveTextContent('A screenshot did not fit.')
+  })
+})
+
+/**
+ * Chromium's decoder and offscreen canvas, as far as the composer uses them: each file decodes to the size
+ * `sizes` gives its name, and a canvas writes a short blob of whatever type it is asked for.
+ */
+function stubCanvas(sizes: Record<string, { width: number, height: number }>) {
+  const drawn: { width: number, height: number, type: string }[] = []
+  vi.stubGlobal('createImageBitmap', async (source: File) => ({ ...sizes[source.name]!, close: () => undefined }))
+  vi.stubGlobal('OffscreenCanvas', class {
+    constructor(readonly width: number, readonly height: number) {}
+    getContext() { return { drawImage: () => undefined } }
+    async convertToBlob({ type }: { type: string }) { drawn.push({ width: this.width, height: this.height, type }); return new Blob([new Uint8Array(12)], { type }) }
+  })
+  return drawn
+}
+const screenshotOf = (name: string, type: string) => new File([new Uint8Array(4096)], name, { type })
+/** How many bytes main was handed to stage for the most recent screenshot: what is sent, scaled or not. */
+const stagedBytes = () => staged.at(-1)!.bytes.byteLength
+async function attach(name: string, type: string): Promise<{ attachment: AgentAttachmentHandle, change: ReturnType<typeof vi.fn>, rerender: (attachments: AgentAttachmentHandle[]) => void }> {
+  const change = vi.fn()
+  const input = (attachments: AgentAttachmentHandle[]) => <ScreenshotInput target="workshop" attachments={attachments} onChange={change} disabled={false} supported><textarea aria-label="Prompt" /></ScreenshotInput>
+  const view = render(input([]))
+  fireEvent.change(screen.getByLabelText('Screenshot files'), { target: { files: [screenshotOf(name, type)] } })
+  await waitFor(() => expect(change).toHaveBeenCalledTimes(1))
+  const [attachment] = change.mock.calls[0]![0] as AgentAttachmentHandle[]
+  return { attachment: attachment!, change, rerender: attachments => view.rerender(input(attachments)) }
+}
+
+describe('scaling screenshots down to the bound', () => {
+  it('scales a 3840x2160 PNG to 2576x1449, keeps it a PNG and says so on its chip', async () => {
+    const drawn = stubCanvas({ '4k.png': { width: 3840, height: 2160 } })
+    const { attachment, rerender } = await attach('4k.png', 'image/png')
+    expect(drawn).toEqual([{ width: 2576, height: 1449, type: 'image/png' }])
+    expect(attachment).toMatchObject({ name: '4k.png', mimeType: 'image/png', dimensions: { original: { width: 3840, height: 2160 }, sent: { width: 2576, height: 1449 } } })
+    // The scaled copy is what main stages, and the handle carries both sizes (ADR-0031).
+    expect(staged.at(-1)).toMatchObject({ mimeType: 'image/png', dimensions: attachment.dimensions })
+    expect(stagedBytes()).toBe(12)
+    rerender([attachment])
+    // The sent size is on the chip itself, where a keyboard user sees it too; the tooltip adds the size before.
+    expect(screen.getByText('Resized to 2576 x 1449', { exact: true })).toBeVisible()
+    expect(screen.getByText('Resized to 2576 x 1449', { exact: true }).parentElement).toHaveAttribute('title', 'Resized from 3840 by 2160 to 2576 by 1449 pixels')
+    expect(screen.getByText('Resized from 3840 by 2160 to 2576 by 1449 pixels')).toHaveClass('tt-visually-hidden')
+  })
+  it('hands a 1200x800 PNG on byte for byte and shows no note', async () => {
+    const drawn = stubCanvas({ 'small.png': { width: 1200, height: 800 } })
+    const { attachment, rerender } = await attach('small.png', 'image/png')
+    expect(drawn).toEqual([])
+    expect(stagedBytes()).toBe(4096)
+    expect(attachment.dimensions).toEqual({ original: { width: 1200, height: 800 }, sent: { width: 1200, height: 800 } })
+    rerender([attachment])
+    expect(screen.getByRole('img', { name: 'small.png' })).toBeVisible()
+    expect(screen.queryByText(/^Resized/u)).not.toBeInTheDocument()
+  })
+  it('keeps a JPEG a JPEG', async () => {
+    const drawn = stubCanvas({ 'photo.jpg': { width: 4032, height: 3024 } })
+    const { attachment } = await attach('photo.jpg', 'image/jpeg')
+    expect(drawn).toEqual([{ width: 2576, height: 1932, type: 'image/jpeg' }])
+    expect(attachment).toMatchObject({ mimeType: 'image/jpeg', dimensions: { sent: { width: 2576, height: 1932 } } })
+    expect(staged.at(-1)).toMatchObject({ mimeType: 'image/jpeg' })
+  })
+})
+
+describe('reading several screenshots at once', () => {
+  it('decodes one at a time, so at most one decoded image is in memory', async () => {
+    let alive = 0, most = 0
+    // Each decode waits until the test lets it finish, so a second one started meanwhile would be seen.
+    const decodes: (() => void)[] = []
+    vi.stubGlobal('createImageBitmap', async () => {
+      alive += 1; most = Math.max(most, alive)
+      await new Promise<void>(resolve => { decodes.push(resolve) })
+      return { width: 3840, height: 2160, close: () => { alive -= 1 } }
+    })
+    vi.stubGlobal('OffscreenCanvas', class {
+      constructor(readonly width: number, readonly height: number) {}
+      getContext() { return { drawImage: () => undefined } }
+      async convertToBlob({ type }: { type: string }) { return new Blob([new Uint8Array(12)], { type }) }
+    })
+    const change = vi.fn()
+    render(<ScreenshotInput target="workshop" attachments={[]} onChange={change} disabled={false} supported><textarea aria-label="Prompt" /></ScreenshotInput>)
+    const files = ['a', 'b', 'c', 'd'].map(name => screenshotOf(`${name}.png`, 'image/png'))
+    fireEvent.change(screen.getByLabelText('Screenshot files'), { target: { files } })
+    for (let finished = 0; finished < files.length; finished += 1) {
+      await waitFor(() => expect(decodes).toHaveLength(finished + 1))
+      // Every decode started so far is still held, and only one has started.
+      expect(alive).toBe(1)
+      decodes[finished]!()
+    }
+    await waitFor(() => expect(change).toHaveBeenCalledTimes(1))
+    expect((change.mock.calls[0]![0] as AgentAttachmentHandle[]).map(image => image.name)).toEqual(['a.png', 'b.png', 'c.png', 'd.png'])
+    expect(most).toBe(1)
+    expect(alive).toBe(0)
+  })
+  it('hands screenshots that finish reading after the composer closes to the draft they were attached to', async () => {
+    const change = vi.fn()
+    const late = vi.fn()
+    const view = render(<ScreenshotInput target="workshop" attachments={[]} onChange={change} onAddAfterClose={late} disabled={false} supported><textarea /></ScreenshotInput>)
+    fireEvent.change(screen.getByLabelText('Screenshot files'), { target: { files: [file()] } })
+    view.unmount()
+    await waitFor(() => expect(late).toHaveBeenCalledWith([expect.objectContaining({ name: 'shot.png', digest: expect.stringMatching(/^[a-f0-9]{64}$/u) })]))
     expect(change).not.toHaveBeenCalled()
   })
 })

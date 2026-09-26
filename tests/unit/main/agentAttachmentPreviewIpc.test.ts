@@ -59,7 +59,7 @@ describe('attachment preview IPC', () => {
     expect(f.attachmentPreview).not.toHaveBeenCalled()
   })
 
-  it('stages an image for either window and reads one back, and refuses a stranger or a malformed image (ADR-0030)', async () => {
+  it('stages an image for either window and reads one back, and refuses a stranger or a malformed image (ADR-0031)', async () => {
     const f = fixture()
     const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])
     const stage = { threadId: 'workshop', name: 'Shot.png', mimeType: 'image/png', bytes }

@@ -310,13 +310,14 @@ export class SocketHostService implements HostService {
     this.previewTail = result.catch(() => undefined); return result
   }
   /**
-   * Stages an image on the host, which is where the provider reads it (ADR-0030). A host that does not list
+   * Stages an image on the host, which is where the provider reads it (ADR-0031). A host that does not list
    * `attachment-staging` is from before staged images; the version sentence says which side to update, and nothing is sent.
    */
   async stageAttachment(image: AgentAttachmentUpload): Promise<AgentAttachmentHandle> {
     if (!this.features.includes('attachment-staging')) throw new HostConnectionError(this.mismatch(), 'version_mismatch')
     const data = Buffer.from(image.bytes.buffer, image.bytes.byteOffset, image.bytes.byteLength).toString('base64')
-    return this.read(agentAttachmentHandleSchema, await this.call({ op: 'stage-attachment', image: { name: image.name, mimeType: image.mimeType, data } }))
+    return this.read(agentAttachmentHandleSchema, await this.call({ op: 'stage-attachment', image: { name: image.name, mimeType: image.mimeType, data,
+      ...(image.dimensions ? { dimensions: image.dimensions } : {}) } }))
   }
   /** A staged image's bytes, queued behind previews: the host answers one of these large frames at a time. */
   attachmentContent(digest: string): Promise<AgentAttachmentContent | null> {

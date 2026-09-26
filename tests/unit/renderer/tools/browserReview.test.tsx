@@ -294,8 +294,9 @@ describe('browser feedback', () => {
     expect(add).not.toHaveBeenCalled()
     fireEvent.change(screen.getByRole('textbox', { name: 'Browser feedback comment' }), { target: { value: 'Give this more space' } })
     fireEvent.click(screen.getByRole('button', { name: 'Add to draft' }))
-    expect(add).toHaveBeenCalledWith(expect.objectContaining({ element: expect.objectContaining({ selector: '#save' }) }), 'Give this more space')
+    expect(screen.getByRole('button', { name: 'Add to draft' })).toBeDisabled()
     await waitFor(() => expect(close).toHaveBeenCalledOnce())
+    expect(add).toHaveBeenCalledWith(expect.objectContaining({ element: expect.objectContaining({ selector: '#save' }) }), 'Give this more space', expect.any(AbortSignal))
   })
   it('returns focus to Add to draft with the problem shown when adding fails, and never stays busy', async () => {
     const browser = fake(); const close = vi.fn()
@@ -311,7 +312,7 @@ describe('browser feedback', () => {
     const failing = vi.fn(async (): Promise<string | null> => { throw new Error('bridge gone') })
     rerender(<BrowserFeedback page={page} initial={capture} bridge={browser.bridge} onAdd={failing} onClose={close} />)
     fireEvent.click(button)
-    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Could not add this screenshot. Nothing was added. Try again.'))
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Could not add this screenshot to the draft. Nothing was added. Try again.'))
     await waitFor(() => expect(button).toBeEnabled())
   })
   it('selects a region entirely from the keyboard and binds it to the captured frame', async () => {
@@ -352,5 +353,58 @@ describe('browser feedback', () => {
       const drafts = new ThreadDraftStore(vi.fn(async () => null), 60_000)
       expect(await appendBrowserFeedback(drafts, 'visual-gate', capture, 'Look', true)).toBe('This host is disconnected. Connect again before attaching images. Nothing was attached.')
     } finally { vi.unstubAllGlobals() }
+  })
+  it('leaves the draft as it was when the add is cancelled while its screenshot is prepared', async () => {
+    vi.useFakeTimers()
+    const drafts = new ThreadDraftStore(vi.fn(async () => null))
+    drafts.edit('visual-gate', { text: 'Keep this thought' })
+    const before = drafts.draft('visual-gate')
+    let finish: (value: { dataUrl: string }) => void = () => undefined
+    const prepare = vi.fn(() => new Promise<{ dataUrl: string }>(resolve => { finish = resolve }))
+    const controller = new AbortController()
+    const added = appendBrowserFeedback(drafts, 'visual-gate', capture, 'Too tight', true, { prepare, signal: controller.signal })
+    controller.abort()
+    finish({ dataUrl: image })
+    expect(await added).toBeNull()
+    expect(drafts.draft('visual-gate')).toBe(before)
+  })
+  it('stops a pending add when Cancel is pressed, and does not close twice', async () => {
+    const browser = fake(); const close = vi.fn()
+    let signal: AbortSignal | undefined
+    let finish: (error: string | null) => void = () => undefined
+    const add = vi.fn((_capture: unknown, _comment: string, given: AbortSignal) => { signal = given; return new Promise<string | null>(resolve => { finish = resolve }) })
+    render(<BrowserFeedback page={page} initial={capture} bridge={browser.bridge} onAdd={add} onClose={close} />)
+    fireEvent.change(screen.getByRole('textbox', { name: 'Browser feedback comment' }), { target: { value: 'Give this more space' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add to draft' }))
+    await waitFor(() => expect(add).toHaveBeenCalledOnce())
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(signal?.aborted).toBe(true)
+    expect(close).toHaveBeenCalledOnce()
+    finish(null)
+    await Promise.resolve(); await Promise.resolve()
+    expect(close).toHaveBeenCalledOnce()
+  })
+  it('scales a capture past the screenshot bound down before it joins the draft, keeping typing done meanwhile', async () => {
+    vi.useFakeTimers()
+    const staged: AgentAttachmentStageRequest[] = []
+    vi.stubGlobal('sotto', { agents: { stageAttachment: vi.fn(async (request: AgentAttachmentStageRequest) => {
+      staged.push(request); return { ...handleOf(request.bytes, 'feedback', request.name), ...(request.dimensions ? { dimensions: request.dimensions } : {}) }
+    }) } })
+    const drafts = new ThreadDraftStore(vi.fn(async () => null))
+    const dimensions = { original: { width: 5120, height: 2880 }, sent: { width: 2576, height: 1449 } }
+    let finish: (value: { dataUrl: string, dimensions: typeof dimensions }) => void = () => undefined
+    const prepare = vi.fn(() => new Promise<{ dataUrl: string, dimensions: typeof dimensions }>(resolve => { finish = resolve }))
+    const added = appendBrowserFeedback(drafts, 'visual-gate', { ...capture, width: 5120, height: 2880 }, 'Too tight', true, { prepare })
+    expect(prepare).toHaveBeenCalledWith(capture.image)
+    drafts.edit('visual-gate', { text: 'Typed while it was prepared' })
+    finish({ dataUrl: image, dimensions })
+    expect(await added).toBeNull()
+    expect(drafts.draft('visual-gate').text).toMatch(/^Typed while it was prepared\n\nBrowser feedback:/)
+    // The agent is told the size of the image it receives, not only the size captured.
+    expect(drafts.draft('visual-gate').text).toContain('Screenshot size: 5120 x 2880, sent at 2576 x 1449')
+    // The handle carries the sizes, and main was told them with the bytes it stages.
+    expect(drafts.draft('visual-gate').attachments).toEqual([expect.objectContaining({ name: 'Browser feedback.png', dimensions })])
+    expect(staged).toEqual([expect.objectContaining({ dimensions })])
+    vi.unstubAllGlobals()
   })
 })

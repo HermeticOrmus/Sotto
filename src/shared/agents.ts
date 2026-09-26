@@ -31,7 +31,7 @@ export const AGENT_GROK_VOICES = 'sotto:agents:grok-voices'
 export const AGENT_VOICE_MODEL = 'sotto:agents:voice-model'
 export const AGENT_WAKE = 'sotto:agents:wake'
 export const AGENT_ATTACHMENT_PREVIEW = 'sotto:agents:attachment-preview'
-/** The window stages an image's bytes once and gets its handle back, or reads a staged image back for a chip (ADR-0030). */
+/** The window stages an image's bytes once and gets its handle back, or reads a staged image back for a chip (ADR-0031). */
 export const AGENT_ATTACHMENT_STAGE = 'sotto:agents:stage-attachment'
 export const AGENT_ATTACHMENT_CONTENT = 'sotto:agents:attachment-content'
 /** Pushed per thread: the messages of a thread the window is actually looking at. */
@@ -65,9 +65,19 @@ export function attachmentSizeBytes(dataUrl: string): number {
   const base64 = dataUrl.slice(dataUrl.indexOf(',') + 1)
   return base64.length / 4 * 3 - (base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0)
 }
+/** An image's size in whole pixels, 1 to 65,535 on each side. The composer's resizer trusts no size this refuses. */
+export const agentImageSizeSchema = z.object({ width: z.number().int().min(1).max(65_535), height: z.number().int().min(1).max(65_535) }).strict()
+export type AgentImageSize = z.infer<typeof agentImageSizeSchema>
+/**
+ * An image's size in pixels as the user attached it and as it is sent, which differ only when the composer
+ * scaled it down to the screenshot bound. Sizes only, never image content.
+ */
+export const agentAttachmentDimensionsSchema = z.object({ original: agentImageSizeSchema, sent: agentImageSizeSchema }).strict()
+export type AgentAttachmentDimensions = z.infer<typeof agentAttachmentDimensionsSchema>
 export const agentAttachmentSchema = z.object({
   id: z.string().min(1).max(128).regex(/^[a-z0-9_-]+$/iu), name: z.string().trim().min(1).max(255),
   mimeType: z.enum(AGENT_IMAGE_MIME_TYPES), dataUrl: z.string().max(14_000_000),
+  dimensions: agentAttachmentDimensionsSchema.optional(),
 }).strict().refine(attachment => {
   const prefix = `data:${attachment.mimeType};base64,`
   if (!attachment.dataUrl.startsWith(prefix)) return false
@@ -100,12 +110,14 @@ export function bytesHaveRasterSignature(mimeType: string, bytes: Uint8Array): b
 /** The SHA-256 of a staged image's bytes, as lowercase hex: the content a handle names. */
 export const attachmentDigestSchema = z.string().regex(/^[a-f0-9]{64}$/u)
 /**
- * A staged image (ADR-0030): what drafts, follow-ups, commands, state and broadcasts carry in place of its bytes.
+ * A staged image (ADR-0031): what drafts, follow-ups, commands, state and broadcasts carry in place of its bytes.
  * `id` is this attachment's own, `digest` the content's; the same image attached twice is two handles on one content.
  */
 export const agentAttachmentHandleSchema = z.object({
   id: z.string().min(1).max(128).regex(/^[a-z0-9_-]+$/iu), name: z.string().trim().min(1).max(255),
   mimeType: z.enum(AGENT_IMAGE_MIME_TYPES), sizeBytes: z.number().int().min(1).max(AGENT_MAX_IMAGE_BYTES), digest: attachmentDigestSchema,
+  /** The sizes the composer attached and staged it at, when it knew them (issue #321). */
+  dimensions: agentAttachmentDimensionsSchema.optional(),
 }).strict()
 export type AgentAttachmentHandle = z.infer<typeof agentAttachmentHandleSchema>
 export const agentAttachmentHandlesSchema = z.array(agentAttachmentHandleSchema).max(AGENT_MAX_ATTACHMENTS)
@@ -116,6 +128,7 @@ const imageBytes = (limit: number) => z.custom<Uint8Array>(value => value instan
 /** The window hands an image's bytes to main once; the handle comes back. `threadId` picks the host that runs it. */
 export const agentAttachmentStageRequestSchema = z.object({
   threadId: id.nullable(), name: z.string().trim().min(1).max(255), mimeType: z.enum(AGENT_IMAGE_MIME_TYPES), bytes: imageBytes(AGENT_MAX_IMAGE_BYTES),
+  dimensions: agentAttachmentDimensionsSchema.optional(),
 }).strict()
 export type AgentAttachmentStageRequest = z.infer<typeof agentAttachmentStageRequestSchema>
 /** What a host is handed to stage: the image without the thread the window routed it by. */
@@ -804,7 +817,7 @@ export interface AgentBridge {
   get(): Promise<AgentState>
   /** The bytes behind one published `preview: { available: true }` marker, or null when nothing is eligible. */
   attachmentPreview?(request: AgentAttachmentPreviewRequest): Promise<AgentAttachmentPreviewResult>
-  /** Stages an image once on the host that runs `threadId` (the selected host when null) and answers with its handle (ADR-0030). */
+  /** Stages an image once on the host that runs `threadId` (the selected host when null) and answers with its handle (ADR-0031). */
   stageAttachment?(request: AgentAttachmentStageRequest): Promise<AgentAttachmentHandle>
   /** A staged image's bytes, for a chip this window holds no copy of; null once its host no longer keeps it. */
   attachmentContent?(request: AgentAttachmentContentRequest): Promise<AgentAttachmentContent | null>

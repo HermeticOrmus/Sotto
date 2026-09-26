@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react'
 import type { AgentSkillReference } from '../../../shared/agentSkills'
 import type { AgentFileReference } from '../../../shared/agentFiles'
-import { MAX_DELIVERED_DRAFTS, type AgentAttachmentHandle, type AgentCommand, type AgentDelivery, type AgentState } from '../../../shared/agents'
+import { MAX_DELIVERED_DRAFTS, agentAttachmentHandlesSchema, type AgentAttachmentHandle, type AgentCommand, type AgentDelivery, type AgentState } from '../../../shared/agents'
 import { gateOnCreation } from './draftThreads'
 
 type Command = (command: AgentCommand) => Promise<AgentState | null>
@@ -17,6 +17,18 @@ export interface ComposerDraft {
   readonly files: readonly AgentFileReference[]
   readonly requestId: string | null
 }
+
+/** Screenshots being read for a thread's draft, which outlive the composer that started reading them. */
+export interface ScreenshotReads {
+  /** Reads under way for the draft, whichever composer started them. The thread cannot send until they land. */
+  readonly pending: number
+  /** Why screenshots that finished reading after their composer closed were not added, until the next read starts. */
+  readonly problem: string | null
+}
+const NO_SCREENSHOT_READS: ScreenshotReads = { pending: 0, problem: null }
+const lateScreenshotsLeftOut = (count: number): string => count === 1
+  ? 'A screenshot added before you moved to another thread did not fit in this draft and was not added. Remove an attachment and add it again.'
+  : `${count} screenshots added before you moved to another thread did not fit in this draft and were not added. Remove an attachment and add them again.`
 
 export interface ThreadComposerSnapshot {
   readonly draft: ComposerDraft
@@ -41,7 +53,7 @@ export const UNCONFIRMED_SUBMISSION: Record<SubmissionMode, string> = {
 /**
  * A revision the user sent from this window. The composer empties on the press, so this is the only
  * copy of what was sent: it holds the images' handles, whose content main keeps for an hour after nothing else
- * owns it (ADR-0030), so a refused prompt can be sent or written again.
+ * owns it (ADR-0031), so a refused prompt can be sent or written again.
  */
 export interface Submission {
   readonly threadId: string
@@ -160,6 +172,7 @@ export class ThreadDraftStore {
   private readonly legacyIds = new Map<string, string>()
   private readonly pendingSaves = new Map<string, Set<Promise<void>>>()
   private readonly handoffs = new Map<string, Promise<AgentState | null>>()
+  private readonly reads = new Map<string, ScreenshotReads>()
   private submissionList: readonly Submission[] = []
   /** Every write waits for the creation of a thread this window minted, so a fresh thread's draft is never refused. */
   private readonly command: Command
@@ -189,6 +202,48 @@ export class ThreadDraftStore {
   }
 
   draft(threadId: string): ComposerDraft { return this.entries.get(threadId)?.draft ?? EMPTY }
+
+  screenshotReads(threadId: string): ScreenshotReads { return this.reads.get(threadId) ?? NO_SCREENSHOT_READS }
+
+  /**
+   * Screenshots start being read for the thread's draft. The returned function says they have been handed on,
+   * added or not; until then the thread's composer, open now or opened later, cannot send.
+   */
+  beginScreenshotRead(threadId: string): () => void {
+    this.setScreenshotReads(threadId, { pending: this.screenshotReads(threadId).pending + 1, problem: null })
+    let ended = false
+    return () => {
+      if (ended) return
+      ended = true
+      const reads = this.screenshotReads(threadId)
+      this.setScreenshotReads(threadId, { ...reads, pending: Math.max(0, reads.pending - 1) })
+    }
+  }
+
+  /**
+   * Screenshots that finished reading after the composer they were added to closed, as it does when the user
+   * moves to another thread. As many as fit join the draft as it is now, and the thread's screenshot problem
+   * names the rest, so none is lost without a word.
+   */
+  addLateScreenshots(threadId: string, images: readonly AgentAttachmentHandle[]): void {
+    const before = this.draft(threadId).attachments
+    let attachments = before
+    let leftOut = 0
+    for (const image of images) {
+      const next = agentAttachmentHandlesSchema.safeParse([...attachments, image])
+      if (next.success) attachments = next.data
+      else leftOut += 1
+    }
+    if (attachments !== before) this.revise(threadId, { attachments })
+    if (leftOut > 0) this.reads.set(threadId, { ...this.screenshotReads(threadId), problem: lateScreenshotsLeftOut(leftOut) })
+    this.emit(new Set([threadId]))
+  }
+
+  private setScreenshotReads(threadId: string, reads: ScreenshotReads): void {
+    if (reads.pending === 0 && reads.problem === null) this.reads.delete(threadId)
+    else this.reads.set(threadId, reads)
+    this.emit(new Set())
+  }
 
   /** Adopt published drafts, delivery receipts and follow-up queue ownership. */
   receive(state: AgentState): void {
@@ -495,6 +550,10 @@ export class ThreadDraftStore {
 
 export function useThreadComposer(store: ThreadDraftStore, threadId: string): ThreadComposerSnapshot {
   return useSyncExternalStore(store.subscribe, () => store.snapshot(threadId))
+}
+
+export function useScreenshotReads(store: ThreadDraftStore, threadId: string): ScreenshotReads {
+  return useSyncExternalStore(store.subscribe, () => store.screenshotReads(threadId))
 }
 
 export function useSubmissions(store: ThreadDraftStore): readonly Submission[] {

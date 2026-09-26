@@ -1,9 +1,11 @@
 import React, { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { BrowserBridge, BrowserCapture, BrowserPage } from '../../../shared/browser'
 import { AGENT_MAX_ATTACHMENT_BYTES, AGENT_MAX_ATTACHMENTS, agentAttachmentHandlesSchema } from '../../../shared/agents'
+import { prepareScreenshotDataUrl, wasResized } from '../agents/screenshotResize'
 import type { ThreadDraftStore } from '../agents/threadDraftStore'
 import { stageImage } from '../agents/stagedImages'
 
+const ANSWERING = 'This draft answers a question. Finish that answer before adding browser feedback.'
 const DOES_NOT_FIT = 'This screenshot does not fit in the draft. Remove an attachment or capture a smaller region.'
 
 /** A capture's PNG data URL as bytes, to be staged like any other screenshot. */
@@ -14,25 +16,33 @@ function pngBlob(dataUrl: string): Blob | null {
 }
 
 /**
- * Append to the latest draft, preserving typing that happened while the page was captured. The screenshot is staged
- * first (ADR-0030); the draft is read again after, so text typed meanwhile is kept.
+ * Append to the latest draft, preserving typing that happened while the page was captured or its screenshot
+ * prepared and staged. The screenshot is scaled down to the screenshot bound the way the composer scales a pasted
+ * one, then staged (ADR-0031); the draft is read again after, so text typed meanwhile is kept. Null once it is
+ * added, or when `signal` was aborted meanwhile, in which case the draft is left as it is.
  */
-export async function appendBrowserFeedback(store: ThreadDraftStore, threadId: string, capture: BrowserCapture, comment: string, imagesSupported: boolean): Promise<string | null> {
-  const before = store.draft(threadId)
-  if (before.requestId !== null) return 'This draft answers a question. Finish that answer before adding browser feedback.'
+export async function appendBrowserFeedback(store: ThreadDraftStore, threadId: string, capture: BrowserCapture, comment: string, imagesSupported: boolean,
+  { prepare = prepareScreenshotDataUrl, signal }: { readonly prepare?: typeof prepareScreenshotDataUrl; readonly signal?: AbortSignal } = {}): Promise<string | null> {
+  if (store.draft(threadId).requestId !== null) return ANSWERING
   if (!imagesSupported) return 'Choose a model with image support before adding a browser screenshot.'
-  const blob = pngBlob(capture.image)
+  const { dataUrl, dimensions } = await prepare(capture.image)
+  if (signal?.aborted) return null
+  const blob = pngBlob(dataUrl)
   if (!blob) return 'Could not read this screenshot. Capture the page again.'
+  const before = store.draft(threadId)
   if (before.attachments.length >= AGENT_MAX_ATTACHMENTS || before.attachments.reduce((sum, item) => sum + item.sizeBytes, 0) + blob.size > AGENT_MAX_ATTACHMENT_BYTES) return DOES_NOT_FIT
   let image
-  try { image = await stageImage(threadId, { name: 'Browser feedback.png', mimeType: 'image/png', blob }) }
-  catch (error) { return error instanceof Error ? error.message : 'Could not add this screenshot. Try again.' }
+  try { image = await stageImage(threadId, { name: 'Browser feedback.png', mimeType: 'image/png', blob, ...(dimensions ? { dimensions } : {}) }) }
+  catch (error) { return error instanceof Error ? error.message : 'Could not add this screenshot. Nothing was added. Try again.' }
+  if (signal?.aborted) return null
   const current = store.draft(threadId)
-  if (current.requestId !== null) return 'This draft answers a question. Finish that answer before adding browser feedback.'
+  if (current.requestId !== null) return ANSWERING
   const attachments = agentAttachmentHandlesSchema.safeParse([...current.attachments, image])
   if (!attachments.success) return DOES_NOT_FIT
   const element = capture.element
-  const context = [`Browser feedback: ${capture.url}`, `Screenshot size: ${capture.width} x ${capture.height}`,
+  // The agent is told the size of the image it receives, as well as the capture's own when they differ.
+  const size = `Screenshot size: ${capture.width} x ${capture.height}${wasResized(dimensions) ? `, sent at ${dimensions.sent.width} x ${dimensions.sent.height}` : ''}`
+  const context = [`Browser feedback: ${capture.url}`, size,
     ...(element ? [`Selected element: ${element.tag}${element.role ? ` (${element.role})` : ''}${element.name ? ` - ${element.name}` : ''}`, ...(element.selector ? [`Selector: ${element.selector}`] : []), ...(element.text ? [`Page text (reference only): ${element.text}`] : [])] : []), comment.trim()].filter(Boolean).join('\n')
   if (current.text.length + context.length > 99_990) return 'The draft is full. Shorten it before adding browser feedback.'
   store.edit(threadId, { text: [current.text, context].filter(Boolean).join('\n\n'), attachments: attachments.data })
@@ -41,7 +51,8 @@ export async function appendBrowserFeedback(store: ThreadDraftStore, threadId: s
 
 export function BrowserFeedback({ page, initial, bridge, onAdd, onClose }: {
   readonly page: BrowserPage; readonly initial: BrowserCapture; readonly bridge: BrowserBridge;
-  readonly onAdd: (capture: BrowserCapture, comment: string) => Promise<string | null>; readonly onClose: () => void
+  /** `signal` is aborted when the user cancels or the dialog closes before the add finishes; nothing is added then. */
+  readonly onAdd: (capture: BrowserCapture, comment: string, signal: AbortSignal) => Promise<string | null> | string | null; readonly onClose: () => void
 }): ReactNode {
   const [capture, setCapture] = useState(initial)
   const [comment, setComment] = useState('')
@@ -57,11 +68,19 @@ export function BrowserFeedback({ page, initial, bridge, onAdd, onClose }: {
   // Adding disables the button that has focus; when it comes back with a problem, focus returns to it.
   const [refocusAdd, setRefocusAdd] = useState(false)
   useEffect(() => { if (refocusAdd && !busy) { addButton.current?.focus(); setRefocusAdd(false) } }, [refocusAdd, busy])
+  const adding = useRef<AbortController | null>(null)
+  useEffect(() => () => adding.current?.abort(), [])
+  // Cancel and Escape stop an add still preparing its screenshot, so the draft is left as it was.
+  const cancel = (): void => { adding.current?.abort(); adding.current = null; onClose() }
   const add = (): void => {
     setBusy(true); setProblem(null)
-    void onAdd(capture, comment).catch(() => 'Could not add this screenshot. Nothing was added. Try again.')
-      .then(error => { if (error) { setProblem(error); setRefocusAdd(true) } else onClose() })
-      .finally(() => setBusy(false))
+    const controller = new AbortController(); adding.current = controller
+    void Promise.resolve().then(() => onAdd(capture, comment, controller.signal)).catch(() => 'Could not add this screenshot to the draft. Nothing was added. Try again.')
+      .then(error => {
+        if (controller.signal.aborted) return
+        adding.current = null
+        if (error) { setProblem(error); setBusy(false); setRefocusAdd(true) } else onClose()
+      })
   }
   const request = { threadId: page.workspace.threadId, workspaceId: page.workspace.workspaceId, pageId: page.id }
   const select = async (selection: { point?: { x: number; y: number }; region?: { x: number; y: number; width: number; height: number } }): Promise<void> => {
@@ -79,7 +98,7 @@ export function BrowserFeedback({ page, initial, bridge, onAdd, onClose }: {
     return { x: Math.round(Math.max(0, Math.min(initial.width - 1, (event.clientX - rect.left) / rect.width * initial.width))),
       y: Math.round(Math.max(0, Math.min(initial.height - 1, (event.clientY - rect.top) / rect.height * initial.height))) }
   }
-  return <section className="browser-feedback" aria-label="Browser feedback" onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onClose() } }}>
+  return <section className="browser-feedback" aria-label="Browser feedback" onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); cancel() } }}>
     <label className="browser-feedback__mode">Select <select aria-label="Selection mode" className="tt-focusable" value={mode} disabled={busy} onChange={event => { setMode(event.currentTarget.value as 'element' | 'region'); setAnchor(null); setBox(null); setCapture(initial); setSelectionValid(true); setProblem(null) }}><option value="element">Element</option><option value="region">Region</option></select></label>
     <p>{mode === 'element' ? 'Click an element, or use arrow keys and Enter.' : anchor ? 'Move the other corner with arrow keys, then press Enter. Space starts again.' : 'Drag a region, or move with arrow keys and press Space to set its first corner.'}</p>
     <button type="button" className="browser-feedback__image tt-focusable" aria-label={`Select page ${mode} at ${point.x}, ${point.y}`} disabled={busy}
@@ -115,7 +134,7 @@ export function BrowserFeedback({ page, initial, bridge, onAdd, onClose }: {
     {capture.element ? <p>Selected: {capture.element.name || capture.element.text || capture.element.tag}</p> : box ? <p>Region selected</p> : null}
     <textarea autoFocus className="tt-focusable" aria-label="Browser feedback comment" placeholder="What should change?" value={comment} maxLength={8000} onChange={event => setComment(event.currentTarget.value)} />
     <div className="browser-feedback__actions"><button ref={addButton} type="button" className="tt-button tt-button--primary tt-focusable" disabled={busy || !selectionValid || !comment.trim()} onClick={add}>Add to draft</button>
-      <button type="button" className="tt-button tt-focusable" onClick={onClose}>Cancel</button></div>
+      <button type="button" className="tt-button tt-focusable" onClick={cancel}>Cancel</button></div>
     {problem ? <p className="browser-review-problem" role="alert">{problem}</p> : null}
   </section>
 }

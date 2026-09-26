@@ -158,7 +158,7 @@ describe('AgentView user workflows', () => {
     state.draft = 'Original text'; state.draftThreadId = 'thread'; state.composing = true
     state.host.models[0]!.supportsImages = true
     let finishRead: (() => void) | undefined
-    // Staging answers only when the test says so, the way a slow main would (ADR-0030).
+    // Staging answers only when the test says so, the way a slow main would (ADR-0031).
     vi.stubGlobal('sotto', { agents: { stageAttachment: (request: AgentAttachmentStageRequest) => new Promise(done => {
       finishRead = () => done(handleOf(request.bytes, 'slow', request.name))
     }) } })

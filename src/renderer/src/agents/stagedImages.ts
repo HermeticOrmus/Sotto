@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { AgentAttachmentHandle, AgentWireBridge } from '../../../shared/agents'
+import type { AgentAttachmentDimensions, AgentAttachmentHandle, AgentWireBridge } from '../../../shared/agents'
 
 /** The long edge of a chip's thumbnail, in pixels: twice the chip's own size, so it stays sharp at 200%. */
 export const THUMBNAIL_EDGE = 256
@@ -62,16 +62,19 @@ export function stagingError(error: unknown): string {
 }
 
 /**
- * Hands an image's bytes to main once and answers with its handle (ADR-0030). `threadId` is the thread the draft
+ * Hands an image's bytes to main once and answers with its handle (ADR-0031). `threadId` is the thread the draft
  * belongs to, which decides the host that keeps it; null is the coordinator's composer on the selected host. Anything
  * that changes the image before it is sent, such as a downscale, runs before this and hands over its result.
  */
-export async function stageImage(threadId: string | null, image: { readonly name: string; readonly mimeType: string; readonly blob: Blob }): Promise<AgentAttachmentHandle> {
+export async function stageImage(threadId: string | null, image: { readonly name: string; readonly mimeType: string; readonly blob: Blob; readonly dimensions?: AgentAttachmentDimensions }): Promise<AgentAttachmentHandle> {
   const bridge = agents()
   if (!bridge?.stageAttachment) throw new Error('Screenshots cannot be attached in this window. Nothing was attached.')
   const bytes = new Uint8Array(await image.blob.arrayBuffer())
   let handle: AgentAttachmentHandle
-  try { handle = await bridge.stageAttachment({ threadId, name: image.name, mimeType: image.mimeType as AgentAttachmentHandle['mimeType'], bytes }) }
+  try {
+    handle = await bridge.stageAttachment({ threadId, name: image.name, mimeType: image.mimeType as AgentAttachmentHandle['mimeType'], bytes,
+      ...(image.dimensions ? { dimensions: image.dimensions } : {}) })
+  }
   catch (error) { throw new Error(stagingError(error), { cause: error }) }
   if (!thumbnails.has(handle.digest)) remember(handle.digest, chipSource(new Blob([bytes], { type: handle.mimeType })))
   return handle

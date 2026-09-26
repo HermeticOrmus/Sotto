@@ -16,7 +16,7 @@ export function followupDigest(input: Pick<AgentFollowup, 'text' | 'attachments'
 const receiptsSchema = z.array(agentDeliveryReceiptsSchema.element.extend({ digest: z.string().optional() })).max(MAX_DELIVERED_DRAFTS)
 type State = { items: AgentFollowup[]; receipts: z.infer<typeof receiptsSchema> }
 /**
- * What the file may hold: a follow-up written before ADR-0030 kept its images inline. Each is read as it stands and
+ * What the file may hold: a follow-up written before ADR-0031 kept its images inline. Each is read as it stands and
  * staged when the store loads, so an upgrade never discards the queue as unreadable.
  */
 const storedSchema = z.object({ items: z.array(agentFollowupSchema.extend({ attachments: z.array(z.union([agentAttachmentHandleSchema, agentAttachmentSchema])) })), receipts: receiptsSchema })
