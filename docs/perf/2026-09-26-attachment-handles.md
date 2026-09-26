@@ -24,7 +24,7 @@ What moved is paid once, when the image is attached: hashing 8 MiB, writing it t
 
 ## What these numbers are and are not
 
-- They are Sotto's own work and the disk. The provider is the in-process E2E host. A send still reads the image once, at the adapter, and hands the provider the same base64 it did before; that part is unchanged.
+- They are Sotto's own work and the disk. The provider is the in-process E2E host. A send still reads the image once, at the adapter, and hands the provider the same base64 it did before. Since the review, the store also hashes what it reads from disk to check it is still the image the user attached, which for 8 MiB is the same 20 ms or so as hashing it at staging, small beside the send.
 - "Before" is `origin/main` at `e093bd6c`, measured in place before any change with a benchmark that did the same things with a data URL (it is not committed, since the API it drove is gone). "After" is `tests/perf/attachmentHandles.perf.test.ts`.
 - The widget receives the same shell as the main window, so the per-window figure applies to each of them.
 - A remote host's shell crosses the socket as JSON rather than structured clone; the draft's share of it falls the same way, from the base64 to the handle.

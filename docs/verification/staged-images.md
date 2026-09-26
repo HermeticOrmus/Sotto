@@ -20,5 +20,13 @@ The chip looks as it did. What changed is where its picture comes from and what 
 
 - After the review fixes (turning history off keeps an image staged for an unsaved draft; an oversize image read over the socket is named as a preview), the spec passed again alone. Run beside `screenshot-paste.spec.ts`, with two Electron apps starting at once, it failed once at a viewport check right after a resize, and passed on its own.
 - `tests/e2e/screenshot-paste.spec.ts` and `tests/e2e/composer-short-window.spec.ts` (the one-image layout at 820x560 and in a short split) passed. The keyboard-focus case in the short-window spec failed once while another spec's app was starting and passed on its own.
-- `tests/e2e/provider-recovery.spec.ts`: the case that clears a recovered draft passed; it starts from an `agents.json` an older version wrote with the image inline, so the image is staged at start. Its two bind cases time out filling **Thread name** in the New thread dialog, before any image step, which this change does not touch; not compared against `origin/main` either.
-- `tests/e2e/phase-one-integrated.spec.ts`: four of its five cases fail. Three fail looking up a thread by its bare ID (`'docs'`) in the desktop's state, which names threads by host and ID; one fails waiting for focus on a rich message's table. None fails at an image. These specs were not run against `origin/main` for comparison, so whether they failed there too is not shown here.
+- `tests/e2e/provider-recovery.spec.ts`: the case that clears a recovered draft passed; it starts from an `agents.json` an older version wrote with the image inline, so the image is staged at start. Its two bind cases time out filling **Thread name** in the New thread dialog, before any image step. They fail the same way on `origin/main` at `bc4110a3` (run in a separate checkout with its own `npm ci` and build), so they are not this change's.
+- `tests/e2e/phase-one-integrated.spec.ts`: four of its five cases fail, none at an image step. The same four fail on `origin/main` at `bc4110a3`: the image-draft restart case, settlement, the light provider controls and the keyboard case. These are tracked in #340.
+
+## After the second review
+
+The review asked for plainer staging errors, a hash of content on read, a second check of a send's images just before the provider hears them, a draft save that keeps its text without a lost image, and follow-ups from an older build that are paused rather than sent without an image. After those, on a fresh build:
+
+- `tests/e2e/staged-images.spec.ts`, `tests/e2e/screenshot-paste.spec.ts` and `tests/e2e/agent-browser.spec.ts` (browser feedback's Add to draft now stages the capture) passed, twice each in one run.
+- `tests/e2e/screenshot-paste.spec.ts` failed once when it ran last in a batch of six specs: the queued screenshot had already been sent when the test read the queue. It passed alone three times.
+- `tests/e2e/composer-short-window.spec.ts`: the one-image layout case passed. The keyboard-focus case fails at the same step (**Write here** never becomes enabled) on `origin/main` at `bc4110a3`, so it is not this change's.
