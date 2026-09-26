@@ -50,6 +50,11 @@ test('new threads inherit Agents despite a saved Grok override and wait if that 
       const thread = state.host.threads.find(thread => thread.id === state.activeThreadId)
       return { modelId: thread?.modelId, providerId: thread?.providerId }
     })).toEqual({ modelId: chosen.modelId, providerId: 'claude' })
+    // Named, it is no longer an unused new thread, so the next press creates rather than returning to it (#347).
+    await page.evaluate(async () => {
+      const state = await window.sotto!.agents!.get()
+      await window.sotto!.agents!.command({ type: 'rename-thread', threadId: state.activeThreadId!, title: 'Inherited model' })
+    })
     await page.evaluate(async () => window.sotto!.agents!.command({ type: 'disconnect', provider: 'claude' }))
     // Disconnected, the inherited model is not ready: the pen's creation is refused and says so where the
     // sidebar shows other such errors, losing nothing.
