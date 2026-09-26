@@ -12,7 +12,7 @@
  *   SOTTO_PERF_BENCH=1 npx vitest run tests/perf/attachmentHandles.perf.test.ts --maxWorkers=1 --disable-console-intercept
  */
 import { randomUUID } from 'node:crypto'
-import { mkdtemp, rm, stat } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { serialize } from 'node:v8'
@@ -63,6 +63,8 @@ describe('an 8 MiB screenshot in a draft', () => {
       const broadcast = f.broadcast()
       await f.control.command({ type: 'manual-send', threadId: 'workshop', text: 'Look', attachments: [f.image] })
       await f.control.privacyChanged()
+      // The bound means something only once the preview is written: the send records it without waiting on the disk.
+      expect(await readFile(join(f.root, 'attachment-previews.json'), 'utf8')).toContain(f.image.digest)
       const previews = (await stat(join(f.root, 'attachment-previews.json'))).size
       const bytes = { saveCommand: median(commands), saveReply: median(replies), shell, largestBroadcast: broadcast, agentsJson: median(files), previewFileAfterSend: previews }
       console.info(`attachment handles bytes: ${JSON.stringify(bytes)}`)
