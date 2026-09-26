@@ -137,7 +137,18 @@ Threads from connected hosts share one sidebar. When a remote host is connected,
 
 After an interrupted command, reconnect and check its result before choosing to send again; Sotto never automatically repeats it.
 
-An iPhone client is planned in its own pull request ([#225](https://github.com/millZach/Sotto/pull/225)) and is not part of this build. Its setup, including the private address it reaches the host through, arrives with it.
+### iPhone app
+
+*In development; build it yourself from `apps/ios` ([its README](../apps/ios/README.md)).*
+
+The iPhone app reads and answers a host's threads over Tailscale. Install Tailscale on the iPhone and on the host machine, and point Tailscale Serve on the host machine at the host's loopback port. Then pair:
+
+1. Type the host machine's name on your tailnet, such as `forge`. The app finds its full private address through Tailscale's MagicDNS and checks that a Sotto host answers there. You can type the full address ending in `.ts.net` instead.
+2. On the host, run the pairing command above and type the eight-character code it prints.
+
+The app has three tabs. **Needs you** lists every question and permission waiting on you, and you can answer each on its card: one tap on a choice, or **Allow once** or **Deny**. Longer questions and other permission choices open in their thread. Working threads are listed below. **Threads** lists every thread by project, with **All**, **Working** and **Done**. A thread shows its messages as a conversation, or its **Activity**: files read and changed, commands and results. You can reply, and stop a turn that is working. **Host** shows whether the host can be reached, whether this iPhone may answer, its client ID, and **Forget this host**.
+
+Pairing lets the iPhone read threads and reply. It answers questions and permissions only after you run `--allow-answers` with its client ID on the host; until then each card says so. A reply the host didn't confirm is marked and never sent again on its own. New threads, terminals, files, voice and notifications are not part of the first version.
 
 ## Headless host
 

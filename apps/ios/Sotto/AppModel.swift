@@ -2,6 +2,12 @@ import Foundation
 import SwiftUI
 import SottoCore
 
+/// A host step 1 of pairing found at a private address, with the health it answered.
+struct FoundHost: Equatable {
+    let endpoint: HostEndpoint; let health: Health
+    var name: String { endpoint.url.host.map { String($0.split(separator: ".").first ?? "") } ?? "host" }
+}
+
 @MainActor final class AppModel: ObservableObject {
     @Published private(set) var saved: SavedHost?
     @Published private(set) var shell: Shell?
@@ -22,19 +28,32 @@ import SottoCore
     private var generation = UUID()
     private var detailVersion = 0
     private var reconnectTask: Task<Void, Never>?
+    /// The host step 1 of pairing found, waiting for its code in step 2.
+    @Published private(set) var found: FoundHost?
     var selected: ThreadSummary? { shell?.host.threads.first { $0.id == selectedID } }
     var threads: [ThreadSummary] { shell?.host.threads.filter { $0.archivedAt == nil } ?? [] }
+    var projects: [Project] { shell?.host.projects ?? [] }
+    /// The host's machine name, the first label of its private address: "forge".
+    var hostName: String { saved.flatMap { URL(string: $0.address)?.host }.map { String($0.split(separator: ".").first ?? "") } ?? "Host" }
     private var scopedPending: [PendingOperation] {
         guard let saved else { return [] }
         return pending.filter { $0.matches(hostID: saved.pairing.hostId, clientID: saved.pairing.clientId) }
     }
-    var selectedPending: [PendingOperation] { scopedPending.filter { $0.threadID == selectedID } }
-    var canAct: Bool { online && !working && selected != nil && selectedPending.isEmpty }
-    var provider: Provider? { shell?.host.providers?.first { $0.id == selected?.providerId } }
+    func thread(_ id: String) -> ThreadSummary? { shell?.host.threads.first { $0.id == id } }
+    func pending(for threadID: String) -> [PendingOperation] { scopedPending.filter { $0.threadID == threadID } }
+    func provider(for thread: ThreadSummary?) -> Provider? { shell?.host.providers?.first { $0.id == thread?.providerId } }
+    var selectedPending: [PendingOperation] { selectedID.map(pending(for:)) ?? [] }
+    /// An answer this iPhone sent that the host hasn't confirmed. Cards wait for it, so a card that
+    /// moves under a finger after the first answer can't take a second tap meant for the first.
+    var answering: Bool { scopedPending.contains { $0.kind == "answer" } }
+    private func canAct(on thread: ThreadSummary?) -> Bool { online && !working && thread != nil && pending(for: thread?.id ?? "").isEmpty }
+    var canAct: Bool { canAct(on: selected) }
+    var provider: Provider? { provider(for: selected) }
     var canSend: Bool { canAct && selected?.status != "running" && selected?.requests.isEmpty == true && (provider?.capabilities.submit ?? shell?.host.capabilities.submit ?? false) && (provider == nil || provider?.connection == "connected") }
     var canInterrupt: Bool { canAct && selected?.status == "running" && (provider?.capabilities.interrupt ?? shell?.host.capabilities.interrupt ?? false) }
-    func canAnswer(_ request: AgentRequest) -> Bool {
-        canAct && mayAnswer && request.supported && (request.kind == "permission" ? (provider?.capabilities.permissions ?? shell?.host.capabilities.permissions ?? false) : (provider?.capabilities.questions ?? shell?.host.capabilities.questions ?? false))
+    func canAnswer(_ request: AgentRequest, in thread: ThreadSummary? = nil) -> Bool {
+        let target = thread ?? selected, source = provider(for: target)
+        return canAct(on: target) && mayAnswer && request.supported && (request.kind == "permission" ? (source?.capabilities.permissions ?? shell?.host.capabilities.permissions ?? false) : (source?.capabilities.questions ?? shell?.host.capabilities.questions ?? false))
     }
     init() {
         do {
@@ -57,18 +76,32 @@ import SottoCore
             online = false; working = false; mayAnswer = false; detail = nil
         }
     }
-    func pair(address: String, code: String) async {
+    /// Step 1: find the host from its machine name (or full address) and confirm a Sotto host answers there.
+    func find(_ typed: String) async {
         guard !working, storageReady else { return }; working = true; feedback = nil
         let current = generation
+        defer { if current == generation { working = false } }
         do {
-            let endpoint = try HostEndpoint(address)
-            let pairing = try await connection.pair(endpoint: endpoint, code: code.trimmingCharacters(in: .whitespacesAndNewlines))
+            let endpoint = try await HostFinder.find(typed)
+            let health = try await connection.health(endpoint: endpoint)
             guard current == generation else { return }
-            let host = SavedHost(address: endpoint.url.absoluteString, pairing: pairing)
+            found = FoundHost(endpoint: endpoint, health: health)
+        } catch { if current == generation { feedback = error.localizedDescription } }
+    }
+    func changeHost() { found = nil; feedback = nil }
+    /// Step 2: spend the code on the host step 1 found.
+    func pair(code typed: String) async {
+        guard !working, storageReady, let found else { return }; working = true; feedback = nil
+        let current = generation
+        do {
+            let code = try PairingCode.normalized(typed)
+            // Kept even if the app went to the background meanwhile: the code is spent and the host holds this client.
+            let pairing = try await connection.pair(endpoint: found.endpoint, expectedHostID: found.health.hostId, code: code)
+            let host = SavedHost(address: found.endpoint.url.absoluteString, pairing: pairing)
             // Old orphan markers must never be attached to a newly paired host/client.
             try keychain.write([PendingOperation](), account: "pending")
             try keychain.write(host, account: "host")
-            pending = []; saved = host; working = false
+            pending = []; saved = host; self.found = nil; working = false
             await reconnect()
         } catch { if current == generation { feedback = error.localizedDescription; working = false } }
     }
@@ -125,8 +158,10 @@ import SottoCore
             await dispatch(command, operation: operation)
         } catch { feedback = error.localizedDescription }
     }
-    func answer(_ request: AgentRequest, choice: String? = nil, text: String = "", answers: [String: QuestionAnswer] = [:]) async {
-        guard canAnswer(request), let thread = selected, let saved else { return }
+    /// Answers a request in any thread: from its card on Needs you, or from the open thread's sheet.
+    func answer(_ request: AgentRequest, in threadID: String? = nil, choice: String? = nil, text: String = "", answers: [String: QuestionAnswer] = [:]) async {
+        let target = threadID.map { self.thread($0) } ?? selected
+        guard let thread = target, canAnswer(request, in: thread), let saved else { return }
         do {
             let command = try Commands.answer(threadID: thread.id, request: request, currentRequests: thread.requests, choice: choice, text: text, answers: answers)
             let operation = PendingOperation(hostID: saved.pairing.hostId, clientID: saved.pairing.clientId, threadID: thread.id, requestID: request.id, kind: "answer")

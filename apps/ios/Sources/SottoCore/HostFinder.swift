@@ -1,0 +1,128 @@
+import Foundation
+#if canImport(Darwin)
+import Darwin
+#endif
+
+/// Turns what the user typed on the pairing screen into the host's private HTTPS address.
+/// A bare machine name such as `forge` is looked up through the tailnet's MagicDNS, which the
+/// Tailscale app on this iPhone answers, so the lookup never leaves the tailnet. The address it
+/// finds still has to be a certificate-validated `*.ts.net` origin (`HostEndpoint`).
+public enum HostFinder {
+    public enum Input: Equatable, Sendable { case address(HostEndpoint), name(String) }
+    /// Every name the system resolver gives for a machine name: its canonical name and the
+    /// reverse-lookup name of each address. Injected so tests need no network.
+    public typealias Lookup = @Sendable (String) async -> [String]
+
+    public static func read(_ typed: String) throws -> Input {
+        let text = typed.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if text.contains("://") { return .address(try HostEndpoint(text)) }
+        if text.contains(".") {
+            let bare = text.hasSuffix(".") ? String(text.dropLast()) : text
+            guard bare.hasSuffix(".ts.net") else { throw ClientError.invalidHost }
+            return .address(try HostEndpoint("https://" + bare))
+        }
+        guard isMachineName(text) else { throw ClientError.invalidHost }
+        return .name(text)
+    }
+
+    /// The private address a resolver's answer names, when it is this machine on a tailnet.
+    public static func endpoint(machine: String, resolvedName: String) -> HostEndpoint? {
+        let name = (resolvedName.hasSuffix(".") ? String(resolvedName.dropLast()) : resolvedName).lowercased()
+        guard name.hasSuffix(".ts.net"), name.split(separator: ".").first.map(String.init) == machine else { return nil }
+        return try? HostEndpoint("https://" + name)
+    }
+
+    public static func find(_ typed: String, lookup: Lookup = SystemLookup.names) async throws -> HostEndpoint {
+        switch try read(typed) {
+        case .address(let endpoint): return endpoint
+        case .name(let machine):
+            for name in await lookup(machine) {
+                if let endpoint = endpoint(machine: machine, resolvedName: name) { return endpoint }
+            }
+            throw ClientError.hostNotFound(machine)
+        }
+    }
+
+    static func isMachineName(_ text: String) -> Bool {
+        guard (1...63).contains(text.count), text.first != "-", text.last != "-" else { return false }
+        return text.allSatisfy { ($0.isASCII && ($0.isLetter || $0.isNumber)) || $0 == "-" }
+    }
+    /// Tailscale's address ranges: 100.64.0.0/10 and fd7a:115c:a1e0::/48. A name is trusted only
+    /// when it resolves into them, so a resolver off the tailnet cannot hand the phone another host.
+    public static func isTailnetAddress(_ bytes: [UInt8]) -> Bool {
+        if bytes.count == 4 { return bytes[0] == 100 && bytes[1] & 0xC0 == 64 }
+        if bytes.count == 16 { return Array(bytes.prefix(6)) == [0xfd, 0x7a, 0x11, 0x5c, 0xa1, 0xe0] }
+        return false
+    }
+}
+
+#if canImport(Darwin)
+/// The system resolver. With Tailscale connected, the tailnet's search domain makes a machine name
+/// resolve, and its canonical or reverse-lookup name is the full `machine.tailnet.ts.net`.
+public enum SystemLookup {
+    /// Gives up after ten seconds; the blocking resolver call is left to finish on its own.
+    public static let names: HostFinder.Lookup = { machine in
+        await withCheckedContinuation { continuation in
+            let once = Once()
+            DispatchQueue.global(qos: .userInitiated).async { let found = resolve(machine); if once.claim() { continuation.resume(returning: found) } }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 10) { if once.claim() { continuation.resume(returning: []) } }
+        }
+    }
+    /// Names are taken only from answers that point into the tailnet.
+    static func resolve(_ machine: String) -> [String] {
+        var hints = addrinfo(); hints.ai_flags = AI_CANONNAME; hints.ai_family = AF_UNSPEC; hints.ai_socktype = SOCK_STREAM
+        var list: UnsafeMutablePointer<addrinfo>?
+        guard getaddrinfo(machine, "443", &hints, &list) == 0, let first = list else { return [] }
+        defer { freeaddrinfo(first) }
+        var names: [String] = []
+        var cursor: UnsafeMutablePointer<addrinfo>? = first
+        while let entry = cursor {
+            cursor = entry.pointee.ai_next
+            guard let address = entry.pointee.ai_addr, HostFinder.isTailnetAddress(bytes(of: address)) else { continue }
+            if names.isEmpty, let canonical = first.pointee.ai_canonname { names.append(String(cString: canonical)) }
+            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            if getnameinfo(address, entry.pointee.ai_addrlen, &host, socklen_t(host.count), nil, 0, NI_NAMEREQD) == 0 {
+                names.append(host.withUnsafeBufferPointer { String(cString: $0.baseAddress!) })
+            }
+        }
+        return names
+    }
+    private static func bytes(of address: UnsafeMutablePointer<sockaddr>) -> [UInt8] {
+        switch Int32(address.pointee.sa_family) {
+        case AF_INET:
+            return address.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { pointer in
+                var value = pointer.pointee.sin_addr
+                return withUnsafeBytes(of: &value) { Array($0) }
+            }
+        case AF_INET6:
+            return address.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) { pointer in
+                var value = pointer.pointee.sin6_addr
+                return withUnsafeBytes(of: &value) { Array($0) }
+            }
+        default: return []
+        }
+    }
+    private final class Once: @unchecked Sendable {
+        private let lock = NSLock(); private var done = false
+        func claim() -> Bool { lock.lock(); defer { lock.unlock() }; if done { return false }; done = true; return true }
+    }
+}
+#endif
+
+/// A pairing code as the host makes it: eight characters from an alphabet without look-alikes.
+/// The host compares codes exactly, so the phone upper-cases and drops the spaces and dashes people type.
+public enum PairingCode {
+    public static let length = 8
+    static let alphabet = Set("23456789ABCDEFGHJKMNPQRSTVWXYZ")
+    /// What the user has typed so far, cleaned: at most eight characters, only from the alphabet.
+    public static func cleaned(_ typed: String) -> String {
+        String(typed.uppercased().filter { alphabet.contains($0) }.prefix(length))
+    }
+    public static func normalized(_ typed: String) throws -> String {
+        let code = cleaned(typed)
+        let kept = typed.uppercased().filter { alphabet.contains($0) }
+        let dropped = typed.uppercased().filter { !alphabet.contains($0) && $0 != " " && $0 != "-" }
+        guard kept.count == length, dropped.isEmpty else { throw ClientError.invalidCode }
+        return code
+    }
+}

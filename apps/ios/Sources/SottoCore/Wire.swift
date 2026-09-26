@@ -32,9 +32,14 @@ public enum JSONValue: Codable, Equatable, Sendable {
 
 public enum ClientError: Error, LocalizedError, Equatable {
     case invalidHost, invalidProtocol, invalidIdentity, invalidRequest, disconnected, uncertain, rejected(String)
+    case hostNotFound(String), hostUnreachable(String), notASottoHost(String), invalidCode
     public var errorDescription: String? {
         switch self {
-        case .invalidHost: return "Enter the private HTTPS address ending in .ts.net, without a path or sign-in details."
+        case .invalidHost: return "Enter the host's name on your tailnet, such as forge, or its full address ending in .ts.net."
+        case .hostNotFound(let name): return "Couldn't find \(name) on your tailnet. Check that Tailscale is connected on this iPhone and MagicDNS is on for your tailnet, or enter the full address ending in .ts.net."
+        case .hostUnreachable(let name): return "Couldn't reach \(name). Check that it's online and that Tailscale is connected on this iPhone."
+        case .notASottoHost(let name): return "\(name) answered, but no Sotto host is listening there. Check that Tailscale Serve on \(name) forwards to the host."
+        case .invalidCode: return "A pairing code is eight letters and numbers. Check the code the host printed."
         case .invalidProtocol: return "This host uses a different connection format. Update Sotto before connecting."
         case .invalidIdentity: return "This address belongs to a different host. Forget it and pair again if you intended to change hosts."
         case .invalidRequest: return "This request changed or is not supported on this iPhone. Refresh the thread or answer on the desktop."
@@ -76,6 +81,16 @@ public struct HostSession: Decodable, Sendable {
         guard hostId == pairing.hostId, clientId == pairing.clientId, !session.isEmpty else { throw ClientError.invalidIdentity }
     }
 }
+/// `GET /v1/health`: read before pairing, so the phone knows it found a Sotto host and which one.
+public struct Health: Decodable, Equatable, Sendable {
+    public let v: Int; public let status: String; public let hostId: String
+    public let sottoVersion: String?; public let features: [String]?
+    public func validate() throws {
+        guard v == 1 else { throw ClientError.invalidProtocol }
+        guard UUID(uuidString: hostId) != nil else { throw ClientError.invalidIdentity }
+        guard status == "ready" else { throw ClientError.rejected("The host is still starting. Try again in a moment.") }
+    }
+}
 public struct WireFailure: Decodable, Sendable { public let code: String; public let message: String }
 public struct Receipt: Decodable, Sendable { public let status: String; public let error: WireFailure? }
 public struct Hello: Decodable, Sendable {
@@ -101,10 +116,29 @@ public struct ProviderCapabilities: Decodable, Sendable { public let submit: Boo
 public struct ThreadSummary: Decodable, Identifiable, Sendable {
     public let id: String; public let hostId: String?; public let projectId: String; public let title: String
     public let providerId: String?; public let status: String; public let requests: [AgentRequest]
-    public let earlierAvailable: Bool?; public let archivedAt: String?
+    public let earlierAvailable: Bool?; public let archivedAt: String?; public let summary: Summary?
+    /// What a row reads about the thread's history without holding it.
+    public struct Summary: Decodable, Sendable {
+        public let lastMessageAt: String?; public let runningTurnStartedAt: String?
+    }
 }
 public struct ThreadDetail: Decodable, Sendable {
     public let threadId: String; public let revision: Int; public let messages: [Message]; public let earlierAvailable: Bool?
+    public let activities: [Activity]?
+}
+/// Provider-reported work beside a thread's messages. Observational only: nothing here is an answer or a grant.
+/// `kind` and `status` stay strings so a kind this build does not know still shows, by its title.
+public struct Activity: Decodable, Identifiable, Sendable {
+    public let id: String; public let sequence: Int; public let kind: String; public let status: String; public let title: String
+    public let command: String?; public let exitCode: Int?; public let durationMs: Double?
+    public let startedAt: String?; public let changes: [Change]?
+    public struct Change: Decodable, Sendable { public let path: String; public let kind: String }
+    /// The line under the title: the command it ran, or the files it changed.
+    public var subject: String? {
+        if let command, !command.isEmpty { return command }
+        guard let changes, let first = changes.first else { return nil }
+        return changes.count == 1 ? first.path : "\(first.path) and \(changes.count - 1) more"
+    }
 }
 public struct Message: Decodable, Identifiable, Sendable {
     public let id: String; public let role: String; public let text: String; public let commandId: String?

@@ -27,6 +27,8 @@
 	<key>UIAppFonts</key>
 	<array>
 		<string>Figtree.ttf</string>
+		<string>Figtree-SemiBold.ttf</string>
+		<string>Figtree-Bold.ttf</string>
 	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
