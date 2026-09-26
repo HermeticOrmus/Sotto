@@ -23,7 +23,7 @@ export function AgentAppearance(): ReactNode {
   const voice = configuration.speechProvider === 'natural' ? `${configuration.speechVoice}, natural voice` : configuration.speechProvider === 'grok' ? `${configuration.grokSpeechVoice}, Grok voice` : configuration.speechProvider === 'kokoro' ? 'Heart, Kokoro voice' : 'System voice'
   return <div className="agent-appearance">
     <button type="button" className="agent-voice-chip tt-focusable" onClick={() => setVoiceOpen(true)}><Volume2 size={15} />{voice}</button>
-    {voiceOpen ? <SideSheet title="Voice" onClose={() => setVoiceOpen(false)}><VoiceSettings configuration={configuration} command={command} change={(key, value) => { void command({ type: 'configure', patch: { [key]: value } }) }} grokKeySaved={state.credentials.grokSpeech} voiceError={state.voice.error} /></SideSheet> : null}
+    {voiceOpen ? <SideSheet title="Voice" onClose={() => setVoiceOpen(false)}><VoiceSettings configuration={configuration} command={command} change={(key, value) => command({ type: 'configure', patch: { [key]: value } }).then(result => result !== null && result.error === null)} grokKeySaved={state.credentials.grokSpeech} voiceError={state.voice.error} /></SideSheet> : null}
   </div>
 }
 
