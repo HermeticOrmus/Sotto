@@ -297,6 +297,23 @@ describe('browser feedback', () => {
     expect(add).toHaveBeenCalledWith(expect.objectContaining({ element: expect.objectContaining({ selector: '#save' }) }), 'Give this more space')
     await waitFor(() => expect(close).toHaveBeenCalledOnce())
   })
+  it('returns focus to Add to draft with the problem shown when adding fails, and never stays busy', async () => {
+    const browser = fake(); const close = vi.fn()
+    const add = vi.fn(async () => 'This screenshot does not fit in the draft. Remove an attachment or capture a smaller region.')
+    const { rerender } = render(<BrowserFeedback page={page} initial={capture} bridge={browser.bridge} onAdd={add} onClose={close} />)
+    fireEvent.change(screen.getByRole('textbox', { name: 'Browser feedback comment' }), { target: { value: 'Tighter' } })
+    const button = screen.getByRole('button', { name: 'Add to draft' })
+    button.focus(); fireEvent.click(button)
+    expect(await screen.findByRole('alert')).toHaveTextContent('does not fit in the draft')
+    await waitFor(() => expect(document.activeElement).toBe(button))
+    expect(button).toBeEnabled(); expect(close).not.toHaveBeenCalled()
+    // A rejection says what happened rather than leaving the button disabled for good.
+    const failing = vi.fn(async (): Promise<string | null> => { throw new Error('bridge gone') })
+    rerender(<BrowserFeedback page={page} initial={capture} bridge={browser.bridge} onAdd={failing} onClose={close} />)
+    fireEvent.click(button)
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Could not add this screenshot. Nothing was added. Try again.'))
+    await waitFor(() => expect(button).toBeEnabled())
+  })
   it('selects a region entirely from the keyboard and binds it to the captured frame', async () => {
     const browser = fake()
     render(<BrowserFeedback page={page} initial={{ ...capture, captureId: 'frame-id' }} bridge={browser.bridge} onAdd={async () => null} onClose={() => undefined} />)
@@ -327,6 +344,13 @@ describe('browser feedback', () => {
       drafts.edit('visual-gate', { requestId: 'question' })
       expect(await appendBrowserFeedback(drafts, 'visual-gate', capture, 'Other', true)).toContain('answers a question')
       expect(staged).toHaveLength(1)
+    } finally { vi.unstubAllGlobals() }
+  })
+  it('shows a staging refusal in its own words, without the channel Electron names', async () => {
+    vi.stubGlobal('sotto', { agents: { stageAttachment: vi.fn(async () => { throw new Error("Error invoking remote method 'sotto:agents:stage-attachment': Error: This host is disconnected. Connect again before attaching images. Nothing was attached.") }) } })
+    try {
+      const drafts = new ThreadDraftStore(vi.fn(async () => null), 60_000)
+      expect(await appendBrowserFeedback(drafts, 'visual-gate', capture, 'Look', true)).toBe('This host is disconnected. Connect again before attaching images. Nothing was attached.')
     } finally { vi.unstubAllGlobals() }
   })
 })

@@ -1,4 +1,4 @@
-import React, { useRef, useState, type ReactNode } from 'react'
+import React, { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { BrowserBridge, BrowserCapture, BrowserPage } from '../../../shared/browser'
 import { AGENT_MAX_ATTACHMENT_BYTES, AGENT_MAX_ATTACHMENTS, agentAttachmentHandlesSchema } from '../../../shared/agents'
 import type { ThreadDraftStore } from '../agents/threadDraftStore'
@@ -53,6 +53,16 @@ export function BrowserFeedback({ page, initial, bridge, onAdd, onClose }: {
   const [point, setPoint] = useState({ x: Math.round(initial.width / 2), y: Math.round(initial.height / 2) })
   const [box, setBox] = useState<{ x: number; y: number; width: number; height: number } | null>(null)
   const start = useRef<{ x: number; y: number } | null>(null)
+  const addButton = useRef<HTMLButtonElement>(null)
+  // Adding disables the button that has focus; when it comes back with a problem, focus returns to it.
+  const [refocusAdd, setRefocusAdd] = useState(false)
+  useEffect(() => { if (refocusAdd && !busy) { addButton.current?.focus(); setRefocusAdd(false) } }, [refocusAdd, busy])
+  const add = (): void => {
+    setBusy(true); setProblem(null)
+    void onAdd(capture, comment).catch(() => 'Could not add this screenshot. Nothing was added. Try again.')
+      .then(error => { if (error) { setProblem(error); setRefocusAdd(true) } else onClose() })
+      .finally(() => setBusy(false))
+  }
   const request = { threadId: page.workspace.threadId, workspaceId: page.workspace.workspaceId, pageId: page.id }
   const select = async (selection: { point?: { x: number; y: number }; region?: { x: number; y: number; width: number; height: number } }): Promise<void> => {
     setBusy(true); setProblem(null); setSelectionValid(false)
@@ -104,7 +114,7 @@ export function BrowserFeedback({ page, initial, bridge, onAdd, onClose }: {
     </button>
     {capture.element ? <p>Selected: {capture.element.name || capture.element.text || capture.element.tag}</p> : box ? <p>Region selected</p> : null}
     <textarea autoFocus className="tt-focusable" aria-label="Browser feedback comment" placeholder="What should change?" value={comment} maxLength={8000} onChange={event => setComment(event.currentTarget.value)} />
-    <div className="browser-feedback__actions"><button type="button" className="tt-button tt-button--primary tt-focusable" disabled={busy || !selectionValid || !comment.trim()} onClick={() => { setBusy(true); void onAdd(capture, comment).then(error => { setBusy(false); if (error) setProblem(error); else onClose() }) }}>Add to draft</button>
+    <div className="browser-feedback__actions"><button ref={addButton} type="button" className="tt-button tt-button--primary tt-focusable" disabled={busy || !selectionValid || !comment.trim()} onClick={add}>Add to draft</button>
       <button type="button" className="tt-button tt-focusable" onClick={onClose}>Cancel</button></div>
     {problem ? <p className="browser-review-problem" role="alert">{problem}</p> : null}
   </section>

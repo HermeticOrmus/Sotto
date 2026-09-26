@@ -124,7 +124,7 @@ export class LocalHostService implements HostService {
   subscribeThreadDetail(listener: (update: AgentThreadDetailUpdate) => void): () => void { return this.control.subscribeThreadDetail?.(listener) ?? (() => undefined) }
   async attachmentPreview(request: AgentAttachmentPreviewRequest): Promise<AgentAttachmentPreviewResult> { return await this.control.attachmentPreview?.(request) ?? null }
   stageAttachment(image: AgentAttachmentUpload): Promise<AgentAttachmentHandle> {
-    if (!this.control.stageAttachment) return Promise.reject(new Error('Images are unavailable on this host.'))
+    if (!this.control.stageAttachment) return Promise.reject(new Error('This host cannot keep screenshots. Update Sotto there, then attach them again. Nothing was attached.'))
     return this.control.stageAttachment(image)
   }
   async attachmentContent(digest: string): Promise<AgentAttachmentContent | null> { return await this.control.attachmentContent?.(digest) ?? null }

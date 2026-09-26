@@ -50,6 +50,16 @@ async function drawThumbnail(image: Blob): Promise<string | null> {
   } catch { return null }
 }
 
+const STAGING_FAILED = 'Could not add this screenshot. Nothing was attached. Try again.'
+/**
+ * The sentence a failed staging shows. Electron prefixes whatever main threw with the channel it came through, which
+ * is not the user's to read; a refusal with no sentence of its own (a sender or schema check) gets the plain one.
+ */
+export function stagingError(error: unknown): string {
+  const message = error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:[A-Za-z]*Error: )?/u, '').trim() : ''
+  return /^[A-Z][A-Z0-9_]+$/u.test(message) || message.startsWith('[') || message.startsWith('{') || !message ? STAGING_FAILED : message
+}
+
 /**
  * Hands an image's bytes to main once and answers with its handle (ADR-0030). `threadId` is the thread the draft
  * belongs to, which decides the host that keeps it; null is the coordinator's composer on the selected host. Anything
@@ -59,7 +69,9 @@ export async function stageImage(threadId: string | null, image: { readonly name
   const bridge = agents()
   if (!bridge?.stageAttachment) throw new Error('Screenshots cannot be attached in this window. Nothing was attached.')
   const bytes = new Uint8Array(await image.blob.arrayBuffer())
-  const handle = await bridge.stageAttachment({ threadId, name: image.name, mimeType: image.mimeType as AgentAttachmentHandle['mimeType'], bytes })
+  let handle: AgentAttachmentHandle
+  try { handle = await bridge.stageAttachment({ threadId, name: image.name, mimeType: image.mimeType as AgentAttachmentHandle['mimeType'], bytes }) }
+  catch (error) { throw new Error(stagingError(error), { cause: error }) }
   if (!thumbnails.has(handle.digest)) remember(handle.digest, chipSource(new Blob([bytes], { type: handle.mimeType })))
   return handle
 }
