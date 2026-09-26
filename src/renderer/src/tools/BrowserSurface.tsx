@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState, type FormEvent, type R
 import { ArrowLeft, ArrowRight, ExternalLink, Globe, MessageSquarePlus, PictureInPicture2, Plus, RotateCw, Share2, X } from 'lucide-react'
 import type { BrowserBounds, BrowserBridge, BrowserPage, BrowserCapture } from '../../../shared/browser'
 import type { ToolsError } from '../../../shared/tools'
+import { findModel } from '../../../shared/modelCatalog'
 import { useOptionalAgents } from '../agents/AgentContext'
 import { BrowserTaskDetails } from './BrowserTaskDetails'
 import { appendBrowserFeedback, BrowserFeedback } from './BrowserFeedback'
@@ -40,7 +41,7 @@ export function BrowserSurface({ threadId, store, bridge, onStatus, onFloat }: B
   const tasks = useBrowserTasks(store)
   const agents = useOptionalAgents()
   const owningThread = agents?.state?.host.threads.find(item => item.id === threadId)
-  const owningModel = agents?.state?.host.models.find(item => item.id === owningThread?.modelId)
+  const owningModel = findModel(agents?.state?.host.models ?? [], owningThread?.modelId)
   const agentToolsUnavailable = owningThread?.providerId === 'devin' || owningModel?.providerId === 'devin'
   const [feedback, setFeedback] = useState<BrowserCapture | null>(null)
   const [reviewBusy, setReviewBusy] = useState(false)
@@ -208,7 +209,7 @@ export function BrowserSurface({ threadId, store, bridge, onStatus, onFloat }: B
     {feedback && active && bridge ? <BrowserFeedback key={active.id} page={active} initial={feedback} bridge={bridge} onClose={() => { setFeedback(null); requestAnimationFrame(() => address.current?.focus()) }} onAdd={(capture, comment) => {
       if (!agents) return 'The draft for this thread is not available.'
       const thread = agents.state?.host.threads.find(item => item.id === threadId)
-      const model = agents.state?.host.models.find(item => item.id === thread?.modelId)
+      const model = findModel(agents.state?.host.models ?? [], thread?.modelId)
       const error = appendBrowserFeedback(agents.threadDrafts, threadId, capture, comment, model?.supportsImages === true)
       if (!error) onStatus(`Added to the draft for ${thread?.title ?? 'this thread'}`)
       return error

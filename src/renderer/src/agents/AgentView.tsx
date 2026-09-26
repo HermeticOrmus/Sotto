@@ -3,6 +3,7 @@ import React, { useEffect, useRef, useState, type ReactNode } from 'react'
 import { ArrowRight, ChevronDown, FolderPlus, List, Mic, MicOff, Plus, RefreshCw, Settings2, VolumeX, Workflow } from 'lucide-react'
 
 import { defaultThreadModelId, PROVIDER_LABELS, capabilitiesForThread, isThreadBusy, isThreadProviderConnected, threadSummaryOf, supportsAgentSupervision, isSubscriptionReasoning, type SubscriptionProvider, type AgentAttachment, type AgentConfiguration, type AgentProject, type AgentState, type AgentThread } from '../../../shared/agents'
+import { catalogModel, chosenModelId, findModel } from '../../../shared/modelCatalog'
 import { Button } from '../components/Button'
 import { useAgents, type AgentConnection } from './AgentContext'
 import './agents.css'
@@ -91,7 +92,7 @@ export function AgentComposer({ state, command, compact = false, footerControls,
     {target !== undefined && target.id !== state.activeThreadId ? <div className="agent-draft-target"><span>This draft stays with {target.title}.</span><Button variant="ghost" onClick={() => void command({ type: 'select-thread', threadId: target.id })}>Return to draft thread</Button></div> : null}
     {!assigned && !pausedDraft ? <p className="agent-muted">This saved draft is paused. {target === undefined ? 'Its thread is unavailable.' : <Button variant="secondary" disabled={state.globalLaneBusy || !isThreadProviderConnected(state.host, target) || !supportsAgentSupervision(capabilitiesForThread(state.host, target))} onClick={() => void command({ type: 'assign', threadId: target.id })}>Manage draft thread</Button>}</p> : null}
     <ScreenshotInput key={target?.id ?? 'no-thread'} attachments={attachments} onChange={updateImages} onReadingChange={setReadingImages}
-      disabled={Boolean(pausedDraft) || state.globalLaneBusy || target === undefined || !assigned} supported={!answering && Boolean(target && hostForThread(state.host, target).models.some(model => model.id === target.modelId && model.supportsImages === true))}>
+      disabled={Boolean(pausedDraft) || state.globalLaneBusy || target === undefined || !assigned} supported={!answering && Boolean(target && findModel(hostForThread(state.host, target).models, target.modelId)?.supportsImages === true)}>
     <textarea id={compact ? 'widget-agent-prompt' : 'agent-prompt'} value={draft} onChange={(event) => update(event.target.value)}
       rows={compact ? 3 : 5} placeholder={target === undefined ? 'Select a thread to start a prompt.' : answering ? 'Dictate or type your answer. It stays saved until you send or clear it.' : 'Dictate or type your prompt. Pauses won’t send it.'}
       disabled={target === undefined || (!assigned && !pausedDraft)} readOnly={Boolean(pausedDraft)} spellCheck
@@ -187,8 +188,8 @@ function AgentConnectionSettings({ state, command, focusReasoning }: { readonly 
   const subscription = isSubscriptionReasoning(configuration.reasoning)
   const api = configuration.reasoning === 'openrouter' || configuration.reasoning === 'openai'
   const account = state.reasoningAccounts.find(item => item.provider === configuration.reasoning)
-  const defaultReasoningModel = account?.models.find(model => model.id === account.defaultModelId)
-  const selectedReasoningModel = configuration.reasoningModel ? account?.models.find(model => model.id === configuration.reasoningModel) : defaultReasoningModel
+  const defaultReasoningModel = findModel(account?.models ?? [], account?.defaultModelId)
+  const selectedReasoningModel = configuration.reasoningModel ? findModel(account?.models ?? [], configuration.reasoningModel) : defaultReasoningModel
   const reasoningEfforts = selectedReasoningModel?.reasoningEfforts ?? []
   const reasoningChanged = configuration.reasoning !== state.configuration.reasoning || configuration.reasoningModel !== state.configuration.reasoningModel || configuration.reasoningEffort !== state.configuration.reasoningEffort
   const providerInput = useRef<HTMLSelectElement>(null)
@@ -243,8 +244,9 @@ function AgentConnectionSettings({ state, command, focusReasoning }: { readonly 
       </select></label>
       <label>Reasoning model{subscription ? <select value={configuration.reasoningModel} onChange={event => { setConfiguration(current => ({ ...current, reasoningModel: event.target.value, reasoningEffort: '' })); setSaved(false) }} disabled={checking || !account?.ready}>
         <option value="">{defaultReasoningModel && defaultReasoningModel.id !== 'default' ? `Default (${defaultReasoningModel.name})` : 'Provider default'}</option>
-        {configuration.reasoningModel && !account?.models.some(model => model.id === configuration.reasoningModel) ? <option value={configuration.reasoningModel}>{configuration.reasoningModel}</option> : null}
-        {account?.models.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
+        {configuration.reasoningModel && !catalogModel(account?.models ?? [], configuration.reasoningModel) ? <option value={configuration.reasoningModel}>{configuration.reasoningModel}</option> : null}
+        {/* A long-context variant the catalog does not list keeps its own ID under its base model's name. */}
+        {account?.models.map(model => <option key={model.id} value={chosenModelId(account.models, model.id, configuration.reasoningModel)}>{model.name}</option>)}
       </select> : <input value={configuration.reasoningModel} onChange={(event) => change('reasoningModel', event.target.value)} placeholder="Provider model ID" disabled={configuration.reasoning === 'none'} />}</label>
       {subscription ? <label>Reasoning effort<select aria-label="Reasoning effort" value={configuration.reasoningEffort} onChange={event => change('reasoningEffort', event.target.value)} disabled={checking || !account?.ready || (reasoningEfforts.length === 0 && !configuration.reasoningEffort)}>
         <option value="">{selectedReasoningModel?.defaultReasoningEffort ? `Default (${selectedReasoningModel.defaultReasoningEffort})` : 'Provider default'}</option>
@@ -316,7 +318,7 @@ function AgentNewThread({ state, command, project, onCreated }: { readonly state
   const modelId = modelOverride || defaultThreadModelId(state.configuration, state.host.models, state.reasoningAccounts)
   const inheritedLabel = isSubscriptionReasoning(state.configuration.reasoning)
     ? PROVIDER_LABELS[state.configuration.reasoning] + ' · ' + (state.configuration.reasoningModel || 'Default') : 'Selected model'
-  const model = state.host.models.find(entry => entry.id === modelId)
+  const model = findModel(state.host.models, modelId)
   const provider = state.host.providers?.find(entry => entry.id === model?.providerId)
   const available = model?.ready === true && (provider ? provider.connection === 'connected' && provider.capabilities.threads : state.connection === 'connected' && state.host.capabilities.threads)
   const create = async (): Promise<void> => {
@@ -335,7 +337,7 @@ function AgentNewThread({ state, command, project, onCreated }: { readonly state
   }
   return <details ref={details} className="agent-new-thread" open={onCreated === undefined ? undefined : true}><summary>Open a new thread in {project.title}</summary><form onSubmit={(event) => { event.preventDefault(); void create() }}>
     <label>Thread name<input value={threadName} onChange={(event) => setThreadName(event.target.value)} placeholder="New thread" /></label>
-    <label>Agent model<select aria-label="Agent model" value={modelId} onChange={(event) => setModelOverride(event.target.value)}><option value="">{!modelOverride && isSubscriptionReasoning(state.configuration.reasoning) ? inheritedLabel + ' · unavailable' : 'Choose an available model'}</option>{modelId && !model ? <option value={modelId} disabled>{inheritedLabel} · unavailable</option> : null}{state.host.models.map((model) => <option key={model.id} value={model.id} disabled={!model.ready}>{model.name}</option>)}</select></label>
+    <label>Agent model<select aria-label="Agent model" value={modelId} onChange={(event) => setModelOverride(event.target.value)}><option value="">{!modelOverride && isSubscriptionReasoning(state.configuration.reasoning) ? inheritedLabel + ' · unavailable' : 'Choose an available model'}</option>{modelId && !model ? <option value={modelId} disabled>{inheritedLabel} · unavailable</option> : null}{state.host.models.map((model) => <option key={model.id} value={chosenModelId(state.host.models, model.id, modelId)} disabled={!model.ready}>{model.name}</option>)}</select></label>
     <Button type="submit" disabled={state.globalLaneBusy || submitting || !modelId || !available}><Plus size={14} aria-hidden="true" />Open thread</Button>
   </form></details>
 }
@@ -420,7 +422,7 @@ export function AgentView({ onOpenThreads }: { /** Opens the Threads page, the r
         {activeProject !== undefined ? <AgentNewThread state={state} command={command} project={activeProject} /> : null}
         <AgentQueue state={state} command={command} />
         <AgentManualNotice state={state} command={command} />
-        {active === undefined ? <section className="agent-empty"><Workflow size={28} aria-hidden="true" /><h2>Your agents, one conversation away</h2><p>Select a thread or open one in your selected project.</p></section> : <section className="agent-thread-heading"><div><span className="agent-eyebrow">{activeProject?.title}</span><h2>{active.title}</h2><p>{hostForThread(state.host, active).models.find((model) => model.id === active.modelId)?.name ?? active.modelId} · {active.status === 'running' ? 'Working' : assignment === undefined ? 'Unassigned · manage this thread to send prompts' : 'Ready for a prompt'}</p></div>
+        {active === undefined ? <section className="agent-empty"><Workflow size={28} aria-hidden="true" /><h2>Your agents, one conversation away</h2><p>Select a thread or open one in your selected project.</p></section> : <section className="agent-thread-heading"><div><span className="agent-eyebrow">{activeProject?.title}</span><h2>{active.title}</h2><p>{findModel(hostForThread(state.host, active).models, active.modelId)?.name ?? active.modelId} · {active.status === 'running' ? 'Working' : assignment === undefined ? 'Unassigned · manage this thread to send prompts' : 'Ready for a prompt'}</p></div>
           <div className="agent-actions">{assignment === undefined ? <Button variant="secondary" disabled={state.globalLaneBusy || !activeConnected || !fullSupervision} onClick={() => void command({ type: 'assign', threadId: active.id })}>Manage this thread</Button> : <>
             <span>{assignment.followups}/{state.configuration.followupLimit} follow-ups</span>
             {assignment.mode === 'managed' ? <Button variant="ghost" onClick={() => void command({ type: assignment.paused ? 'resume' : 'pause', threadId: active.id })}>{assignment.paused ? 'Resume management' : 'Pause management'}</Button> : null}

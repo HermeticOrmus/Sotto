@@ -1,4 +1,5 @@
 import type { AgentModel } from '../../shared/agents'
+import { findModel } from '../../shared/modelCatalog'
 
 /**
  * How long a thread's client has to answer a side call (ADR-0026). A client starts cold for each one, so
@@ -13,5 +14,5 @@ export const SIDE_WRITING_TIMEOUT_MS = 90_000
  * from the same subscription limits as the thread's own work, so it asks for as little as the model allows.
  */
 export function sideWritingEffort(models: readonly AgentModel[], modelId: string): string | undefined {
-  return models.find(model => model.id === modelId)?.reasoningEfforts?.[0]
+  return findModel(models, modelId)?.reasoningEfforts?.[0]
 }

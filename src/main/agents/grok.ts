@@ -20,6 +20,7 @@ import type { AgentSkillCatalog } from '../../shared/agentSkills'
 import { discoverGrokSkills, grokSkillPrompt } from './grokSkills'
 import { verifyFileMentions } from './promptFiles'
 import { validatePromptAttachments, validateThreadOptions } from './threadOptions'
+import { findModel } from '../../shared/modelCatalog'
 import { grokActivities } from './grokActivity'
 import { markTurnActivity } from './turnActivity'
 import { grokBrowserAdmission, grokPending, grokAnswer, type GrokPending as Pending } from './grokRequests'
@@ -557,7 +558,7 @@ export class GrokAcpHost implements AgentHost {
         // A create that names no level (the Agents view's new-thread form, a coordinator dispatch) starts on
         // the model's default and says so to Grok. Left unsent, Grok would run at the level in the user's
         // own Grok settings while the chip fell back to the flagged default and named a level it is not on.
-        const reasoningEffort = command.reasoningEffort ?? this.state.models.find(model => model.id === command.modelId)?.defaultReasoningEffort
+        const reasoningEffort = command.reasoningEffort ?? findModel(this.state.models, command.modelId)?.defaultReasoningEffort
         const alias: Alias = { ...(command.type === 'create-personal' ? { kind: 'personal' as const } : { projectId: project!.id }), cwd: await existingWorkingDirectory(command.workingDirectory ?? project!.path), title: command.title, modelId: command.modelId, settingsConfirmed: false, createdAt: new Date().toISOString(), origins: [], answeredRequestIds: [], ...(reasoningEffort ? { reasoningEffort } : {}), ...(command.runtimeMode ? { runtimeMode: grokRuntimeMode(command.runtimeMode) } : {}) }
         this.aliases[command.threadId] = alias; await this.persist()
         await rpc.request('session/new', { cwd: alias.cwd, mcpServers: await this.browserServers(command.threadId), _meta: sessionPolicy(alias.runtimeMode) }, async value => {

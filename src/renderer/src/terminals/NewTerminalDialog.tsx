@@ -2,6 +2,7 @@ import { parseHostEntityKey } from '../../../shared/clientIdentity'
 import React, { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 import { ArrowLeft, ChevronRight, Folder, X } from 'lucide-react'
 import { PROVIDER_LABELS, defaultThreadModelId, isSubscriptionReasoning, type AgentModel, type AgentProject, type AgentState } from '../../../shared/agents'
+import { catalogModel, findModel } from '../../../shared/modelCatalog'
 import { TERMINAL_PERMISSIONS, TERMINAL_PERMISSION_LABELS, commandLine, nativeModelName, providerCommand, type TerminalPermission } from '../../../shared/terminalCommands'
 import { terminalProviderSchema, type TerminalProvider, type TerminalLaunch, type TerminalWorkspaceBridge } from '../../../shared/terminalWorkspace'
 import type { AgentConnection } from '../agents/AgentContext'
@@ -57,7 +58,7 @@ export function NewTerminalDialog({ state, command, store, bridge, shell, onClos
   const [workingCopy, setWorkingCopy] = useState<WorkingCopyChoice>('shared')
   const catalogProviders = useMemo(() => providersOf(state.host.models), [state.host.models])
   const inheritedModelId = defaultThreadModelId(state.configuration, state.host.models, state.reasoningAccounts)
-  const defaultModel = state.host.models.find(model => model.id === inheritedModelId)
+  const defaultModel = findModel(state.host.models, inheritedModelId)
   const nativeAgent = isSubscriptionReasoning(state.configuration.reasoning) ? state.configuration.reasoning : null
   const defaultProvider = nativeAgent ?? (defaultModel ? providerOf(defaultModel) : undefined) ?? catalogProviders[0] ?? null
   const defaultModelId = nativeAgent || (defaultModel && providerOf(defaultModel) === defaultProvider) ? inheritedModelId
@@ -67,12 +68,12 @@ export function NewTerminalDialog({ state, command, store, bridge, shell, onClos
   const choiceMade = useRef(false)
   const providers = [...new Set([...catalogProviders, ...(provider ? [provider] : [])])]
   const catalogModels = state.host.models.filter(model => providerOf(model) === provider)
-  const accountModel = state.reasoningAccounts.find(account => account.provider === provider)?.models.find(model => model.id === nativeModelName(modelId))
-  const model: AgentModel | undefined = catalogModels.find(item => item.id === modelId) ?? (provider && modelId ? {
+  const accountModel = findModel(state.reasoningAccounts.find(account => account.provider === provider)?.models ?? [], nativeModelName(modelId))
+  const model: AgentModel | undefined = findModel(catalogModels, modelId) ?? (provider && modelId ? {
     id: modelId, name: accountModel?.name ?? nativeModelName(modelId) ?? PROVIDER_LABELS[provider],
     providerId: provider, provider: PROVIDER_LABELS[provider], ready: false,
   } : undefined)
-  const models = model && !catalogModels.some(item => item.id === model.id) ? [...catalogModels, model] : catalogModels
+  const models = model && !catalogModel(catalogModels, model.id) ? [...catalogModels, model] : catalogModels
   const [reasoning, setReasoning] = useState<string | undefined>()
   const [permission, setPermission] = useState<TerminalPermission>('ask')
   useEffect(() => {

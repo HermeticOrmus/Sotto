@@ -25,6 +25,7 @@ import { attentionItemKey, isLiveAttention } from '../../shared/agentAttention'
 import { maintainProviderRecovery, retireLegacyProvider, stripRetiredEndpoint } from './providerRetirement'
 import { clientVersionOf } from './clientVersions'
 import { locateClient as locateClientOnDisk, ProviderClients } from './providerClients'
+import { findModel } from '../../shared/modelCatalog'
 import { validatePromptAttachments, validateThreadOptions } from './threadOptions'
 import { AttachmentPreviews } from './attachmentPreviews'
 import type { ThreadTitleExchange } from '../llm/threadTitle'
@@ -1819,11 +1820,11 @@ export class AgentControl {
       case 'create-thread': {
         const managed = command.managed !== false
         if (managed && this.state.composing && this.hasDraft()) throw new Error('Send or clear your draft before creating another thread.')
-        const model = this.state.host.models.find(model => model.id === command.modelId)
+        const model = findModel(this.state.host.models, command.modelId)
         this.canCreate(model?.providerId)
         if (!this.state.host.capabilities.threads) throw new Error('This provider cannot create threads.')
         if (!this.state.host.projects.some(p => p.id === command.projectId)) throw new Error('Choose an available project.')
-        if (!this.state.host.models.some(m => m.id === command.modelId && m.ready)) throw new Error('That model or account is unavailable. Choose a ready model; Sotto will not switch your account.')
+        if (!model?.ready) throw new Error('That model or account is unavailable. Choose a ready model; Sotto will not switch your account.')
         validateThreadOptions(this.state.host, command)
         // The window may already be showing this thread under an ID it minted; main adopts it so nothing has to move.
         if (command.threadId !== undefined && this.state.host.threads.some(thread => thread.id === command.threadId)) {
@@ -1876,7 +1877,7 @@ export class AgentControl {
         const validate = (): void => {
           const thread = this.thread(command.threadId)
           if (thread.status === 'running' || thread.requests.length) throw new Error('Wait for this thread to finish and answer its pending requests before changing settings.')
-          if (thread.nativeSessionStarted !== false && command.modelId && thread.providerId && this.state.host.models.find(model => model.id === command.modelId)?.providerId !== thread.providerId) throw new Error('Choose a model from this thread provider. Existing sessions cannot move between providers.')
+          if (thread.nativeSessionStarted !== false && command.modelId && thread.providerId && findModel(this.state.host.models, command.modelId)?.providerId !== thread.providerId) throw new Error('Choose a model from this thread provider. Existing sessions cannot move between providers.')
           validateThreadOptions(this.state.host, command, thread.modelId)
         }
         validate()
@@ -2082,7 +2083,7 @@ export class AgentControl {
     const threadId = 'threadId' in command ? command.threadId : undefined
     const provider = command.type === 'create-project' ? command.provider ?? this.state.configuration.provider
       : command.type === 'create-thread' || (command.type === 'configure-thread' && command.modelId && this.thread(command.threadId).nativeSessionStarted === false)
-        ? this.state.host.models.find(model => model.id === command.modelId)?.providerId : command.type === 'answer'
+        ? findModel(this.state.host.models, command.modelId)?.providerId : command.type === 'answer'
           ? requestDraftProvider(this.state.host, this.thread(command.threadId), this.state.configuration.provider) : this.thread(command.threadId).providerId
     if (threadId && command.type !== 'create-thread' && !(command.type === 'configure-thread' && this.thread(threadId).nativeSessionStarted === false)) this.canAct(threadId)
     if ((command.type === 'send' || command.type === 'steer') || command.type === 'answer') {
@@ -2102,8 +2103,8 @@ export class AgentControl {
       ...('requestId' in command ? { requestId: command.requestId } : {}),
       ...(answerQuestions.length ? { questionsDigest: requestQuestionsDigest(answerQuestions) } : {}),
       ...(command.type === 'configure-thread' ? { options: agentThreadOptionsSchema.parse({ ...command,
-        ...(command.modelId !== undefined && command.reasoningEffort === undefined && this.state.host.models.find(model => model.id === command.modelId)?.defaultReasoningEffort
-          ? { reasoningEffort: this.state.host.models.find(model => model.id === command.modelId)!.defaultReasoningEffort } : {}) }) } : {}),
+        ...(command.modelId !== undefined && command.reasoningEffort === undefined && findModel(this.state.host.models, command.modelId)?.defaultReasoningEffort
+          ? { reasoningEffort: findModel(this.state.host.models, command.modelId)!.defaultReasoningEffort } : {}) }) } : {}),
       ...((command.type === 'send' || command.type === 'steer') ? { draftDigest: this.promptDigest(command.text, command.attachments, command.skills, command.files), ...(draftId ? { draftId } : {}) } : {}),
       ...(command.type === 'create-project' ? { entityId: command.projectId } : command.type === 'create-thread' ? { entityId: command.threadId } : {}),
     })

@@ -2,6 +2,7 @@ import React, { useEffect, useId, useLayoutEffect, useRef, useState, type ReactN
 import { createPortal } from 'react-dom'
 import { Check, ChevronDown } from 'lucide-react'
 import { hostForThread, capabilitiesForThread, isThreadProviderConnected, PROVIDER_LABELS, PROVIDER_REJECTED_ACTION, PROVIDER_RESULT_UNCONFIRMED, THREAD_SETTINGS_UNRECONCILED, type AgentModel, type AgentRuntimeMode, type AgentState, type AgentThread } from '../../../shared/agents'
+import { catalogModel, chosenModelId, findModel } from '../../../shared/modelCatalog'
 import type { AgentConnection } from './AgentContext'
 import { moveListboxFocus } from './listboxKeys'
 import { ModelPicker } from './ModelPicker'
@@ -76,7 +77,7 @@ export function ThreadOptionFields({ models, modelId, reasoningEffort, runtimeMo
   /** Model and reasoning stay visible but fixed; permissions remain editable. */
   readonly modelDisabled?: boolean
 }): ReactNode {
-  const model = models.find(item => item.id === modelId)
+  const model = findModel(models, modelId)
   const reasoning = reasoningEffort ?? model?.defaultReasoningEffort ?? ''
   const efforts = effortChoices(model, reasoning)
   const own = usesProviderModes(model)
@@ -107,7 +108,8 @@ function canCreateWith(state: AgentState, model: AgentModel): boolean {
 function threadModelChoices(state: AgentState, thread: AgentThread): { readonly models: AgentModel[]; readonly locked: boolean } {
   state = { ...state, host: hostForThread(state.host, thread) }
   if (thread.nativeSessionStarted === false) {
-    const models = state.host.models.filter(model => model.id === thread.modelId || canCreateWith(state, model))
+    const own = catalogModel(state.host.models, thread.modelId)
+    const models = state.host.models.filter(model => model === own || canCreateWith(state, model))
     return { models, locked: false }
   }
   return { models: state.host.models.filter(model => !thread.providerId || model.providerId === thread.providerId), locked: true }
@@ -271,9 +273,9 @@ export function ThreadOptions({ thread, state, command, turnNote = true, getDraf
   if (locked && !capabilities.configureThread) return null
   const modelDisabled = locked && capabilities.configureThreadModel === false
   // The model shown is the one pressed; effort and permissions are read for it, as they will be once it lands.
-  const confirmedModel = models.find(item => item.id === thread.modelId)
+  const confirmedModel = findModel(models, thread.modelId)
   const modelId = settings.pending.model?.value ?? thread.modelId
-  const model = models.find(item => item.id === modelId)
+  const model = findModel(models, modelId)
   // What each chip shows with nothing pressed: the drawn values, except that a model change starts on the new
   // model's default effort, so that is what the effort chip shows meanwhile.
   const unpressed = modelId === thread.modelId ? drawn
@@ -293,7 +295,7 @@ export function ThreadOptions({ thread, state, command, turnNote = true, getDraf
   } : undefined
   const note = locked ? (providerName ? `This thread stays with ${providerName}.` : undefined) : providers > 1 ? 'Any provider until your first message.' : undefined
   /** A setting's value in words: a model's name, an effort level, a permission mode in its own provider's terms. */
-  const valueName = (kind: SettingKind, value: string, owner: AgentModel | undefined): string => kind === 'model' ? models.find(item => item.id === value)?.name ?? value
+  const valueName = (kind: SettingKind, value: string, owner: AgentModel | undefined): string => kind === 'model' ? findModel(models, value)?.name ?? value
     : kind === 'effort' ? (value ? `${effortLabel(value)} effort` : "the model's default effort")
       : owner?.providerModes?.find(mode => mode.id === value)?.name ?? (value ? RUNTIME_LABELS[value as AgentRuntimeMode] ?? value : "the provider's default")
   // Marked from the press until the window draws the provider's answer, not merely until its reply (#306), and
@@ -323,7 +325,7 @@ export function ThreadOptions({ thread, state, command, turnNote = true, getDraf
   </>
   return <div ref={bar} className="thread-options-bar" data-provider-locked={locked}>
     <div className="thread-options thread-options--chips">
-      <ModelPicker models={models} modelId={modelId} disabled={fixed || modelDisabled} onChange={id => press('model', id, { modelId: id })} note={note} />
+      <ModelPicker models={models} modelId={modelId} disabled={fixed || modelDisabled} onChange={pressed => { const id = chosenModelId(models, pressed, thread.modelId); press('model', id, { modelId: id }) }} note={note} />
       {efforts.length > 0 && <EffortPicker key={`${modelId}:${model?.reasoningEfforts?.join(',') ?? ''}`} value={reasoning} options={efforts}
         disabled={fixed || modelDisabled} onChange={reasoningEffort => press('effort', reasoningEffort, { reasoningEffort }, unpressed.effort)}
         defaultValue={model?.defaultReasoningEffort} modelName={model?.name}

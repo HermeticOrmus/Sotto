@@ -3,6 +3,7 @@ import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { EMPTY_AGENT_HOST, agentRuntimeModeSchema, attachmentSizeBytes, type AgentHostSnapshot, type AgentThread } from '../../shared/agents'
 import { designThreadsFixture, type E2EScenario, type SottoE2EBridge } from '../../shared/e2e'
+import { findModel } from '../../shared/modelCatalog'
 import type { AgentHost, AgentHostCommand, AgentHostResult, AgentSkillScope } from '../agents/host'
 import type { AgentSkillCatalog } from '../../shared/agentSkills'
 import type { AgentReasoner } from '../agents/reasoning'
@@ -43,7 +44,7 @@ export class E2EAgentHost implements AgentHost {
         this.state.capabilities.skills = true
         this.state.threads = structuredClone([...fixture.threads])
         for (const model of this.state.models) model.providerId = model.id.startsWith('claude:') ? 'claude' : model.id.startsWith('grok:') ? 'grok' : 'codex'
-        for (const thread of this.state.threads) thread.providerId = this.state.models.find(model => model.id === thread.modelId)!.providerId
+        for (const thread of this.state.threads) thread.providerId = findModel(this.state.models, thread.modelId)!.providerId
       }
     }
   }
@@ -114,7 +115,7 @@ export class E2EAgentHost implements AgentHost {
     this.commands.add(command.commandId)
     if (command.type === 'create-project') this.state.projects.push({ id: command.projectId, title: command.title, path: command.path })
     else if (command.type === 'create-thread') {
-      const providerId = this.state.models.find(model => model.id === command.modelId)?.providerId
+      const providerId = findModel(this.state.models, command.modelId)?.providerId
       this.state.threads.push({ id: command.threadId, title: command.title, projectId: command.projectId, modelId: command.modelId,
         ...(providerId ? { providerId } : {}),
         runtimeMode: command.runtimeMode ?? 'approval-required', reasoningEffort: command.reasoningEffort ?? 'low', status: 'idle', messages: [], requests: [] })

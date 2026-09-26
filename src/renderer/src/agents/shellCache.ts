@@ -1,4 +1,5 @@
 import { agentShell, hostForThread, type AgentHostSnapshot, type AgentModel, type AgentState } from '../../../shared/agents'
+import { baseModelId } from '../../../shared/modelCatalog'
 
 /**
  * The last shell the window saw, kept so the Threads page paints its rows on the first frame after a
@@ -46,7 +47,9 @@ function trimCatalogsToReferencedModels(host: AgentHostSnapshot): AgentHostSnaps
     const cached = trimmed.get(models)
     if (cached) return cached
     const ids = referenced.get(models) ?? new Set<string>()
-    const result = models.filter(model => ids.has(model.id))
+    // A long-context variant (`opus[1m]`) is drawn from its base model's entry, so that entry is what it references.
+    const bases = new Set([...ids].map(baseModelId))
+    const result = models.filter(model => ids.has(model.id) || bases.has(model.id))
     trimmed.set(models, result)
     return result
   }

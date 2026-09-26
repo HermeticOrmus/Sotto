@@ -8,6 +8,7 @@ import { coalesceAgentStatePublishes, coalesceAgentThreadDetailPublishes } from 
 import { HOST_BUSY, HOST_EVENT_PAGE_SIZE, HOST_FEATURES, HOST_MAX_FRAME_BYTES, HOST_SESSION_REJECTED, hostRequestEnvelopeSchema, hostRequestSchema, type HostDescriptor, type HostErrorCode, type HostPush, type HostReceipt, type HostRequest, type HostResponse } from '../shared/hostProtocol'
 import type { AgentCommand, AgentThreadDetail } from '../shared/agents'
 import { isAgentThreadDetailDelta } from '../shared/agentThreadDetail'
+import { findModel } from '../shared/modelCatalog'
 import { version as packageVersion } from '../../package.json'
 import { remoteCommandRefusal } from './remoteCommands'
 import { SocketFrames } from './socketFrames'
@@ -164,7 +165,7 @@ export async function startSocketServer(options: SocketServerOptions) {
     if (input.type !== 'create-thread' && input.type !== 'configure-thread') return []
     const host = service.shell().host
     const modelId = input.modelId ?? (input.type === 'configure-thread' ? host.threads.find(thread => thread.id === input.threadId)?.modelId : undefined)
-    return host.models.find(model => model.id === modelId)?.providerModes?.filter(mode => mode.allows === 'nothing').map(mode => mode.id) ?? []
+    return findModel(host.models, modelId)?.providerModes?.filter(mode => mode.allows === 'nothing').map(mode => mode.id) ?? []
   }
   const command = async (peer: Peer, request: Extract<HostRequest, { op: 'command' }>): Promise<unknown> => {
     const key = peer.client.clientId + ':' + request.id

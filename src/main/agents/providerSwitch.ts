@@ -7,6 +7,7 @@ import { cloneHostSnapshot } from './cloneHostSnapshot'
 import { cloneActivitySnapshot, subscribeActivitySnapshots } from './activitySnapshots'
 import { join, resolve } from 'node:path'
 import { EMPTY_AGENT_HOST, PROVIDER_LABELS, providerIdSchema, publicProviderEntityId, type AgentCapabilities, type AgentHostSnapshot, type AgentProviderStatus, type ProviderId } from '../../shared/agents'
+import { findModel } from '../../shared/modelCatalog'
 import { confirmedSettingsSnapshot, type AgentHost, type AgentHostCommand, type AgentHostResult, type AgentSkillScope, type RestoredThreadHistory, type ShortTextPrompt, type ThreadHistorySource, type ThreadHostEvent } from './host'
 
 /** Public IDs are opaque to callers and reversible only at the provider boundary. */
@@ -247,7 +248,7 @@ export class ConfiguredProviderHost implements AgentHost {
       return this.options.hosts[id].execute({ ...command, projectId: nativeId })
     }
     if (command.type === 'create-thread') {
-      const model = this.aggregate().models.find(model => model.id === this.resolveModelId(command.modelId))
+      const model = findModel(this.aggregate().models, this.resolveModelId(command.modelId))
       if (!model?.providerId || !model.ready) throw new Error('Choose an available model and provider.')
       const id = model.providerId; this.requireConnected(id)
       if (!this.slots.get(id)!.status.capabilities.threads) throw new Error('This provider cannot create threads.')
