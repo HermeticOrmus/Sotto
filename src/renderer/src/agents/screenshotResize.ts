@@ -36,7 +36,10 @@ const sameSize = (a: AgentImageSize, b: AgentImageSize): boolean => a.width === 
 export interface ImageHeader {
   /** The size the image is shown at: a JPEG turned by its EXIF orientation has its sides swapped, as the decoder does. */
   readonly size: AgentImageSize
-  /** An animated PNG or WebP. Scaling one down would keep only its first frame, so it is never scaled. */
+  /**
+   * An animated PNG or WebP, or a PNG that may be one because its first bytes end before its image data
+   * begins. Scaling one down would keep only its first frame, so it is never scaled.
+   */
   readonly animated: boolean
 }
 
@@ -53,7 +56,9 @@ function pngHeader(bytes: Uint8Array): ImageHeader | null {
     if (type === 'acTL') return { size, animated: true }
     if (type === 'IDAT') return { size, animated: false }
   }
-  return null
+  // A large metadata chunk (a colour profile, text or EXIF) pushed the image data past the bytes read, so
+  // whether an animation chunk comes first is unknown. It is treated as animated and goes as attached.
+  return { size, animated: true }
 }
 
 /** The EXIF orientation (1 to 8) in the APP1 segment between `start` and `end`, or null when it names none. */

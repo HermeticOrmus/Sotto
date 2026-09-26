@@ -112,6 +112,10 @@ describe('reading the size an image names in its first bytes', () => {
     expect(readImageHeader(png(3840, 2160))).toEqual({ size: { width: 3840, height: 2160 }, animated: false })
     expect(readImageHeader(png(3840, 2160, 'iCCP', 'acTL'))).toEqual({ size: { width: 3840, height: 2160 }, animated: true })
   })
+  it('counts a PNG whose bytes end before its image data as one that may be animated', () => {
+    expect(readImageHeader(png(3840, 2160, 'iCCP', 'acTL').subarray(0, 40))).toEqual({ size: { width: 3840, height: 2160 }, animated: true })
+    expect(readImageHeader(png(3840, 2160, 'iCCP').subarray(0, 40))).toEqual({ size: { width: 3840, height: 2160 }, animated: true })
+  })
   it('reads a JPEG past its metadata, with a quarter-turned orientation swapping its sides as the decoder shows it', () => {
     expect(readImageHeader(jpeg(4032, 3024))).toEqual({ size: { width: 4032, height: 3024 }, animated: false })
     expect(readImageHeader(jpeg(4032, 3024, 1))).toEqual({ size: { width: 4032, height: 3024 }, animated: false })
@@ -128,7 +132,7 @@ describe('reading the size an image names in its first bytes', () => {
   })
   it('reads nothing from bytes that are not an image, are cut short, or name no plausible size', () => {
     expect(readImageHeader(bytes('not an image at all, just some text'))).toBeNull()
-    expect(readImageHeader(png(3840, 2160).subarray(0, 30))).toBeNull()
+    expect(readImageHeader(png(3840, 2160).subarray(0, 20))).toBeNull()
     expect(readImageHeader(jpeg(4032, 3024).subarray(0, 24))).toBeNull()
     expect(readImageHeader(png(0, 2160))).toBeNull()
     expect(readImageHeader(png(70_000, 2160))).toBeNull()
@@ -150,6 +154,14 @@ describe('preparing a screenshot whose first bytes name its size', () => {
       expect(await prepareScreenshot(original, decode)).toEqual({ blob: original, dimensions: { original: { width: 3840, height: 2160 }, sent: { width: 3840, height: 2160 } } })
       expect(decode).not.toHaveBeenCalled()
     }
+  })
+  it('never scales a PNG whose metadata pushes its image data past the bytes read, since it may be animated', async () => {
+    const decode = vi.fn(never)
+    const profile = new Uint8Array(300 * 1024)
+    const data = bytes(png(3840, 2160).subarray(0, 33), be32(profile.length), 'iCCP', profile, be32(0), be32(8), 'acTL', new Array<number>(8).fill(0), be32(0), be32(0), 'IDAT', be32(0))
+    const original = new File([data], 'moving.png', { type: 'image/png' })
+    expect(await prepareScreenshot(original, decode)).toEqual({ blob: original, dimensions: { original: { width: 3840, height: 2160 }, sent: { width: 3840, height: 2160 } } })
+    expect(decode).not.toHaveBeenCalled()
   })
   it('decodes one past the bound and scales it down', async () => {
     const { decode, encode } = fakeDecoder({ width: 3840, height: 2160 })
