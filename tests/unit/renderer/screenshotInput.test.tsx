@@ -48,12 +48,12 @@ describe('screenshot attachment input', () => {
   it('refuses dropped screenshots that total more than 20 MB before reading any of them', () => {
     const readers = countReaders()
     const change = vi.fn()
-    const reading = vi.fn()
-    render(<ScreenshotInput attachments={[]} onChange={change} onReadingChange={reading} disabled={false} supported><textarea aria-label="Prompt" /></ScreenshotInput>)
+    const read = vi.fn(() => () => undefined)
+    render(<ScreenshotInput attachments={[]} onChange={change} onRead={read} disabled={false} supported><textarea aria-label="Prompt" /></ScreenshotInput>)
     fireEvent.drop(screen.getByRole('textbox'), { dataTransfer: { files: [sized('a.png', 8 * MB), sized('b.png', 8 * MB), sized('c.png', 8 * MB)], types: ['Files'] } })
     expect(screen.getByRole('alert')).toHaveTextContent('Screenshots must total 20 MB or less. Remove an image or choose smaller files.')
     expect(readers.count).toBe(0)
-    expect(reading).not.toHaveBeenCalledWith(true)
+    expect(read).not.toHaveBeenCalled()
     expect(change).not.toHaveBeenCalled()
   })
   it('counts the screenshots already attached toward the 20 MB total', () => {
@@ -83,13 +83,25 @@ describe('screenshot attachment input', () => {
   })
   it('does not attach an in-flight file read to a thread after the input unmounts', async () => {
     const change = vi.fn()
-    const reading = vi.fn()
-    const view = render(<ScreenshotInput attachments={[]} onChange={change} onReadingChange={reading} disabled={false} supported><textarea /></ScreenshotInput>)
+    const handedOn = vi.fn()
+    const view = render(<ScreenshotInput attachments={[]} onChange={change} onRead={() => handedOn} disabled={false} supported><textarea /></ScreenshotInput>)
     fireEvent.change(screen.getByLabelText('Screenshot files'), { target: { files: [file()] } })
     view.unmount()
-    await waitFor(() => expect(reading).toHaveBeenLastCalledWith(false))
-    await new Promise(resolve => setTimeout(resolve, 20))
+    // The read is over only once its screenshots have been handed on, or dropped for want of a draft to take them.
+    await waitFor(() => expect(handedOn).toHaveBeenCalledOnce())
     expect(change).not.toHaveBeenCalled()
+  })
+  it('adds nothing and says it is still adding while an earlier input reads for the same draft', () => {
+    const read = vi.fn(() => () => undefined)
+    render(<ScreenshotInput attachments={[]} onChange={vi.fn()} onRead={read} pending disabled={false} supported><textarea aria-label="Prompt" /></ScreenshotInput>)
+    expect(screen.getByRole('status')).toHaveTextContent('Adding screenshots...')
+    expect(screen.getByRole('button', { name: 'Attach screenshots' })).toBeDisabled()
+    fireEvent.paste(screen.getByRole('textbox'), { clipboardData: { items: [{ kind: 'file', getAsFile: file }] } })
+    expect(read).not.toHaveBeenCalled()
+  })
+  it('shows what became of screenshots an earlier input read', () => {
+    render(<ScreenshotInput attachments={[]} onChange={vi.fn()} notice="A screenshot did not fit." disabled={false} supported><textarea aria-label="Prompt" /></ScreenshotInput>)
+    expect(screen.getByRole('alert')).toHaveTextContent('A screenshot did not fit.')
   })
 })
 
@@ -153,9 +165,11 @@ describe('scaling screenshots down to the bound', () => {
 describe('reading several screenshots at once', () => {
   it('decodes one at a time, so at most one decoded image is in memory', async () => {
     let alive = 0, most = 0
+    // Each decode waits until the test lets it finish, so a second one started meanwhile would be seen.
+    const decodes: (() => void)[] = []
     vi.stubGlobal('createImageBitmap', async () => {
       alive += 1; most = Math.max(most, alive)
-      await new Promise(resolve => setTimeout(resolve, 5))
+      await new Promise<void>(resolve => { decodes.push(resolve) })
       return { width: 3840, height: 2160, close: () => { alive -= 1 } }
     })
     vi.stubGlobal('OffscreenCanvas', class {
@@ -167,6 +181,12 @@ describe('reading several screenshots at once', () => {
     render(<ScreenshotInput attachments={[]} onChange={change} disabled={false} supported><textarea aria-label="Prompt" /></ScreenshotInput>)
     const files = ['a', 'b', 'c', 'd'].map(name => screenshotOf(`${name}.png`, 'image/png'))
     fireEvent.change(screen.getByLabelText('Screenshot files'), { target: { files } })
+    for (let finished = 0; finished < files.length; finished += 1) {
+      await waitFor(() => expect(decodes).toHaveLength(finished + 1))
+      // Every decode started so far is still held, and only one has started.
+      expect(alive).toBe(1)
+      decodes[finished]!()
+    }
     await waitFor(() => expect(change).toHaveBeenCalledTimes(1))
     expect((change.mock.calls[0]![0] as AgentAttachment[]).map(image => image.name)).toEqual(['a.png', 'b.png', 'c.png', 'd.png'])
     expect(most).toBe(1)

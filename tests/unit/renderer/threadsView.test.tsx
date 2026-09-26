@@ -253,6 +253,36 @@ describe('ThreadsView workspace', () => {
     expect(await screen.findByRole('img', { name: 'moving.png' })).toBeVisible()
   })
 
+  it('holds Send on a thread left and returned to until the screenshot pasted before leaving has landed', async () => {
+    // The decode waits until the test lets it finish, so the read outlasts the move away and back.
+    let decoded: () => void = () => undefined
+    vi.stubGlobal('createImageBitmap', async () => { await new Promise<void>(resolve => { decoded = resolve }); return { width: 3840, height: 2160, close: () => undefined } })
+    vi.stubGlobal('OffscreenCanvas', class {
+      constructor(readonly width: number, readonly height: number) {}
+      getContext() { return { drawImage: () => undefined } }
+      async convertToBlob({ type }: { type: string }) { return new Blob([new Uint8Array(4)], { type }) }
+    })
+    try {
+      const state = stateFixture(); state.assignments = []; state.activeThreadId = 'grok-previews'
+      state.host.models.forEach(model => { model.supportsImages = true })
+      const { command, rerender } = renderThreads(state)
+      const drafts = connectionStores.get(command)!
+      fireEvent.change(screen.getByRole('textbox', { name: /prompt/i }), { target: { value: 'Look at this' } })
+      fireEvent.change(screen.getByLabelText('Screenshot files'), { target: { files: [new File([new Uint8Array(64)], 'moving.png', { type: 'image/png' })] } })
+      state.activeThreadId = 'release-notes'
+      rerender(<ThreadsView onOpenAgents={vi.fn()} now={NOW} />)
+      state.activeThreadId = 'grok-previews'
+      rerender(<ThreadsView onOpenAgents={vi.fn()} now={NOW} />)
+      // Back on the thread with the screenshot still being read: the text alone must not go out without it.
+      expect(await screen.findByText('Adding screenshots...')).toBeVisible()
+      expect(screen.getByRole('button', { name: 'Send prompt' })).toBeDisabled()
+      decoded()
+      expect(await screen.findByRole('img', { name: 'moving.png' })).toBeVisible()
+      expect(drafts.draft('grok-previews').attachments).toEqual([expect.objectContaining({ name: 'moving.png' })])
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Send prompt' })).toBeEnabled())
+    } finally { vi.unstubAllGlobals() }
+  })
+
   it('reconciles a late manual receipt while a managed thread has unmounted its composer', async () => {
     const state = stateFixture(); state.activeThreadId = 'grok-previews'
     state.assignments = state.assignments.filter(assignment => assignment.threadId === 'footer-links')

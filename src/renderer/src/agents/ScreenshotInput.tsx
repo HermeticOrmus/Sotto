@@ -25,7 +25,7 @@ function resizedDescription({ original, sent }: AgentAttachmentDimensions): stri
   return `Resized from ${original.width} by ${original.height} to ${sent.width} by ${sent.height} pixels`
 }
 
-export function ScreenshotInput({ attachments, onChange, onAddAfterClose, disabled, supported, children, onReadingChange }: {
+export function ScreenshotInput({ attachments, onChange, onAddAfterClose, disabled, supported, children, onRead, pending = false, notice = null }: {
   readonly attachments: AgentAttachment[]
   readonly onChange: (attachments: AgentAttachment[]) => void
   /**
@@ -37,7 +37,15 @@ export function ScreenshotInput({ attachments, onChange, onAddAfterClose, disabl
   readonly disabled: boolean
   readonly supported: boolean
   readonly children: ReactNode
-  readonly onReadingChange?: (reading: boolean) => void
+  /**
+   * Called as screenshots start being read. It returns what to call once they have been handed on, which
+   * happens after this input has closed when the user moved on meanwhile.
+   */
+  readonly onRead?: () => () => void
+  /** Screenshots an earlier input started reading for this draft are still being read, so nothing more is added yet. */
+  readonly pending?: boolean
+  /** What became of screenshots read after an earlier input closed, shown until the user adds more. */
+  readonly notice?: string | null
 }): ReactNode {
   const picker = useRef<HTMLInputElement>(null)
   const current = useRef(attachments)
@@ -48,11 +56,12 @@ export function ScreenshotInput({ attachments, onChange, onAddAfterClose, disabl
   latestAddAfterClose.current = onAddAfterClose
   const reading = useRef(false)
   const mounted = useRef(true)
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false; onReadingChange?.(false) } }, [onReadingChange])
-  const [busy, setBusy] = useState(false)
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
+  const [readingHere, setReadingHere] = useState(false)
+  const busy = readingHere || pending
   const [error, setError] = useState<string | null>(null)
   const add = async (files: File[]): Promise<void> => {
-    if (disabled || reading.current) return
+    if (disabled || reading.current || pending) return
     if (!supported) { setError('This model does not support screenshots. Choose a model with image support.'); return }
     setError(null)
     if (files.length + current.current.length > AGENT_MAX_ATTACHMENTS) { setError(`Attach up to ${AGENT_MAX_ATTACHMENTS} screenshots at a time.`); return }
@@ -60,7 +69,8 @@ export function ScreenshotInput({ attachments, onChange, onAddAfterClose, disabl
     try { files.forEach(checkImage) } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not read these screenshots.'); return }
     const total = current.current.reduce((sum, item) => sum + attachmentSizeBytes(item.dataUrl), 0) + files.reduce((sum, file) => sum + file.size, 0)
     if (total > AGENT_MAX_ATTACHMENT_BYTES) { setError(TOO_LARGE_IN_TOTAL); return }
-    reading.current = true; setBusy(true); onReadingChange?.(true)
+    reading.current = true; setReadingHere(true)
+    const handedOn = onRead?.()
     try {
       // One at a time, so at most one decoded image is held in memory however many are added at once.
       const images: AgentAttachment[] = []
@@ -71,7 +81,10 @@ export function ScreenshotInput({ attachments, onChange, onAddAfterClose, disabl
       if (!result.success) { setError(TOO_LARGE_IN_TOTAL); return }
       latestChange.current(result.data)
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not read these screenshots.') }
-    finally { if (mounted.current) { reading.current = false; setBusy(false); onReadingChange?.(false) } }
+    finally {
+      handedOn?.()
+      if (mounted.current) { reading.current = false; setReadingHere(false) }
+    }
   }
   return <div className="screenshot-input" onPaste={event => {
     const files = [...event.clipboardData.items].filter(item => item.kind === 'file').map(item => item.getAsFile()).filter((file): file is File => file !== null)
@@ -89,7 +102,7 @@ export function ScreenshotInput({ attachments, onChange, onAddAfterClose, disabl
     <div className="screenshot-input__tools"><input ref={picker} type="file" accept={AGENT_IMAGE_MIME_TYPES.join(',')} multiple aria-label="Screenshot files" hidden onChange={event => { const files = [...(event.target.files ?? [])]; event.target.value = ''; void add(files) }} />
       <Button type="button" variant="ghost" iconOnly aria-label="Attach screenshots" disabled={disabled || busy || !supported} onClick={() => picker.current?.click()}><Paperclip size={16} /></Button>
       {busy && <small role="status">Adding screenshots...</small>}
-      {error && <small className="agent-error" role="alert">{error}</small>}
+      {(error ?? notice) && <small className="agent-error" role="alert">{error ?? notice}</small>}
     </div>
   </div>
 }
