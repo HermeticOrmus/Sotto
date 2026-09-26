@@ -58,7 +58,16 @@ describe('nearest reasoning effort', () => {
   it('is undefined when the model offers no reasoning efforts at all', () => {
     expect(nearestReasoningEffort('high', claude.reasoningEfforts!, [])).toBeUndefined()
   })
-  it('takes the most thorough offered level when the desired one has no reference position', () => {
-    expect(nearestReasoningEffort('extreme', [], grok.reasoningEfforts!)).toBe('high')
+  it('falls back to the provider default, never the top, when the desired level has no reference position', () => {
+    expect(nearestReasoningEffort('extreme', [], grok.reasoningEfforts!)).toBeUndefined()
+  })
+  it('maps a low reference level onto the offered list’s own low end, such as a minimal Claude level Grok lacks', () => {
+    expect(nearestReasoningEffort('minimal', ['minimal', ...claude.reasoningEfforts!], grok.reasoningEfforts!)).toBe('low')
+  })
+  it('maps the top reference level onto the offered list’s own highest, even with fewer levels to choose from', () => {
+    expect(nearestReasoningEffort('max', claude.reasoningEfforts!, grok.reasoningEfforts!)).toBe('high')
+  })
+  it('falls back to the provider default for a one-level reference, which has no low-to-high position to map', () => {
+    expect(nearestReasoningEffort('default', ['default'], grok.reasoningEfforts!)).toBeUndefined()
   })
 })

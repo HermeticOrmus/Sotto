@@ -173,6 +173,9 @@
   .settings-view .settings-scroll { padding: 28px; }
   .settings-feedback { padding-inline: 28px; }
   .settings-view .settings-rows .tt-field, .settings-view .account-rows > label, .settings-view .account-rows > .account-row, .settings-view .provider-default { grid-template-columns: minmax(0, 1fr) minmax(140px, 210px); column-gap: 18px; }
+  /* A chip group still needs its own wider room here, the same as at full width, or the 210px column above wins
+     on equal specificity by coming later and squeezes all three chips into it. */
+  .settings-view .account-rows > .account-row--chips { grid-template-columns: minmax(160px, 1fr) minmax(0, auto); }
   .settings-view .settings-rows .tt-field:has(.segmented-control) { grid-template-columns: minmax(0, 1fr); grid-template-areas: 'label' 'description' 'control' 'error'; gap: 9px; }
   .settings-view .settings-rows .tt-field:has(.segmented-control) .segmented-control { justify-self: start; }
   .settings-view .providers-list { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; }
@@ -222,7 +225,7 @@
   .settings-view .provider-detail__body { padding-top: 16px; }
   .settings-view .provider-tabs button { min-height: 38px; padding-bottom: 10px; }
   .settings-view .provider-default { margin-top: 20px; padding-block: 16px; }
-  .settings-view .account-rows > label { padding-block: 13px; }
+  .settings-view .account-rows > label, .settings-view .account-rows > .account-row { padding-block: 13px; }
   .settings-view .agent-voice-settings { margin-top: 12px; padding-top: 16px; }
 }
 

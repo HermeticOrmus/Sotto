@@ -16,7 +16,9 @@ Starting a thread in an existing project opens the **New thread** dialog every t
 3. **One permissions default, nearest fit.** The default is one of the four modes. A provider that lacks it starts on the nearest safer mode it has (Grok: Allow edits → Ask for approval), and Settings says so under the row when the chosen model's provider lacks it. Devin starts on its first profile. A default effort the chosen model does not offer falls back to the nearest level it does.
 4. **Ctrl+Shift+N** (Cmd+Shift+N on a Mac) opens a new thread in the focused thread's project, or the project chooser when no thread is focused. It is checked against the dictation hotkey like every other chord, and an open dialog or a terminal keeps its keys.
 
-Prototype: `docs/prototypes/new-thread-defaults-prototype.html` (variant b picked, with the composer's grouped model selector).
+Prototype: on branch `prototype/new-thread-defaults` (variant b picked, with the composer's grouped model selector).
+
+Also shipped, beyond these decisions: a project whose folder was moved or deleted says so in plain words ("The folder … is not there any more. Move it back, or add the project again from where it is now.") instead of the file system's ENOENT text; the composer's own permissions chip and Settings' new row both offer "Provider default" the same way, so a chosen default can go back to unset; and Settings → Agents groups the new row, the personal-chat and reasoning settings, and Projects each under their own heading.
 
 ## Build
 

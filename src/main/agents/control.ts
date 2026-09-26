@@ -9,7 +9,7 @@ import { isAbsolute, join, resolve } from 'node:path'
 import { z } from 'zod'
 import {
   agentAssignmentSchema, agentConfigurationSchema, agentQueueItemSchema, agentAttachmentsSchema, agentThreadOptionsSchema, agentThreadDraftSchema, agentDeliverySchema,
-  providerUpgradeSchema, defaultAgentConfiguration, PROVIDER_REJECTED_ACTION, PROVIDER_RESULT_UNCONFIRMED, THREAD_SETTINGS_UNRECONCILED, EMPTY_AGENT_HOST, PROVIDER_LABELS, supportsAgentSupervision, isSubscriptionReasoning, agentDeliveryReceiptsSchema, MAX_DELIVERED_DRAFTS, enabledThreadProviders, defaultThreadModelId, capabilitiesForThread, isThreadProviderConnected, providerIdSchema, threadSummaryOf,
+  providerUpgradeSchema, defaultAgentConfiguration, PROVIDER_REJECTED_ACTION, PROVIDER_RESULT_UNCONFIRMED, THREAD_SETTINGS_UNRECONCILED, EMPTY_AGENT_HOST, PROVIDER_LABELS, supportsAgentSupervision, isSubscriptionReasoning, agentDeliveryReceiptsSchema, MAX_DELIVERED_DRAFTS, enabledThreadProviders, defaultNewThreadModelId, capabilitiesForThread, isThreadProviderConnected, providerIdSchema, threadSummaryOf,
   type AgentMessage, type AgentThreadDetail, type AgentThreadDetailDelta, type AgentThreadDetailUpdate, type ProviderId, type AgentAttachment, type AgentAttachmentPreviewRequest, type AgentAttachmentPreviewResult, type AgentAssignment, type AgentCommand, type AgentConfiguration, type AgentDelivery, type AgentThreadDraft, type AgentHostSnapshot, type AgentModel, type AgentProject, type AgentQueueItem, type AgentRuntimeMode, type AgentState, type AgentThread, type ProviderClientUpdate, type SubscriptionProvider,
 } from '../../shared/agents'
 import { nearestReasoningEffort, resolveNewThreadPermission } from '../../shared/newThreadDefaults'
@@ -1867,9 +1867,7 @@ export class AgentControl {
             ...(command.baseBranch ? { baseBranch: command.baseBranch } : {}),
             ...(command.startFromOrigin !== undefined ? { startFromOrigin: command.startFromOrigin } : {}),
             ...(command.existingWorktreePath ? { existingWorktreePath: command.existingWorktreePath } : {}),
-            ...(defaults.reasoningEffort !== undefined ? { reasoningEffort: defaults.reasoningEffort } : {}),
-            ...(defaults.runtimeMode !== undefined ? { runtimeMode: defaults.runtimeMode } : {}),
-            ...(defaults.providerMode !== undefined ? { providerMode: defaults.providerMode } : {}) }, turn)
+            ...defaults }, turn)
         } catch (error) { if (selectionRevision === this.selectionRevision) this.queueSelectionPinned = previousSelectionPinned; throw error }
         if (selectionRevision === this.selectionRevision) {
           this.presentedQueueId = null
@@ -2437,7 +2435,7 @@ export class AgentControl {
     const intentStarted = Date.now()
     let intent
     try {
-      intent = await this.dependencies.reasoner.intent(request, this.state.host, this.state.activeProjectId, defaultThreadModelId(this.state.configuration, this.state.host.models, this.state.reasoningAccounts), this.state.activeThreadId, preferences)
+      intent = await this.dependencies.reasoner.intent(request, this.state.host, this.state.activeProjectId, defaultNewThreadModelId(this.state.configuration, this.state.host.models, this.state.reasoningAccounts), this.state.activeThreadId, preferences)
       if (turn) turn.intentResolvedAtMs = Date.now()
     } finally {
       if (turn) turn.intentMs += Date.now() - intentStarted

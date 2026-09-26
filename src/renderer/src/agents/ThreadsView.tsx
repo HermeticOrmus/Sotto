@@ -11,9 +11,7 @@ import { draftThreads, gateOnCreation, overlayDraftThreads, useDraftThreads } fr
 import { describeThreads, organizeWorkspace, type ThreadRow } from './threadFacts'
 import { NewThreadDialog } from './NewThreadDialog'
 import { beginNewThread, type ThreadCreationStart } from './newThread'
-import { newThreadChord, newThreadChordLabel } from './newThreadShortcut'
-import { chordBelongsElsewhere } from '../tools/changesShortcut'
-import { chordMatches } from './branchToolbar.logic'
+import { newThreadChord, newThreadChordLabel, newThreadChordPressed } from './newThreadShortcut'
 import { ProviderUpgradeNotice } from './ProviderUpgradeNotice'
 import { THREAD_PROMPT_ID } from './ThreadComposer'
 import { hasDraftContent } from './threadDraftStore'
@@ -96,6 +94,9 @@ export function ThreadsView({ onOpenAgents, now: fixedNow, updateControl, tools,
   const stateRef = useRef<AgentState | null>(null)
   const lastFocused = useRef<string | null>(null)
   const store = agents.threadDrafts
+  // Text typed into a draft thread's composer before its creation is refused: kept for the next new thread
+  // opened in the same project, since the refused thread's own pane and composer are gone from here.
+  const carriedDraftText = useRef(new Map<string, string>())
   // A thread created in this window is shown from its local record until main's state carries it, and every
   // command about it waits for that creation instead of being refused for naming a thread main does not know.
   const drafts = useDraftThreads()
@@ -157,9 +158,17 @@ export function ThreadsView({ onOpenAgents, now: fixedNow, updateControl, tools,
   const handleCreationStart = useCallback((start: ThreadCreationStart): void => {
     draftThreads.open(start.thread, start.created)
     setPending({ threadId: start.thread.id })
+    const carried = carriedDraftText.current.get(start.thread.projectId)
+    if (carried !== undefined) { carriedDraftText.current.delete(start.thread.projectId); store.edit(start.thread.id, { text: carried }) }
     focusNewComposer()
-    void start.created.then(creationError => { if (creationError !== null) setNewThreadError(creationError) })
-  }, [])
+    void start.created.then(creationError => {
+      if (creationError === null) return
+      setNewThreadError(creationError)
+      // The refused thread's own pane is gone; its typed text moves to the project's next new thread instead.
+      const text = store.draft(start.thread.id).text
+      if (text.trim()) carriedDraftText.current.set(start.thread.projectId, text)
+    })
+  }, [store])
   // The pen and the empty page's button already know their project: the thread opens at once, on the defaults
   // from Settings → Agents, selected and focused; a refusal shows in the sidebar's own error place.
   const createThreadIn = useCallback((project: AgentProject): void => {
@@ -184,11 +193,13 @@ export function ThreadsView({ onOpenAgents, now: fixedNow, updateControl, tools,
   const platform: SottoPlatform = app?.platform ?? 'win32'
   const hotkey = app?.settings?.hotkey
   const shortcutChord = newThreadChord(hotkey, platform)
+  // Hoisted rather than a fresh object every render: passed down to the memoised sidebar rows, which compare it.
+  const newThreadShortcutLabel = useMemo(() => shortcutChord ? newThreadChordLabel(platform) : undefined, [shortcutChord, platform])
+  const dismissNewThreadError = useCallback((): void => setNewThreadError(null), [])
   useEffect(() => {
     if (shortcutChord === null) return
     const onKey = (event: globalThis.KeyboardEvent): void => {
-      if (event.defaultPrevented || event.repeat || !chordMatches(event, shortcutChord, platform) || chordBelongsElsewhere(event.target)) return
-      if (document.querySelector('dialog[open], [role="dialog"][aria-modal="true"]')) return
+      if (!newThreadChordPressed(event, shortcutChord, platform)) return
       event.preventDefault()
       // The focused pane's project, or the chooser: unlike the empty page's own button, this never falls back
       // to the last-active project, since no thread being focused is exactly when the project is unclear.
@@ -256,7 +267,7 @@ export function ThreadsView({ onOpenAgents, now: fixedNow, updateControl, tools,
       onCreated={() => { setChooserOpen(false); focusNewComposer() }} />}
     <ThreadSidebar state={state} command={command} organization={organization} query={query} liveClock={fixedNow === undefined} mode={mode} onMode={setMode} onQuery={setQuery} onOpen={openThread} onNewThread={startNewThread}
       currentThreadId={focusedId} openThreadIds={paneIds} onOpenBeside={openBeside} onDragThread={setDragging}
-      newThreadError={newThreadError} onDismissNewThreadError={() => setNewThreadError(null)} newThreadShortcut={shortcutChord ? newThreadChordLabel(platform) : undefined} />
+      newThreadError={newThreadError} onDismissNewThreadError={dismissNewThreadError} newThreadShortcut={newThreadShortcutLabel} />
     <section className="thread-workspace" aria-label="Thread workspace">
       {recoveredDraft ? <ProviderUpgradeNotice state={state} command={recoverCommand} threadId={focusedId ?? undefined} localDraftPresent={localDraftPresent} /> : null}
       <div className="thread-workspace__body">

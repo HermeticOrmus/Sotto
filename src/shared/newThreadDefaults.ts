@@ -54,7 +54,9 @@ export function nearestReasoningEffort(desired: string, reference: readonly stri
   if (offered.length === 0) return undefined
   if (offered.includes(desired)) return desired
   const at = reference.indexOf(desired)
-  if (at === -1 || reference.length < 2) return offered.at(-1)
+  // No position to map from: an unrecognized value, or a reference too short to hold a low-to-high position.
+  // The provider's own default (unset) is the honest answer, not the top of the offered list.
+  if (at === -1 || reference.length < 2) return undefined
   const ratio = at / (reference.length - 1)
   return offered[Math.round(ratio * (offered.length - 1))]
 }

@@ -28,7 +28,8 @@ function NewThreadDefaultsRow({ state, command }: { readonly state: AgentState; 
   const efforts = effortChoices(model, reasoning)
   const chosenMode = configuration.newThreadRuntimeMode
   const providerLabel = model?.providerId ? PROVIDER_LABELS[model.providerId] : model?.provider
-  const permissionOptions = RUNTIME_MODE_ORDER.map(mode => ({ id: mode, label: RUNTIME_LABELS[mode] }))
+  // An unset option at the top, so a chosen default can go back to the provider's own once it is set.
+  const permissionOptions = [{ id: '', label: 'Provider default' }, ...RUNTIME_MODE_ORDER.map(mode => ({ id: mode, label: RUNTIME_LABELS[mode] }))]
   let fitNote: string | null = null
   if (model?.providerModes?.length) fitNote = `${providerLabel ?? 'This provider'} uses its own permission profiles; a new thread starts on its first.`
   else if (chosenMode) {
@@ -44,7 +45,7 @@ function NewThreadDefaultsRow({ state, command }: { readonly state: AgentState; 
       {efforts.length > 0 && <EffortPicker value={reasoning} options={efforts} disabled={false}
         onChange={effort => save({ newThreadReasoningEffort: effort })} defaultValue={model?.defaultReasoningEffort} modelName={model?.name} />}
       <ChoiceChip label="Default permissions for new threads" placeholder="Provider default" value={chosenMode ?? ''} options={permissionOptions} disabled={false} pending={false}
-        onChange={mode => save({ newThreadRuntimeMode: mode as AgentRuntimeMode })} />
+        onChange={mode => save({ newThreadRuntimeMode: (mode || undefined) as AgentRuntimeMode | undefined })} />
     </fieldset>
     {fitNote ? <p className="account-row__note">{fitNote}</p> : null}
   </div>

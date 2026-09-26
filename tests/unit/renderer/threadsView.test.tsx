@@ -506,6 +506,31 @@ describe('a thread created without a round trip', () => {
     expect(screen.getByRole('heading', { name: 'Visual gate flake', exact: true })).toBeVisible()
     expect(command.mock.calls.filter(([request]) => (request as AgentCommand).type === 'create-thread')).toHaveLength(1)
   })
+
+  it('carries text typed before a refusal to the next new thread opened in the same project', async () => {
+    const state = stateFixture()
+    let settle: (value: AgentState) => void = () => undefined
+    const refusing = new Promise<AgentState>(resolve => { settle = resolve })
+    let creations = 0
+    const command = vi.fn(async (...args: unknown[]) => {
+      const request = args[0] as AgentCommand
+      if (request.type !== 'create-thread') return state
+      creations += 1
+      return creations === 1 ? refusing : state
+    })
+    renderThreads(state, command)
+    createThread()
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'New thread', exact: true })).toBeVisible())
+    expect(screen.getByRole('textbox', { name: 'Prompt', exact: true })).toBeEnabled()
+    fireEvent.change(screen.getByRole('textbox', { name: 'Prompt', exact: true }), { target: { value: 'Do not lose this.' } })
+    await act(async () => { settle({ ...state, error: 'Send or clear your draft before creating another thread.' }) })
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Send or clear your draft before creating another thread.'))
+    expect(screen.queryByRole('heading', { name: 'New thread', exact: true })).not.toBeInTheDocument()
+    // The refused draft's own pane is gone, but its text opens with the project's next new thread.
+    createThread()
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'New thread', exact: true })).toBeVisible())
+    expect(screen.getByRole('textbox', { name: 'Prompt', exact: true })).toHaveValue('Do not lose this.')
+  })
 })
 
 describe('Ctrl+Shift+N opens a new thread (issue #347)', () => {

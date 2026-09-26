@@ -62,6 +62,16 @@ describe('New threads start with (issue #347)', () => {
     await waitFor(() => expect(command).toHaveBeenCalledWith({ type: 'configure', patch: { newThreadRuntimeMode: 'full-access' } }))
   })
 
+  it('goes back to Provider default once a permission is chosen, instead of being stuck on it', async () => {
+    const { command } = provide(fixture({ newThreadModelId: 'claude:sonnet', newThreadRuntimeMode: 'full-access' }))
+    render(<AgentSetupFields />)
+    const chip = screen.getByRole('combobox', { name: 'Default permissions for new threads' })
+    expect(chip).toHaveTextContent('Full access')
+    fireEvent.click(chip)
+    fireEvent.click(screen.getByRole('option', { name: 'Provider default' }))
+    await waitFor(() => expect(command).toHaveBeenCalledWith({ type: 'configure', patch: { newThreadRuntimeMode: undefined } }))
+  })
+
   it('notes the nearest fit when the chosen model’s provider lacks the chosen permission', () => {
     provide(fixture({ newThreadModelId: 'grok:test', newThreadRuntimeMode: 'auto-accept-edits' }))
     render(<AgentSetupFields />)

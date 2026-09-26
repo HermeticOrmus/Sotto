@@ -50,7 +50,7 @@ async function captureMatrix(launched: LaunchedSotto, dialog: Locator): Promise<
         await launched.page.emulateMedia({ reducedMotion })
         await expect.poll(() => launched.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
         await expect(dialog.getByRole('searchbox', { name: 'Search projects' })).toBeInViewport()
-        await expect(dialog.getByText('Choose the project. The thread opens with your defaults from Settings → Agents.')).toBeInViewport()
+        await expect(dialog.getByRole('button', { name: 'Local folder', exact: false })).toBeInViewport()
         await launched.page.screenshot({ path: `${SHOTS}/new-worktree-${width}x${height}-${appearance}-${reducedMotion}.png`, animations: 'disabled' })
       }
     }
