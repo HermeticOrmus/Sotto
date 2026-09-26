@@ -184,6 +184,8 @@ createInterface({ input: process.stdin }).on('line', line => {
     const thread = state.threads[params.threadId]
     if (!thread) { emit({ id, error: { code: -32000, message: 'Unknown thread' } }); return }
     const hasNativeLog = existsSync(join(process.env.CODEX_HOME, 'sessions', '2026', '09', '10', `rollout-2026-09-10-${thread.id}.jsonl`))
+    // Invented: how 0.157.1 refuses this request before a thread's first message was not observed. It is modelled
+    // on thread/read's refusal, and Sotto reads any refusal of this request as "read the whole transcript".
     if (thread.turns.length === 0 && !hasNativeLog) {
       setTimeout(() => emit({ id, error: { code: -32600, message: `thread ${thread.id} is not materialized yet; thread/turns/list is unavailable before first user message` } }), delay)
       return
@@ -284,6 +286,11 @@ setInterval(() => {
       { type: 'userMessage', id: randomUUID(), content: [{ type: 'text', text: action.text }] }, ...running ? [] : [{ type: 'agentMessage', id: randomUUID(), text: 'Native reply' }]] })
     save()
   } else if (action.type === 'native-rewind') { thread.turns = thread.turns.slice(0, -1); save() }
+  // A message in the newest turn that this connection never streamed, so Sotto cannot match it to one it holds.
+  else if (action.type === 'native-message') {
+    thread.turns.at(-1).items.push({ type: 'userMessage', id: randomUUID(), content: [{ type: 'text', text: action.text }] })
+    save()
+  }
   else if (action.type === 'notify-burst') {
     process.stdout.write(action.frames.map(frame => JSON.stringify(frame) + '\n').join(''))
   }

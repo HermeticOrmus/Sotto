@@ -38,7 +38,7 @@ const send = (f: Fixture, id: string, messageId: string, expectedLastUserMessage
 /** Act as a second Codex process, and wait until the fake's shared history holds what it did. */
 async function elsewhere(f: Fixture, id: string, action: Record<string, unknown>): Promise<void> {
   const codexThreadId = await f.realId(id)
-  const turns = async () => (JSON.parse(await readFile(join(f.root, 'state.json'), 'utf8')) as { threads: Record<string, { turns: unknown[] }> }).threads[codexThreadId]!.turns.length
+  const turns = async () => JSON.stringify((JSON.parse(await readFile(join(f.root, 'state.json'), 'utf8')) as { threads: Record<string, { turns: unknown[] }> }).threads[codexThreadId]!.turns)
   const before = await turns()
   await f.action(id, action)
   await expect.poll(turns).not.toBe(before)
@@ -91,13 +91,97 @@ describe('Codex send checks the newest turn before reading the whole transcript'
     expect(await historyRequests(f, from)).toEqual(['turns', 'read'])
   })
 
-  it('reads the whole transcript when another Codex process took the newest turn back', async () => {
+  it('reads the whole transcript when another Codex process took the newest turn back, then sends as a whole read always did', async () => {
     const { f, id } = await answeredThread()
     await turn(f, id, 'own-2', 'own-1')
     await elsewhere(f, id, { type: 'native-rewind' })
     const from = (await f.driver.requests()).length
-    await send(f, id, 'after-rewind', 'own-2').catch(() => undefined)
+    // A read takes no words back unless Sotto asked for the rewind itself, so the last user message it holds is
+    // still own-2 and the send goes, exactly as it did when every send read the whole transcript.
+    await expect(send(f, id, 'after-rewind', 'own-2')).resolves.toEqual({ accepted: true })
+    expect((await f.driver.requests()).slice(from).flatMap(request => ['thread/turns/list', 'thread/read', 'turn/start'].includes(request.method ?? '') ? [request.method] : []))
+      .toEqual(['thread/turns/list', 'thread/read', 'turn/start'])
+    const messages = (await f.host.snapshot()).threads.find(thread => thread.id === id)!.messages
+    expect(messages.filter(message => message.role === 'user').map(message => message.id)).toEqual(['own-1', 'own-2', 'after-rewind'])
+  })
+
+  it('reads the whole transcript and refuses a stale reply when the newest turn holds a message Sotto cannot match', async () => {
+    const { f, id } = await answeredThread()
+    await elsewhere(f, id, { type: 'native-message', text: 'Added to the newest turn elsewhere' })
+    const from = (await f.driver.requests()).length
+    await expect(send(f, id, 'stale', 'own-1')).rejects.toThrow('changed')
     expect(await historyRequests(f, from)).toEqual(['turns', 'read'])
+    expect((await f.driver.requests()).slice(from).some(request => request.method === 'turn/start')).toBe(false)
+  })
+
+  it('leaves the thread as it was when the newest turn does not match and the whole read then fails', async () => {
+    const { f, id } = await answeredThread()
+    await elsewhere(f, id, { type: 'native-message', text: 'Added to the newest turn elsewhere' })
+    const shown = async () => (await f.host.snapshot()).threads.find(thread => thread.id === id)!.messages.map(message => [message.id, message.text])
+    const before = await shown()
+    await f.script({ reject: 'thread/read' })
+    const from = (await f.driver.requests()).length
+    await expect(send(f, id, 'unread', 'own-1')).rejects.toThrow()
+    expect(await historyRequests(f, from)).toEqual(['turns', 'read'])
+    expect((await f.driver.requests()).slice(from).some(request => request.method === 'turn/start')).toBe(false)
+    expect(await shown()).toEqual(before)
+  })
+
+  it('refuses a stale reply on the check alone when the input was typed into the Codex session log', async () => {
+    const { f, id } = await answeredThread()
+    await f.driver.typeInProvider(id, 'Typed in the Codex CLI')
+    await expect.poll(async () => (await f.host.snapshot()).threads.find(thread => thread.id === id)!.messages.some(message => message.text === 'Typed in the Codex CLI')).toBe(true)
+    const from = (await f.driver.requests()).length
+    // On a thread Sotto has read, session-log input is shown as soon as it is polled, so the newest turn still
+    // matches and the stale-reply check after it is what refuses. The log holds input back only for a thread
+    // with no history on this connection, and such a thread reads the whole transcript anyway.
+    await expect(send(f, id, 'stale', 'own-1')).rejects.toThrow('changed')
+    expect(await historyRequests(f, from)).toEqual(['turns'])
+    expect((await f.driver.requests()).slice(from).some(request => request.method === 'turn/start')).toBe(false)
+  })
+
+  it('reads the whole transcript when Codex refuses the check, and asks again on the next send', async () => {
+    const { f, id } = await answeredThread()
+    await f.script({ reject: 'thread/turns/list' })
+    const from = (await f.driver.requests()).length
+    await turn(f, id, 'own-2', 'own-1')
+    await turn(f, id, 'own-3', 'own-2')
+    expect(await historyRequests(f, from)).toEqual(['turns', 'read', 'turns'])
+  })
+
+  it('asks again on the next send when Codex names an unknown value rather than the request', async () => {
+    const { f, id } = await answeredThread()
+    // How Codex 0.157.1 answers a params value it does not know, here an itemsView it has no such view for.
+    await f.script({ reject: 'thread/turns/list', rejection: { code: -32600, message: 'Invalid request: unknown variant `bogus`, expected one of `notLoaded`, `summary`, `full`' } })
+    const from = (await f.driver.requests()).length
+    await turn(f, id, 'own-2', 'own-1')
+    await turn(f, id, 'own-3', 'own-2')
+    expect(await historyRequests(f, from)).toEqual(['turns', 'read', 'turns'])
+  })
+
+  it('checks the newest turn before a personal-chat send', async () => {
+    const f = await codexFixture(); fixtures.push(f)
+    await f.host.connect()
+    const id = randomUUID()
+    await f.adapter.createPersonalConversation({ commandId: randomUUID(), threadId: id, modelId: f.modelId, title: 'Personal', workingDirectory: f.root })
+    const personal = (messageId: string, expectedLastUserMessageId?: string) => f.adapter.sendPersonalConversation({ type: 'send', commandId: randomUUID(), threadId: id,
+      messageId, text: `Prompt ${messageId}`, ...(expectedLastUserMessageId ? { expectedLastUserMessageId } : {}) }, [])
+    const answered = async (messageId: string, expectedLastUserMessageId?: string) => {
+      await expect(personal(messageId, expectedLastUserMessageId)).resolves.toEqual({ accepted: true })
+      await f.driver.completeTurn(id, `Reply to ${messageId}`)
+      await expect.poll(() => f.adapter.personalSnapshot().find(thread => thread.id === id)?.status).toBe('idle')
+    }
+    await answered('own-1')
+    const from = (await f.driver.requests()).length
+    await answered('own-2', 'own-1')
+    // One check before the chat's own instructions are resumed and one inside the send itself; neither reads whole.
+    expect(await historyRequests(f, from)).toEqual(['turns', 'turns'])
+    await elsewhere(f, id, { type: 'native-turn', text: 'Typed in another Codex' })
+    const stale = (await f.driver.requests()).length
+    // The chat's own check reads the whole transcript; the send's check then finds the newest turn it just read.
+    await expect(personal('stale', 'own-2')).rejects.toThrow('changed')
+    expect(await historyRequests(f, stale)).toEqual(['turns', 'read', 'turns'])
+    expect((await f.driver.requests()).slice(stale).some(request => request.method === 'turn/start')).toBe(false)
   })
 
   it('reads the whole transcript on a Codex without thread/turns/list, and stops asking on that connection', async () => {

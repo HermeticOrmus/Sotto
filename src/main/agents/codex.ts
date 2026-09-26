@@ -29,7 +29,7 @@ import { needsPerson, unreadableRequest } from './nativeRequests'
 import { effortAfterChange, validatePromptAttachments, validateThreadOptions } from './threadOptions'
 import { CodexActivityProjection, codexItemSchema } from './codexActivity'
 import { SessionReaper } from './sessionReaper'
-import { codexTurnIdentitySchema, compatibleClient, identityTurn, messageIdentity, messageOrigin, reconcileMessageIdentities, type IdentityItem } from './codexMessageIdentity'
+import { codexTurnIdentitySchema, compatibleClient, identityTurn, messageIdentity, messageOrigin, reconcileMessageIdentities, type CodexTurnIdentity, type IdentityItem } from './codexMessageIdentity'
 
 const MAX_OUTPUT_BYTES = 1024 * 1024
 // Legacy history and completed turns can echo multiple screenshot batches. Keep a
@@ -96,14 +96,18 @@ class Rejected extends Error {
   readonly unmaterializedThreadId: string | undefined
   readonly missingThreadId: string | undefined
   /**
-   * This Codex has no such request at all. Codex 0.157.1 says so as an invalid request naming an unknown variant;
-   * JSON-RPC's own "method not found" is accepted too.
+   * The name Codex said it does not know. Codex 0.157.1 answers a request it does not have as an invalid request
+   * naming an unknown variant, and names an unknown value inside the params the same way, so a caller compares it
+   * with the method it asked for.
    */
-  readonly unknownMethod: boolean
+  readonly unknownVariant: string | undefined
+  /** JSON-RPC's own "method not found". */
+  readonly methodNotFound: boolean
   constructor(value: unknown) {
     super('Codex rejected the operation. Review the thread before retrying.')
     const error = z.object({ code: z.literal(-32600), message: z.string() }).safeParse(value)
-    this.unknownMethod = z.object({ code: z.literal(-32601) }).safeParse(value).success || error.success && error.data.message.startsWith('Invalid request: unknown variant `')
+    this.methodNotFound = z.object({ code: z.literal(-32601) }).safeParse(value).success
+    this.unknownVariant = error.success ? /^Invalid request: unknown variant `([^`]+)`/.exec(error.data.message)?.[1] : undefined
     this.unmaterializedThreadId = error.success
       ? /^thread (\S+) is not materialized yet; includeTurns is unavailable before first user message$/.exec(error.data.message)?.[1]
       : undefined
@@ -140,7 +144,7 @@ export class CodexAppServerHost implements AgentHost {
   private readonly opening = new Map<string, Promise<void>>()
   private readonly threadReads = new Map<string, Promise<void>>()
   /** Whether this connection's Codex answers `thread/turns/list`; an older one says the method is unknown once. */
-  private turnPages = true
+  private turnsListSupported = true
   private readonly revisions = new Map<string, number>()
   private readonly dispatching = new Set<string>()
   private readonly runningTurns = new Map<string, string>()
@@ -223,7 +227,7 @@ export class CodexAppServerHost implements AgentHost {
     for (const alias of Object.values(this.aliases)) if (alias.compaction?.status === 'running') alias.compaction = { ...alias.compaction, status: 'uncertain', error: 'Native compaction was interrupted by disconnection. Reconnecting observes its result without retrying.' }
     this.providerSessionIds.clear()
     for (const [id, alias] of Object.entries(aliases)) this.providerSessionIds.set(alias.codexThreadId, id)
-    this.threads.clear(); this.histories.clear(); this.terminalTurns.clear(); this.runningTurns.clear(); this.turnDates.clear(); this.turnPages = true
+    this.threads.clear(); this.histories.clear(); this.terminalTurns.clear(); this.runningTurns.clear(); this.turnDates.clear(); this.turnsListSupported = true
     this.activity = new CodexActivityProjection(); this.completedMessages.clear(); this.fileSummaries.clear()
     const codexHome = this.options.codexHome ?? process.env.CODEX_HOME ?? join(homedir(), '.codex')
     this.watcher = new CodexSessionLogWatcher({ codexHome, pollIntervalMs: this.options.pollIntervalMs, onMessage: (id, message) => {
@@ -504,42 +508,47 @@ export class CodexAppServerHost implements AgentHost {
     finally { if (this.threadReads.get(id) === work) this.threadReads.delete(id) }
   }
   /**
-   * The check before a dispatch, without reading the whole transcript (#324). It asks Codex for its newest turn
-   * alone with `thread/turns/list`, which reads the same session file `thread/read` does, so it sees a turn
-   * another Codex process added. It answers true only when that turn is the newest one Sotto already holds, has
-   * ended, and reconciles onto exactly the messages Sotto already has: then nothing was added to or taken from
-   * the transcript since Sotto last read or streamed it, and a whole read would change nothing a dispatch checks.
-   * Anything else answers false and the caller reads the whole transcript, as it always did: a thread not read on
-   * this connection, work or a request in flight, a settings change, rewind or compaction not yet confirmed, a
-   * dispatch whose delivery is uncertain, session-log input not yet shown, a newest turn Sotto does not hold or
-   * one still running, a message Sotto cannot match, a Codex that refuses the request, or a reply that moved on
-   * while it was read.
+   * The newest-turn check (#324): the read before a send, without reading the whole transcript. It asks Codex for
+   * its newest turn alone with `thread/turns/list`, which reads the same session file `thread/read` does, so it
+   * sees a turn another Codex process added. It answers true only when that turn is the newest one Sotto already
+   * holds, has ended, and reconciles onto exactly the messages Sotto already has; then a whole read would change
+   * nothing a send checks. Anything else answers false and the caller reads the whole transcript. ADR-0005's
+   * follow-up lists every such case; the condition and the refusal handling below are that list in code. The match
+   * is decided on copies before anything is applied, so a turn that does not match leaves the thread as it was for
+   * the whole read, or a failed one, to find.
    */
   private async confirmNewestTurn(id: string, generation: number): Promise<boolean> {
     const alias = this.aliases[id]!, thread = this.ensureThread(id)
     const newest = alias.messageIdentities.at(-1)
-    if (!this.turnPages || !this.histories.has(id) || !newest || !this.terminalTurns.has(newest.turnId) || alias.historyMode === 'paginated'
+    if (!this.turnsListSupported || !this.histories.has(id) || !newest || !this.terminalTurns.has(newest.turnId) || alias.historyMode === 'paginated'
       || alias.pendingSettings || alias.pendingRollback || compactionPending(alias.compaction) || this.unconfirmedDispatchSessionIds.has(id)
       || this.pendingLogMessages.has(id) || this.runningTurns.has(id) || thread.status !== 'idle' || thread.requests.length || thread.historyStatus) return false
     const revision = this.revisions.get(id)
+    const held = newest.messages.map(message => message.id)
+    const matches = (identity: CodexTurnIdentity | undefined): boolean =>
+      !!identity && identity.ordered && identity.messages.every(message => message.complete && held.includes(message.id))
     let confirmed = false
     try {
       await this.rpc('thread/turns/list', { threadId: alias.codexThreadId, limit: 1, sortDirection: 'desc', itemsView: 'full' }, async value => {
         if (generation !== this.generation || revision !== this.revisions.get(id)) return
         const page = z.object({ data: z.array(turnSchema) }).safeParse(value)
         const turn = page.success && page.data.data.length === 1 ? page.data.data[0]! : undefined
-        if (!turn || turn.id !== newest.turnId || turn.status === 'inProgress' || turn.itemsView !== 'full') return
-        const held = newest.messages.map(message => message.id)
+        if (!turn || turn.id !== newest.turnId || turn.status === 'inProgress' || turn.itemsView !== 'full' || alias.rewoundTurnIds.includes(turn.id)) return
+        // Reconcile onto a copy of the newest turn's identities and of the origins, both of which reconciling writes to.
+        const trial = structuredClone(newest)
+        reconcileMessageIdentities([...alias.messageIdentities.slice(0, -1), trial], turn.id, turn.items.flatMap(item => { const message = this.identityItem(item); return message ? [message] : [] }),
+          structuredClone(alias.origins), alias.createdAt, this.watcher?.identities(alias.codexThreadId, turn.id), true)
+        if (!matches(trial)) return
         this.applyTurn(id, turn)
-        const read = alias.messageIdentities.find(identity => identity.turnId === turn.id)
-        if (!read || read !== alias.messageIdentities.at(-1) || !read.ordered || read.messages.some(message => !message.complete || !held.includes(message.id))) return
+        const applied = alias.messageIdentities.at(-1)
+        if (applied?.turnId !== turn.id || !matches(applied)) return
         this.flushLogMessages(id); this.orderMessages(id)
         await this.persist()
         confirmed = true
       })
     } catch (error) {
       if (!(error instanceof Rejected)) throw error
-      if (error.unknownMethod) this.turnPages = false
+      if (error.methodNotFound || error.unknownVariant === 'thread/turns/list') this.turnsListSupported = false
       return false
     }
     return confirmed
