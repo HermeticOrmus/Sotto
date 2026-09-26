@@ -357,6 +357,18 @@ export const agentConfigurationSchema = z.object({
   reasoningEffort: z.string().max(64).default(''),
   membershipEndpoint: z.string().max(2_048),
   checkClientUpdates: z.boolean().default(true),
+  /**
+   * What a new thread in a project starts on, apart from personal chats' reasoning model and effort
+   * (issue #347): the model a create-thread that leaves one unset takes, empty until chosen so an existing
+   * install keeps following the reasoning-based default (`defaultThreadModelId`). `newThreadReasoningEffort`
+   * is empty the same way, meaning the chosen model's own default; `newThreadRuntimeMode` is absent the same
+   * way, meaning the provider's own starting mode. Settings → Agents' "New threads start with" row is the
+   * only place that sets them; a provider that does not offer the chosen mode or effort starts on the
+   * nearest one it does (`src/shared/newThreadDefaults.ts`).
+   */
+  newThreadModelId: z.string().max(6_144),
+  newThreadReasoningEffort: z.string().max(64).default(''),
+  newThreadRuntimeMode: agentRuntimeModeSchema.optional(),
 }).strict()
 export type AgentConfiguration = z.infer<typeof agentConfigurationSchema>
 export const defaultAgentConfiguration = (): AgentConfiguration => ({
@@ -364,6 +376,7 @@ export const defaultAgentConfiguration = (): AgentConfiguration => ({
   orbColor: 'teal',
   enabled: false, projectsDirectory: '', defaultModelId: '',
   followupLimit: 5, speak: true, speechProvider: 'grok', speechVoice: 'F1', grokSpeechVoice: 'altair', wakeModelDirectory: '', wakeRuntimeDirectory: '', reasoning: 'none', reasoningModel: '', reasoningEffort: '', membershipEndpoint: '', checkClientUpdates: true,
+  newThreadModelId: '', newThreadReasoningEffort: '',
 })
 
 export const agentAssignmentSchema = z.object({
@@ -606,7 +619,7 @@ export function agentShell(state: AgentState): AgentState {
 }
 export const agentCommandSchema = z.discriminatedUnion('type', [
   // Re-extend defaulted fields: Zod 4 applies defaults through partial(), resetting omitted settings.
-  z.object({ type: z.literal('configure'), patch: agentConfigurationSchema.partial().extend({ provider: providerIdSchema.optional(), orbColor: orbColorSchema.optional(), reasoningEffort: z.string().max(64).optional(), speechProvider: speechProviderSchema.optional(), speechVoice: z.enum(NATURAL_VOICES).optional(), grokSpeechVoice: grokSpeechVoiceSchema.optional(), checkClientUpdates: z.boolean().optional() }) }).strict(),
+  z.object({ type: z.literal('configure'), patch: agentConfigurationSchema.partial().extend({ provider: providerIdSchema.optional(), orbColor: orbColorSchema.optional(), reasoningEffort: z.string().max(64).optional(), speechProvider: speechProviderSchema.optional(), speechVoice: z.enum(NATURAL_VOICES).optional(), grokSpeechVoice: grokSpeechVoiceSchema.optional(), checkClientUpdates: z.boolean().optional(), newThreadReasoningEffort: z.string().max(64).optional() }) }).strict(),
   z.object({ type: z.literal('credential'), slot: z.enum(['reasoning', 'membership', 'grokSpeech']), value: z.string().max(16_384) }).strict(),
   z.object({ type: z.literal('connect'), provider: providerIdSchema.optional() }).strict(),
   z.object({ type: z.literal('disconnect'), provider: providerIdSchema.optional() }).strict(),
@@ -773,6 +786,15 @@ export function defaultThreadModelId(configuration: AgentConfiguration, models: 
   }
   const ready = models.filter(model => model.ready)
   return (ready.find(model => model.providerId === configuration.provider) ?? ready[0])?.id ?? ''
+}
+/**
+ * The model a new thread in a project starts on (issue #347): the model chosen in Settings → Agents' "New
+ * threads start with" row, or, unset, the same reasoning-based default a personal chat starts on
+ * (`defaultThreadModelId`), which is today's behaviour for an install made before the setting existed.
+ */
+export function defaultNewThreadModelId(configuration: AgentConfiguration, models: readonly AgentModel[], accounts: readonly SubscriptionAccount[] = []): string {
+  if (configuration.newThreadModelId && models.some(model => model.id === configuration.newThreadModelId)) return configuration.newThreadModelId
+  return defaultThreadModelId(configuration, models, accounts)
 }
 /**
  * Whether this thread's own lane is running a command right now. Every control that acts on one thread

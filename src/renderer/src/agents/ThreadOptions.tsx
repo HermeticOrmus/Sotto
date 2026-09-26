@@ -10,7 +10,7 @@ import { OPTION_CHIP_NAMES } from './optionChipNames'
 import { pendingSettingsStore, permissionPatch, settingValues, settingValuesFor, unconfirmedKinds, usePendingSettings, usesProviderModes, type SettingKind, type SettingsPatch } from './pendingSettings'
 import './threadChips.css'
 
-const RUNTIME_LABELS: Record<AgentRuntimeMode, string> = {
+export const RUNTIME_LABELS: Record<AgentRuntimeMode, string> = {
   'approval-required': 'Ask for approval',
   'auto-accept-edits': 'Allow edits',
   auto: 'Auto',
@@ -26,10 +26,10 @@ export function threadOptionsSummary(model: AgentModel | undefined, effort: stri
   return [model?.name ?? 'Choose model', reasoning ? capitalise(reasoning) : null, permissions].filter(Boolean).join(' · ')
 }
 
-interface ChoiceOption { readonly id: string; readonly label: string; readonly description?: string; readonly disabled?: boolean }
+export interface ChoiceOption { readonly id: string; readonly label: string; readonly description?: string; readonly disabled?: boolean }
 
 /** The effort levels a model offers, led by the current one as unchoosable when the model does not offer it. */
-function effortChoices(model: AgentModel | undefined, reasoning: string): ChoiceOption[] {
+export function effortChoices(model: AgentModel | undefined, reasoning: string): ChoiceOption[] {
   const efforts = model?.reasoningEfforts ?? []
   if (efforts.length === 0) return []
   const lead = efforts.includes(reasoning) ? [] : [{ id: reasoning, label: reasoning ? capitalise(reasoning) : 'Provider default', disabled: true }]
@@ -165,7 +165,7 @@ export function unconfirmedSettingText(provider: string, wanted: string, error: 
  * one the provider has not confirmed: the chip shows it with a dashed outline and a small dot, and is described by
  * the line that says what is still in force (`describedBy`), so the words are the ones on screen, said once.
  */
-function ChoiceChip({ label, placeholder, value, options, disabled, pending, describedBy, onChange }: {
+export function ChoiceChip({ label, placeholder, value, options, disabled, pending, describedBy, onChange }: {
   readonly label: string; readonly placeholder: string; readonly value: string; readonly options: readonly ChoiceOption[]
   readonly disabled: boolean; readonly pending: boolean; readonly describedBy?: string | undefined; readonly onChange: (id: string) => void
 }): ReactNode {
@@ -328,7 +328,7 @@ export function ThreadOptions({ thread, state, command, turnNote = true, getDraf
         disabled={fixed || modelDisabled} onChange={reasoningEffort => press('effort', reasoningEffort, { reasoningEffort }, unpressed.effort)}
         defaultValue={model?.defaultReasoningEffort} modelName={model?.name}
         hasUltrathink={hasUltrathink} {...(addUltrathink ? { onUltrathink: addUltrathink } : {})} />}
-      {modes.length > 0 && <ChoiceChip label={OPTION_CHIP_NAMES.permissions} placeholder="Permissions" value={permission} options={modes} disabled={fixed}
+      {modes.length > 0 && <ChoiceChip label={OPTION_CHIP_NAMES.permissions} placeholder="Provider default" value={permission} options={modes} disabled={fixed}
         pending={pendingPermission !== null} describedBy={permissionUnconfirmed ? unconfirmedId : captionId}
         onChange={mode => press('permissions', mode, permissionPatch(model, mode), unpressed.permissions)} />}
     </div>

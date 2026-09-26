@@ -566,7 +566,7 @@ export function SettingsView({
 
               <Card className="settings-section" id="settings-hosts" {...panelProps('settings-hosts')}><div className="settings-section__heading"><h2>Hosts</h2><p>Local & remote hosts</p></div><HostsSettings localHostEnabled={settings.localHostEnabled} onLocalHostChange={enabled => onUpdateSettings({ localHostEnabled: enabled })} /></Card>
 
-              <Card className="settings-section" id="settings-agents" {...panelProps('settings-agents')}><div className="settings-section__heading"><h2>Agents</h2><p>{settings.voiceCoordinatorEnabled ? 'Reasoning, voice & projects' : 'Reasoning & projects'}</p></div><AgentSetupFields /></Card>
+              <Card className="settings-section" id="settings-agents" {...panelProps('settings-agents')}><div className="settings-section__heading"><h2>Agents</h2><p>{settings.voiceCoordinatorEnabled ? 'Reasoning, voice, new threads & projects' : 'Reasoning, new threads & projects'}</p></div><AgentSetupFields /></Card>
 
               <Card className="settings-section" id="settings-output" {...panelProps('settings-output')}>
                 <div className="settings-section__heading"><h2>Output</h2><p>Clipboard & automatic paste</p></div>

@@ -422,7 +422,7 @@ describe('composer option chips', () => {
     mount(state)
     expect(screen.getByRole('combobox', { name: 'Thread reasoning' })).toHaveTextContent('Medium')
     const chip = screen.getByRole('combobox', { name: 'Thread permissions' })
-    expect(chip).toHaveTextContent('Permissions')
+    expect(chip).toHaveTextContent('Provider default')
     fireEvent.click(chip)
     const option = screen.getByRole('option', { name: 'Provider default' })
     expect(option).toBeDisabled()

@@ -6,6 +6,7 @@ export default tseslint.config(
     ignores: [
       'artifacts/phase-three-themes/**',
       'artifacts/thread-browser-player/**',
+      'artifacts/new-thread-defaults/**',
       'artifacts/codex-questions-thread-agents/**',
       'artifacts/agent-browser/**',
       'artifacts/browser-grant/**',

@@ -3,69 +3,69 @@
     {
       "role": "--tt-activity",
       "background": "selected",
-      "ratio": 7.54
+      "ratio": 6.67
     },
     {
       "role": "--tt-attention",
       "background": "selected",
-      "ratio": 6.55
+      "ratio": 6.32
     },
     {
       "role": "--tt-activity",
       "background": "sidebar",
-      "ratio": 12.02
+      "ratio": 10.23
     },
     {
       "role": "--tt-attention",
       "background": "sidebar",
-      "ratio": 10.44
+      "ratio": 9.69
     },
     {
       "role": "--tt-activity",
       "background": "sidebar",
-      "ratio": 12.02
+      "ratio": 10.23
     },
     {
       "role": "--tt-attention",
       "background": "sidebar",
-      "ratio": 10.44
+      "ratio": 9.69
     },
     {
       "role": "--tt-activity",
       "background": "sidebar",
-      "ratio": 12.02
+      "ratio": 10.23
     },
     {
       "role": "--tt-attention",
       "background": "sidebar",
-      "ratio": 10.44
+      "ratio": 9.69
     },
     {
       "role": "--tt-activity",
       "background": "sidebar",
-      "ratio": 12.02
+      "ratio": 10.23
     },
     {
       "role": "--tt-attention",
       "background": "sidebar",
-      "ratio": 10.44
+      "ratio": 9.69
     }
   ],
   "light": [
     {
       "role": "--tt-activity",
       "background": "selected",
-      "ratio": 5.86
+      "ratio": 5.68
     },
     {
       "role": "--tt-attention",
       "background": "selected",
-      "ratio": 3.74
+      "ratio": 3.89
     },
     {
       "role": "--tt-activity",
       "background": "sidebar",
-      "ratio": 7.21
+      "ratio": 6.74
     },
     {
       "role": "--tt-attention",
@@ -75,7 +75,7 @@
     {
       "role": "--tt-activity",
       "background": "sidebar",
-      "ratio": 7.21
+      "ratio": 6.74
     },
     {
       "role": "--tt-attention",
@@ -85,7 +85,7 @@
     {
       "role": "--tt-activity",
       "background": "sidebar",
-      "ratio": 7.21
+      "ratio": 6.74
     },
     {
       "role": "--tt-attention",
@@ -95,7 +95,7 @@
     {
       "role": "--tt-activity",
       "background": "sidebar",
-      "ratio": 7.21
+      "ratio": 6.74
     },
     {
       "role": "--tt-attention",

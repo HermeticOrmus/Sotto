@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
-import { defaultAgentConfiguration, defaultThreadModelId, publicProviderEntityId, type AgentModel, type ProviderId, type SubscriptionAccount } from '../../../src/shared/agents'
+import { defaultAgentConfiguration, defaultNewThreadModelId, defaultThreadModelId, publicProviderEntityId, type AgentModel, type ProviderId, type SubscriptionAccount } from '../../../src/shared/agents'
 
 const model = (provider: ProviderId, id: string, ready = true): AgentModel =>
   ({ id: publicProviderEntityId(provider, 'model', id), provider, providerId: provider, name: id, ready })
@@ -50,5 +50,23 @@ describe('default model for a new thread', () => {
     expect(defaultThreadModelId(config, models)).toBe(models[1]!.id)
     expect(defaultThreadModelId(config, [model('codex', 'gpt-6-astra', false), models[0]!])).toBe(models[0]!.id)
     expect(defaultThreadModelId(config, [model('grok', 'grok-4.6', false)])).toBe('')
+  })
+})
+
+describe('default model for a new thread in a project (issue #347)', () => {
+  it('keeps the reasoning-based default when no new-thread model is chosen, today’s behaviour for an existing install', () => {
+    const config = configuration({ reasoning: 'claude', reasoningModel: 'opus[1m]' })
+    expect(config.newThreadModelId).toBe('')
+    expect(defaultNewThreadModelId(config, models)).toBe(defaultThreadModelId(config, models))
+  })
+
+  it('uses the chosen new-thread model over the reasoning-based default', () => {
+    const config = configuration({ reasoning: 'claude', reasoningModel: 'opus[1m]', newThreadModelId: models[0]!.id })
+    expect(defaultNewThreadModelId(config, models)).toBe(models[0]!.id)
+  })
+
+  it('falls back to the reasoning-based default when the chosen new-thread model is gone from the catalog', () => {
+    const config = configuration({ reasoning: 'claude', reasoningModel: 'opus[1m]', newThreadModelId: 'native:grok:model:retired' })
+    expect(defaultNewThreadModelId(config, models)).toBe(defaultThreadModelId(config, models))
   })
 })

@@ -165,6 +165,12 @@ export interface SidebarFrameProps {
   readonly onNew: () => void
   readonly newLabel: string
   readonly NewIcon: LucideIcon
+  /**
+   * The New action's shortcut. `title` always shows in its tooltip once the chord claims one; `keys` sets
+   * `aria-keyshortcuts` only when this exact button is what the chord invokes right now (a sidebar with a
+   * focused thread answers the chord from that thread's own pen instead, so the top button carries none then).
+   */
+  readonly newShortcut?: { readonly title: string; readonly keys?: string | undefined } | undefined
   /** Where the window says it runs; macOS keeps the traffic lights' room in the top row. Defaults to the app's. */
   readonly platform?: SottoPlatform | undefined
   /** What sits at the sidebar's bottom edge; the room switch, the page links and the update control by default. */
@@ -173,6 +179,9 @@ export interface SidebarFrameProps {
   readonly title?: string | null | undefined
   readonly children: ReactNode
   readonly collapsedContent?: ReactNode
+  /** A refusal from outside Add project, shown in the same place: an instant thread's creation, refused. */
+  readonly extraError?: string | null | undefined
+  readonly onDismissExtraError?: (() => void) | undefined
 }
 
 /**
@@ -180,7 +189,7 @@ export interface SidebarFrameProps {
  * actions, then search, the scrolling list, and the foot. Only what the body lists changes with the mode. The
  * top row is the frameless window's drag region, which is why every control in it is marked no-drag.
  */
-export function SidebarFrame({ state, command, mode, onMode, label, query, searchPlaceholder, onQuery, onNew, newLabel, NewIcon, platform, foot, title = 'Threads', children, collapsedContent }: SidebarFrameProps): ReactNode {
+export function SidebarFrame({ state, command, mode, onMode, label, query, searchPlaceholder, onQuery, onNew, newLabel, NewIcon, newShortcut, platform, foot, title = 'Threads', children, collapsedContent, extraError, onDismissExtraError }: SidebarFrameProps): ReactNode {
   const app = useOptionalApp()
   const addProject = useAddProject(state, command)
   const mac = (platform ?? app?.platform) === 'darwin'
@@ -205,7 +214,7 @@ export function SidebarFrame({ state, command, mode, onMode, label, query, searc
           }}><Icon size={15} aria-hidden="true" /><span className="tt-visually-hidden">{modeLabel}</span></button>)}
       </div>
       <Button variant="ghost" iconOnly aria-label="Add project" title="Add project" disabled={addProject.adding} onClick={() => void addProject.add()}><FolderPlus size={16} /></Button>
-      <Button variant="ghost" iconOnly aria-label={newLabel} title={newLabel} onClick={onNew}><NewIcon size={16} /></Button>
+      <Button variant="ghost" iconOnly aria-label={newLabel} title={newShortcut ? newShortcut.title : newLabel} aria-keyshortcuts={newShortcut?.keys} onClick={onNew}><NewIcon size={16} /></Button>
       <button ref={size.collapsed ? undefined : toggle} type="button" className="thread-nav__action tt-focusable thread-nav__collapse" aria-label="Collapse sidebar" title="Collapse sidebar" onClick={() => size.collapse(true)}><PanelLeftClose size={16} aria-hidden="true" /></button>
     </SidebarTop>
     <label className="threads-search"><span className="tt-visually-hidden">{searchPlaceholder}</span><Search size={15} aria-hidden="true" />
@@ -214,6 +223,7 @@ export function SidebarFrame({ state, command, mode, onMode, label, query, searc
       {query ? <button type="button" className="threads-search__clear tt-focusable" aria-label="Clear search" title="Clear search" onClick={() => onQuery('')}><X size={14} /></button> : null}
     </label>
     {addProject.error ? <p className="thread-nav__error" role="alert">{addProject.error}<button type="button" className="thread-nav__action tt-focusable" aria-label="Dismiss" onClick={addProject.clearError}><X size={14} aria-hidden="true" /></button></p> : null}
+    {extraError ? <p className="thread-nav__error" role="alert">{extraError}{onDismissExtraError ? <button type="button" className="thread-nav__action tt-focusable" aria-label="Dismiss" onClick={onDismissExtraError}><X size={14} aria-hidden="true" /></button> : null}</p> : null}
     <div className="thread-nav__scroll">{children}</div>
     {size.collapsed ? null : foot ?? <SidebarFoot />}
     </div>

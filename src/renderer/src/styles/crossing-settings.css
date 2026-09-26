@@ -34,12 +34,25 @@
 .settings-notice { border-radius: 10px; margin: 0 0 18px; }
 .settings-danger-row { padding: 20px 0; border-top: 1px solid var(--tt-hairline); }
 .settings-danger-row h3 { font-weight: 500; }
-.account-rows > label { display: grid; grid-template-columns: minmax(0, 1fr) minmax(130px, 260px); align-items: center; gap: 12px 22px; padding: 18px 0; border-top: 1px solid var(--tt-hairline); font-size: 15px; }
+.account-rows > label, .account-rows > .account-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(130px, 260px); align-items: center; gap: 12px 22px; padding: 18px 0; border-top: 1px solid var(--tt-hairline); font-size: 15px; }
+/* A chip group needs its own room: the fixed-width second column sized for one select wraps three chips
+   onto two lines well before the window is actually narrow. The label column gives up the space instead. */
+.account-rows > .account-row--chips { grid-template-columns: minmax(160px, 1fr) minmax(0, auto); }
 .account-rows input:not([type='checkbox']), .account-rows select { width: 100%; min-width: 0; height: 36px; padding: 6px 14px; border: 1px solid var(--tt-hairline); border-radius: 999px; background: var(--tt-field); color: var(--tt-text); font: inherit; font-size: 13px; }
 .account-rows .agent-checkbox { display: flex; }
 .account-connection { display: flex; align-items: center; gap: 20px; padding: 16px 0; }
 .account-connection p { flex: 1; color: var(--tt-text-muted); }
 .side-sheet .account-rows > label { grid-template-columns: 1fr; }
+.account-rows__heading { grid-column: 1 / -1; margin: 26px 0 2px; font-size: 15px; font-weight: 600; }
+/* Only the very first heading on the page sits flush; a later one, even as the first child of its own
+   rows block, still wants the usual gap from whatever came before it. */
+.account-rows__heading--first { margin-top: 0; }
+.account-rows__subheading { grid-column: 1 / -1; margin: 0 0 4px; color: var(--tt-text-muted); font-size: 13px; }
+.account-row__heading { display: block; }
+.account-row__heading strong { display: block; font-weight: 600; }
+.account-row__heading span { display: block; margin-top: 2px; color: var(--tt-text-muted); font-size: 13px; }
+.account-row__control { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; min-width: 0; border: 0; padding: 0; margin: 0; }
+.account-row__note { grid-column: 1 / -1; margin: -4px 0 0; color: var(--tt-text-muted); font-size: 12px; }
 .agent-saved-field > span { color: var(--tt-error); grid-column: 1 / -1; font-size: 13px; }
 .help-view { width: min(100%, 800px); margin: 0 auto; padding: 28px 40px 48px; }
 .help-view > h1 { margin: 0 0 24px; font-size: 28px; font-weight: 500; letter-spacing: -.9px; }
@@ -61,7 +74,8 @@
   .settings-scroll { padding-top: 24px; }
   .settings-rows .tt-field { grid-template-columns: minmax(0, 1fr); gap: 8px; }
   .settings-rows .tt-field > .tt-input, .settings-rows .tt-field > .tt-select { grid-column: 1; grid-row: auto; }
-  .help-aside, .account-rows > label { grid-template-columns: 1fr; }
+  .help-aside, .account-rows > label, .account-rows > .account-row { grid-template-columns: 1fr; }
+  .account-row__control { justify-content: flex-start; }
 }
 
 .segmented-control { grid-area: control; display: inline-flex; align-items: center; justify-self: end; padding: 3px; border: 1px solid var(--tt-hairline); border-radius: 999px; gap: 2px; }
@@ -131,7 +145,8 @@
 .settings-view .provider-tabs { padding: 0; }
 .settings-view .provider-detail__body { padding: 24px 0; }
 .settings-view .provider-default { grid-template-columns: minmax(0, 1fr) minmax(140px, 240px); align-items: center; gap: 22px; padding: 20px 0; border-top: 1px solid var(--tt-hairline); }
-.settings-view .account-rows > label { grid-template-columns: minmax(0, 1fr) minmax(140px, 240px); gap: 12px 22px; padding: 18px 0; font-size: 15px; }
+.settings-view .account-rows > label, .settings-view .account-rows > .account-row { grid-template-columns: minmax(0, 1fr) minmax(140px, 240px); gap: 12px 22px; padding: 18px 0; font-size: 15px; }
+.settings-view .account-rows > .account-row--chips { grid-template-columns: minmax(160px, 1fr) minmax(0, auto); }
 .settings-view .account-rows input:not([type='checkbox']), .settings-view .account-rows select { min-height: 38px; padding: 7px 12px; border-radius: 8px; font-size: 14px; }
 .settings-view .account-connection { flex-wrap: wrap; }
 .settings-view .account-connection p { flex: 1 1 230px; font-size: 14px; line-height: 1.5; }
@@ -157,7 +172,7 @@
   .settings-subnav button:nth-of-type(4)::before, .settings-subnav button:nth-of-type(8)::before { top: -14px; }
   .settings-view .settings-scroll { padding: 28px; }
   .settings-feedback { padding-inline: 28px; }
-  .settings-view .settings-rows .tt-field, .settings-view .account-rows > label, .settings-view .provider-default { grid-template-columns: minmax(0, 1fr) minmax(140px, 210px); column-gap: 18px; }
+  .settings-view .settings-rows .tt-field, .settings-view .account-rows > label, .settings-view .account-rows > .account-row, .settings-view .provider-default { grid-template-columns: minmax(0, 1fr) minmax(140px, 210px); column-gap: 18px; }
   .settings-view .settings-rows .tt-field:has(.segmented-control) { grid-template-columns: minmax(0, 1fr); grid-template-areas: 'label' 'description' 'control' 'error'; gap: 9px; }
   .settings-view .settings-rows .tt-field:has(.segmented-control) .segmented-control { justify-self: start; }
   .settings-view .providers-list { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; }
@@ -179,8 +194,9 @@
   .settings-view .settings-layout { grid-template-columns: 156px minmax(0, 1fr); }
   .settings-view .settings-scroll { padding-inline: 20px; }
   .settings-feedback { padding-inline: 20px; }
-  .settings-view .settings-rows .tt-field, .settings-view .account-rows > label, .settings-view .provider-default { grid-template-columns: minmax(0, 1fr); grid-template-areas: 'label' 'description' 'control' 'error'; gap: 9px; }
+  .settings-view .settings-rows .tt-field, .settings-view .account-rows > label, .settings-view .account-rows > .account-row, .settings-view .provider-default { grid-template-columns: minmax(0, 1fr); grid-template-areas: 'label' 'description' 'control' 'error'; gap: 9px; }
   .settings-view .settings-rows .tt-field > .tt-input, .settings-view .settings-rows .tt-field > .tt-select { grid-area: control; }
+  .settings-view .account-row__control { justify-content: flex-start; }
   .settings-view .providers-list { grid-template-columns: 1fr; }
 }
 @media (prefers-reduced-motion: reduce) { .settings-form > [role='tabpanel']:not([hidden]) { animation: none; } .settings-subnav button { transition: none; } }

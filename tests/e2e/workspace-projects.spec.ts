@@ -5,7 +5,7 @@ import { _electron as electron, expect, test, type Page } from '@playwright/test
 import { DEFAULT_SETTINGS } from '../../src/shared/settings'
 import { defaultAgentConfiguration } from '../../src/shared/agents'
 import { requireOwnedE2EProfile } from '../../scripts/e2e-profile-policy.mjs'
-import { closeSotto, firstSottoWindow, launchSotto, openThreads, type LaunchedSotto, userMessageTexts } from './support/sottoLaunch'
+import { bareEntityId, closeSotto, firstSottoWindow, launchSotto, openThreads, type LaunchedSotto, userMessageTexts } from './support/sottoLaunch'
 
 const ARTIFACTS = 'artifacts/phase1-workspace'
 // A 1x1 PNG: enough for the real attachment validation path.
@@ -136,12 +136,16 @@ test('project folders hold several threads, settle and restore threads and proje
     expect(created.error).toBeNull()
     const projectFolder = sidebar.getByRole('region', { name: 'Projects' }).getByRole('button', { name: new RegExp(`^${title}`) })
     await expect(projectFolder).toBeVisible()
+    // The pen opens the thread at once, named "New thread" (issue #347); renaming it here stands in for the
+    // dialog's old naming field so this project ends up with two distinctly named threads to work with below.
     for (const name of ['Plan the release', 'Fix the footer']) {
       await sidebar.getByRole('button', { name: `New thread in ${title}` }).click()
-      const dialog = page.getByRole('dialog', { name: 'New thread' })
-      await dialog.getByLabel('Thread name').fill(name)
-      await dialog.getByRole('button', { name: /Create thread/ }).click()
-      await expect(dialog).toHaveCount(0)
+      await expect(page.getByRole('dialog', { name: 'New thread' })).toHaveCount(0)
+      const projects = sidebar.getByRole('region', { name: 'Projects' })
+      await projects.getByRole('button', { name: 'New thread', exact: true }).hover()
+      await projects.getByRole('button', { name: 'Rename New thread', exact: true }).click()
+      await sidebar.getByLabel('Rename New thread').fill(name)
+      await page.keyboard.press('Enter')
       await expect(sidebar.getByRole('button', { name, exact: true })).toBeVisible()
     }
     await expect(projectFolder).toHaveAccessibleName(new RegExp(`^${title}.*2 threads`))
@@ -196,7 +200,7 @@ test('project folders hold several threads, settle and restore threads and proje
     await page.keyboard.type('line two')
     await expect(prompt).toHaveValue('Workshop line one\nline two')
     await expect.poll(async () => (await page.evaluate(async () => (await window.sotto!.agents!.get()).threadDrafts ?? []))
-      .map(draft => [draft.threadId, draft.text, draft.attachments.map(image => image.name)]).sort()).toEqual([
+      .map(draft => [bareEntityId(draft.threadId), draft.text, draft.attachments.map(image => image.name)]).sort()).toEqual([
       ['docs', 'Docs draft kept across a restart.', ['docs-shot.png']],
       ['workshop', 'Workshop line one\nline two', []],
     ])
@@ -273,10 +277,10 @@ test('delivery states stay truthful: an unconfirmed send is never repeated and a
     await page.screenshot({ animations: 'disabled', path: join(ARTIFACTS, 'delivery-unconfirmed.png') })
     // Enter on newer text does not start a second send while the first is unconfirmed.
     const afterEnter = await page.evaluate(async () => window.sotto!.agents!.get())
-    expect(afterEnter.deliveries!.filter(delivery => delivery.threadId === 'docs').map(delivery => delivery.status).sort()).toEqual(['accepted', 'uncertain'])
+    expect(afterEnter.deliveries!.filter(delivery => bareEntityId(delivery.threadId) === 'docs').map(delivery => delivery.status).sort()).toEqual(['accepted', 'uncertain'])
     expect(afterEnter.followups ?? []).toEqual([])
     expect(await userMessageTexts(page, 'docs')).toEqual(['First, delivered.'])
-    await expect.poll(async () => (await page.evaluate(async () => (await window.sotto!.agents!.get()).threadDrafts ?? [])).find(draft => draft.threadId === 'docs')?.text).toBe('Edited while unconfirmed.')
+    await expect.poll(async () => (await page.evaluate(async () => (await window.sotto!.agents!.get()).threadDrafts ?? [])).find(draft => bareEntityId(draft.threadId) === 'docs')?.text).toBe('Edited while unconfirmed.')
 
     await page.evaluate(async () => window.sottoE2E!.agentEvent!({ type: 'disconnect', threadId: 'docs', text: '' }))
     await expect(page.getByLabel('Thread transcript')).toContainText('Delivered reply.')

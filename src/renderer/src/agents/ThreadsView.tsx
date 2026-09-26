@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { MessageSquare } from 'lucide-react'
-import type { AgentState } from '../../../shared/agents'
+import type { AgentProject, AgentState } from '../../../shared/agents'
+import type { SottoPlatform } from '../../../shared/platform'
 import { Button } from '../components/Button'
 import { PageWindowControls } from '../components/WindowControls'
 import { useOptionalApp } from '../state/AppContext'
@@ -8,7 +9,11 @@ import { useVoiceCoordinatorEnabled } from '../state/voiceCoordinator'
 import { useAgents, type AgentConnection } from './AgentContext'
 import { draftThreads, gateOnCreation, overlayDraftThreads, useDraftThreads } from './draftThreads'
 import { describeThreads, organizeWorkspace, type ThreadRow } from './threadFacts'
-import { NewThreadDialog, type NewThreadChoices } from './NewThreadDialog'
+import { NewThreadDialog } from './NewThreadDialog'
+import { beginNewThread, type ThreadCreationStart } from './newThread'
+import { newThreadChord, newThreadChordLabel } from './newThreadShortcut'
+import { chordBelongsElsewhere } from '../tools/changesShortcut'
+import { chordMatches } from './branchToolbar.logic'
 import { ProviderUpgradeNotice } from './ProviderUpgradeNotice'
 import { THREAD_PROMPT_ID } from './ThreadComposer'
 import { hasDraftContent } from './threadDraftStore'
@@ -80,10 +85,10 @@ export function ThreadsView({ onOpenAgents, now: fixedNow, updateControl, tools,
   const now = useClock(fixedNow)
   const [mode, setMode] = useSidebarMode()
   const [query, setQuery] = useState('')
-  // Reopened with `choices` and `error` when main refuses a creation this view was already showing.
-  const [newThread, setNewThread] = useState<{ readonly projectId?: string | undefined; readonly choices?: NewThreadChoices | undefined; readonly error?: string | undefined } | null>(null)
-  // A New thread pressed in the sidebar beside another page opens the dialog here, once.
-  useEffect(() => { const intent = takeNewThreadIntent(); if (intent !== null) setNewThread(intent) }, [])
+  // The chooser for the top New thread button and the sidebar's own top button; the pen and the empty page's
+  // button already know their project and skip it, opening the thread at once (issue #347).
+  const [chooserOpen, setChooserOpen] = useState(false)
+  const [newThreadError, setNewThreadError] = useState<string | null>(null)
   const [dragging, setDragging] = useState<string | null>(null)
   // The pane the user just focused, shown at once while main confirms the selection. Once the command
   // settles, the next published state is the truth, so an older echo cannot pull focus back meanwhile.
@@ -147,7 +152,51 @@ export function ThreadsView({ onOpenAgents, now: fixedNow, updateControl, tools,
 
   const openThread = useCallback((threadId: string): void => { setPending(null); void command({ type: 'select-thread', threadId }) }, [command])
   // Callbacks that cross into the memoised sidebar are hoisted: a fresh function each render would undo the memo.
-  const startNewThread = useCallback((projectId?: string): void => { setNewThread({ projectId }) }, [])
+  // The pane and its composer are on screen before the command is answered; main catches up under the same ID.
+  // Shared by every instant-creation entry point: the pen, the empty page's button and the chooser.
+  const handleCreationStart = useCallback((start: ThreadCreationStart): void => {
+    draftThreads.open(start.thread, start.created)
+    setPending({ threadId: start.thread.id })
+    focusNewComposer()
+    void start.created.then(creationError => { if (creationError !== null) setNewThreadError(creationError) })
+  }, [])
+  // The pen and the empty page's button already know their project: the thread opens at once, on the defaults
+  // from Settings → Agents, selected and focused; a refusal shows in the sidebar's own error place.
+  const createThreadIn = useCallback((project: AgentProject): void => {
+    if (state === null) return
+    setNewThreadError(null)
+    void beginNewThread(state, command, project).then(start => {
+      if ('error' in start) { setNewThreadError(start.error); return }
+      handleCreationStart(start)
+    })
+  }, [state, command, handleCreationStart])
+  const startNewThread = useCallback((projectId?: string): void => {
+    setNewThreadError(null)
+    const project = projectId !== undefined ? state?.host.projects.find(item => item.id === projectId) : undefined
+    if (project) { createThreadIn(project); return }
+    setChooserOpen(true)
+  }, [state, createThreadIn])
+  // A New thread pressed in the sidebar beside another page lands here, once, after the navigation to Threads.
+  useEffect(() => { const intent = takeNewThreadIntent(); if (intent !== null) startNewThread(intent.projectId) }, [startNewThread])
+  // Ctrl+Shift+N (Cmd+Shift+N on a Mac): a new thread in the focused thread's project, or the chooser when none
+  // is focused. Checked against the dictation hotkey like every other chord; an open dialog or a terminal keeps
+  // its keys.
+  const platform: SottoPlatform = app?.platform ?? 'win32'
+  const hotkey = app?.settings?.hotkey
+  const shortcutChord = newThreadChord(hotkey, platform)
+  useEffect(() => {
+    if (shortcutChord === null) return
+    const onKey = (event: globalThis.KeyboardEvent): void => {
+      if (event.defaultPrevented || event.repeat || !chordMatches(event, shortcutChord, platform) || chordBelongsElsewhere(event.target)) return
+      if (document.querySelector('dialog[open], [role="dialog"][aria-modal="true"]')) return
+      event.preventDefault()
+      // The focused pane's project, or the chooser: unlike the empty page's own button, this never falls back
+      // to the last-active project, since no thread being focused is exactly when the project is unclear.
+      startNewThread(focusedId !== null ? rowsById.get(focusedId)?.thread.projectId : undefined)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [shortcutChord, platform, focusedId, rowsById, startNewThread])
   // The pane actions are rebuilt every render from the current layout; the sidebar is handed a stable
   // entry point into the latest one instead.
   const gridRef = useRef<ReturnType<typeof paneGridActions> | null>(null)
@@ -201,19 +250,13 @@ export function ThreadsView({ onOpenAgents, now: fixedNow, updateControl, tools,
   }
 
   return <SidebarChromeProvider updateControl={updateControl}><div className={page} onKeyDown={grid.onKeyDown}>
-    {newThread && <NewThreadDialog state={state} command={command} initialProjectId={newThread.projectId} initialChoices={newThread.choices} initialError={newThread.error}
-      onClose={() => setNewThread(null)}
-      onCreating={start => {
-        // The pane and its composer are on screen before the command is answered; main catches up under the same ID.
-        draftThreads.open(start.thread, start.created)
-        setNewThread(null)
-        setPending({ threadId: start.thread.id })
-        focusNewComposer()
-        void start.created.then(error => { if (error !== null) setNewThread({ projectId: start.choices.projectId, choices: start.choices, error }) })
-      }}
-      onCreated={() => { setNewThread(null); focusNewComposer() }} />}
+    {chooserOpen && <NewThreadDialog state={state} command={command}
+      onClose={() => setChooserOpen(false)}
+      onCreating={start => { setChooserOpen(false); handleCreationStart(start) }}
+      onCreated={() => { setChooserOpen(false); focusNewComposer() }} />}
     <ThreadSidebar state={state} command={command} organization={organization} query={query} liveClock={fixedNow === undefined} mode={mode} onMode={setMode} onQuery={setQuery} onOpen={openThread} onNewThread={startNewThread}
-      currentThreadId={focusedId} openThreadIds={paneIds} onOpenBeside={openBeside} onDragThread={setDragging} />
+      currentThreadId={focusedId} openThreadIds={paneIds} onOpenBeside={openBeside} onDragThread={setDragging}
+      newThreadError={newThreadError} onDismissNewThreadError={() => setNewThreadError(null)} newThreadShortcut={shortcutChord ? newThreadChordLabel(platform) : undefined} />
     <section className="thread-workspace" aria-label="Thread workspace">
       {recoveredDraft ? <ProviderUpgradeNotice state={state} command={recoverCommand} threadId={focusedId ?? undefined} localDraftPresent={localDraftPresent} /> : null}
       <div className="thread-workspace__body">
@@ -221,7 +264,7 @@ export function ThreadsView({ onOpenAgents, now: fixedNow, updateControl, tools,
           ? <ThreadPanes layout={layout} paneIds={paneIds} rows={labels} focusedId={focusedId} dragging={dragging} renderPane={renderPane}
             onFocusPane={focusPane} onLayoutChange={next => layoutStore.set(next)} onDrop={(threadId, target) => { setDragging(null); grid.onDrop(threadId, target) }} onClosePane={grid.close} measuredWidth={paneAreaWidth} measuredHeight={paneAreaHeight} />
           : null}
-        {!paneIds.length ? <div className="thread-workspace__empty"><MessageSquare size={30} strokeWidth={1.3} aria-hidden="true" /><h2>{savedDraft ? 'Your draft is saved.' : rows.length ? 'Choose a thread.' : 'No threads yet.'}</h2><p>{savedDraft ? 'Reconnect to continue your saved draft.' : rows.length ? 'Select a thread to read its messages and continue working.' : 'Start a thread to begin working with your agent.'}</p>{savedDraft ? <div className="thread-prompt thread-prompt--saved"><label className="tt-visually-hidden" htmlFor="saved-thread-prompt">Prompt</label><textarea id="saved-thread-prompt" rows={4} value={state.draft} readOnly /></div> : null}{!connected ? <Button disabled={state.connection === 'connecting'} onClick={() => void command({ type: 'connect' })}>{state.connection === 'connecting' ? 'Connecting...' : 'Connect providers'}</Button> : <Button onClick={() => setNewThread({ projectId: state.activeProjectId ?? undefined })}>New thread</Button>}{voice ? <Button variant="ghost" onClick={onOpenAgents}>Open Agents</Button> : null}</div> : null}
+        {!paneIds.length ? <div className="thread-workspace__empty"><MessageSquare size={30} strokeWidth={1.3} aria-hidden="true" /><h2>{savedDraft ? 'Your draft is saved.' : rows.length ? 'Choose a thread.' : 'No threads yet.'}</h2><p>{savedDraft ? 'Reconnect to continue your saved draft.' : rows.length ? 'Select a thread to read its messages and continue working.' : 'Start a thread to begin working with your agent.'}</p>{savedDraft ? <div className="thread-prompt thread-prompt--saved"><label className="tt-visually-hidden" htmlFor="saved-thread-prompt">Prompt</label><textarea id="saved-thread-prompt" rows={4} value={state.draft} readOnly /></div> : null}{!connected ? <Button disabled={state.connection === 'connecting'} onClick={() => void command({ type: 'connect' })}>{state.connection === 'connecting' ? 'Connecting...' : 'Connect providers'}</Button> : <Button onClick={() => startNewThread(state.activeProjectId ?? undefined)}>New thread</Button>}{voice ? <Button variant="ghost" onClick={onOpenAgents}>Open Agents</Button> : null}</div> : null}
         {tools ? <div className="thread-workspace__tools">{tools({ focusedThreadId: focusedId, state, command })}</div> : null}
       </div>
     </section>
