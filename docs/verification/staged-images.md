@@ -30,3 +30,7 @@ The review asked for plainer staging errors, a hash of content on read, a second
 - `tests/e2e/staged-images.spec.ts`, `tests/e2e/screenshot-paste.spec.ts` and `tests/e2e/agent-browser.spec.ts` (browser feedback's Add to draft now stages the capture) passed, twice each in one run.
 - `tests/e2e/screenshot-paste.spec.ts` failed once when it ran last in a batch of six specs: the queued screenshot had already been sent when the test read the queue. It passed alone three times.
 - `tests/e2e/composer-short-window.spec.ts`: the one-image layout case passed. The keyboard-focus case fails at the same step (**Write here** never becomes enabled) on `origin/main` at `bc4110a3`, so it is not this change's.
+
+## After merging screenshot resizing (#349)
+
+The composer and browser feedback now scale a screenshot to the screenshot bound before they stage it, and the handle carries its sizes. On a fresh build, run alone on an idle machine: `tests/e2e/screenshot-resize.spec.ts` (which now reads each staged image back from main to decode its size), `tests/e2e/staged-images.spec.ts`, `tests/e2e/screenshot-paste.spec.ts` and `tests/e2e/agent-browser.spec.ts`, 5 passed. Run beside the unit suite, `agent-browser.spec.ts` lost window focus at its hidden-capture check and `screenshot-paste.spec.ts` read the queue after its screenshot had been sent; both passed again alone.
