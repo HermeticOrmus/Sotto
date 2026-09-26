@@ -169,6 +169,16 @@ describe('Claude native subscription client', () => {
     expect(completion.overrides).toEqual([])
   })
 
+  it('runs a long-context model the catalog lists only by its base, with the base model’s efforts', async () => {
+    // Claude Code 2.1.283 lists `opus` and no `opus[1m]`, though it still runs `--model opus[1m]` (#344).
+    const f = await fixture({ models: [{ value: 'opus', displayName: 'Opus', supportsEffort: true, supportedEffortLevels: ['low', 'high', 'max'] }] })
+    await f.client.complete('JSON only', {}, 'opus[1m]', 'max')
+    const completion = (await f.calls()).at(-1)!
+    expect(completion.args[completion.args.indexOf('--model') + 1]).toBe('opus[1m]')
+    expect(completion.args[completion.args.indexOf('--effort') + 1]).toBe('max')
+    await expect(f.client.complete('JSON only', {}, 'opus[1m]', 'xhigh')).rejects.toThrow(/effort/iu)
+  })
+
   it('names a model with the version its description carries and leaves the account default its own name', async () => {
     const f = await fixture({ models: [
       { value: 'claude-fable-5-1[1m]', displayName: 'Fable', description: 'Fable 5.1 · Most capable for your hardest tasks' },

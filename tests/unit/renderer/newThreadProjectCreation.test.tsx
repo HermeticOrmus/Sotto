@@ -43,6 +43,50 @@ describe('native folder project resolution', () => {
     expect(command).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'create-thread', projectId: actual.id, title: 'New thread', modelId: 'codex:model', managed: false, workingCopy: 'shared', titleSource: 'default' }))
   })
 
+  it('uses the Agents model even when an older saved thread default and model order prefer Grok', async () => {
+    const state = fixture([actual])
+    state.configuration = { ...state.configuration, reasoning: 'claude', reasoningModel: 'opus[1m]', defaultModelId: 'native:grok:model:grok-4.6' }
+    // Grok comes first in the saved model order, as in an installed profile.
+    state.host.models = [{ id: 'native:grok:model:grok-4.6', name: 'Grok 4.6', provider: 'Grok', providerId: 'grok', ready: true },
+      { id: 'native:claude:model:default', name: 'Default', provider: 'Claude', providerId: 'claude', ready: true },
+      { id: 'native:claude:model:opus%5B1m%5D', name: 'Opus', provider: 'Claude', providerId: 'claude', ready: true }]
+    const command = vi.fn<(request: AgentCommand) => Promise<AgentState>>(async () => state)
+    setup(command, state)
+    await browse()
+    await waitFor(() => expect(command).toHaveBeenCalled())
+    expect(command).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'create-thread', modelId: 'native:claude:model:opus%5B1m%5D' }))
+  })
+
+  it('follows the Agents account default at the moment the thread opens', async () => {
+    const state = fixture([actual])
+    state.configuration = { ...state.configuration, reasoning: 'claude', reasoningModel: '' }
+    state.host.models = [
+      { id: 'native:claude:model:sonnet', name: 'Sonnet', provider: 'Claude', providerId: 'claude', ready: true },
+      { id: 'native:claude:model:opus', name: 'Opus', provider: 'Claude', providerId: 'claude', ready: true },
+    ]
+    const account = { provider: 'claude' as const, label: 'Claude', installed: true, ready: true, detail: '', models: [{ id: 'sonnet', name: 'Sonnet' }, { id: 'opus', name: 'Opus' }], defaultModelId: 'opus' }
+    state.reasoningAccounts = [account]
+    const command = vi.fn<(request: AgentCommand) => Promise<AgentState>>(async () => state)
+    setup(command, state)
+    await browse()
+    await waitFor(() => expect(command).toHaveBeenCalled())
+    expect(command).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'create-thread', modelId: 'native:claude:model:opus' }))
+  })
+  it('creates on a long-context Agents model the catalog lists only by its base model', async () => {
+    // Claude Code 2.1.283 lists `opus` and no `opus[1m]`; Settings still names the variant (#344).
+    const state = fixture([actual])
+    state.configuration = { ...state.configuration, reasoning: 'claude', reasoningModel: 'opus[1m]' }
+    state.host.models = [
+      { id: 'native:claude:model:opus', name: 'Opus 5.5', provider: 'Claude', providerId: 'claude', ready: true, reasoningEfforts: ['low', 'high', 'max'], defaultReasoningEffort: 'high' },
+      { id: 'native:claude:model:sonnet', name: 'Sonnet 4.6', provider: 'Claude', providerId: 'claude', ready: true },
+    ]
+    state.reasoningAccounts = [{ provider: 'claude', label: 'Claude', installed: true, ready: true, detail: '', models: [{ id: 'opus', name: 'Opus 5.5' }, { id: 'sonnet', name: 'Sonnet 4.6' }] }]
+    const command = vi.fn<(request: AgentCommand) => Promise<AgentState>>(async () => state)
+    setup(command, state)
+    await browse()
+    await waitFor(() => expect(command).toHaveBeenCalled())
+    expect(command).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'create-thread', modelId: 'native:claude:model:opus%5B1m%5D' }))
+  })
   it('reuses an existing Windows path without creating a duplicate project', async () => {
     const state = fixture([{ ...actual, path: actual.path.toUpperCase() + '\\' }])
     const command = vi.fn<(request: AgentCommand) => Promise<AgentState>>(async () => state)

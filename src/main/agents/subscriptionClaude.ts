@@ -5,6 +5,7 @@ import { access, mkdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { delimiter, isAbsolute, join } from 'node:path'
 import { z } from 'zod'
+import { resolveModel } from '../../shared/modelCatalog'
 import { orderReasoningEfforts } from '../../shared/reasoningEfforts'
 import type { SubscriptionAccount, SubscriptionClient } from './subscriptionTypes'
 
@@ -87,7 +88,7 @@ export class ClaudeSubscriptionClient implements SubscriptionClient {
     const { account, executable } = await this.inspect(signal)
     if (!account.ready || !executable) throw new Error(account.detail)
     const selectedModel = model || account.defaultModelId
-    if (effort && !account.models.find(candidate => candidate.id === selectedModel)?.reasoningEfforts?.includes(effort)) {
+    if (effort && !resolveModel(account.models, selectedModel)?.reasoningEfforts?.includes(effort)) {
       throw new Error('Claude Code does not report that reasoning effort for this model. Choose a supported effort or use the native default.')
     }
     const output = await this.run(executable, [

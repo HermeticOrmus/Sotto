@@ -26,6 +26,7 @@ import { attentionItemKey, isLiveAttention } from '../../shared/agentAttention'
 import { maintainProviderRecovery, retireLegacyProvider, stripRetiredEndpoint } from './providerRetirement'
 import { clientVersionOf } from './clientVersions'
 import { locateClient as locateClientOnDisk, ProviderClients } from './providerClients'
+import { resolveModel } from '../../shared/modelCatalog'
 import { validatePromptAttachments, validateThreadOptions } from './threadOptions'
 import { AttachmentPreviews } from './attachmentPreviews'
 import type { ThreadTitleExchange } from '../llm/threadTitle'
@@ -916,7 +917,7 @@ export class AgentControl {
     const configuration = this.state.configuration
     let reasoningEffort = command.reasoningEffort
     if (reasoningEffort === undefined && configuration.newThreadReasoningEffort) {
-      const reference = this.state.host.models.find(item => item.id === configuration.newThreadModelId)?.reasoningEfforts ?? model?.reasoningEfforts ?? []
+      const reference = resolveModel(this.state.host.models, configuration.newThreadModelId)?.reasoningEfforts ?? model?.reasoningEfforts ?? []
       reasoningEffort = nearestReasoningEffort(configuration.newThreadReasoningEffort, reference, model?.reasoningEfforts ?? [])
     }
     let runtimeMode = command.runtimeMode
@@ -1842,11 +1843,11 @@ export class AgentControl {
       case 'create-thread': {
         const managed = command.managed !== false
         if (managed && this.state.composing && this.hasDraft()) throw new Error('Send or clear your draft before creating another thread.')
-        const model = this.state.host.models.find(model => model.id === command.modelId)
+        const model = resolveModel(this.state.host.models, command.modelId)
         this.canCreate(model?.providerId)
         if (!this.state.host.capabilities.threads) throw new Error('This provider cannot create threads.')
         if (!this.state.host.projects.some(p => p.id === command.projectId)) throw new Error('Choose an available project.')
-        if (!this.state.host.models.some(m => m.id === command.modelId && m.ready)) throw new Error('That model or account is unavailable. Choose a ready model; Sotto will not switch your account.')
+        if (!model?.ready) throw new Error('That model or account is unavailable. Choose a ready model; Sotto will not switch your account.')
         // A create-thread that leaves an option unset takes Settings → Agents' new-thread defaults instead,
         // so the coordinator's and voice's own threads follow them too; a caller's explicit choice still wins.
         const defaults = this.newThreadOptionDefaults(command, model)
@@ -1902,7 +1903,7 @@ export class AgentControl {
         const validate = (): void => {
           const thread = this.thread(command.threadId)
           if (thread.status === 'running' || thread.requests.length) throw new Error('Wait for this thread to finish and answer its pending requests before changing settings.')
-          if (thread.nativeSessionStarted !== false && command.modelId && thread.providerId && this.state.host.models.find(model => model.id === command.modelId)?.providerId !== thread.providerId) throw new Error('Choose a model from this thread provider. Existing sessions cannot move between providers.')
+          if (thread.nativeSessionStarted !== false && command.modelId && thread.providerId && resolveModel(this.state.host.models, command.modelId)?.providerId !== thread.providerId) throw new Error('Choose a model from this thread provider. Existing sessions cannot move between providers.')
           validateThreadOptions(this.state.host, command, thread.modelId)
         }
         validate()
@@ -2108,7 +2109,7 @@ export class AgentControl {
     const threadId = 'threadId' in command ? command.threadId : undefined
     const provider = command.type === 'create-project' ? command.provider ?? this.state.configuration.provider
       : command.type === 'create-thread' || (command.type === 'configure-thread' && command.modelId && this.thread(command.threadId).nativeSessionStarted === false)
-        ? this.state.host.models.find(model => model.id === command.modelId)?.providerId : command.type === 'answer'
+        ? resolveModel(this.state.host.models, command.modelId)?.providerId : command.type === 'answer'
           ? requestDraftProvider(this.state.host, this.thread(command.threadId), this.state.configuration.provider) : this.thread(command.threadId).providerId
     if (threadId && command.type !== 'create-thread' && !(command.type === 'configure-thread' && this.thread(threadId).nativeSessionStarted === false)) this.canAct(threadId)
     if ((command.type === 'send' || command.type === 'steer') || command.type === 'answer') {
@@ -2123,13 +2124,14 @@ export class AgentControl {
     if (this.outbox.some(item => threadId ? item.threadId === threadId : item.threadId === undefined && (item.provider ?? this.state.configuration.provider) === provider)) throw new Error('An earlier action has an unknown result. Reconnect and inspect the provider before retrying; Sotto will not send it twice.')
     const answerRequest = command.type === 'answer' ? this.thread(command.threadId).requests.find(item => item.id === command.requestId) : undefined
     const answerQuestions = answerRequest ? requestDraftQuestions(answerRequest) : []
+    // A model change that names no effort is saved with the new model's default, as the provider will start it on.
+    const startingEffort = command.type === 'configure-thread' && command.modelId !== undefined && command.reasoningEffort === undefined
+      ? resolveModel(this.state.host.models, command.modelId)?.defaultReasoningEffort : undefined
     this.outbox.push({ id: command.commandId, type: command.type, ...(provider ? { provider } : {}), ...(threadId ? { threadId } : {}),
       ...('messageId' in command ? { messageId: command.messageId } : {}),
       ...('requestId' in command ? { requestId: command.requestId } : {}),
       ...(answerQuestions.length ? { questionsDigest: requestQuestionsDigest(answerQuestions) } : {}),
-      ...(command.type === 'configure-thread' ? { options: agentThreadOptionsSchema.parse({ ...command,
-        ...(command.modelId !== undefined && command.reasoningEffort === undefined && this.state.host.models.find(model => model.id === command.modelId)?.defaultReasoningEffort
-          ? { reasoningEffort: this.state.host.models.find(model => model.id === command.modelId)!.defaultReasoningEffort } : {}) }) } : {}),
+      ...(command.type === 'configure-thread' ? { options: agentThreadOptionsSchema.parse({ ...command, ...(startingEffort ? { reasoningEffort: startingEffort } : {}) }) } : {}),
       ...((command.type === 'send' || command.type === 'steer') ? { draftDigest: this.promptDigest(command.text, command.attachments, command.skills, command.files), ...(draftId ? { draftId } : {}) } : {}),
       ...(command.type === 'create-project' ? { entityId: command.projectId } : command.type === 'create-thread' ? { entityId: command.threadId } : {}),
     })

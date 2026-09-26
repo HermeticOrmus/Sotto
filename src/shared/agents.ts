@@ -770,6 +770,13 @@ export function capabilitiesForThread(host: AgentHostSnapshot, thread: AgentThre
 export function publicProviderEntityId(provider: ProviderId, kind: 'model' | 'project', value: string): string {
   return `native:${provider}:${kind}:${encodeURIComponent(value)}`
 }
+/** The provider, kind and native value a public ID names, or null for any other ID or one whose value will not decode. */
+export function parsePublicProviderEntityId(id: string): { readonly provider: ProviderId; readonly kind: 'model' | 'project'; readonly value: string } | null {
+  const match = /^native:([a-z]+):(model|project):(.*)$/u.exec(id)
+  const provider = providerIdSchema.safeParse(match?.[1])
+  if (!match || !provider.success) return null
+  try { return { provider: provider.data, kind: match[2] as 'model' | 'project', value: decodeURIComponent(match[3]!) } } catch { return null }
+}
 /**
  * New threads inherit the native agent selected in Settings. Keep its explicit or account-default
  * model even while unavailable, so the caller can explain what needs to connect instead of changing
@@ -793,7 +800,10 @@ export function defaultThreadModelId(configuration: AgentConfiguration, models: 
  * (`defaultThreadModelId`), which is today's behaviour for an install made before the setting existed.
  */
 export function defaultNewThreadModelId(configuration: AgentConfiguration, models: readonly AgentModel[], accounts: readonly SubscriptionAccount[] = []): string {
-  if (configuration.newThreadModelId && models.some(model => model.id === configuration.newThreadModelId)) return configuration.newThreadModelId
+  // Keeps an explicit choice even while the catalog does not list it verbatim, the same as the reasoning
+  // model above: a long-context variant the catalog answers from its base model's entry (`modelCatalog.ts`)
+  // resolves through the caller, which is catalog-aware; this module cannot import it without a cycle.
+  if (configuration.newThreadModelId) return configuration.newThreadModelId
   return defaultThreadModelId(configuration, models, accounts)
 }
 /**

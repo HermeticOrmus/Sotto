@@ -1,5 +1,6 @@
 import { hostEntityKey, parseHostEntityKey } from '../../../shared/clientIdentity'
 import { defaultNewThreadModelId, hostForThread, type AgentProject, type AgentState, type AgentThread } from '../../../shared/agents'
+import { resolveModel } from '../../../shared/modelCatalog'
 import type { AgentConnection } from './AgentContext'
 import { draftThread, UNCONFIRMED_CREATION } from './draftThreads'
 
@@ -36,7 +37,8 @@ export async function beginNewThread(state: AgentState, command: AgentConnection
   const worktreeChoices = workingCopy === 'independent' ? { startFromOrigin: true } : {}
   const threadId = hostEntityKey(project.hostId ?? parseHostEntityKey(project.id)?.hostId ?? state.hostId, crypto.randomUUID())
   const title = 'New thread'
-  const selectedModel = projectHost.models.find(model => model.id === modelId)
+  // A long-context variant the catalog does not list (`opus[1m]`) answers from its base model's entry.
+  const selectedModel = resolveModel(projectHost.models, modelId)
   const thread = draftThread({ id: threadId, projectId: project.id, title, modelId, workingCopy, ...worktreeChoices,
     ...(selectedModel?.providerId ? { providerId: selectedModel.providerId } : {}) })
   const created = command({ type: 'create-thread', threadId, projectId: project.id, title, modelId, titleSource: 'default', managed, workingCopy, ...worktreeChoices })

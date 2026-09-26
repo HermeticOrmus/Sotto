@@ -16,6 +16,7 @@ import { FIRST_WINDOW_TURNS, LATER_WINDOW_TURNS, ThreadStore } from './threadSto
 import { SubagentStore, subagentActivityClassification } from './subagentStore'
 import { observedSubagentStatus, EMPTY_SUBAGENT_SUMMARY, type SubagentChange, type SubagentSummary, type SubagentPageRequest, type SubagentAssignmentsRequest } from '../../shared/subagents'
 import { validateThreadOptions } from './threadOptions'
+import { resolveModel } from '../../shared/modelCatalog'
 import { resolveThreadWorkingDirectory } from '../../shared/threadWorkingDirectory'
 import { existingWorkingDirectory, ThreadWorktrees } from './threadWorktrees'
 import { gitStatusFingerprint, type GitStatus } from '../../shared/gitStatus'
@@ -1757,7 +1758,7 @@ export class WorkspaceHost implements AgentHost {
       if (this.state.snapshot.threads.some(thread => thread.id === command.threadId)) throw new Error('This thread already exists. Select it instead of creating it again.')
       if (!this.state.snapshot.projects.some(project => project.id === command.projectId)) throw new Error('Choose an available project.')
       validateThreadOptions(this.state.snapshot, command)
-      const model = this.state.snapshot.models.find(model => model.id === command.modelId)!
+      const model = resolveModel(this.state.snapshot.models, command.modelId)!
       this.requireCreation(model.providerId)
       const thread: AgentThread = { hostId: this.hostId, id: command.threadId, projectId: command.projectId, title: command.title, modelId: command.modelId,
         titleSource: command.titleSource ?? 'default',
@@ -1803,7 +1804,7 @@ export class WorkspaceHost implements AgentHost {
     const creation = this.state.creations.find(item => item.threadId === thread.id)
     if (command.type === 'configure-thread' && creation?.phase === 'unstarted') {
       validateThreadOptions(this.state.snapshot, command, thread.modelId)
-      const model = this.state.snapshot.models.find(model => model.id === (command.modelId ?? thread.modelId))!
+      const model = resolveModel(this.state.snapshot.models, command.modelId ?? thread.modelId)!
       this.requireCreation(model.providerId)
       const previous = structuredClone(thread)
       if (command.modelId !== undefined) {
@@ -1887,7 +1888,7 @@ export class WorkspaceHost implements AgentHost {
       if (!capabilities.configureThread) throw new Error('This provider does not support changing thread settings.')
       if (thread.status === 'running' || thread.requests.length) throw new Error('Wait for this thread to finish and answer its pending requests before changing settings.')
       validateThreadOptions(this.state.snapshot, command, thread.modelId)
-      if (command.modelId && this.state.snapshot.models.find(model => model.id === command.modelId)?.providerId !== thread.providerId) throw new Error('Existing sessions cannot move between providers.')
+      if (command.modelId && resolveModel(this.state.snapshot.models, command.modelId)?.providerId !== thread.providerId) throw new Error('Existing sessions cannot move between providers.')
     }
     // Native command uncertainty belongs to the existing outbox; do not add a failing
     // history read after dispatch that could turn unknown delivery into a rejection.

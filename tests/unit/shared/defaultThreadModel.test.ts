@@ -65,8 +65,11 @@ describe('default model for a new thread in a project (issue #347)', () => {
     expect(defaultNewThreadModelId(config, models)).toBe(models[0]!.id)
   })
 
-  it('falls back to the reasoning-based default when the chosen new-thread model is gone from the catalog', () => {
+  it('keeps the chosen new-thread model even while the catalog does not list it, instead of switching providers', () => {
+    // The same as an unavailable reasoning model above: the caller resolves it against the catalog
+    // (`modelCatalog.ts`, e.g. a long-context variant answering from its base model's entry) and explains
+    // what needs to connect, rather than this silently switching to a different provider's default.
     const config = configuration({ reasoning: 'claude', reasoningModel: 'opus[1m]', newThreadModelId: 'native:grok:model:retired' })
-    expect(defaultNewThreadModelId(config, models)).toBe(defaultThreadModelId(config, models))
+    expect(defaultNewThreadModelId(config, models)).toBe('native:grok:model:retired')
   })
 })

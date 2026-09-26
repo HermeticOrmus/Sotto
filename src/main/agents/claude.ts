@@ -23,6 +23,7 @@ import { claudeSkillPrompt, discoverClaudeSkills } from './claudeSkills'
 import { verifyFileMentions } from './promptFiles'
 import { ClaudeSubscriptionClient } from './subscriptionClaude'
 import { ClaudeProtocol, ClaudeRejected, object, type ClaudeFrame } from './claudeProtocol'
+import { claudeTurnFailure } from './claudeTurnFailure'
 import { authoredClaudeUser, claudeDigest, ClaudeSessionLog, claudeText } from './claudeSessionLog'
 import { claudeAnswer, claudeDenial, claudePending, type ClaudePending } from './claudeRequests'
 import { unreadableRequest } from './nativeRequests'
@@ -176,6 +177,10 @@ export class ClaudeStreamJsonHost implements AgentHost {
   private readonly dispatching = new Set<string>()
   /** The threads whose settings change is being dispatched now: the part of `dispatching` a refusal names as such. */
   private readonly configuring = new Set<string>()
+  /** The error each thread's failed turn put on the provider, so that thread's next finished turn can take it down again. */
+  private readonly turnFailures = new Map<string, string>()
+  /** The classification on a turn's last assistant message, when Claude Code gave one for a failed API call. */
+  private readonly assistantErrors = new Map<string, string>()
   private readonly logOrigins = new Map<string, Set<string>>()
   private readonly lastLogDigest = new Map<string, string>()
   private readonly staleContexts = new Set<string>()
@@ -266,7 +271,7 @@ export class ClaudeStreamJsonHost implements AgentHost {
     await this.usage.load()
     const [account, executable, aliases, projects] = await Promise.all([this.client.status(), this.client.findExecutable(), this.aliasStore.read(), this.projectStore.read()])
     if (generation !== this.generation) throw new Error('Claude connection was cancelled.')
-    this.state.error = undefined; this.state.models = account.models.map(model => ({ ...model, provider: 'claude', ready: account.ready, runtimeModes: [...agentRuntimeModeSchema.options], supportsImages: true,
+    this.state.error = undefined; this.turnFailures.clear(); this.assistantErrors.clear(); this.state.models = account.models.map(model => ({ ...model, provider: 'claude', ready: account.ready, runtimeModes: [...agentRuntimeModeSchema.options], supportsImages: true,
       ...(account.defaultModelId && model.id === account.defaultModelId ? { recommended: true } : {}) }))
     if (!account.ready || !executable) { this.state.error = account.detail; this.emit(); return this.view() }
     // Without this the version is only known once a session runs, so an idle provider could not be
@@ -849,7 +854,10 @@ export class ClaudeStreamJsonHost implements AgentHost {
         this.acknowledgements.get(uuid)?.()
       }
     }
-    if (frame.type === 'assistant') this.message(id, frame, false)
+    if (frame.type === 'assistant') {
+      if (typeof frame.error === 'string' && !frame.parent_tool_use_id) this.assistantErrors.set(id, frame.error)
+      this.message(id, frame, false)
+    }
     if (frame.type === 'stream_event') {
       this.usage.claude(id, frame, thread.modelId); thread.usage = this.usage.get(id)
       const event = object(frame.event)
@@ -879,17 +887,33 @@ export class ClaudeStreamJsonHost implements AgentHost {
       thread.usage = this.usage.get(id)
       this.messageLog.dropEmpty(id); this.streaming.delete(id)
       const origin = typeof frame.user_message_uuid === 'string' ? frame.user_message_uuid : alias.origins.at(-1)?.uuid
+      // A turn the user stopped ends in an error result, which is no failure of Claude Code's.
+      const stopped = thread.lastTurn?.status === 'interrupted' && (!origin || thread.lastTurn.id === origin)
       if (origin) {
         this.completedOrigins.add(origin)
         if (thread.lastTurn?.id !== origin || thread.lastTurn.status !== 'interrupted') thread.lastTurn = { id: origin, status: frame.is_error === true ? 'failed' : 'completed' }
         this.markTurn(id, thread.lastTurn?.status === 'interrupted' ? 'interrupted' : frame.is_error === true ? 'failed' : 'completed',
           alias.origins.find(value => value.uuid === origin)?.messageId, typeof frame.result === 'string' && frame.is_error === true ? frame.result : undefined)
       }
-      thread.status = frame.is_error === true ? 'error' : 'idle'; runtime.requests.clear(); thread.requests = []
-      if (frame.is_error === true) { this.clearMonitoring(id); this.state.error = 'Claude could not complete this turn. Check its native subscription, model and usage limits.' }
+      const failure = frame.is_error === true && !stopped ? claudeTurnFailure(frame, this.assistantErrors.get(id)) : null
+      this.assistantErrors.delete(id)
+      thread.status = failure !== null ? 'error' : 'idle'; runtime.requests.clear(); thread.requests = []
+      if (frame.is_error === true) this.clearMonitoring(id)
+      if (failure !== null) { this.turnFailures.set(id, failure); this.state.error = failure }
+      else if (frame.is_error !== true) this.clearTurnFailure(id)
     }
     this.emit(frame.type === 'stream_event' || frame.type === 'assistant'
       || frame.type === 'system' && ['task_started', 'task_progress', 'task_updated', 'task_notification'].includes(String(frame.subtype)))
+  }
+  /**
+   * A thread's next finished turn takes down the error its failed turn left, and nothing else the provider is saying.
+   * Another thread's failure that is still standing takes its place.
+   */
+  private clearTurnFailure(id: string): void {
+    const failure = this.turnFailures.get(id)
+    if (failure === undefined) return
+    this.turnFailures.delete(id)
+    if (this.state.error === failure) this.state.error = [...this.turnFailures.values()].at(-1)
   }
   private clearMonitoring(id: string): void {
     this.monitoring.delete(id)

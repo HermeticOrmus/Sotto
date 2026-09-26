@@ -1,6 +1,7 @@
 import React, { useEffect, useState, type ReactNode } from 'react'
 import { defaultNewThreadModelId, isSubscriptionReasoning, PROVIDER_LABELS, type AgentConfiguration, type AgentCommand, type AgentRuntimeMode, type AgentState } from '../../../shared/agents'
 import { resolveNewThreadPermission, RUNTIME_MODE_ORDER } from '../../../shared/newThreadDefaults'
+import { catalogEntry, chosenModelId, resolveModel } from '../../../shared/modelCatalog'
 import { Button } from '../components/Button'
 import { useVoiceCoordinatorEnabled } from '../state/voiceCoordinator'
 import { useOptionalAgents, type AgentConnection } from './AgentContext'
@@ -21,7 +22,8 @@ function NewThreadDefaultsRow({ state, command }: { readonly state: AgentState; 
   const configuration = state.configuration
   const models = state.host.models
   const modelId = defaultNewThreadModelId(configuration, models, state.reasoningAccounts)
-  const model = models.find(item => item.id === modelId)
+  // A long-context variant the catalog does not list (`opus[1m]`) answers from its base model's entry.
+  const model = resolveModel(models, modelId)
   const reasoning = configuration.newThreadReasoningEffort || model?.defaultReasoningEffort || ''
   const efforts = effortChoices(model, reasoning)
   const chosenMode = configuration.newThreadRuntimeMode
@@ -38,7 +40,7 @@ function NewThreadDefaultsRow({ state, command }: { readonly state: AgentState; 
     <span className="account-row__heading"><strong>New threads start with</strong><span>Model, reasoning effort and permissions, as the composer shows them.</span></span>
     <fieldset className="account-row__control">
       <legend className="tt-visually-hidden">New threads start with</legend>
-      <ModelPicker models={models} modelId={modelId} disabled={false} onChange={id => save({ newThreadModelId: id })} />
+      <ModelPicker models={models} modelId={modelId} disabled={false} onChange={pressed => save({ newThreadModelId: chosenModelId(models, pressed, modelId) })} />
       {efforts.length > 0 && <EffortPicker value={reasoning} options={efforts} disabled={false}
         onChange={effort => save({ newThreadReasoningEffort: effort })} defaultValue={model?.defaultReasoningEffort} modelName={model?.name} />}
       <ChoiceChip label="Default permissions for new threads" placeholder="Provider default" value={chosenMode ?? ''} options={permissionOptions} disabled={false} pending={false}
@@ -70,7 +72,7 @@ function AgentAccountSettings(): ReactNode {
   const configuration = state.configuration
   const account = state.reasoningAccounts.find(account => account.provider === configuration.reasoning)
   const subscription = isSubscriptionReasoning(configuration.reasoning)
-  const model = account?.models.find(model => model.id === (configuration.reasoningModel || account.defaultModelId))
+  const model = resolveModel(account?.models ?? [], configuration.reasoningModel || account?.defaultModelId)
   const save = async (patch: Partial<AgentConfiguration>): Promise<boolean> => {
     const result = await command({ type: 'configure', patch })
     return result !== null && result.error === null
@@ -87,7 +89,7 @@ function AgentAccountSettings(): ReactNode {
       <NewThreadDefaultsRow state={state} command={command} />
       <h3 className="account-rows__heading">Personal chats and reasoning</h3>
       <label>Reasoning account<select aria-label="Reasoning account" value={configuration.reasoning} disabled={checking} onChange={event => { void save({ reasoning: event.target.value as AgentConfiguration['reasoning'], reasoningModel: '', reasoningEffort: '' }) }}><option value="none">Not configured</option><optgroup label="Your subscriptions"><option value="codex">ChatGPT · Codex</option><option value="claude">Claude · Claude Code</option><option value="grok">Grok · Grok Build</option></optgroup><optgroup label="API accounts"><option value="openrouter">OpenRouter</option><option value="openai">OpenAI</option></optgroup></select></label>
-      {subscription ? <><label>Reasoning model<select aria-label="Reasoning model" value={configuration.reasoningModel} disabled={!account?.ready} onChange={event => void save({ reasoningModel: event.target.value, reasoningEffort: '' })}><option value="">Provider default</option>{configuration.reasoningModel && !account?.models.some(model => model.id === configuration.reasoningModel) ? <option value={configuration.reasoningModel}>{configuration.reasoningModel}</option> : null}{account?.models.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}</select></label><label>Reasoning effort<select aria-label="Reasoning effort" value={configuration.reasoningEffort} disabled={!account?.ready || !model?.reasoningEfforts?.length} onChange={event => void save({ reasoningEffort: event.target.value })}><option value="">Provider default</option>{configuration.reasoningEffort && !model?.reasoningEfforts?.includes(configuration.reasoningEffort) ? <option value={configuration.reasoningEffort}>{configuration.reasoningEffort} · unavailable</option> : null}{model?.reasoningEfforts?.map(effort => <option key={effort} value={effort}>{effort}</option>)}</select></label><div className="account-connection"><p role="status">{checking ? 'Checking your provider account…' : account?.detail ?? 'Check the account signed in through your installed provider app.'}</p><Button variant="secondary" disabled={checking || state.globalLaneBusy} onClick={() => void check()}>Check connection</Button></div></> : configuration.reasoning !== 'none' ? <><SavedField label="Reasoning model" value={configuration.reasoningModel} onSave={reasoningModel => save({ reasoningModel })} /><SavedField label="Reasoning API key" value="" secret placeholder={state.credentials.reasoning ? 'Saved securely · enter to replace' : 'Enter your API key'} onSave={async value => { const result = await command({ type: 'credential', slot: 'reasoning', value: value.trim() }); return result !== null && result.error === null }} />{state.credentials.reasoning ? <Button variant="ghost" disabled={state.globalLaneBusy} onClick={() => void command({ type: 'credential', slot: 'reasoning', value: '' })}>Remove reasoning API key</Button> : null}</> : null}
+      {subscription ? <><label>Reasoning model<select aria-label="Reasoning model" value={configuration.reasoningModel} disabled={!account?.ready} onChange={event => void save({ reasoningModel: event.target.value, reasoningEffort: '' })}><option value="">Provider default</option>{configuration.reasoningModel && !catalogEntry(account?.models ?? [], configuration.reasoningModel) ? <option value={configuration.reasoningModel}>{configuration.reasoningModel}</option> : null}{account?.models.map(model => <option key={model.id} value={chosenModelId(account.models, model.id, configuration.reasoningModel)}>{model.name}</option>)}</select></label><label>Reasoning effort<select aria-label="Reasoning effort" value={configuration.reasoningEffort} disabled={!account?.ready || !model?.reasoningEfforts?.length} onChange={event => void save({ reasoningEffort: event.target.value })}><option value="">Provider default</option>{configuration.reasoningEffort && !model?.reasoningEfforts?.includes(configuration.reasoningEffort) ? <option value={configuration.reasoningEffort}>{configuration.reasoningEffort} · unavailable</option> : null}{model?.reasoningEfforts?.map(effort => <option key={effort} value={effort}>{effort}</option>)}</select></label><div className="account-connection"><p role="status">{checking ? 'Checking your provider account…' : account?.detail ?? 'Check the account signed in through your installed provider app.'}</p><Button variant="secondary" disabled={checking || state.globalLaneBusy} onClick={() => void check()}>Check connection</Button></div></> : configuration.reasoning !== 'none' ? <><SavedField label="Reasoning model" value={configuration.reasoningModel} onSave={reasoningModel => save({ reasoningModel })} /><SavedField label="Reasoning API key" value="" secret placeholder={state.credentials.reasoning ? 'Saved securely · enter to replace' : 'Enter your API key'} onSave={async value => { const result = await command({ type: 'credential', slot: 'reasoning', value: value.trim() }); return result !== null && result.error === null }} />{state.credentials.reasoning ? <Button variant="ghost" disabled={state.globalLaneBusy} onClick={() => void command({ type: 'credential', slot: 'reasoning', value: '' })}>Remove reasoning API key</Button> : null}</> : null}
     </div>
     {state.error ? <p className="agent-error" role="alert">{state.error}</p> : null}
   </div>

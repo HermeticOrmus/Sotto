@@ -151,7 +151,9 @@ lines.on('line', line => {
         refuse('Synthetic settings refusal'); return
       }
       if (request.subtype === 'set_model') {
-        if (typeof request.model !== 'string' || !models.some(model => model.value === request.model)) { refuse('Unknown model'); return }
+        // Claude Code runs a long-context variant (`opus[1m]`) of a model it lists by its base alone.
+        const listed = typeof request.model === 'string' ? request.model.replace(/\[\d+[km]\]$/iu, '') : null
+        if (listed === null || !models.some(model => model.value === request.model || model.value === listed)) { refuse('Unknown model'); return }
         settings.model = request.model
       } else if (request.subtype === 'apply_flag_settings') {
         const keys = Object.keys(request.settings ?? {})

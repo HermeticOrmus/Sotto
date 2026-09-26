@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Laptop, Server, X } from 'lucide-react'
 import { defaultNewThreadModelId, hostForThread, isSubscriptionReasoning, type AgentProject, type AgentState } from '../../../shared/agents'
+import { resolveModel } from '../../../shared/modelCatalog'
 import type { AgentConnection } from './AgentContext'
 import { Button } from '../components/Button'
 import './newThread.css'
@@ -63,7 +64,7 @@ export function NewThreadDialog({ state, command, onClose, onCreated, onCreating
     setError(null)
     if (choice.project) { startThread(choice.project); return }
     const provider = isSubscriptionReasoning(state.configuration.reasoning) ? state.configuration.reasoning
-      : projectHost.models.find(model => model.id === defaultNewThreadModelId(state.configuration, projectHost.models, state.reasoningAccounts))?.providerId
+      : resolveModel(projectHost.models, defaultNewThreadModelId(state.configuration, projectHost.models, state.reasoningAccounts))?.providerId
     setCreating(true)
     void (async () => {
       if (chosenHost && chosenHost.hostId !== latestState.current.hostId) await window.sotto?.hosts?.command({ type: 'select', hostId: chosenHost.hostId })
