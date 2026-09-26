@@ -532,9 +532,10 @@ export class CodexAppServerHost implements AgentHost {
     try {
       await this.rpc('thread/turns/list', { threadId: alias.codexThreadId, limit: 1, sortDirection: 'desc', itemsView: 'full' }, async value => {
         if (generation !== this.generation || revision !== this.revisions.get(id)) return
-        const page = z.object({ data: z.array(turnSchema) }).safeParse(value)
+        // Only a reply that says it carries the full items counts; turnSchema would take a missing itemsView as full.
+        const page = z.object({ data: z.array(turnSchema.extend({ itemsView: z.literal('full') })) }).safeParse(value)
         const turn = page.success && page.data.data.length === 1 ? page.data.data[0]! : undefined
-        if (!turn || turn.id !== newest.turnId || turn.status === 'inProgress' || turn.itemsView !== 'full' || alias.rewoundTurnIds.includes(turn.id)) return
+        if (!turn || turn.id !== newest.turnId || turn.status === 'inProgress' || alias.rewoundTurnIds.includes(turn.id)) return
         // Reconcile onto a copy of the newest turn's identities and of the origins, both of which reconciling writes to.
         const trial = structuredClone(newest)
         this.reconcileTurn(id, [...alias.messageIdentities.slice(0, -1), trial], structuredClone(alias.origins), turn)

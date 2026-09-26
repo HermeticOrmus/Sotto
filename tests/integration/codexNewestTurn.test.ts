@@ -187,6 +187,14 @@ describe('Codex send checks the newest turn before reading the whole transcript'
     expect((await f.driver.requests()).slice(stale).some(request => request.method === 'turn/start')).toBe(false)
   })
 
+  it('reads the whole transcript when the newest turn does not say it carries the full items', async () => {
+    // Sotto's turn schema takes a missing itemsView as full; the check does not, so a summary cannot pass as the turn.
+    const { f, id } = await answeredThread({ omitTurnsListItemsView: true })
+    const from = (await f.driver.requests()).length
+    await turn(f, id, 'own-2', 'own-1')
+    expect(await historyRequests(f, from)).toEqual(['turns', 'read'])
+  })
+
   it('reads the whole transcript on a Codex without thread/turns/list, and stops asking on that connection', async () => {
     const { f, id } = await answeredThread()
     // How Codex 0.157.1 answers a request it does not have.

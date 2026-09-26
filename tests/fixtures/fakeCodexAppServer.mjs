@@ -195,7 +195,8 @@ createInterface({ input: process.stdin }).on('line', line => {
     const start = params.cursor ? Number(params.cursor) : 0
     const page = turns.slice(start, start + (params.limit ?? turns.length))
     const view = params.itemsView ?? 'summary'
-    const data = page.map(turn => ({ ...turn, itemsView: view,
+    // `omitTurnsListItemsView` leaves out the field that says which view a turn carries.
+    const data = page.map(turn => ({ ...turn, ...(script.omitTurnsListItemsView ? { itemsView: undefined } : { itemsView: view }),
       items: view === 'full' ? turn.items : view === 'notLoaded' ? [] : turn.items.filter(item => ['userMessage', 'agentMessage'].includes(item.type)) }))
     reply({ data, nextCursor: start + page.length < turns.length ? String(start + page.length) : null, backwardsCursor: page.length ? String(start) : null })
   } else if (method === 'thread/settings/update') {
