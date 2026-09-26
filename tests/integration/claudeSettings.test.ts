@@ -253,3 +253,22 @@ it('starts a thread\'s CLI only once the one the reaper stopped has exited', asy
   expect(exit).toBeGreaterThanOrEqual(0)
   expect(records.findLastIndex(record => record.method === 'launch' || record.method === 'resume')).toBeGreaterThan(exit)
 })
+
+it('creates and runs a thread on a long-context model the catalog lists only by its base, and moves to it and back live', async () => {
+  // Claude Code 2.1.283 lists `opus` and no `opus[1m]`; threads and the Settings default still carry the variant (#344).
+  const { f, id } = await fixture()
+  const started = await launches(f)
+  const longContext = randomUUID()
+  expect(await f.host.execute({ type: 'create-thread', commandId: randomUUID(), threadId: longContext, projectId: f.projectId, title: 'Long context', modelId: 'fixture-model[1m]', reasoningEffort: 'high' }))
+    .toEqual({ accepted: true })
+  const launch = (await f.driver.requests()).findLast(record => record.method === 'launch')?.params?.frame as { args: string[] }
+  expect(launch.args[launch.args.indexOf('--model') + 1]).toBe('fixture-model[1m]')
+  expect(await thread(f, longContext)).toMatchObject({ modelId: 'fixture-model[1m]', reasoningEffort: 'high' })
+  // The existing thread moves onto the variant over its running CLI, keeping the ID, with the base model's levels.
+  expect((await f.host.execute({ type: 'configure-thread', commandId: randomUUID(), threadId: id, modelId: 'fixture-model[1m]', reasoningEffort: 'high' })).accepted).toBe(true)
+  expect(await f.liveSettings.effective(id)).toMatchObject({ modelId: 'fixture-model[1m]', reasoningEffort: 'high' })
+  expect(await launches(f)).toBe(started + 1)
+  await expect(f.host.execute({ type: 'configure-thread', commandId: randomUUID(), threadId: id, modelId: 'fixture-large[1m]' })).resolves.toMatchObject({ accepted: true })
+  await expect(f.host.execute({ type: 'configure-thread', commandId: randomUUID(), threadId: id, modelId: 'fixture-unknown[1m]' }))
+    .rejects.toThrow('That model or account is unavailable.')
+})

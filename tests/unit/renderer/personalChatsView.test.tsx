@@ -4,7 +4,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { AgentSkillCatalog } from '../../../src/shared/agentSkills'
 import type { PersonalChat, PersonalChatBridge, PersonalChatState } from '../../../src/shared/personalChats'
-import { PersonalChatsView } from '../../../src/renderer/src/agents/personal/PersonalChatsView'
+import { PersonalChatsView, personalModelLabel } from '../../../src/renderer/src/agents/personal/PersonalChatsView'
+import type { AgentState } from '../../../src/shared/agents'
 import { PersonalDraftStore } from '../../../src/renderer/src/agents/personal/personalDrafts'
 import { captureDictationDestination } from '../../../src/renderer/src/features/dictation/dictationDestination'
 import { requestAnswerStore } from '../../../src/renderer/src/agents/requests/requestAnswers'
@@ -423,4 +424,14 @@ it.each(['codex', 'claude', 'grok'] as const)('dictation stays in its captured %
   expect(h.bridge.answer).not.toHaveBeenCalled()
   expect(screen.getByRole('textbox', { name: 'Message' })).toHaveValue('')
   vi.restoreAllMocks()
+})
+
+// Claude Code lists `opus` and no `opus[1m]`, which a chat started on the Settings default still carries (#344).
+it('names a chat on a 1M-context model by its base model, from the host catalog or the reasoning account', () => {
+  const agents = { host: { models: [{ id: 'native:claude:model:opus', name: 'Opus 5.5', provider: 'Claude', ready: true }] },
+    reasoningAccounts: [{ provider: 'claude', models: [{ id: 'sonnet', name: 'Sonnet 4.6' }] }] } as unknown as AgentState
+  expect(personalModelLabel(agents, { providerId: 'claude', modelId: 'opus[1m]' })).toBe('Opus 5.5')
+  expect(personalModelLabel(agents, { providerId: 'claude', modelId: 'sonnet[1m]' })).toBe('Sonnet 4.6')
+  expect(personalModelLabel(agents, { providerId: 'claude', modelId: 'haiku' })).toBe('haiku')
+  expect(personalModelLabel(null, { providerId: 'codex', modelId: 'codex:gpt-6-astra' })).toBe('gpt-6-astra')
 })

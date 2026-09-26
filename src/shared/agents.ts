@@ -757,6 +757,13 @@ export function capabilitiesForThread(host: AgentHostSnapshot, thread: AgentThre
 export function publicProviderEntityId(provider: ProviderId, kind: 'model' | 'project', value: string): string {
   return `native:${provider}:${kind}:${encodeURIComponent(value)}`
 }
+/** The provider, kind and native value a public ID names, or null for any other ID or one whose value will not decode. */
+export function parsePublicProviderEntityId(id: string): { readonly provider: ProviderId; readonly kind: 'model' | 'project'; readonly value: string } | null {
+  const match = /^native:([a-z]+):(model|project):(.*)$/u.exec(id)
+  const provider = providerIdSchema.safeParse(match?.[1])
+  if (!match || !provider.success) return null
+  try { return { provider: provider.data, kind: match[2] as 'model' | 'project', value: decodeURIComponent(match[3]!) } } catch { return null }
+}
 /**
  * New threads inherit the native agent selected in Settings. Keep its explicit or account-default
  * model even while unavailable, so the caller can explain what needs to connect instead of changing

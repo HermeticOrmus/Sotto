@@ -268,6 +268,33 @@ describe('AgentView user workflows', () => {
     expect(command).toHaveBeenLastCalledWith({ type: 'create-thread', projectId: 'project', title: 'Gameplay', modelId: 'model', titleSource: 'user' })
   })
 
+  // Claude Code lists `opus` and no `opus[1m]`, which threads and the Settings default still carry (#344).
+  it('takes screenshots in the managed composer on a 1M-context model the catalog lists only by its base', () => {
+    const state = stateFixture()
+    state.host.models[0]!.supportsImages = true
+    state.host.threads[0]!.modelId = 'model[1m]'
+    state.draftThreadId = 'thread'; state.composing = true
+    render(<AgentComposer state={state} command={vi.fn(async () => state)} />)
+    expect(screen.getByRole('button', { name: 'Attach screenshots' })).toBeEnabled()
+  })
+
+  it('names the Settings model by its base model when it is a 1M-context variant, and opens the thread on it', async () => {
+    const state = stateFixture()
+    state.configuration = { ...state.configuration, reasoning: 'claude', reasoningModel: 'opus[1m]' }
+    state.host.models = [{ id: 'native:claude:model:opus', name: 'Opus 5.5', provider: 'Claude', providerId: 'claude', ready: true },
+      { id: 'native:claude:model:sonnet', name: 'Sonnet 4.6', provider: 'Claude', providerId: 'claude', ready: true }]
+    const command = vi.fn(async () => state)
+    vi.mocked(useAgents).mockReturnValue(connection(state, command))
+    render(<AgentView onOpenThreads={() => undefined} />)
+    fireEvent.click(screen.getByText('Open a new thread in Workshop'))
+    const select = screen.getByLabelText<HTMLSelectElement>('Agent model')
+    expect(select).toHaveValue('native:claude:model:opus%5B1m%5D')
+    expect(select.selectedOptions[0]).toHaveTextContent('Opus 5.5')
+    expect([...select.options].map(option => option.textContent)).toEqual(['Choose an available model', 'Opus 5.5', 'Sonnet 4.6'])
+    fireEvent.click(screen.getByRole('button', { name: 'Open thread' }))
+    await waitFor(() => expect(command).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'create-thread', modelId: 'native:claude:model:opus%5B1m%5D' })))
+  })
+
   it('finds threads by thread or project name without changing the selected thread', () => {
     const state = stateFixture()
     const command = vi.fn(async () => state)

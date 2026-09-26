@@ -83,6 +83,37 @@ describe('native folder project resolution', () => {
     await submit()
     expect(command).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'create-thread', modelId: 'native:claude:model:opus' }))
   })
+  it('creates on a long-context Agents model the catalog lists only by its base model, and keeps it when that entry is pressed', async () => {
+    // Claude Code 2.1.283 lists `opus` and no `opus[1m]`; Settings still names the variant (#344).
+    const state = fixture([actual])
+    state.configuration = { ...state.configuration, reasoning: 'claude', reasoningModel: 'opus[1m]' }
+    state.host.models = [
+      { id: 'native:claude:model:opus', name: 'Opus 5.5', provider: 'Claude', providerId: 'claude', ready: true, reasoningEfforts: ['low', 'high', 'max'], defaultReasoningEffort: 'high' },
+      { id: 'native:claude:model:sonnet', name: 'Sonnet 4.6', provider: 'Claude', providerId: 'claude', ready: true },
+    ]
+    state.reasoningAccounts = [{ provider: 'claude', label: 'Claude', installed: true, ready: true, detail: '', models: [{ id: 'opus', name: 'Opus 5.5' }, { id: 'sonnet', name: 'Sonnet 4.6' }] }]
+    const command = vi.fn<(request: AgentCommand) => Promise<AgentState>>(async () => state)
+    setup(command, state)
+    await browse()
+    expect(screen.queryByText(/is not ready with this model/u)).toBeNull()
+    expect(screen.getByRole('button', { name: 'Create thread' })).toBeEnabled()
+    expect(screen.getByText('Thread options').parentElement).toHaveTextContent('Opus 5.5 · High')
+    const model = screen.getByRole('combobox', { name: 'Thread model' })
+    expect(model).toHaveTextContent('Opus 5.5')
+    expect(model).not.toHaveTextContent(/1M|%5B/iu)
+    expect(screen.getByRole('combobox', { name: 'Thread reasoning' })).toHaveValue('high')
+    fireEvent.click(model)
+    expect(screen.getAllByRole('option', { name: 'Opus 5.5' })).toHaveLength(1)
+    expect(screen.getByRole('option', { name: 'Opus 5.5' })).toHaveAttribute('aria-selected', 'true')
+    fireEvent.click(screen.getByRole('option', { name: 'Opus 5.5' }))
+    // Away and back again lands on the Agents model's own ID, not the base model's.
+    fireEvent.click(model)
+    fireEvent.click(screen.getByRole('option', { name: 'Sonnet 4.6' }))
+    fireEvent.click(model)
+    fireEvent.click(screen.getByRole('option', { name: 'Opus 5.5' }))
+    await submit()
+    expect(command).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'create-thread', modelId: 'native:claude:model:opus%5B1m%5D' }))
+  })
   it.each(['missing', 'unavailable'] as const)('waits for the Agents model when it is %s instead of creating with ready Grok', async availability => {
     const grok = { id: 'native:grok:model:grok-4.6', name: 'Grok 4.6', provider: 'Grok', providerId: 'grok' as const, ready: true }
     const claude = { id: 'native:claude:model:opus', name: 'Opus', provider: 'Claude', providerId: 'claude' as const, ready: false }
