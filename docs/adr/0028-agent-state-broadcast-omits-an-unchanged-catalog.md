@@ -20,7 +20,7 @@ The catalog itself rarely changes — a model list is edited by a subscription o
 
 - On the owner's 608-model catalog (measured with `node:v8`'s `serialize`, which approximates what Electron's structured clone puts on the wire): an unchanged repeat fell from 649 KB to 1.1 KB, a 99.8% reduction. The first send after a real change is unaffected (649 KB plus 37 bytes of revision bookkeeping). Detecting "unchanged" with `isDeepStrictEqual` across both destinations costs about 0.5 ms per publish on that catalog, paid in main, not on the window's own thread. This figure is unchanged by moving reassembly to the page — it measures main's own encoding, not where the window puts the catalog back — and the page-side saving from not cloning the reassembled array a second time across `contextBridge` has not been separately measured; see `docs/verification/catalog-broadcast-omission.md`.
 - A window's own memory of what it holds lives only as long as its wrapped bridge's closure does, so a reload or a fresh window empties it at exactly the moment the window's actual knowledge also empties, without main needing to notice the window came back — correctness does not depend on `windowManager.ts`'s `loadedRendererUrls` catching every reload path, only on `deliver()`'s return value gating what main assumes was received.
-- `AGENT_GET` and `AGENT_COMMAND` (`src/main/agents/ipc.ts`) are unchanged: both still answer with a whole `AgentState`, model arrays included, because they are the recovery path this design depends on.
+- `AGENT_GET` and `AGENT_COMMAND` (`src/main/agents/ipc.ts`) are unchanged: both still answer with a whole `AgentState`, model arrays included, because they are the recovery path this design depends on. The September 26 amendment below changes this for `AGENT_COMMAND`; `AGENT_GET` still answers whole.
 - The remote host socket protocol (`src/host/socketServer.ts`, `socketHostService.ts`) is untouched. It still sends a whole `AgentState` on every event; a catalog omission is only a property of the desktop's own broadcast to its two windows; see `docs/agent-control.md` if that protocol's own cost is addressed later.
 
 ### September 25 amendment: routine replies do not copy histories
@@ -44,3 +44,65 @@ catalog, and repeated immutable history arrays reuse their reconciled identity.
 Theme inspection and working-copy presence use explicit attributes rather than
 broad descendant `:has()` selectors that invalidated the window on textarea edits.
 See [the follow-up verification](../verification/composer-typing-followup.md).
+
+### September 26 amendment: a command's answer is a receipt
+
+Issue #323. This changes the Decision above, which kept a command's answer whole as a recovery path. After the
+September 25 amendment a reply no longer copied histories, but every draft save and every chip press still
+carried the whole model catalog to the window. On a synthetic 608-model catalog that is 542 KB for one draft
+save, cloned into the window and parsed there by the preload's schema on every save.
+
+**`AGENT_COMMAND` now answers with a command receipt.** It is the shell after the command, with its outcome
+(`error`, `notice`), the evidence its caller acts on (`threadDraftPersistence` for the exact draft revision
+saved, `configuration` for the effective settings) and every other changed field whole. The model catalogs are
+the exception: `host.models` and each `host.clientHosts[].models` cross as `{ revision, omitted: true }`, naming
+their catalog revision. `AgentStateBroadcaster.encodeReceipt` encodes it with the same revision counter the broadcast
+uses, so there is one ordering for a catalog, not a second one for replies. A receipt records nothing as sent,
+so the next broadcast to that window is what it would have been without the receipt. The preload parses it
+with `agentCommandReceiptSchema`, which accepts a catalog only as a revision. The preload's own bridge is typed
+as what crosses (`AgentWireBridge`: a receipt from `command`, an `AgentStateBroadcast` from `onState`), so code
+that reads it without the page's wrapper cannot read a catalog from it by mistake.
+
+**The page puts the catalog back from the cache the broadcast fills.** `wrapAgentBridge` now wraps `command` as
+well as `onState`, and the two share one cache per page. A receipt whose revisions the window holds resolves
+at once. So does one naming an older revision than the window holds: revisions only advance, so that receipt
+was built before a broadcast the window already has, and the newer catalog is the one to show. One whose
+revisions the window does not hold at all (nothing broadcast yet, or a catalog this command changed whose
+broadcast has not landed) recovers through `bridge.get()`. Receipts naming the same hosts at the same revisions
+while that is in flight wait for the same answer; the host is part of that match because main counts revisions
+per host. The recovered catalog is filed under the receipt's revisions, where the next receipt or broadcast
+naming them finds it, and a catalog the cache still cannot name is taken from the recovery's own answer. The
+caller always gets the receipt's own fields, never the recovery's. A recovery that fails is asked once more
+before anything else, because main has already run the command and a failed reply tells the user it may not
+have. If that fails too, the reply still resolves with the receipt's own fields: the catalog the window last
+held stands in, or the one the last `get()` listed, until the next broadcast. A window that holds neither was
+never sent that catalog, so main recorded none as sent to it and the next broadcast carries it in full; until
+then that host has no models, which is what the window already showed. Where the reply is committed against broadcasts is
+unchanged: `AgentContext` still drops a reply that a broadcast overtook. The catalog revision orders only
+catalogs. Issue #306 is open; if it gives the state its own revision, the receipt carries that revision too.
+
+Two sentences of the Decision above no longer hold. The page's cache no longer "lives exactly as long as the
+subscription does": it lives as long as the page, and every `onState` listener and every command share it, so
+a listener that subscribes again finds what an earlier one was sent rather than recovering. And it is no longer
+true that "nothing downstream of the wrapper knows the wire ever changed shape" for code that calls the
+preload's bridge directly: its `command` answers with a receipt. Everything the app reads goes through the
+wrapper, which still hands back a whole `AgentState`.
+
+The broadcast and the receipts advance one counter from two places with no order between them. A reply shell
+built before a catalog changed can be encoded after the broadcast of that change: it takes a new revision for
+the old content, and the next broadcast takes another for the new content. The window that sent the command
+reads `AGENT_GET` once for that reply. The next broadcast then sends the catalog in full to both windows, the
+widget included, although the widget never saw the receipt: to main the catalog changed twice. Nothing wrong
+reaches the screen, because the
+recovery answers with main's current catalog. Naming the old content by its old revision instead was
+considered and not done: main cannot tell that reply from a catalog that really went back to what it was,
+such as a provider that reconnects, and a window holding the newer revision would then keep showing it.
+
+`AGENT_GET` is unchanged and still answers whole: it is the one recovery path for both. The remote host socket
+protocol is untouched. A content comparison now serves every key that holds the same array: `host.models` and
+the selected host's `clientHosts[]` entry are one array in a shell, and one shell is encoded for both windows.
+A receipt costs main one comparison of the catalog (about 0.8 ms on the synthetic 608 models), and a publish
+of one host's shell to both windows costs one where it used to cost four.
+
+The draft save's reply fell from 542 KB to 2.3 KB. The preload's parse of it fell from about 2.5 ms to 0.04 ms
+and its copy from about 2.2 ms to 0.015 ms. See [the measurement](../perf/2026-09-26-command-receipt.md).

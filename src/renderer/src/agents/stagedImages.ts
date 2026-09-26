@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { AgentAttachmentHandle, AgentBridge } from '../../../shared/agents'
+import type { AgentAttachmentHandle, AgentWireBridge } from '../../../shared/agents'
 
 /** The long edge of a chip's thumbnail, in pixels: twice the chip's own size, so it stays sharp at 200%. */
 export const THUMBNAIL_EDGE = 256
@@ -7,7 +7,8 @@ export const THUMBNAIL_EDGE = 256
 const THUMBNAIL_CACHE = 64
 const thumbnails = new Map<string, Promise<string | null>>()
 
-function agents(): AgentBridge | undefined { return window.sotto?.agents ?? window.sottoWidget?.agents }
+/** Only the staging calls are used, which cross the bridge as they are. */
+function agents(): AgentWireBridge | undefined { return window.sotto?.agents ?? window.sottoWidget?.agents }
 
 function remember(digest: string, thumbnail: Promise<string | null>): Promise<string | null> {
   thumbnails.delete(digest)

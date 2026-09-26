@@ -5,6 +5,7 @@ import { AGENT_ATTACHMENT_CONTENT, AGENT_ATTACHMENT_PREVIEW, AGENT_ATTACHMENT_ST
 import type { AgentControl } from '../../../src/main/agents/control'
 
 vi.mock('electron', () => ({ app: { isPackaged: false, getAppPath: () => 'D:/fixture' } }))
+import { AgentStateBroadcaster } from '../../../src/main/agents/agentStateBroadcast'
 import { registerAgentIpc } from '../../../src/main/agents/ipc'
 
 const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWZ0AAAAASUVORK5CYII='
@@ -27,7 +28,7 @@ function fixture() {
   const attachmentContent = vi.fn(async () => ({ mimeType: 'image/png' as const, bytes: new Uint8Array([1]) }))
   const control = { get: () => ({} as AgentState), shell: () => ({} as AgentState), threadDetail: () => null, command: vi.fn<AgentControl['command']>(), attachmentPreview, stageAttachment, attachmentContent }
   disposables.push(registerAgentIpc(ipc, control, { command: command => control.command(command) }, () => [main, widget], 'win32', { status: vi.fn(), download: vi.fn() },
-    { synthesize: vi.fn(), voices: vi.fn(), cancel: vi.fn() }, { synthesize: vi.fn(), cancel: vi.fn() }))
+    { synthesize: vi.fn(), voices: vi.fn(), cancel: vi.fn() }, { synthesize: vi.fn(), cancel: vi.fn() }, { receipts: new AgentStateBroadcaster() }))
   const invoke = async (payload: unknown, source = main) =>
     listeners.get(AGENT_ATTACHMENT_PREVIEW)!({ sender: source.webContents, senderFrame: source.webContents.mainFrame }, payload)
   const call = async (channel: string, payload: unknown, source = main) =>
