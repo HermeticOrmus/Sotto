@@ -61,8 +61,14 @@ function isStateLike(raw: unknown): raw is AgentState {
  * One catalog as it crossed: a bare array is complete already (a whole `AgentState` read another way, or a
  * test fixture standing in for main); a full catalog is cached under its revision; a revision alone is read
  * back from the cache when the window holds that revision, and is otherwise unresolved.
+ *
+ * `newer` lets a held revision newer than the one named stand in for it. A command receipt asks for that:
+ * main's revisions only advance, so a receipt naming an older revision than the window holds was built
+ * before a broadcast the window already has, and the newer catalog is the one to show. A broadcast does not:
+ * main sends each window its broadcasts in order, so one naming a revision the window does not hold exactly
+ * is one the window missed.
  */
-function resolveCatalog(catalogs: CatalogCache, key: string, catalog: unknown): AgentModel[] | undefined {
+function resolveCatalog(catalogs: CatalogCache, key: string, catalog: unknown, newer = false): AgentModel[] | undefined {
   if (Array.isArray(catalog)) return catalog as AgentModel[]
   if (catalog && typeof catalog === 'object') {
     const record = catalog as { revision?: unknown; models?: unknown; omitted?: unknown }
@@ -73,7 +79,7 @@ function resolveCatalog(catalogs: CatalogCache, key: string, catalog: unknown): 
     }
     if (typeof record.revision === 'number' && record.omitted === true) {
       const cached = catalogs.get(key)
-      return cached && cached.revision === record.revision ? cached.models : undefined
+      return cached && (cached.revision === record.revision || (newer && cached.revision > record.revision)) ? cached.models : undefined
     }
   }
   return undefined
@@ -86,10 +92,11 @@ function revisionOf(catalog: unknown): number | undefined {
 
 /**
  * `state` with every catalog put back, or undefined when one names a revision this window does not hold.
- * `fallback` answers for such a catalog instead, when a recovery could not.
+ * `options.newer` is `resolveCatalog`'s; `options.fallback` answers for an unresolved catalog instead, once
+ * a recovery has been tried.
  */
-function assembleState(catalogs: CatalogCache, state: AgentState | AgentCommandReceipt, fallback?: (key: string) => AgentModel[] | undefined): AgentState | undefined {
-  const find = (key: string, catalog: unknown): AgentModel[] | undefined => resolveCatalog(catalogs, key, catalog) ?? fallback?.(key)
+function assembleState(catalogs: CatalogCache, state: AgentState | AgentCommandReceipt, options: { newer?: boolean; fallback?: (key: string) => AgentModel[] | undefined } = {}): AgentState | undefined {
+  const find = (key: string, catalog: unknown): AgentModel[] | undefined => resolveCatalog(catalogs, key, catalog, options.newer) ?? options.fallback?.(key)
   // Reused as the actual array on both fields when they name the same catalog, so this window holds one
   // copy of it, the way the wire itself does (DesktopHostRouter.shell()).
   // Every catalog is looked at before any is found missing, so one carried in full is cached either way.
@@ -106,46 +113,66 @@ function assembleState(catalogs: CatalogCache, state: AgentState | AgentCommandR
  */
 function rememberRecovered(catalogs: CatalogCache, named: AgentState | AgentCommandReceipt, full: AgentState): void {
   // Revisions only advance, so a newer one the window already holds is never filed over.
-  const remember = (key: string, revision: number | undefined, models: AgentModel[]): void => {
-    if (revision !== undefined && !((catalogs.get(key)?.revision ?? 0) > revision)) catalogs.set(key, { revision, models })
+  const remember = (key: string, revision: number | undefined): void => {
+    const models = catalogIn(full, key)
+    if (models !== undefined && revision !== undefined && !((catalogs.get(key)?.revision ?? 0) > revision)) catalogs.set(key, { revision, models })
   }
-  remember(hostCatalogKey(named.host.hostId), revisionOf(named.host.models), full.host.models)
-  for (const client of named.host.clientHosts ?? []) {
-    const recovered = full.host.clientHosts?.find(candidate => candidate.hostId === client.hostId)
-    if (recovered) remember(clientCatalogKey(client.hostId), revisionOf(client.models), recovered.models)
-  }
+  remember(hostCatalogKey(named.host.hostId), revisionOf(named.host.models))
+  for (const client of named.host.clientHosts ?? []) remember(clientCatalogKey(client.hostId), revisionOf(client.models))
+}
+
+/**
+ * The catalog `full` lists under `key`, keyed as main keys it. A selected host's catalog is found by its
+ * host ID even when `full` was read after another host was selected: the shell lists every host's catalog
+ * in `clientHosts`, and the selected one's entry is the same catalog as `host.models`.
+ */
+function catalogIn(full: AgentState, key: string): AgentModel[] | undefined {
+  if (key === hostCatalogKey(full.host.hostId)) return full.host.models
+  return full.host.clientHosts?.find(client => key === clientCatalogKey(client.hostId) || key === hostCatalogKey(client.hostId))?.models
 }
 
 /**
  * A command's reply as its caller reads it: the receipt main sent (issue #323) with every catalog put back.
- * Nearly always they come from the cache the broadcast filled. A receipt naming a revision this window does
- * not hold — nothing broadcast yet, or a catalog that changed with this command and whose broadcast has not
- * landed — recovers through `bridge.get()` once, and receipts naming the same revisions while that is in
- * flight wait for the same answer rather than asking again. Only an answer asked for after the receipt
- * arrived is remembered under its revisions, so older content is never filed under a newer revision.
+ * Nearly always they come from the cache the broadcast filled. A receipt naming a revision older than one
+ * the window holds takes the newer catalog, since the receipt was built before a broadcast the window
+ * already has. A receipt naming a revision this window does not hold at all (nothing broadcast yet, or a
+ * catalog that changed with this command and whose broadcast has not landed) recovers through
+ * `bridge.get()`, and receipts naming the same hosts at the same revisions while that is in flight wait for
+ * the same answer rather than asking again. Only an answer asked for after the receipt arrived is
+ * remembered under its revisions, so older content is never filed under a newer revision.
  *
  * The receipt's own fields are what the caller gets, never the recovery's: the draft store reads the
- * draft revision it acknowledged and the settings card the settings it applied. When the recovery fails,
- * or its answer no longer lists a host the receipt named, the catalog this window last held for that host
- * stands in until the next broadcast; a failed recovery with nothing held at all fails the reply.
+ * draft revision it acknowledged and the settings card the settings it applied. A catalog the cache still
+ * cannot name after a recovery is taken from the recovery's own answer; a host that answer no longer lists
+ * has no models. A recovery that fails is asked once more, because main has already run the command and
+ * failing the reply tells the user it may not have. When that fails too, the catalog this window last held
+ * for that host stands in until the next broadcast, and with nothing held at all the reply fails the way a
+ * lost reply does.
  */
 function createReceiptCompleter(bridge: Pick<AgentWireBridge, 'get'>, catalogs: CatalogCache): (reply: AgentCommandReceipt) => Promise<AgentState> {
   const recoveries = new Map<string, Promise<AgentState>>()
-  return async reply => {
-    const assembled = assembleState(catalogs, reply)
-    if (assembled !== undefined) return assembled
-    const named = JSON.stringify([revisionOf(reply.host.models), ...(reply.host.clientHosts ?? []).map(client => [client.hostId, revisionOf(client.models)])])
+  const recover = (reply: AgentCommandReceipt): Promise<AgentState> => {
+    // Main counts revisions per host, so the key names each host beside its revision.
+    const named = JSON.stringify([reply.host.hostId ?? null, revisionOf(reply.host.models), ...(reply.host.clientHosts ?? []).map(client => [client.hostId, revisionOf(client.models)])])
     let recovery = recoveries.get(named)
     if (recovery === undefined) {
-      recovery = bridge.get().then(full => { rememberRecovered(catalogs, reply, full); return full })
+      recovery = bridge.get().catch(() => bridge.get()).then(full => { rememberRecovered(catalogs, reply, full); return full })
       recoveries.set(named, recovery)
       const forget = (): void => { recoveries.delete(named) }
       recovery.then(forget, forget)
     }
+    return recovery
+  }
+  return async reply => {
+    const assembled = assembleState(catalogs, reply, { newer: true })
+    if (assembled !== undefined) return assembled
+    let recovered: AgentState | null = null
     let failure: unknown = null
-    try { await recovery } catch (error) { failure = error }
-    const held = (key: string): AgentModel[] | undefined => catalogs.get(key)?.models ?? (failure === null ? [] : undefined)
-    const completed = assembleState(catalogs, reply, held)
+    try { recovered = await recover(reply) } catch (error) { failure = error }
+    const fallback = (key: string): AgentModel[] | undefined => recovered === null
+      ? catalogs.get(key)?.models
+      : catalogIn(recovered, key) ?? catalogs.get(key)?.models ?? []
+    const completed = assembleState(catalogs, reply, { newer: true, fallback })
     if (completed === undefined) throw failure instanceof Error ? failure : new Error('The model list could not be read back.')
     return completed
   }

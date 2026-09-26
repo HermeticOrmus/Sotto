@@ -244,18 +244,60 @@ describe('wrapAgentBridge', () => {
       expect(reply.host.models).toBe(whole.host.models)
       expect(get).not.toHaveBeenCalled()
     })
+    it('resolves a receipt naming an older revision from the newer catalog the window holds, without asking main', async () => {
+      const newer = [model('gpt-5.1')]
+      const { bridge, emit, get } = receiptBridge(() => Promise.reject(new Error('unused')), broadcast({ revision: 1, omitted: true }))
+      const wrapped = wrapAgentBridge(bridge)
+      wrapped.onState(() => undefined)
+      emit(broadcast({ revision: 2, models: newer }))
+      // Main built this receipt before the broadcast of revision 2 the window already has.
+      expect((await wrapped.command(voice)).host.models).toBe(newer)
+      expect(get).not.toHaveBeenCalled()
+    })
+
     it('never files a recovery for an older revision over the newer catalog the window holds', async () => {
       const newer = [model('gpt-5.1')]
-      const { bridge, emit, get } = receiptBridge(() => Promise.resolve(fullState(newer)), broadcast({ revision: 1, omitted: true }))
+      let resolveGet: (value: AgentState) => void = () => undefined
+      const { bridge, emit, get } = receiptBridge(() => new Promise<AgentState>(resolve => { resolveGet = resolve }), broadcast({ revision: 3, omitted: true }))
       const wrapped = wrapAgentBridge(bridge)
       const delivered: AgentState[] = []
       wrapped.onState(state => delivered.push(state))
-      emit(broadcast({ revision: 2, models: newer }))
-      // A receipt naming revision 1 the window no longer holds: it reads main once and answers with what it holds.
-      expect((await wrapped.command(voice)).host.models).toBe(newer)
-      emit(broadcast({ revision: 2, omitted: true }))
+      const reply = wrapped.command(voice)
+      await vi.waitFor(() => expect(get).toHaveBeenCalledTimes(1))
+      // Revision 4 lands in full while the recovery for revision 3 is in flight, and the recovery answers older.
+      emit(broadcast({ revision: 4, models: newer }))
+      resolveGet(fullState([model('gpt-5')]))
+      expect((await reply).host.models).toBe(newer)
+      emit(broadcast({ revision: 4, omitted: true }))
       expect(delivered[1]!.host.models).toBe(newer)
       expect(get).toHaveBeenCalledTimes(1)
+    })
+
+    it('recovers a receipt for another host on its own, even at the same revision while one is in flight', async () => {
+      const hostB = 'bbbbbbbb-0000-4000-8000-000000000000'
+      const modelsA = [model('gpt-5')]
+      const modelsB = [model('grok-4')]
+      const answers: Array<(value: AgentState) => void> = []
+      const full = fullState(modelsA, [{ hostId: HOST, models: modelsA }, { hostId: hostB, models: modelsB }])
+      // The selected host changes between two commands: each receipt names its own host's catalog at revision 1.
+      const forB = broadcast({ revision: 1, omitted: true }) as AgentState
+      const { bridge, get } = receiptBridge(() => new Promise<AgentState>(resolve => { answers.push(resolve) }),
+        broadcast({ revision: 1, omitted: true }), { ...forB, host: { ...forB.host, hostId: hostB } })
+      const wrapped = wrapAgentBridge(bridge)
+      const first = wrapped.command(voice)
+      const second = wrapped.command(voice)
+      await vi.waitFor(() => expect(get).toHaveBeenCalledTimes(2))
+      for (const answer of answers) answer(full)
+      expect((await first).host.models).toEqual(modelsA)
+      expect((await second).host.models).toEqual(modelsB)
+    })
+
+    it('asks main once more when a recovery fails, rather than failing a command main already ran', async () => {
+      let calls = 0
+      const { bridge, get } = receiptBridge(() => ++calls === 1 ? Promise.reject(new Error('offline')) : Promise.resolve(fullState([model('gpt-5')])),
+        broadcast({ revision: 2, omitted: true }))
+      expect((await wrapAgentBridge(bridge).command(voice)).host.models).toEqual([model('gpt-5')])
+      expect(get).toHaveBeenCalledTimes(2)
     })
   })
 })
