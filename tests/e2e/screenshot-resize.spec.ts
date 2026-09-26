@@ -1,31 +1,9 @@
 import { mkdir } from 'node:fs/promises'
-import { expect, test, type Page } from '@playwright/test'
-import type { AgentAttachment } from '../../src/shared/agents'
-import { pasteDrawnScreenshot } from '../fixtures/drawnScreenshot'
-import { closeSotto, launchSotto, openThreads } from './support/sottoLaunch'
+import { expect, test } from '@playwright/test'
+import { decodedSize, openWorkshopComposer, pasteDrawnScreenshot, savedAttachment } from '../fixtures/drawnScreenshot'
+import { closeSotto, launchSotto } from './support/sottoLaunch'
 
 const RUN = 'artifacts/screenshot-resize-run'
-
-/** The attachment named `name` on any saved thread draft, once the draft carrying it has been saved. */
-async function savedAttachment(page: Page, name: string): Promise<AgentAttachment> {
-  let found: AgentAttachment | undefined
-  await expect.poll(async () => {
-    const state = await page.evaluate(async () => window.sotto!.agents!.get())
-    found = state.threadDrafts?.flatMap(draft => draft.attachments).find(attachment => attachment.name === name)
-    return found !== undefined
-  }).toBe(true)
-  return found!
-}
-
-/** The pixel size of the image a data URL holds, as the window decodes it. */
-async function decodedSize(page: Page, dataUrl: string): Promise<{ width: number, height: number }> {
-  return page.evaluate(async source => {
-    const image = new Image()
-    image.src = source
-    await image.decode()
-    return { width: image.naturalWidth, height: image.naturalHeight }
-  }, dataUrl)
-}
 
 test('a screenshot past the bound is scaled down in its own format, and its chip says so', async () => {
   test.setTimeout(90_000)
@@ -33,14 +11,7 @@ test('a screenshot past the bound is scaled down in its own format, and its chip
   const launched = await launchSotto()
   const { page } = launched
   try {
-    await page.evaluate(async () => {
-      await window.sotto!.updateSettings({ onboardingComplete: true })
-      await window.sotto!.agents!.command({ type: 'configure', patch: { enabled: true, speak: false } })
-      await window.sotto!.agents!.command({ type: 'connect' })
-    })
-    await page.reload(); await openThreads(page)
-    await page.getByRole('button', { name: 'Workshop', exact: true }).click()
-    const prompt = page.getByRole('textbox', { name: 'Prompt', exact: true })
+    const prompt = await openWorkshopComposer(page)
     const previews = page.getByLabel('Attached screenshots')
     await expect(page.getByRole('button', { name: 'Attach screenshots', exact: true })).toBeEnabled()
 

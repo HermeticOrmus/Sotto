@@ -1,8 +1,8 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
 import { attachmentSizeBytes } from '../../src/shared/agents'
-import { closeSotto, launchSotto, openThreads, type LaunchedSotto } from '../e2e/support/sottoLaunch'
-import { pasteDrawnScreenshot, type DrawnScreenshot } from '../fixtures/drawnScreenshot'
+import { closeSotto, launchSotto, type LaunchedSotto } from '../e2e/support/sottoLaunch'
+import { decodedSize, openWorkshopComposer, pasteDrawnScreenshot, savedAttachment, type DrawnScreenshot } from '../fixtures/drawnScreenshot'
 import { median, PERF_BENCH, round } from '../fixtures/perfBench'
 
 const RUNS = 5
@@ -14,22 +14,12 @@ interface Run { readonly ms: number, readonly fileBytes: number, readonly sentBy
 async function pasteOnce({ page }: LaunchedSotto, screenshot: DrawnScreenshot): Promise<Run> {
   const prompt = page.getByRole('textbox', { name: 'Prompt', exact: true })
   const { ms, fileBytes } = await pasteDrawnScreenshot(prompt, screenshot)
-  let dataUrl: string | undefined
-  await expect.poll(async () => {
-    const state = await page.evaluate(async () => window.sotto!.agents!.get())
-    dataUrl = state.threadDrafts?.flatMap(draft => draft.attachments).find(attachment => attachment.name === screenshot.name)?.dataUrl
-    return dataUrl !== undefined
-  }, { timeout: 30_000 }).toBe(true)
+  const { dataUrl } = await savedAttachment(page, screenshot.name)
   // Sizes only: the pixel size the window decodes from the data URL, and its decoded byte count.
-  const sent = await page.evaluate(async source => {
-    const image = new Image()
-    image.src = source
-    await image.decode()
-    return { width: image.naturalWidth, height: image.naturalHeight }
-  }, dataUrl!)
+  const sent = await decodedSize(page, dataUrl)
   await page.getByRole('button', { name: `Remove ${screenshot.name}`, exact: true }).click()
   await expect.poll(async () => page.getByAltText(screenshot.name, { exact: true }).count()).toBe(0)
-  return { ms, fileBytes, sentBytes: attachmentSizeBytes(dataUrl!), sent }
+  return { ms, fileBytes, sentBytes: attachmentSizeBytes(dataUrl), sent }
 }
 
 async function measure(launched: LaunchedSotto, label: string, screenshot: Omit<DrawnScreenshot, 'name'>) {
@@ -57,13 +47,7 @@ describe.skipIf(!PERF_BENCH)('scaling pasted screenshots down to the bound', () 
     const launched = await launchSotto()
     try {
       const { page } = launched
-      await page.evaluate(async () => {
-        await window.sotto!.updateSettings({ onboardingComplete: true })
-        await window.sotto!.agents!.command({ type: 'configure', patch: { enabled: true, speak: false } })
-        await window.sotto!.agents!.command({ type: 'connect' })
-      })
-      await page.reload(); await openThreads(page)
-      await page.getByRole('button', { name: 'Workshop', exact: true }).click()
+      await openWorkshopComposer(page)
       await measure(launched, 'floor: 1920x1080 PNG, a quarter photograph', { type: 'image/png', width: 1920, height: 1080, photo: 0.25 })
       await measure(launched, '3840x2160 PNG, a quarter photograph', { type: 'image/png', width: 3840, height: 2160, photo: 0.25 })
       await measure(launched, '5120x2880 PNG, a quarter photograph', { type: 'image/png', width: 5120, height: 2880, photo: 0.25 })

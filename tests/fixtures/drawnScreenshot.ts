@@ -1,4 +1,6 @@
-import type { Locator } from '@playwright/test'
+import { expect, type Locator, type Page } from '@playwright/test'
+import type { AgentAttachment } from '../../src/shared/agents'
+import { openThreads } from '../e2e/support/sottoLaunch'
 
 export interface DrawnScreenshot {
   readonly name: string
@@ -50,9 +52,9 @@ export async function pasteDrawnScreenshot(target: Locator, screenshot: DrawnScr
     const blob = await canvas.convertToBlob({ type: image.type, quality: 0.92 })
     const shown = () => [...document.querySelectorAll('img')].some(img => img.getAttribute('alt') === image.name)
     const appeared = new Promise<void>((resolve, reject) => {
-      const observer = new MutationObserver(() => { if (shown()) { observer.disconnect(); resolve() } })
+      const deadline = setTimeout(() => { observer.disconnect(); reject(new Error(`${image.name} did not appear in the composer.`)) }, 30_000)
+      const observer = new MutationObserver(() => { if (shown()) { observer.disconnect(); clearTimeout(deadline); resolve() } })
       observer.observe(document.body, { childList: true, subtree: true })
-      setTimeout(() => { observer.disconnect(); reject(new Error(`${image.name} did not appear in the composer.`)) }, 30_000)
     })
     const transfer = new DataTransfer()
     transfer.items.add(new File([blob], image.name, { type: image.type }))
@@ -61,4 +63,37 @@ export async function pasteDrawnScreenshot(target: Locator, screenshot: DrawnScr
     await appeared
     return { fileBytes: blob.size, ms: performance.now() - started }
   }, screenshot)
+}
+
+/** Turns the thread view on in the launched app and opens the Workshop thread's composer, ready for a paste. */
+export async function openWorkshopComposer(page: Page): Promise<Locator> {
+  await page.evaluate(async () => {
+    await window.sotto!.updateSettings({ onboardingComplete: true })
+    await window.sotto!.agents!.command({ type: 'configure', patch: { enabled: true, speak: false } })
+    await window.sotto!.agents!.command({ type: 'connect' })
+  })
+  await page.reload(); await openThreads(page)
+  await page.getByRole('button', { name: 'Workshop', exact: true }).click()
+  return page.getByRole('textbox', { name: 'Prompt', exact: true })
+}
+
+/** The attachment named `name` on any saved thread draft, once the draft carrying it has been saved. */
+export async function savedAttachment(page: Page, name: string): Promise<AgentAttachment> {
+  let found: AgentAttachment | undefined
+  await expect.poll(async () => {
+    const state = await page.evaluate(async () => window.sotto!.agents!.get())
+    found = state.threadDrafts?.flatMap(draft => draft.attachments).find(attachment => attachment.name === name)
+    return found !== undefined
+  }, { timeout: 30_000 }).toBe(true)
+  return found!
+}
+
+/** The pixel size of the image a data URL holds, as the window decodes it. Sizes only. */
+export async function decodedSize(page: Page, dataUrl: string): Promise<{ width: number, height: number }> {
+  return page.evaluate(async source => {
+    const image = new Image()
+    image.src = source
+    await image.decode()
+    return { width: image.naturalWidth, height: image.naturalHeight }
+  }, dataUrl)
 }
