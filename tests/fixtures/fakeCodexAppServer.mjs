@@ -64,7 +64,18 @@ if (process.argv.includes('exec')) {
 }
 const state = read('state.json', { threads: {} })
 const loadedThreads = new Set()
-const save = () => { writeFileSync(file('state.tmp'), JSON.stringify(state)); renameSync(file('state.tmp'), file('state.json')) }
+// Windows refuses to rename over a file another process has open, and a test may be reading state.json right then.
+// Wait for the reader, as graceful-fs does, rather than let the refusal end this process.
+const pause = new Int32Array(new SharedArrayBuffer(4))
+const save = () => {
+  writeFileSync(file('state.tmp'), JSON.stringify(state))
+  for (let attempt = 0; ; attempt++) {
+    try { renameSync(file('state.tmp'), file('state.json')); return } catch (error) {
+      if (attempt >= 100 || !['EPERM', 'EACCES', 'EBUSY'].includes(error.code)) throw error
+      Atomics.wait(pause, 0, 0, 10)
+    }
+  }
+}
 const emit = message => process.stdout.write(JSON.stringify(message) + '\n')
 const notify = (method, params) => emit({ method, params })
 const record = message => appendFileSync(file('requests.jsonl'), JSON.stringify(message) + '\n')
