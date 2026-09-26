@@ -9,6 +9,9 @@ interface CachedCatalog {
 /** What this window holds of each catalog, keyed by `hostCatalogKey` and `clientCatalogKey`, as main keys it. */
 type CatalogCache = Map<string, CachedCatalog>
 
+/** The catalogs the last whole state read through `get()` listed, by the same keys, with no revision. */
+type LastRead = Map<string, AgentModel[]>
+
 const wrapped = new WeakMap<AgentWireBridge, AgentBridge>()
 
 /**
@@ -23,7 +26,9 @@ const wrapped = new WeakMap<AgentWireBridge, AgentBridge>()
  * Broadcasts and receipts share one cache, because their revisions come from the same counter in main: a
  * catalog the broadcast sent in full is what a receipt resolves from, and a catalog recovered for a receipt
  * serves the next broadcast that names it. The cache lives as long as the page does — a reload runs the
- * page fresh, so it empties exactly when the window's own memory of what it was sent does.
+ * page fresh, so it empties exactly when the window's own memory of what it was sent does. Every catalog a
+ * whole state read through `get()` listed is kept apart from it, with no revision, as the last resort for a
+ * receipt whose recovery fails (`createReceiptCompleter`).
  *
  * `bridge` is `window.sotto.agents` or `window.sottoWidget.agents`, whichever a window has. Wrapping is
  * memoized by the underlying bridge's own identity, so calling this again on the same bridge — as a
@@ -34,10 +39,21 @@ export function wrapAgentBridge(bridge: AgentWireBridge): AgentBridge {
   const existing = wrapped.get(bridge)
   if (existing) return existing
   const catalogs: CatalogCache = new Map()
-  const completeReceipt = createReceiptCompleter(bridge, catalogs)
+  const lastRead: LastRead = new Map()
+  const get = async (): Promise<AgentState> => {
+    const full = await bridge.get()
+    lastRead.set(hostCatalogKey(full.host.hostId), full.host.models)
+    for (const client of full.host.clientHosts ?? []) {
+      lastRead.set(clientCatalogKey(client.hostId), client.models)
+      lastRead.set(hostCatalogKey(client.hostId), client.models)
+    }
+    return full
+  }
+  const completeReceipt = createReceiptCompleter({ get }, catalogs, lastRead)
   const result: AgentBridge = {
     ...bridge,
-    onState: listener => bridge.onState(createReassembler(bridge, catalogs, listener)),
+    get,
+    onState: listener => bridge.onState(createReassembler({ get }, catalogs, listener)),
     command: async request => completeReceipt(await bridge.command(request)),
   }
   wrapped.set(bridge, result)
@@ -49,8 +65,8 @@ function isStateLike(raw: unknown): raw is AgentState {
 }
 
 /**
- * One catalog as it crossed: a bare array is complete already (a whole `AgentState` read another way, or a
- * test fixture standing in for main); a full catalog is cached under its revision; a revision alone is read
+ * One catalog as it crossed: a bare array is complete already (a whole `AgentState` from a test bridge
+ * standing in for main, since the preload refuses one from main's command); a full catalog is cached under its revision; a revision alone is read
  * back from the cache when the window holds that revision, and is otherwise unresolved.
  *
  * `newer` lets a held revision newer than the one named stand in for it. A command receipt asks for that:
@@ -136,11 +152,13 @@ function catalogIn(full: AgentState, key: string): AgentModel[] | undefined {
  * draft revision it acknowledged and the settings card the settings it applied. A catalog the cache still
  * cannot name after a recovery is taken from the recovery's own answer; a host that answer no longer lists
  * has no models. A recovery that fails is asked once more, because main has already run the command and
- * failing the reply tells the user it may not have. When that fails too, the catalog this window last held
- * for that host stands in until the next broadcast, and with nothing held at all the reply fails the way a
- * lost reply does.
+ * failing the reply tells the user it may not have. When that fails too, the reply still resolves: the
+ * catalog this window last held for that host stands in, or the one the last `get()` listed, until the next
+ * broadcast. A window that holds neither has no models on screen for that host to keep, and main has
+ * recorded no catalog as sent to it, so the next broadcast carries the catalog in full; until then that
+ * host has no models, which is what the window already showed.
  */
-function createReceiptCompleter(bridge: Pick<AgentWireBridge, 'get'>, catalogs: CatalogCache): (reply: AgentCommandReceipt) => Promise<AgentState> {
+function createReceiptCompleter(bridge: Pick<AgentBridge, 'get'>, catalogs: CatalogCache, lastRead: LastRead): (reply: AgentCommandReceipt) => Promise<AgentState> {
   const recoveries = new Map<string, Promise<AgentState>>()
   const recover = (reply: AgentCommandReceipt): Promise<AgentState> => {
     // Main counts revisions per host, so the key names each host beside its revision.
@@ -158,14 +176,11 @@ function createReceiptCompleter(bridge: Pick<AgentWireBridge, 'get'>, catalogs: 
     const assembled = assembleState(catalogs, reply, { newer: true })
     if (assembled !== undefined) return assembled
     let recovered: AgentState | null = null
-    let failure: unknown = null
-    try { recovered = await recover(reply) } catch (error) { failure = error }
-    const fallback = (key: string): AgentModel[] | undefined => recovered === null
-      ? catalogs.get(key)?.models
-      : catalogIn(recovered, key) ?? catalogs.get(key)?.models ?? []
-    const completed = assembleState(catalogs, reply, { newer: true, fallback })
-    if (completed === undefined) throw failure instanceof Error ? failure : new Error('The model list could not be read back.')
-    return completed
+    try { recovered = await recover(reply) } catch { /* main ran the command; the fallback below answers */ }
+    const fallback = (key: string): AgentModel[] => (recovered === null ? undefined : catalogIn(recovered, key))
+      ?? catalogs.get(key)?.models ?? lastRead.get(key) ?? []
+    // With a fallback that always answers, every catalog resolves.
+    return assembleState(catalogs, reply, { newer: true, fallback })!
   }
 }
 
