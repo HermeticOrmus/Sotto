@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Paperclip, X } from 'lucide-react'
-import { AGENT_IMAGE_MIME_TYPES, AGENT_MAX_ATTACHMENT_BYTES, AGENT_MAX_ATTACHMENTS, AGENT_MAX_IMAGE_BYTES, agentAttachmentsSchema, attachmentSizeBytes, type AgentAttachment } from '../../../shared/agents'
+import { AGENT_IMAGE_MIME_TYPES, AGENT_MAX_ATTACHMENT_BYTES, AGENT_MAX_ATTACHMENTS, AGENT_MAX_IMAGE_BYTES, agentAttachmentsSchema, attachmentSizeBytes, type AgentAttachment, type AgentAttachmentDimensions } from '../../../shared/agents'
 import { Button } from '../components/Button'
+import { readScreenshot, wasResized } from './screenshotResize'
 import './screenshots.css'
 
 // The refusals a file's own type and size decide, checked before anything is read.
@@ -14,35 +15,53 @@ function checkImage(file: File): void {
   if (file.size > AGENT_MAX_IMAGE_BYTES) throw new Error(TOO_LARGE)
 }
 
-function readImage(file: File): Promise<AgentAttachment> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onerror = () => reject(new Error('Could not read this screenshot. Try selecting it again.'))
-    reader.onload = () => resolve({ id: crypto.randomUUID(), name: file.name || 'Screenshot.png', mimeType: file.type as AgentAttachment['mimeType'], dataUrl: String(reader.result) })
-    reader.readAsDataURL(file)
-  })
+async function readImage(file: File): Promise<AgentAttachment> {
+  const { dataUrl, dimensions } = await readScreenshot(file)
+  return { id: crypto.randomUUID(), name: file.name || 'Screenshot.png', mimeType: file.type as AgentAttachment['mimeType'], dataUrl, ...(dimensions ? { dimensions } : {}) }
 }
 
-export function ScreenshotInput({ attachments, onChange, disabled, supported, children, onReadingChange }: {
+/** "Resized from 3840 by 2160 to 2576 by 1449 pixels": sizes only, for the chip's tooltip and what a screen reader reads. */
+function resizedDescription({ original, sent }: AgentAttachmentDimensions): string {
+  return `Resized from ${original.width} by ${original.height} to ${sent.width} by ${sent.height} pixels`
+}
+
+export function ScreenshotInput({ attachments, onChange, onAddAfterClose, disabled, supported, children, onRead, pending = false, notice = null }: {
   readonly attachments: AgentAttachment[]
   readonly onChange: (attachments: AgentAttachment[]) => void
+  /**
+   * Where screenshots go that finish reading after this composer has closed, as it does when the user moves to
+   * another thread while they are read. It is given only the new ones, to add to the draft they were attached
+   * to. Without it they are dropped.
+   */
+  readonly onAddAfterClose?: (images: AgentAttachment[]) => void
   readonly disabled: boolean
   readonly supported: boolean
   readonly children: ReactNode
-  readonly onReadingChange?: (reading: boolean) => void
+  /**
+   * Called as screenshots start being read. It returns what to call once they have been handed on, which
+   * happens after this input has closed when the user moved on meanwhile.
+   */
+  readonly onRead?: () => () => void
+  /** Screenshots an earlier input started reading for this draft are still being read, so nothing more is added yet. */
+  readonly pending?: boolean
+  /** What became of screenshots read after an earlier input closed, shown until the user adds more. */
+  readonly notice?: string | null
 }): ReactNode {
   const picker = useRef<HTMLInputElement>(null)
   const current = useRef(attachments)
   current.current = attachments
   const latestChange = useRef(onChange)
   latestChange.current = onChange
+  const latestAddAfterClose = useRef(onAddAfterClose)
+  latestAddAfterClose.current = onAddAfterClose
   const reading = useRef(false)
   const mounted = useRef(true)
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false; onReadingChange?.(false) } }, [onReadingChange])
-  const [busy, setBusy] = useState(false)
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
+  const [readingHere, setReadingHere] = useState(false)
+  const busy = readingHere || pending
   const [error, setError] = useState<string | null>(null)
   const add = async (files: File[]): Promise<void> => {
-    if (disabled || reading.current) return
+    if (disabled || reading.current || pending) return
     if (!supported) { setError('This model does not support screenshots. Choose a model with image support.'); return }
     setError(null)
     if (files.length + current.current.length > AGENT_MAX_ATTACHMENTS) { setError(`Attach up to ${AGENT_MAX_ATTACHMENTS} screenshots at a time.`); return }
@@ -50,16 +69,22 @@ export function ScreenshotInput({ attachments, onChange, disabled, supported, ch
     try { files.forEach(checkImage) } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not read these screenshots.'); return }
     const total = current.current.reduce((sum, item) => sum + attachmentSizeBytes(item.dataUrl), 0) + files.reduce((sum, file) => sum + file.size, 0)
     if (total > AGENT_MAX_ATTACHMENT_BYTES) { setError(TOO_LARGE_IN_TOTAL); return }
-    reading.current = true; setBusy(true); onReadingChange?.(true)
+    reading.current = true; setReadingHere(true)
+    const handedOn = onRead?.()
     try {
-      const images = await Promise.all(files.map(readImage))
-      if (!mounted.current) return
+      // One at a time, so at most one decoded image is held in memory however many are added at once.
+      const images: AgentAttachment[] = []
+      for (const file of files) images.push(await readImage(file))
+      if (!mounted.current) { latestAddAfterClose.current?.(images); return }
       // The schema stays the authority: it checks what was actually read, not what the files claimed.
       const result = agentAttachmentsSchema.safeParse([...current.current, ...images])
       if (!result.success) { setError(TOO_LARGE_IN_TOTAL); return }
       latestChange.current(result.data)
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not read these screenshots.') }
-    finally { if (mounted.current) { reading.current = false; setBusy(false); onReadingChange?.(false) } }
+    finally {
+      handedOn?.()
+      if (mounted.current) { reading.current = false; setReadingHere(false) }
+    }
   }
   return <div className="screenshot-input" onPaste={event => {
     const files = [...event.clipboardData.items].filter(item => item.kind === 'file').map(item => item.getAsFile()).filter((file): file is File => file !== null)
@@ -70,12 +95,14 @@ export function ScreenshotInput({ attachments, onChange, disabled, supported, ch
     {children}
     {attachments.length > 0 && <div className="screenshot-previews" aria-label="Attached screenshots">{attachments.map(attachment => <figure key={attachment.id}>
       <img src={attachment.dataUrl} alt={attachment.name} /><figcaption title={attachment.name}>{attachment.name}</figcaption>
+      {wasResized(attachment.dimensions) && <small className="screenshot-previews__resized" title={resizedDescription(attachment.dimensions)}>
+        <span aria-hidden="true">Resized to {attachment.dimensions.sent.width} x {attachment.dimensions.sent.height}</span><span className="tt-visually-hidden">{resizedDescription(attachment.dimensions)}</span></small>}
       <button type="button" title={`Remove ${attachment.name}`} aria-label={`Remove ${attachment.name}`} disabled={disabled || busy} onClick={() => onChange(current.current.filter(item => item.id !== attachment.id))}><X size={12} /></button>
     </figure>)}</div>}
     <div className="screenshot-input__tools"><input ref={picker} type="file" accept={AGENT_IMAGE_MIME_TYPES.join(',')} multiple aria-label="Screenshot files" hidden onChange={event => { const files = [...(event.target.files ?? [])]; event.target.value = ''; void add(files) }} />
       <Button type="button" variant="ghost" iconOnly aria-label="Attach screenshots" disabled={disabled || busy || !supported} onClick={() => picker.current?.click()}><Paperclip size={16} /></Button>
       {busy && <small role="status">Adding screenshots...</small>}
-      {error && <small className="agent-error" role="alert">{error}</small>}
+      {(error ?? notice) && <small className="agent-error" role="alert">{error ?? notice}</small>}
     </div>
   </div>
 }
