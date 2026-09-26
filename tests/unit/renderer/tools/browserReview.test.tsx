@@ -294,7 +294,7 @@ describe('browser feedback', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add to draft' }))
     expect(screen.getByRole('button', { name: 'Add to draft' })).toBeDisabled()
     await waitFor(() => expect(close).toHaveBeenCalledOnce())
-    expect(add).toHaveBeenCalledWith(expect.objectContaining({ element: expect.objectContaining({ selector: '#save' }) }), 'Give this more space')
+    expect(add).toHaveBeenCalledWith(expect.objectContaining({ element: expect.objectContaining({ selector: '#save' }) }), 'Give this more space', expect.any(AbortSignal))
   })
   it('selects a region entirely from the keyboard and binds it to the captured frame', async () => {
     const browser = fake()
@@ -322,18 +322,50 @@ describe('browser feedback', () => {
     drafts.edit('visual-gate', { requestId: 'question' })
     expect(await appendBrowserFeedback(drafts, 'visual-gate', capture, 'Other', true)).toContain('answers a question')
   })
+  it('leaves the draft as it was when the add is cancelled while its screenshot is prepared', async () => {
+    vi.useFakeTimers()
+    const drafts = new ThreadDraftStore(vi.fn(async () => null))
+    drafts.edit('visual-gate', { text: 'Keep this thought' })
+    const before = drafts.draft('visual-gate')
+    let finish: (value: { dataUrl: string }) => void = () => undefined
+    const prepare = vi.fn(() => new Promise<{ dataUrl: string }>(resolve => { finish = resolve }))
+    const controller = new AbortController()
+    const added = appendBrowserFeedback(drafts, 'visual-gate', capture, 'Too tight', true, { prepare, signal: controller.signal })
+    controller.abort()
+    finish({ dataUrl: image })
+    expect(await added).toBeNull()
+    expect(drafts.draft('visual-gate')).toBe(before)
+  })
+  it('stops a pending add when Cancel is pressed, and does not close twice', async () => {
+    const browser = fake(); const close = vi.fn()
+    let signal: AbortSignal | undefined
+    let finish: (error: string | null) => void = () => undefined
+    const add = vi.fn((_capture: unknown, _comment: string, given: AbortSignal) => { signal = given; return new Promise<string | null>(resolve => { finish = resolve }) })
+    render(<BrowserFeedback page={page} initial={capture} bridge={browser.bridge} onAdd={add} onClose={close} />)
+    fireEvent.change(screen.getByRole('textbox', { name: 'Browser feedback comment' }), { target: { value: 'Give this more space' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add to draft' }))
+    await waitFor(() => expect(add).toHaveBeenCalledOnce())
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(signal?.aborted).toBe(true)
+    expect(close).toHaveBeenCalledOnce()
+    finish(null)
+    await Promise.resolve(); await Promise.resolve()
+    expect(close).toHaveBeenCalledOnce()
+  })
   it('scales a capture past the screenshot bound down before it joins the draft, keeping typing done meanwhile', async () => {
     vi.useFakeTimers()
     const drafts = new ThreadDraftStore(vi.fn(async () => null))
     const dimensions = { original: { width: 5120, height: 2880 }, sent: { width: 2576, height: 1449 } }
     let finish: (value: { dataUrl: string, dimensions: typeof dimensions }) => void = () => undefined
     const prepare = vi.fn(() => new Promise<{ dataUrl: string, dimensions: typeof dimensions }>(resolve => { finish = resolve }))
-    const added = appendBrowserFeedback(drafts, 'visual-gate', capture, 'Too tight', true, prepare)
+    const added = appendBrowserFeedback(drafts, 'visual-gate', { ...capture, width: 5120, height: 2880 }, 'Too tight', true, { prepare })
     expect(prepare).toHaveBeenCalledWith(capture.image)
     drafts.edit('visual-gate', { text: 'Typed while it was prepared' })
     finish({ dataUrl: image, dimensions })
     expect(await added).toBeNull()
     expect(drafts.draft('visual-gate').text).toMatch(/^Typed while it was prepared\n\nBrowser feedback:/)
+    // The agent is told the size of the image it receives, not only the size captured.
+    expect(drafts.draft('visual-gate').text).toContain('Screenshot size: 5120 x 2880, sent at 2576 x 1449')
     expect(drafts.draft('visual-gate').attachments).toEqual([expect.objectContaining({ name: 'Browser feedback.png', dataUrl: image, dimensions })])
   })
 })
