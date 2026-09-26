@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { hostKeys } from './support/hostKeys'
 import { closeSotto, launchSotto, launchSottoWithVoice, openThreads, paneMenuAction, resizeWindow } from './support/sottoLaunch'
 
 const screenshot = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a5FoAAAAASUVORK5CYII=', 'base64')
@@ -35,12 +36,13 @@ test('creates a project thread while the hidden coordinator retains another thre
     const state = await page.evaluate(async () => window.sotto!.agents!.get())
     expect(state.error).toBeNull()
     expect(state.host.threads).toContainEqual(expect.objectContaining({ id: state.activeThreadId, title: 'New project thread' }))
-    expect(state).toMatchObject({ draft: 'Keep the other thread draft', draftThreadId: 'workshop', assignments: [] })
+    const key = await hostKeys(page)
+    expect(state).toMatchObject({ draft: 'Keep the other thread draft', draftThreadId: key('workshop'), assignments: [] })
     await page.getByRole('textbox', { name: 'Prompt', exact: true }).fill('Only send this new prompt')
     await page.getByRole('button', { name: 'Send prompt', exact: true }).click()
     await expect(page.getByLabel('Thread transcript')).toContainText('Only send this new prompt')
     await expect(page.getByRole('textbox', { name: 'Prompt', exact: true })).toHaveValue('')
-    expect(await page.evaluate(async () => window.sotto!.agents!.get())).toMatchObject({ draft: 'Keep the other thread draft', draftThreadId: 'workshop' })
+    expect(await page.evaluate(async () => window.sotto!.agents!.get())).toMatchObject({ draft: 'Keep the other thread draft', draftThreadId: key('workshop') })
     await page.screenshot({ animations: 'disabled', path: 'artifacts/new-thread-saved-draft/created-and-sent.png' })
   } finally { await closeSotto(launched) }
 })

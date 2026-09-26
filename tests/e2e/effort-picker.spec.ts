@@ -1,12 +1,14 @@
 import { mkdir } from 'node:fs/promises'
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import sharp from 'sharp'
+import { hostKeys } from './support/hostKeys'
 import { closeSotto, launchSottoWithVoice, openThreads, resizeWindow } from './support/sottoLaunch'
 
 const ARTIFACTS = 'artifacts/effort-slider'
 
 async function savedEffort(page: Page): Promise<string | undefined> {
-  return page.evaluate(async () => (await window.sotto!.agents!.get()).host.threads.find(thread => thread.id === 'workshop')?.reasoningEffort)
+  const workshop = (await hostKeys(page))('workshop')
+  return page.evaluate(async id => (await window.sotto!.agents!.get()).host.threads.find(thread => thread.id === id)?.reasoningEffort, workshop)
 }
 
 /** The composer's outline is its ::after ring; its opacity says whether the thread wears the colourway. */
