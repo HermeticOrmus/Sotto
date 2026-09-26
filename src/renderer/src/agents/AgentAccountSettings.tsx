@@ -63,7 +63,7 @@ export function AgentSetupFields(): ReactNode {
     <ProviderUpgradeNotice state={state} command={command} />
     <SavedField label="Default projects directory" value={configuration.projectsDirectory} onSave={projectsDirectory => save({ projectsDirectory })} />
     <SavedField label="Automatic follow-up limit" value={String(configuration.followupLimit)} onSave={value => /^\d+$/.test(value) && Number(value) <= 100 ? save({ followupLimit: Number(value) }) : Promise.resolve(false)} />
-  </div>{voiceCoordinator ? <><VoiceSettings configuration={configuration} command={command} change={(key, value) => { void save({ [key]: value }) }} grokKeySaved={state.credentials.grokSpeech} voiceError={state.voice.error} />
+  </div>{voiceCoordinator ? <><VoiceSettings configuration={configuration} command={command} change={(key, value) => save({ [key]: value })} grokKeySaved={state.credentials.grokSpeech} voiceError={state.voice.error} />
   <details className="agent-wake-advanced">
     <summary>Advanced wake settings</summary>
     <div className="account-rows">

@@ -9,13 +9,39 @@ function speechError(error: unknown): string {
   return error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/u, '') : 'The voice could not be prepared. Try again.'
 }
 
-export function VoiceSettings({ configuration, command, change, grokKeySaved = false, voiceError }: {
+type VoiceField = 'speechProvider' | 'speechVoice' | 'grokSpeechVoice'
+type VoicePick = Partial<Pick<AgentConfiguration, VoiceField>>
+
+/** Drops a field's pick if it still holds this value; a later pick of the same field is left alone. */
+function withoutPick(current: VoicePick, field: VoiceField, value: string): VoicePick {
+  if (current[field] !== value) return current
+  const next = { ...current }
+  delete next[field]
+  return next
+}
+
+export function VoiceSettings({ configuration: saved, command, change, grokKeySaved = false, voiceError }: {
   readonly configuration: AgentConfiguration
   readonly command: AgentConnection['command']
-  readonly change: <K extends keyof AgentConfiguration>(key: K, value: AgentConfiguration[K]) => void
+  /** Saves one setting. A promise says whether main took it; without one the configuration passed back is the answer. */
+  readonly change: <K extends keyof AgentConfiguration>(key: K, value: AgentConfiguration[K]) => void | Promise<boolean>
   readonly grokKeySaved?: boolean
   readonly voiceError?: string | null
 }): ReactNode {
+  // A voice the user picks shows, and is what Use and preview voice saves, from the moment it is picked. The
+  // configuration passed in can still name the voice before the pick when the press follows at once, and saving
+  // that would put the old voice back. The pick gives way once the configuration names it, or once its save is
+  // refused, when the select goes back to the voice that is saved.
+  const [picked, setPicked] = useState<VoicePick>({})
+  useEffect(() => {
+    setPicked(current => (Object.keys(current) as VoiceField[]).reduce((next, field) => withoutPick(next, field, saved[field]), current))
+  }, [saved])
+  const configuration = { ...saved, ...picked }
+  const pick = <K extends VoiceField>(field: K, value: AgentConfiguration[K]): void => {
+    setPicked(current => ({ ...current, [field]: value }))
+    const saving = change(field, value)
+    if (saving) void saving.catch(() => false).then(taken => { if (!taken) setPicked(current => withoutPick(current, field, value)) })
+  }
   const [model, setModel] = useState<AgentVoiceModelStatus | null>(null)
   const [downloading, setDownloading] = useState(false)
   const [previewing, setPreviewing] = useState(false)
@@ -94,11 +120,11 @@ export function VoiceSettings({ configuration, command, change, grokKeySaved = f
     setPreviewing(true); setError(''); setNotice('')
     try {
       const patch = { speechProvider: configuration.speechProvider, ...(grok ? { grokSpeechVoice: configuration.grokSpeechVoice } : natural ? { speechVoice: configuration.speechVoice } : {}), speak: true }
-      const saved = await command({ type: 'configure', patch })
-      if (!saved || saved.error) { setError(saved?.error ?? 'The voice settings could not be saved.'); return }
+      const stored = await command({ type: 'configure', patch })
+      if (!stored || stored.error) { setError(stored?.error ?? 'The voice settings could not be saved.'); return }
       change('speak', true)
-      const result = await command({ type: 'preview-voice' })
-      if (!result || result.error) setError(result?.error ?? 'The voice preview could not start.')
+      const started = await command({ type: 'preview-voice' })
+      if (!started || started.error) setError(started?.error ?? 'The voice preview could not start.')
       else setNotice('Voice saved. Your preview will play through the selected output device.')
     } catch (error) { setError(speechError(error)) }
     finally { setPreviewing(false) }
@@ -108,16 +134,16 @@ export function VoiceSettings({ configuration, command, change, grokKeySaved = f
   return <div className="agent-field-wide agent-voice-settings">
     <Toggle label="Spoken replies" checked={configuration.speak} onCheckedChange={checked => change('speak', checked)} />
     <div className="agent-fields">
-      <label>Speech voice<select aria-label="Speech voice" value={configuration.speechProvider} onChange={event => { change('speechProvider', event.target.value as AgentConfiguration['speechProvider']); setError(''); setNotice('') }}>
+      <label>Speech voice<select aria-label="Speech voice" value={configuration.speechProvider} onChange={event => { pick('speechProvider', event.target.value as AgentConfiguration['speechProvider']); setError(''); setNotice('') }}>
         <option value="grok">Grok voice · default</option>
         <option value="kokoro">Kokoro Heart · lower cost</option>
         <option value="natural">Natural voice · on this computer</option>
         {configuration.speechProvider === 'system' ? <option value="system">System voice · previously selected</option> : null}
       </select></label>
-      {natural ? <label>Voice<select aria-label="Voice" value={configuration.speechVoice} onChange={event => { change('speechVoice', event.target.value as AgentConfiguration['speechVoice']); setNotice('') }}>
+      {natural ? <label>Voice<select aria-label="Voice" value={configuration.speechVoice} onChange={event => { pick('speechVoice', event.target.value as AgentConfiguration['speechVoice']); setNotice('') }}>
         {NATURAL_VOICES.map(voice => <option key={voice} value={voice}>{voice.startsWith('F') ? 'Female' : 'Male'} {voice.slice(1)}</option>)}
       </select></label> : null}
-      {grok ? <label>Grok voice<select aria-label="Grok voice" value={configuration.grokSpeechVoice} onChange={event => { change('grokSpeechVoice', event.target.value); setNotice('') }}>
+      {grok ? <label>Grok voice<select aria-label="Grok voice" value={configuration.grokSpeechVoice} onChange={event => { pick('grokSpeechVoice', event.target.value); setNotice('') }}>
         {!configuration.grokSpeechVoice ? <option value="">Choose a voice</option> : null}
         {savedVoiceOutsideCatalog ? <option value={configuration.grokSpeechVoice}>{configuration.grokSpeechVoice}{voices.length ? ' · saved voice' : ''}</option> : null}
         {voices.map(voice => <option key={voice.id} value={voice.id}>{voice.name}</option>)}
