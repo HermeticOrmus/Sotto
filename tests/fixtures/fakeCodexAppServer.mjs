@@ -183,13 +183,6 @@ createInterface({ input: process.stdin }).on('line', line => {
     // opaque cursors. It reads the same session history thread/read does.
     const thread = state.threads[params.threadId]
     if (!thread) { emit({ id, error: { code: -32000, message: 'Unknown thread' } }); return }
-    const hasNativeLog = existsSync(join(process.env.CODEX_HOME, 'sessions', '2026', '09', '10', `rollout-2026-09-10-${thread.id}.jsonl`))
-    // Invented: how 0.157.1 refuses this request before a thread's first message was not observed. It is modelled
-    // on thread/read's refusal, and Sotto reads any refusal of this request as "read the whole transcript".
-    if (thread.turns.length === 0 && !hasNativeLog) {
-      setTimeout(() => emit({ id, error: { code: -32600, message: `thread ${thread.id} is not materialized yet; thread/turns/list is unavailable before first user message` } }), delay)
-      return
-    }
     const turns = historyTurns(thread, script)
     if (params.sortDirection !== 'asc') turns.reverse()
     const start = params.cursor ? Number(params.cursor) : 0
