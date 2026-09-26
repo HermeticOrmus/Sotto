@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test'
-import type { AgentCommand, AgentState, AgentThread } from '../../src/shared/agents'
+import type { AgentCommand, AgentCommandReceipt, AgentThread } from '../../src/shared/agents'
 import { requireOwnedE2EProfile } from '../../scripts/e2e-profile-policy.mjs'
 import { firstSottoWindow, openThreads } from './support/sottoLaunch'
 
@@ -71,7 +71,7 @@ test('installed Codex: structured skill, worktree, queue, steer and restart with
     if (!current) throw new Error('Synthetic thread missing')
     return current
   }
-  const command = async (value: AgentCommand): Promise<AgentState> => {
+  const command = async (value: AgentCommand): Promise<AgentCommandReceipt> => {
     const result = await page!.evaluate(value => window.sotto!.agents!.command(value), value)
     if (result.error) throw new Error(result.error)
     return result
@@ -90,7 +90,8 @@ test('installed Codex: structured skill, worktree, queue, steer and restart with
     await command({ type: 'configure', patch: { provider: 'codex', enabled: true, enabledProviders: ['codex'],
       speak: false, reasoning: 'none', followupLimit: 0 } })
     const connected = await command({ type: 'connect', provider: 'codex' })
-    const model = connected.host.models.find(value => value.providerId === 'codex' && value.ready && /luna|mini/i.test(value.name))
+    // A command answers with a receipt that names the model catalog by revision; the whole list is read here.
+    const model = (await state()).host.models.find(value => value.providerId === 'codex' && value.ready && /luna|mini/i.test(value.name))
     if (!model) throw new Error('No ready Luna/mini model in installed catalog; no native turn initiated.')
     const effort = ['minimal', 'low', 'none'].find(value => model.reasoningEfforts?.includes(value))
     if (!effort) throw new Error('No supported low reasoning effort; no native turn initiated.')

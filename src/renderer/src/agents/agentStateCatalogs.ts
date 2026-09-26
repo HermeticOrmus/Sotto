@@ -1,4 +1,4 @@
-import type { AgentBridge, AgentClientHost, AgentModel, AgentState } from '../../../shared/agents'
+import type { AgentBridge, AgentClientHost, AgentCommandReceipt, AgentModel, AgentState, AgentWireBridge } from '../../../shared/agents'
 
 const PRIMARY_CATALOG_KEY = '__primary__'
 
@@ -18,7 +18,7 @@ function clientCatalogKey(hostId: string): string {
   return `client:${hostId}`
 }
 
-const wrapped = new WeakMap<AgentBridge, AgentBridge>()
+const wrapped = new WeakMap<AgentWireBridge, AgentBridge>()
 
 /**
  * Puts a model catalog main left out back before any consumer reads the state: one the `AGENT_STATE`
@@ -39,7 +39,7 @@ const wrapped = new WeakMap<AgentBridge, AgentBridge>()
  * component that re-renders would — returns the same wrapped bridge rather than a new one, which keeps
  * the object stable for callers that key their own effects on it.
  */
-export function wrapAgentBridge(bridge: AgentBridge): AgentBridge {
+export function wrapAgentBridge(bridge: AgentWireBridge): AgentBridge {
   const existing = wrapped.get(bridge)
   if (existing) return existing
   const catalogs: CatalogCache = new Map()
@@ -88,7 +88,7 @@ function revisionOf(catalog: unknown): number | undefined {
  * `state` with every catalog put back, or undefined when one names a revision this window does not hold.
  * `fallback` answers for such a catalog instead, when a recovery could not.
  */
-function assembleState(catalogs: CatalogCache, state: AgentState, fallback?: (key: string) => AgentModel[] | undefined): AgentState | undefined {
+function assembleState(catalogs: CatalogCache, state: AgentState | AgentCommandReceipt, fallback?: (key: string) => AgentModel[] | undefined): AgentState | undefined {
   const find = (key: string, catalog: unknown): AgentModel[] | undefined => resolveCatalog(catalogs, key, catalog) ?? fallback?.(key)
   // Reused as the actual array on both fields when they name the same catalog, so this window holds one
   // copy of it, the way the wire itself does (DesktopHostRouter.shell()).
@@ -104,7 +104,7 @@ function assembleState(catalogs: CatalogCache, state: AgentState, fallback?: (ke
  * an immediate repeat of them is read from the cache instead of asked for again. Main answers `get()` after
  * it sent `named`, so the answer is never older than those revisions.
  */
-function rememberRecovered(catalogs: CatalogCache, named: AgentState, full: AgentState): void {
+function rememberRecovered(catalogs: CatalogCache, named: AgentState | AgentCommandReceipt, full: AgentState): void {
   // Revisions only advance, so a newer one the window already holds is never filed over.
   const remember = (key: string, revision: number | undefined, models: AgentModel[]): void => {
     if (revision !== undefined && !((catalogs.get(key)?.revision ?? 0) > revision)) catalogs.set(key, { revision, models })
@@ -129,10 +129,9 @@ function rememberRecovered(catalogs: CatalogCache, named: AgentState, full: Agen
  * or its answer no longer lists a host the receipt named, the catalog this window last held for that host
  * stands in until the next broadcast; a failed recovery with nothing held at all fails the reply.
  */
-function createReceiptCompleter(bridge: Pick<AgentBridge, 'get'>, catalogs: CatalogCache): (reply: AgentState) => Promise<AgentState> {
+function createReceiptCompleter(bridge: Pick<AgentWireBridge, 'get'>, catalogs: CatalogCache): (reply: AgentCommandReceipt) => Promise<AgentState> {
   const recoveries = new Map<string, Promise<AgentState>>()
   return async reply => {
-    if (!isStateLike(reply)) return reply
     const assembled = assembleState(catalogs, reply)
     if (assembled !== undefined) return assembled
     const named = JSON.stringify([revisionOf(reply.host.models), ...(reply.host.clientHosts ?? []).map(client => [client.hostId, revisionOf(client.models)])])

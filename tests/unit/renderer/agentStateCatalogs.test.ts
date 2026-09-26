@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { wrapAgentBridge } from '../../../src/renderer/src/agents/agentStateCatalogs'
-import { defaultAgentConfiguration, EMPTY_AGENT_HOST, type AgentBridge, type AgentModel, type AgentState } from '../../../src/shared/agents'
+import { defaultAgentConfiguration, EMPTY_AGENT_HOST, type AgentModel, type AgentState, type AgentWireBridge } from '../../../src/shared/agents'
 
 function model(id: string, overrides: Partial<AgentModel> = {}): AgentModel {
   return { id, provider: 'codex', name: id, ready: true, ...overrides }
@@ -31,14 +31,14 @@ function broadcast(hostModels: unknown, clientHosts?: { hostId: string; models: 
 
 /** A fake bridge whose `onState` hands back the raw handler the wrapper registered, so a test can feed
  * it broadcasts directly, the way the real preload's IPC subscription would. */
-function fakeBridge(get: () => Promise<AgentState>): { bridge: AgentBridge; emit: (raw: unknown) => void; get: ReturnType<typeof vi.fn> } {
+function fakeBridge(get: () => Promise<AgentState>): { bridge: AgentWireBridge; emit: (raw: unknown) => void; get: ReturnType<typeof vi.fn> } {
   let raw: ((value: unknown) => void) | null = null
   const getFn = vi.fn(get)
   const bridge = {
     get: getFn,
     command: vi.fn(),
     onState: (listener: (state: AgentState) => void) => { raw = listener as unknown as (value: unknown) => void; return () => { raw = null } },
-  } as unknown as AgentBridge
+  } as unknown as AgentWireBridge
   return { bridge, emit: value => raw?.(value), get: getFn }
 }
 

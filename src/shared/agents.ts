@@ -758,6 +758,18 @@ export interface AgentBridge {
   onThreadDetail?(listener: (update: AgentThreadDetailUpdate) => void): () => void
 }
 
+/**
+ * The agent bridge as the preload exposes it (`window.sotto.agents`, `window.sottoWidget.agents`): what
+ * crosses from main before the page puts the model catalogs back (ADR-0028). A broadcast may omit a catalog
+ * the window was already sent, and a command answers with a receipt that names every catalog by revision.
+ * `wrapAgentBridge` in `src/renderer/src/agents/agentStateCatalogs.ts` turns it into the `AgentBridge` every
+ * consumer reads; nothing else should read a catalog from it.
+ */
+export interface AgentWireBridge extends Omit<AgentBridge, 'command' | 'onState'> {
+  command(command: AgentCommand): Promise<AgentCommandReceipt>
+  onState(listener: (state: AgentStateBroadcast) => void): () => void
+}
+
 export const EMPTY_AGENT_HOST: AgentHostSnapshot = {
   connected: false, name: 'Codex', version: '', projects: [], threads: [], models: [],
   capabilities: { projects: false, threads: false, submit: false, observe: false,

@@ -245,7 +245,7 @@ function validatedRoutedCommand(command: import('../shared/agents').AgentCommand
   return command
 }
 
-function createAgentBridge(renderer: IpcRendererAdapter, role: 'main' | 'widget'): import('../shared/agents').AgentBridge {
+function createAgentBridge(renderer: IpcRendererAdapter, role: 'main' | 'widget'): import('../shared/agents').AgentWireBridge {
   return Object.freeze({
     get: () => invokeParsed(renderer, AGENT_GET, agentStateSchema),
     attachmentPreview: (request: import('../shared/agents').AgentAttachmentPreviewRequest) =>
@@ -271,15 +271,15 @@ function createAgentBridge(renderer: IpcRendererAdapter, role: 'main' | 'widget'
     } : {}),
     // A command's answer is a receipt (issue #323): its catalogs are named by catalog revision, and the page
     // puts them back from what the broadcast sent it, the same way it does for an omitted broadcast catalog.
-    // Typed as the state the page's wrapper turns it into; see src/renderer/src/agents/agentStateCatalogs.ts.
-    command: (command: import('../shared/agents').AgentCommand) => invokeParsed(renderer, AGENT_COMMAND, agentCommandReceiptSchema, validatedRoutedCommand(command)) as Promise<unknown> as Promise<import('../shared/agents').AgentState>,
+    // See src/renderer/src/agents/agentStateCatalogs.ts.
+    command: (command: import('../shared/agents').AgentCommand) => invokeParsed(renderer, AGENT_COMMAND, agentCommandReceiptSchema, validatedRoutedCommand(command)),
     // The broadcast may omit a model catalog this window already has (issue #286), coded as
     // AgentStateBroadcast rather than AgentState. This crosses to the page unreassembled on purpose:
     // contextBridge copies whatever a listener is called with back across the isolated-world boundary,
     // so putting the catalog back here would clone it again on the way out, defeating most of what
     // omitting it saved. The page puts it back; see src/renderer/src/agents/agentStateCatalogs.ts.
-    onState: (listener: (state: import('../shared/agents').AgentState) => void) => subscribe(renderer, AGENT_STATE,
-      trustedState<Record<string, unknown>>('host'), raw => listener(raw as import('../shared/agents').AgentState)),
+    onState: (listener: (state: import('../shared/agents').AgentStateBroadcast) => void) => subscribe(renderer, AGENT_STATE,
+      trustedState<Record<string, unknown>>('host'), raw => listener(raw as import('../shared/agents').AgentStateBroadcast)),
   })
 }
 
