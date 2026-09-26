@@ -516,8 +516,12 @@ describe('staged images over the socket (ADR-0030)', () => {
     const content = await client.attachmentContent(handle.digest)
     expect(content?.mimeType).toBe('image/png'); expect(Buffer.from(content!.bytes)).toEqual(bytes)
     expect(await client.attachmentContent('f'.repeat(64))).toBeNull()
-    // Content that is not the image it claims is refused on the host, whoever sent it.
-    await expect(client.stageAttachment({ name: 'Fake.png', mimeType: 'image/png', bytes: Buffer.from('<svg/>') })).rejects.toMatchObject({ code: 'unavailable' })
+    // After a reload a draft's chips ask for their images at once. The host answers one such frame at a time per
+    // device, as it does previews, and the client queues them behind one another, so none is refused as busy.
+    const many = await Promise.all(Array.from({ length: 4 }, () => client.attachmentContent(handle.digest)))
+    expect(many.map(item => item?.bytes.byteLength)).toEqual(Array(4).fill(bytes.length))
+    // Content that is not the image it claims is refused on the host, whoever sent it, and the desktop is told why.
+    await expect(client.stageAttachment({ name: 'Fake.png', mimeType: 'image/png', bytes: Buffer.from('<svg/>') })).rejects.toMatchObject({ code: 'invalid_request', message: 'The image content does not match its file type.' })
   })
 })
 

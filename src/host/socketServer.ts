@@ -5,6 +5,7 @@ import { z } from 'zod'
 import type { HostService, ClientIdentity } from '../main/agents/hostService'
 import { PairedClients, originAllowed, SESSION_LIFETIME_MS } from '../main/agents/pairing'
 import { coalesceAgentStatePublishes, coalesceAgentThreadDetailPublishes } from '../main/agents/control'
+import { RefusedImage } from '../main/agents/attachmentStore'
 import { HOST_BUSY, HOST_EVENT_PAGE_SIZE, HOST_FEATURES, HOST_MAX_FRAME_BYTES, HOST_SESSION_REJECTED, hostRequestEnvelopeSchema, hostRequestSchema, type HostDescriptor, type HostErrorCode, type HostPush, type HostReceipt, type HostRequest, type HostResponse } from '../shared/hostProtocol'
 import type { AgentCommand, AgentThreadDetail } from '../shared/agents'
 import { isAgentThreadDetailDelta } from '../shared/agentThreadDetail'
@@ -33,7 +34,8 @@ const TOO_LARGE: Record<Oversize, string> = {
   preview: 'This attachment is too large to preview on this device. Nothing on the host was lost, and the attachment is unchanged there.',
   list: 'The thread list on this host is too large to send to this device. Nothing on the host was lost, and this device keeps the last list it received.',
 }
-class Refusal extends Error { constructor(readonly code: HostErrorCode) { super(errors[code]) } }
+/** A refusal the client reads: its code, and a sentence, which is the code's own unless the refusal says more. */
+class Refusal extends Error { constructor(readonly code: HostErrorCode, message = errors[code]) { super(message) } }
 /** `deltas` is set by the client's hello: only a client that accepts `detail-delta` is sent one. */
 interface Peer { frames: SocketFrames; client: ClientIdentity; session: string; observed: Set<string>; inFlight: number; window: number; count: number; pageWindow: number; pages: number; preview: boolean; afterSeq: number; selectedThreadId: string | null; selectedProjectId: string | null; deltas: boolean }
 export interface SocketServerOptions {
@@ -237,11 +239,20 @@ export async function startSocketServer(options: SocketServerOptions) {
         if (!service.stageAttachment) throw new Refusal('invalid_request')
         const bytes = Buffer.from(request.image.data, 'base64')
         try { return await service.stageAttachment({ name: request.image.name, mimeType: request.image.mimeType, bytes: new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength) }) }
-        catch { throw new Refusal('unavailable') }
+        catch (error) {
+          // An image refused for what it is says so; anything else is the host's failure to keep it.
+          if (error instanceof RefusedImage) throw new Refusal('invalid_request', error.message)
+          throw new Refusal('unavailable')
+        }
       }
       case 'attachment-content': {
-        const content = await service.attachmentContent?.(request.digest) ?? null
-        return content && { mimeType: content.mimeType, data: Buffer.from(content.bytes).toString('base64') }
+        // Up to about 14 MB of base64: one at a time per peer, on the same guard as a preview.
+        if (peer.preview) throw new Refusal('busy')
+        peer.preview = true
+        try {
+          const content = await service.attachmentContent?.(request.digest) ?? null
+          return content && { mimeType: content.mimeType, data: Buffer.from(content.bytes).toString('base64') }
+        } finally { peer.preview = false }
       }
       case 'preview':
         if (peer.preview) throw new Refusal('busy')
@@ -280,7 +291,7 @@ export async function startSocketServer(options: SocketServerOptions) {
       if (wait > 0) await new Promise(resolve => setTimeout(resolve, wait))
       let response: HostResponse
       try { response = { v: 1, id: request.id, ok: true, result: await dispatch(peer, request) } }
-      catch (error) { const code = error instanceof Refusal ? error.code : 'unavailable'; response = { v: 1, id: request.id, ok: false, error: { code, message: errors[code] } } }
+      catch (error) { const code = error instanceof Refusal ? error.code : 'unavailable'; response = { v: 1, id: request.id, ok: false, error: { code, message: error instanceof Refusal ? error.message : errors[code] } } }
       // A revocation while an operation was pending also denies its response.
       if (!authenticated(peer)) { peer.frames.send({ v: 1, id: request.id, ok: false, error: { code: 'unauthenticated', message: errors.unauthenticated } }); peer.frames.close() }
       else deliver(peer, response, request.op === 'detail' ? 'thread' : request.op === 'preview' || request.op === 'attachment-content' ? 'preview' : 'list')

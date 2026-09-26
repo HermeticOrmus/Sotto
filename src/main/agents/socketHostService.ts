@@ -318,12 +318,15 @@ export class SocketHostService implements HostService {
     const data = Buffer.from(image.bytes.buffer, image.bytes.byteOffset, image.bytes.byteLength).toString('base64')
     return this.read(agentAttachmentHandleSchema, await this.call({ op: 'stage-attachment', image: { name: image.name, mimeType: image.mimeType, data } }))
   }
-  async attachmentContent(digest: string): Promise<AgentAttachmentContent | null> {
-    if (!this.features.includes('attachment-staging')) return null
-    const content = this.read(hostAttachmentContentSchema, await this.call({ op: 'attachment-content', digest }))
-    if (!content) return null
-    // A copy of exactly these bytes, never a view on a buffer another value may share.
-    return { mimeType: content.mimeType, bytes: new Uint8Array(Buffer.from(content.data, 'base64')) }
+  /** A staged image's bytes, queued behind previews: the host answers one of these large frames at a time. */
+  attachmentContent(digest: string): Promise<AgentAttachmentContent | null> {
+    if (!this.features.includes('attachment-staging')) return Promise.resolve(null)
+    const result = this.previewTail.then(async () => {
+      const content = this.read(hostAttachmentContentSchema, await this.call({ op: 'attachment-content', digest }))
+      // A copy of exactly these bytes, never a view on a buffer another value may share.
+      return content ? { mimeType: content.mimeType, bytes: new Uint8Array(Buffer.from(content.data, 'base64')) } : null
+    })
+    this.previewTail = result.catch(() => undefined); return result
   }
   /** A host that does not list `git-refs` is from before the branch picker; the version sentence says which side to bring up to date, and nothing is sent. */
   async gitRefs(request: GitRefsRequest): Promise<GitRefsPage> {
