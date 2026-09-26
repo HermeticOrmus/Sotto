@@ -25,10 +25,13 @@ fake sent. Each figure is the median of the five sends in a run, and each range 
 
 ### What a user sees: a send from the Threads page
 
-The benchmark's second half sends the way the Threads page does: a `manual-send` command to the coordinator, over
-the adapter wrapped behind Sotto thread IDs as the app composes it, timed until the command returns. "Before" is this
-branch with the check switched off, which is the code on `origin/main` (`e093bd6c`) for every read it makes; "after"
-is this change.
+The benchmark's second half sends the way the Threads page does: a `manual-send` command to the coordinator, timed
+until the command returns. The coordinator sits over the adapter behind the Sotto thread host, which maps Sotto thread
+IDs to the adapter's own. The workspace and provider hosts the app also puts between them are left out; they hand
+the read's purpose on unchanged, which `tests/unit/main/threadReadPurpose.test.ts` checks. "Before" is this branch
+with the check switched off, which is the code on `origin/main` (`e093bd6c`) for every read it makes; "after" is
+this change. The table was first taken with the check switched off by hand. The benchmark now does the same with
+`SOTTO_PERF_WITHOUT_TURNS_LIST=1`, which has the fake refuse `thread/turns/list` the way a Codex without it does.
 
 | Turns | Send, before | Send, after | Reads inside it, before | Reads inside it, after |
 | ---: | ---: | ---: | ---: | ---: |
@@ -39,6 +42,11 @@ is this change.
 Before, every send read the whole transcript twice before `turn/start`: once in the coordinator and once in the
 adapter. After, neither did; each asked for the newest turn. Neither version read it again after `turn/start`,
 because Codex's own echo of the message settled the send before the coordinator's reconciliation read was needed.
+
+One run of each mode after review, with the committed switch and on a busier machine, gave the same shape. Sends
+from the Threads page took 97, 1,447 and 8,404 ms at 50, 500 and 2,000 turns with the check off, each making two
+whole reads before `turn/start`, and 66, 136 and 335 ms with it on, making none. The adapter's own sends took 67,
+1,449 and 3,758 ms against 36, 80 and 228 ms.
 
 ### The adapter's own read
 
@@ -72,7 +80,9 @@ which holds an identity for every turn, is 19-38 ms of it.
 ## Against Codex CLI 0.157.1
 
 The fake cannot say what the real app-server does, so the check was built only after the installed client showed
-four things. `tests/integration/codexNewestTurnLive.test.ts` (`SOTTO_CODEX_TURNS_LIVE=1`) repeats them. It starts
+four things. Claim 1 comes from the generated schema alone. `tests/integration/codexNewestTurnLive.test.ts`
+(`SOTTO_CODEX_TURNS_LIVE=1`) repeats claims 2 to 4, apart from the `thread/items/list` aside in claim 2. It
+initializes the way Sotto's adapter does, asking for the experimental API, so it cannot show claim 1 itself. It starts
 the installed app-server in a throwaway `CODEX_HOME`, so it reads none of the user's Codex threads and needs no
 sign-in, starts a legacy thread, makes its session file exist with one injected message pair, and writes filler turns
 into that file the way Codex writes a turn. No model turn is run.
@@ -106,7 +116,8 @@ asking for the check on a connection only when the variant named is `thread/turn
 
 The check decides whether a whole read is needed, never whether the send may go. When it finds nothing changed, the
 send makes the same `expectedLastUserMessageId`, running and request checks as before; anything else reads the whole
-transcript as before. ADR-0005's follow-up keeps the full list of what reads whole, and `confirmNewestTurn` in
+transcript as before. A reply counts only when it says it carries the full items: Sotto's turn schema would take a
+missing `itemsView` as full, and the check does not. ADR-0005's follow-up keeps the full list of what reads whole, and `confirmNewestTurn` in
 `codex.ts` is that list in code. The session log is polled before the check and again before `turn/start`, as it was.
 
 The adapter contract's takeover and stale-input cases pass unchanged. `tests/integration/codexNewestTurn.test.ts`
@@ -115,8 +126,11 @@ Threads page, use the check alone, including when Codex names history items diff
 another process added or is still running, and a message in the newest turn Sotto cannot match, are read in full and
 the stale reply refused before `turn/start`. Input typed into the session log is refused on the check alone. A turn
 another process took back is read in full and the send goes, as it did before. A turn that does not match leaves the
-thread as it was when the whole read after it fails. Any refusal is read in full; only a Codex without
-`thread/turns/list` is not asked again on that connection.
+thread as it was when the whole read after it fails. A reply without `itemsView` is read in full. Any refusal is read
+in full; only a Codex without `thread/turns/list` is not asked again on that connection.
+`tests/unit/main/threadReadPurpose.test.ts` shows that the workspace, provider and Sotto thread hosts hand the read's
+purpose on, that the coordinator marks its reads before a manual send, a draft send and a supervision follow-up, and
+that its assign, select and retry reads stay whole.
 
 ## What these numbers are not
 
@@ -129,14 +143,19 @@ thread as it was when the whole read after it fails. Any refusal is read in full
 - Opening a thread still reads it whole and was not changed: 9.2-11.8 s at 2,000 turns before and 12.6-17.1 s after
   on the fake in the first measurement, the same code on a busier machine, and 6.1-16.3 s across the Threads-page
   runs. That applying cost grows faster than the thread does. `applyTurn` sorts the whole message window once for
-  every turn it applies, which is a likely cause; it was not measured separately and is left for its own issue.
+  every turn it applies, which is a likely cause; it was not measured separately and is left for its own issue,
+  [#352](https://github.com/millZach/Sotto/issues/352).
 - Taken on the Windows development machine (Intel Core Ultra 9 275HX, Node v24.14.1) while other agents' test
   suites were running on it, which is why some ranges are wide. Read them as sizes, not budgets. Nothing asserts a
   time.
 
 ## Re-run
 
+The first line gives the "after" figures, the second the "before" ones: the same benchmark with the fake refusing
+`thread/turns/list` as a Codex without it does, so every read before a send is whole.
+
 ```sh
 SOTTO_PERF_BENCH=1 npx vitest run tests/perf/codexSendRead.perf.test.ts --maxWorkers=1 --disable-console-intercept
+SOTTO_PERF_BENCH=1 SOTTO_PERF_WITHOUT_TURNS_LIST=1 npx vitest run tests/perf/codexSendRead.perf.test.ts --maxWorkers=1 --disable-console-intercept
 SOTTO_CODEX_TURNS_LIVE=1 npx vitest run tests/integration/codexNewestTurnLive.test.ts --maxWorkers=1 --disable-console-intercept
 ```

@@ -6,6 +6,8 @@ Before parsing current saved configuration, explicitly retire an old or omitted 
 
 Send validation and confirmation refresh only the target thread and return the complete cached provider view. Each native adapter preserves its dispatch-time takeover and permission guard; unrelated history reads must not hold the target's critical path. Full discovery remains a separate operation. Keep the coordinator's current command ordering until measured evidence justifies changing its shared draft and authority model.
 
+For Codex, the send-validation read is now the newest-turn check, which reads the whole transcript only when the newest turn does not match ([ADR-0005](0005-codex-app-server-adapter.md)'s follow-up for #324).
+
 The [pinned T3 source study](../research/2026-09-12-native-thread-source-study.md) informed this decision: separate summaries from thread detail, reconcile pending submissions by identity, and distinguish accepted intent from confirmed provider delivery. Sotto adapts those patterns to its existing outbox and native protocols, without importing another orchestration framework. Research citations and historical verification remain provenance; they do not describe a supported runtime provider.
 
 ## Amendment, September 25, 2026: a settings change is confirmed by the adapter's own snapshot (#318)
