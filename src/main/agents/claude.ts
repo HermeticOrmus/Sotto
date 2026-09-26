@@ -59,6 +59,25 @@ const APPROVAL_SURFACE_TOOL = 'AskUserQuestion'
 /** Shown under a reply whose Claude Code process ended on its own; the next message starts the process again. */
 const SESSION_ENDED = 'Claude Code stopped before this reply finished, so it may be cut short. Send a message to carry on.'
 const APPROVAL_SURFACE_LOST = 'Claude Code is not letting Sotto answer its permission prompts, so it denies them itself and nothing reaches you. No work was lost. Answer in Claude Code until this is fixed, and check for a Sotto or Claude Code update.'
+/** Why Claude Code stopped a turn early, for the result subtypes that say so without its own words. */
+const TURN_STOPPED: Readonly<Record<string, string>> = {
+  error_max_turns: 'It reached its limit of steps for one turn.',
+  error_max_budget_usd: 'It reached its spending limit.',
+}
+const TURN_REASON_LIMIT = 280
+/**
+ * The provider's error after a turn Claude Code could not finish, with Claude Code's own reason when the result
+ * gives one: the error text a `success` result carries when an API error ended the turn (never a reply, which a
+ * failed turn's `result` is not), or the `errors` an early stop lists. Bounded and on one line.
+ */
+export function claudeTurnFailure(frame: ClaudeFrame): string {
+  const said = frame.subtype === 'success' ? [frame.result] : Array.isArray(frame.errors) ? frame.errors : []
+  let reason = said.filter((item): item is string => typeof item === 'string').join(' ').replace(/\s+/gu, ' ').trim()
+  if (reason.length > TURN_REASON_LIMIT) reason = `${reason.slice(0, TURN_REASON_LIMIT - 1).trimEnd()}…`
+  const stopped = typeof frame.subtype === 'string' ? TURN_STOPPED[frame.subtype] : undefined
+  if (!reason && !stopped) return 'Claude could not complete this turn. Check its native subscription, model and usage limits.'
+  return ['Claude could not complete this turn.', stopped, reason ? `Claude Code said: ${reason}${/[.!?…]$/u.test(reason) ? '' : '.'}` : undefined].filter(Boolean).join(' ')
+}
 /**
  * Rewinding, and a settings change the running CLI cannot take in place, restart the CLI, and a restart ends
  * the agents a thread still has running (ADR-0023), so both wait for them rather than end work the user
@@ -176,6 +195,8 @@ export class ClaudeStreamJsonHost implements AgentHost {
   private readonly dispatching = new Set<string>()
   /** The threads whose settings change is being dispatched now: the part of `dispatching` a refusal names as such. */
   private readonly configuring = new Set<string>()
+  /** The error a failed turn put on the provider, so the next turn that finishes can take it down again. */
+  private turnFailure: string | undefined
   private readonly logOrigins = new Map<string, Set<string>>()
   private readonly lastLogDigest = new Map<string, string>()
   private readonly staleContexts = new Set<string>()
@@ -886,7 +907,9 @@ export class ClaudeStreamJsonHost implements AgentHost {
           alias.origins.find(value => value.uuid === origin)?.messageId, typeof frame.result === 'string' && frame.is_error === true ? frame.result : undefined)
       }
       thread.status = frame.is_error === true ? 'error' : 'idle'; runtime.requests.clear(); thread.requests = []
-      if (frame.is_error === true) { this.clearMonitoring(id); this.state.error = 'Claude could not complete this turn. Check its native subscription, model and usage limits.' }
+      if (frame.is_error === true) { this.clearMonitoring(id); this.state.error = this.turnFailure = claudeTurnFailure(frame) }
+      // A later turn that finishes takes down a failed turn's error, and nothing else the provider is saying.
+      else if (this.turnFailure !== undefined) { if (this.state.error === this.turnFailure) this.state.error = undefined; this.turnFailure = undefined }
     }
     this.emit(frame.type === 'stream_event' || frame.type === 'assistant'
       || frame.type === 'system' && ['task_started', 'task_progress', 'task_updated', 'task_notification'].includes(String(frame.subtype)))
