@@ -76,6 +76,9 @@ const itemSchema = codexItemSchema
 const turnSchema = z.object({ id: z.string(), status: z.enum(['inProgress', 'completed', 'interrupted', 'failed']), items: z.array(itemSchema).default([]), startedAt: z.number().nullish(),
   itemsView: z.enum(['notLoaded', 'summary', 'full']).default('full'),
   completedAt: z.number().nullish(), durationMs: z.number().nonnegative().nullish(), error: z.object({ message: z.string() }).nullish() })
+type Turn = z.infer<typeof turnSchema>
+/** When a turn began, or when its thread did when Codex does not say. */
+const turnCreatedAt = (alias: { readonly createdAt: string }, turn: Turn): string => turn.startedAt ? new Date(turn.startedAt * 1000).toISOString() : alias.createdAt
 const threadSchema = z.object({ id: z.string(), historyMode: z.enum(['legacy', 'paginated']).optional(), turns: z.array(turnSchema).default([]), status: z.object({ type: z.string() }).optional() })
 const threadResponse = z.object({ thread: threadSchema })
 const settingsResponse = threadResponse.extend({ model: z.string(), reasoningEffort: z.string().nullish(),
@@ -514,8 +517,8 @@ export class CodexAppServerHost implements AgentHost {
    * holds, has ended, and reconciles onto exactly the messages Sotto already has; then a whole read would change
    * nothing a send checks. Anything else answers false and the caller reads the whole transcript. ADR-0005's
    * follow-up lists every such case; the condition and the refusal handling below are that list in code. The match
-   * is decided on copies before anything is applied, so a turn that does not match leaves the thread as it was for
-   * the whole read, or a failed one, to find.
+   * is decided on copies with the same reconciliation `applyTurn` runs, and only a turn that matches is applied, so
+   * a turn that does not match leaves the thread as it was for the whole read, or a failed one, to find.
    */
   private async confirmNewestTurn(id: string, generation: number): Promise<boolean> {
     const alias = this.aliases[id]!, thread = this.ensureThread(id)
@@ -525,8 +528,6 @@ export class CodexAppServerHost implements AgentHost {
       || this.pendingLogMessages.has(id) || this.runningTurns.has(id) || thread.status !== 'idle' || thread.requests.length || thread.historyStatus) return false
     const revision = this.revisions.get(id)
     const held = newest.messages.map(message => message.id)
-    const matches = (identity: CodexTurnIdentity | undefined): boolean =>
-      !!identity && identity.ordered && identity.messages.every(message => message.complete && held.includes(message.id))
     let confirmed = false
     try {
       await this.rpc('thread/turns/list', { threadId: alias.codexThreadId, limit: 1, sortDirection: 'desc', itemsView: 'full' }, async value => {
@@ -536,12 +537,9 @@ export class CodexAppServerHost implements AgentHost {
         if (!turn || turn.id !== newest.turnId || turn.status === 'inProgress' || turn.itemsView !== 'full' || alias.rewoundTurnIds.includes(turn.id)) return
         // Reconcile onto a copy of the newest turn's identities and of the origins, both of which reconciling writes to.
         const trial = structuredClone(newest)
-        reconcileMessageIdentities([...alias.messageIdentities.slice(0, -1), trial], turn.id, turn.items.flatMap(item => { const message = this.identityItem(item); return message ? [message] : [] }),
-          structuredClone(alias.origins), alias.createdAt, this.watcher?.identities(alias.codexThreadId, turn.id), true)
-        if (!matches(trial)) return
+        this.reconcileTurn(id, [...alias.messageIdentities.slice(0, -1), trial], structuredClone(alias.origins), turn)
+        if (!trial.ordered || !trial.messages.every(message => message.complete && held.includes(message.id))) return
         this.applyTurn(id, turn)
-        const applied = alias.messageIdentities.at(-1)
-        if (applied?.turnId !== turn.id || !matches(applied)) return
         this.flushLogMessages(id); this.orderMessages(id)
         await this.persist()
         confirmed = true
@@ -694,7 +692,16 @@ export class CodexAppServerHost implements AgentHost {
     if (item.type === 'userMessage' && turnId) this.activity.anchor(thread, turnId, record?.id ?? item.id)
     if (origin) this.unconfirmedDispatchSessionIds.delete(id)
   }
-  private applyTurn(id: string, turn: z.infer<typeof turnSchema>, live = false): void {
+  /**
+   * Reconcile a turn's full items onto `identities` and `origins`, both of which it writes to. `applyTurn` passes
+   * the thread's own; the newest-turn check passes copies to decide a match before anything changes.
+   */
+  private reconcileTurn(id: string, identities: CodexTurnIdentity[], origins: Origin[], turn: Turn): void {
+    const alias = this.aliases[id]!
+    reconcileMessageIdentities(identities, turn.id, turn.items.flatMap(item => { const message = this.identityItem(item); return message ? [message] : [] }),
+      origins, turnCreatedAt(alias, turn), this.watcher?.identities(alias.codexThreadId, turn.id), turn.status !== 'inProgress')
+  }
+  private applyTurn(id: string, turn: Turn, live = false): void {
     if (this.aliases[id]!.rewoundTurnIds.includes(turn.id)) return
     const thread = this.ensureThread(id)
     const alias = this.aliases[id]!
@@ -706,16 +713,12 @@ export class CodexAppServerHost implements AgentHost {
         thread.compaction = alias.compaction
       }
     }
-    const createdAt = turn.startedAt ? new Date(turn.startedAt * 1000).toISOString() : this.aliases[id]!.createdAt
+    const createdAt = turnCreatedAt(alias, turn)
     this.turnDates.set(turn.id, createdAt)
     // A delayed start response must never resurrect a turn whose completion already arrived.
     if (turn.status === 'inProgress' && this.terminalTurns.has(turn.id)) return
     if (live && this.terminalTurns.has(turn.id) && this.aliases[id]!.messageIdentities.find(t => t.turnId === turn.id)?.sealed) return
-    if (turn.items.length && turn.itemsView === 'full') {
-      const alias = this.aliases[id]!
-      reconcileMessageIdentities(alias.messageIdentities, turn.id, turn.items.flatMap(item => { const message = this.identityItem(item); return message ? [message] : [] }),
-        alias.origins, createdAt, this.watcher?.identities(alias.codexThreadId, turn.id), turn.status !== 'inProgress')
-    }
+    if (turn.items.length && turn.itemsView === 'full') this.reconcileTurn(id, alias.messageIdentities, alias.origins, turn)
     let anchor = this.log.lastMessageId(id)
     for (const item of turn.items) {
       // A display summary is not an authoritative message sequence or origin.
