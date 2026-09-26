@@ -21,9 +21,13 @@ Exactly two chips carry the note. The spec then sets reduced motion and, at 1600
 
 The note uses `--tt-text-muted`, the colour the name above it already uses, at the name's size in the Threads view (12 px) and 10 px elsewhere. No new colour, no motion.
 
+`tests/e2e/agent-browser.spec.ts` adds browser feedback to a draft through the same path, now through `prepareScreenshotDataUrl`, and still finds the one attachment on the saved draft. Its capture is under the bound, so it is handed on untouched; `tests/unit/renderer/tools/browserReview.test.tsx` covers one past it.
+
+After the review, the sizes a file names in its first bytes are read before anything is decoded (`tests/unit/renderer/screenshotResize.test.ts` pins PNG, animated PNG, JPEG with and without an EXIF quarter turn, the three WebP kinds and GIF), several files are read one at a time (`screenshotInput.test.tsx`), and a screenshot still being read when the user moves to another thread lands in the draft it was pasted into (`threadsView.test.tsx`). The look did not change, so the captures below still stand.
+
 ## Not checked
 
-The note was checked in a thread's composer (`ThreadComposer`). The coordinator's composer (`AgentView`) renders the same `ScreenshotInput` but was not captured. No live provider received a resized image in this pass: the adapters send the data URL as before, only smaller, and `tests/unit/main/claudeImages.test.ts` and `codexImages.test.ts` cover the send path unchanged.
+The note was checked in a thread's composer (`ThreadComposer`). The coordinator's composer (`AgentView`) renders the same `ScreenshotInput` but was not captured, and it still drops a screenshot that finishes reading after its thread changes, because its draft follows the coordinator's current target rather than the thread the screenshot was pasted into. No animated PNG or WebP, and no Display P3 capture, went through the built app. No live provider received a resized image in this pass: the adapters send the data URL as before, only smaller, and `tests/unit/main/claudeImages.test.ts` and `codexImages.test.ts` cover the send path unchanged.
 
 ## Re-run
 

@@ -2,7 +2,7 @@
 
 Issue #321. The composer read a pasted, dropped or chosen screenshot straight into a base64 data URL at whatever size it came in. A high-DPI capture is megabytes, and that data URL is what every draft save, shell broadcast and persisted state carries until #320 changes how attachments are staged, and what the provider is finally sent. Both providers that take screenshots from Sotto scale an image down to a fixed long edge before the model sees it, so the pixels past that edge cost all of that and change nothing the model reads.
 
-Zach chose option 1 on the issue: scale down to the largest long edge any supported provider reads, keep the format, never scale up.
+Zach chose option 1 on the issue: scale down to the largest long edge any supported provider reads, keep the format, never scale up. ADR-0030 records the decision and when to revisit it.
 
 ## The bound
 
@@ -16,11 +16,13 @@ What each provider reads from a screenshot Sotto sends, checked on September 26,
 
 The largest of these is Claude's 2576 px, so `SCREENSHOT_MAX_LONG_EDGE` in `src/renderer/src/agents/screenshotResize.ts` is 2576. For a 16:9 capture that is 2576x1449, the size Claude's own table gives for a 3840x2160 image, and exactly Claude's 4784-token budget. A squarer image at 2576 px can still be over Claude's token budget, and Codex still scales anything down to its 2048 px itself; the bound is a long edge only, as chosen, so it never takes away a pixel any model reads.
 
-If Sotto starts sending Codex images with `original` detail, or Codex turns its unified budget on, Codex would read up to 6000 px and the bound should be raised to match.
+If Sotto starts sending Codex images with `original` detail, or Codex turns its unified budget on, Codex would read up to 6000 px and the bound should be raised to match (ADR-0030).
 
 ## What changed
 
-`ScreenshotInput` now hands each file to `prepareScreenshot` before it reads it. That decodes the image with Chromium's own decoder (`createImageBitmap`), and when its longer edge is past the bound, draws it at the bound on an `OffscreenCanvas` and writes it back in the same format: PNG as PNG, JPEG and WebP as themselves at quality 0.92. A GIF is left as it is, because a canvas cannot write one. The scaled copy is used only when it is smaller than the file: a capture of flat panels and text compresses so well as a PNG that the smoothing of a scaled-down copy can make it larger, and then the original goes as it came. An image the renderer cannot decode goes as it came too, with no sizes recorded, which is what happens in jsdom.
+`ScreenshotInput` now hands each file to `prepareScreenshot` before it reads it, one file at a time, so a drop of several large images never holds more than one decoded bitmap. `prepareScreenshot` first reads the size the file names in its first bytes: a PNG's header, a JPEG's frame header (turned by its EXIF orientation, as the decoder shows it), a WebP's or a GIF's. An image that fits the bound is handed on untouched with that size recorded, and is never decoded. Otherwise it decodes the image with Chromium's own decoder (`createImageBitmap`), and when its longer edge is past the bound, draws it at the bound on an `OffscreenCanvas` and writes it back in the same format: PNG as PNG, JPEG and WebP as themselves at quality 0.92. The canvas is sRGB, so a Display P3 capture's colours are converted. A GIF is left as it is, because a canvas cannot write one, and so is an animated PNG or WebP, which the canvas would flatten to its first frame. The scaled copy is used only when it is smaller than the file: a capture of flat panels and text compresses so well as a PNG that the smoothing of a scaled-down copy can make it larger, and then the original goes as it came. An image the renderer can neither read a size from nor decode goes as it came too, with no sizes recorded, which is what happens in jsdom.
+
+A screenshot of Sotto's own browser added as browser feedback goes through the same steps (`prepareScreenshotDataUrl`) before it joins the draft. Screenshots still being read when the user moves to another thread are added to the draft of the thread they were pasted into, instead of being dropped.
 
 Each attachment now records `dimensions: { original, sent }` in pixels, sizes and nothing else. The chip under a scaled-down screenshot says "Resized", with "Resized from 3840 by 2160 to 2576 by 1449 pixels" as its tooltip and as the text a screen reader reads. The adapters build their attachment references field by field and ignore the new one.
 
@@ -40,7 +42,19 @@ The per-image 10 MB and 20 MB total refusals still check the files as the user a
 
 The data URL is base64, a third larger than these byte counts, and until #320 lands it is carried by every draft save and broadcast while the screenshot sits in the composer, then sent to the provider. A 4K capture with a photograph in it now carries about half as many bytes and a 5K one just over a quarter. The JPEG case carries about 40 percent.
 
-The price is paid once, at paste: decoding the image, and for a large one drawing and encoding the copy, costs 60 to 130 ms more than reading the file did. The flat 4K PNG pays for the copy and then throws it away because it came out larger (0.68 MB against 0.60 MB in a probe of the same drawing). The floor case is decoded only to record its size, about 12 ms. "Adding screenshots..." shows while this happens and Send waits for it, as it already did for the read.
+The price is paid once, at paste: decoding the image, and for a large one drawing and encoding the copy, costs 60 to 130 ms more than reading the file did. The flat 4K PNG pays for the copy and then throws it away because it came out larger (0.68 MB against 0.60 MB in a probe of the same drawing). "Adding screenshots..." shows while this happens and Send waits for it, as it already did for the read.
+
+The first version decoded every image, even one under the bound, to learn its size: about 12 ms for the floor case, and 70 to 120 ms for a flat 4K PNG that was then sent untouched anyway. The review asked for the size to be read from the file's header first. Measured again after that change, on the same machine but with more of other agents' work running on it, so every column is slower and noisier:
+
+| Case | Before (e093bd6c) | After, header read first |
+| --- | ---: | ---: |
+| Floor: 1920x1080 PNG, a quarter photograph | 32 ms | 17-19 ms |
+| 3840x2160 PNG, a quarter photograph | 48 ms | 174-199 ms |
+| 5120x2880 PNG, a quarter photograph | 110 ms | 235-236 ms |
+| 3840x2160 PNG, text and flat panels only | 9 ms | 97-99 ms |
+| 3840x2160 JPEG, half photograph | 23 ms | 96-106 ms |
+
+The floor case no longer pays anything measurable: it is within the noise of reading the file. The byte counts are unchanged. The flat 4K PNG still pays for a decode and a copy it then discards; only encoding it can tell that the copy comes out larger.
 
 ## What the numbers are not
 
