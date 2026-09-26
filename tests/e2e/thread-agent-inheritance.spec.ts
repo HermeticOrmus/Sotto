@@ -22,7 +22,9 @@ test('new threads inherit Agents despite a saved Grok override and wait if that 
       await window.sotto!.updateSettings({ onboardingComplete: true })
       const agents = window.sotto!.agents!
       await agents.command({ type: 'connect', provider: 'grok' })
-      const state = await agents.command({ type: 'connect', provider: 'claude' })
+      await agents.command({ type: 'connect', provider: 'claude' })
+      // A command answers with a receipt that names the model catalog by revision; the whole list is read here.
+      const state = await agents.get()
       const claude = state.host.models.find(model => model.providerId === 'claude')!
       const grok = state.host.models.find(model => model.providerId === 'grok')!
       const configured = await agents.command({ type: 'configure', patch: { reasoning: 'claude', reasoningModel: decodeURIComponent(claude.id.slice('native:claude:model:'.length)), defaultModelId: grok.id } })
