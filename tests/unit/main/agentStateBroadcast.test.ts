@@ -138,7 +138,7 @@ describe('AgentStateBroadcaster', () => {
     const sent: AgentStateBroadcast[] = []
     broadcaster.send(shell, 'main', payload => { sent.push(payload); return true })
 
-    const receipt = broadcaster.receipt(state(shellModels.map(entry => ({ ...entry })),
+    const receipt = broadcaster.encodeReceipt(state(shellModels.map(entry => ({ ...entry })),
       [clientHost(hostA, shellModels.map(entry => ({ ...entry }))), clientHost(hostB, [model('grok-4')])]))
     expect(receipt.host.models).toEqual({ revision: 1, omitted: true })
     expect(receipt.host.clientHosts!.map(client => client.models)).toEqual([{ revision: 1, omitted: true }, { revision: 1, omitted: true }])
@@ -151,7 +151,7 @@ describe('AgentStateBroadcaster', () => {
     const sent: AgentStateBroadcast[] = []
     broadcaster.send(state([model('gpt-5')]), 'main', payload => { sent.push(payload); return true })
     const changed = state([model('gpt-5', { ready: false })])
-    expect(broadcaster.receipt(changed).host.models).toEqual({ revision: 2, omitted: true })
+    expect(broadcaster.encodeReceipt(changed).host.models).toEqual({ revision: 2, omitted: true })
     // The window was never sent revision 2, so its next broadcast carries it in full.
     broadcaster.send(changed, 'main', payload => { sent.push(payload); return true })
     expect(sent[1]!.host.models).toEqual({ revision: 2, models: changed.host.models })
@@ -169,7 +169,7 @@ describe('AgentStateBroadcaster', () => {
     broadcaster.send(shell, 'widget', deliver)
     expect(compare.spy).toHaveBeenCalledTimes(1)
     compare.spy.mockClear()
-    expect(broadcaster.receipt(fresh()).host.models).toEqual({ revision: 1, omitted: true })
+    expect(broadcaster.encodeReceipt(fresh()).host.models).toEqual({ revision: 1, omitted: true })
     expect(compare.spy).toHaveBeenCalledTimes(1)
   })
 })

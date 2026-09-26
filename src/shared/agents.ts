@@ -518,6 +518,22 @@ export type AgentHostSnapshotBroadcast = Omit<AgentHostSnapshot, 'models' | 'cli
 /** What actually crosses `sotto:agents:state`: `AgentState` with its catalogs replaced by `AgentModelCatalogBroadcast`. */
 export type AgentStateBroadcast = Omit<AgentState, 'host'> & { host: AgentHostSnapshotBroadcast }
 
+const PRIMARY_CATALOG_KEY = '__primary__'
+
+/**
+ * The key main's catalog revisions and the page's catalog cache both file `host.models` under (ADR-0028).
+ * A broadcast, a command receipt and the page's recovery all resolve by it, so the two sides must agree.
+ * The primary host has no host ID and takes a fixed key.
+ */
+export function hostCatalogKey(hostId: string | undefined): string {
+  return `host:${hostId ?? PRIMARY_CATALOG_KEY}`
+}
+
+/** The key for one `host.clientHosts[]` entry's catalog, kept apart from `hostCatalogKey` (see `AgentStateBroadcaster`). */
+export function clientCatalogKey(hostId: string): string {
+  return `client:${hostId}`
+}
+
 /**
  * A catalog named by its catalog revision alone. The broadcast sends one in place of a catalog the window
  * was already sent, and a command receipt always does (issue #323).

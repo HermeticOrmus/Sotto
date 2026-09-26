@@ -1,22 +1,13 @@
+import { clientCatalogKey, hostCatalogKey } from '../../../shared/agents'
 import type { AgentBridge, AgentClientHost, AgentCommandReceipt, AgentModel, AgentState, AgentWireBridge } from '../../../shared/agents'
-
-const PRIMARY_CATALOG_KEY = '__primary__'
 
 interface CachedCatalog {
   revision: number
   models: AgentModel[]
 }
 
-/** What this window holds of each catalog, keyed as main keys it (`AgentStateBroadcaster`). */
+/** What this window holds of each catalog, keyed by `hostCatalogKey` and `clientCatalogKey`, as main keys it. */
 type CatalogCache = Map<string, CachedCatalog>
-
-function hostCatalogKey(hostId: string | undefined): string {
-  return `host:${hostId ?? PRIMARY_CATALOG_KEY}`
-}
-
-function clientCatalogKey(hostId: string): string {
-  return `client:${hostId}`
-}
 
 const wrapped = new WeakMap<AgentWireBridge, AgentBridge>()
 

@@ -85,7 +85,7 @@ describe.skipIf(!PERF_BENCH)('command receipt size', () => {
         // built ahead, as each command's own reply is.
         receiptEncode: await (async () => {
           const shells = Array.from({ length: WARMUP + ITERATIONS }, () => router.shell())
-          return time(() => broadcaster.receipt(shells.pop()!))
+          return time(() => broadcaster.encodeReceipt(shells.pop()!))
         })(),
         clone: await time(() => clone(reply)),
         preload: await (async () => {

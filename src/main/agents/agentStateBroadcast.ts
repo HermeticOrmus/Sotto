@@ -1,9 +1,8 @@
 import { isDeepStrictEqual } from 'node:util'
+import { clientCatalogKey, hostCatalogKey } from '../../shared/agents'
 import type { AgentClientHost, AgentCommandReceipt, AgentModel, AgentModelCatalogBroadcast, AgentModelCatalogRevision, AgentState, AgentStateBroadcast } from '../../shared/agents'
 
 export type AgentStateBroadcastDestination = 'main' | 'widget'
-
-const PRIMARY_CATALOG_KEY = '__primary__'
 
 type EncodedClientHost<Catalog> = Omit<AgentClientHost, 'models'> & { models: Catalog }
 type EncodedState<Catalog> = Omit<AgentState, 'host'> & {
@@ -31,8 +30,9 @@ interface CatalogSnapshot {
  * one's revision out from under the other's own comparison on every publish, so neither could ever settle
  * on `omitted` again.
  *
- * A command's reply to a window is encoded here too (`receipt`, issue #323), with the same revisions, so
- * one counter orders what the broadcast and the replies say about a catalog.
+ * A command's reply to a window is encoded here too (`encodeReceipt`, issue #323), with the same revisions,
+ * so one counter orders what the broadcast and the replies say about a catalog. The keys are
+ * `hostCatalogKey` and `clientCatalogKey` from `src/shared/agents.ts`, which the page's cache uses too.
  */
 export class AgentStateBroadcaster {
   private readonly catalogs = new Map<string, CatalogSnapshot>()
@@ -60,10 +60,16 @@ export class AgentStateBroadcaster {
    * A command's reply to a window (issue #323): `state` whole except that every catalog is named by its
    * catalog revision rather than listed, whatever the window was sent. The revision comes from the same
    * counter the broadcast uses, so a window resolves it from what the broadcast already gave it and
-   * recovers through `AGENT_GET` when it holds another. A receipt records nothing as sent: it carries no
-   * catalog, so a window's next broadcast is exactly what it would have been without it.
+   * recovers through `AGENT_GET` when it holds another. A receipt records nothing as sent to any window.
+   *
+   * It is not a pure encoder. Naming a catalog's revision goes through `revisionFor`, which advances the
+   * counter both windows share and stores `state`'s catalog as the current content when that content
+   * differs from what the counter last held. A reply shell built before a catalog change and encoded after
+   * its broadcast therefore takes a revision of its own for the old content, and the next broadcast takes
+   * another for the new content and sends it in full to both windows, the widget included (ADR-0028's
+   * September 26 amendment).
    */
-  receipt(state: AgentState): AgentCommandReceipt {
+  encodeReceipt(state: AgentState): AgentCommandReceipt {
     return this.encode(state, (key, models): AgentModelCatalogRevision => ({ revision: this.revisionFor(key, models), omitted: true }))
   }
 
@@ -75,7 +81,7 @@ export class AgentStateBroadcaster {
       ...state,
       host: {
         ...hostRest,
-        models: catalog(hostCatalogKey(state), state.host.models),
+        models: catalog(hostCatalogKey(state.host.hostId), state.host.models),
         ...(clientHosts ? { clientHosts: clientHosts.map(encodeClientHost) } : {}),
       },
     }
@@ -102,12 +108,4 @@ export class AgentStateBroadcaster {
     this.lastComparison = { stored, incoming, equal }
     return equal
   }
-}
-
-function hostCatalogKey(state: AgentState): string {
-  return `host:${state.host.hostId ?? PRIMARY_CATALOG_KEY}`
-}
-
-function clientCatalogKey(hostId: string): string {
-  return `client:${hostId}`
 }

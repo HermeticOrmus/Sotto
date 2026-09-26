@@ -35,7 +35,7 @@ function fixture() {
   }, grok, kokoro, { receipts: new AgentStateBroadcaster() }))
   const invoke = async (channel: string, payload?: unknown, source = main, frame = source.webContents.mainFrame) => listeners.get(channel)!({ sender: source.webContents, senderFrame: frame }, payload)
   // A command answers with a receipt: the shell with its catalog named by revision (issue #323).
-  const reply = new AgentStateBroadcaster().receipt(agentShell(state))
+  const reply = new AgentStateBroadcaster().encodeReceipt(agentShell(state))
   return { state, reply, control, grok, kokoro, invoke, main, widget }
 }
 

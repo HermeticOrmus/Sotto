@@ -21,9 +21,9 @@ import type { KokoroSpeechService } from './kokoroSpeech'
 import type { AgentStateBroadcaster } from './agentStateBroadcast'
 
 export interface AgentIpcOptions {
-  /** Encodes a command's reply as a command receipt (issue #323): `AgentStateBroadcaster.receipt`, so the
-   * receipt names each catalog by the revision the broadcast uses. */
-  readonly receipts: Pick<AgentStateBroadcaster, 'receipt'>
+  /** Encodes a command's reply as a command receipt (issue #323): `AgentStateBroadcaster.encodeReceipt`,
+   * so the receipt names each catalog by the revision the broadcast uses. */
+  readonly receipts: Pick<AgentStateBroadcaster, 'encodeReceipt'>
   /** The working-copy choices for a project; without it the window is told they are unavailable. */
   readonly workingCopyOptions?: (projectId: string) => Promise<AgentWorkingCopyOptions>
 }
@@ -146,7 +146,7 @@ export function registerAgentIpc(ipc: IpcMainAdapter, control: Pick<AgentControl
     // The host answers with the shell already; the coordinator builds it without copying any history.
     // The window already has the catalogs from the broadcast, so the answer names each by its catalog
     // revision rather than listing it again (issue #323); the page recovers through AGENT_GET on a mismatch.
-    return host.command(payload as typeof command, windowClient).then(state => receipts.receipt(state))
+    return host.command(payload as typeof command, windowClient).then(state => receipts.encodeReceipt(state))
   })
   return () => { grokSpeech.cancel(); kokoroSpeech.cancel(); wake.dispose(); ipc.removeHandler(AGENT_WORKING_COPY_OPTIONS); ipc.removeHandler(AGENT_CHOOSE_PROJECT_DIRECTORY); ipc.removeHandler(AGENT_WAKE); ipc.removeHandler(AGENT_GET); ipc.removeHandler(AGENT_THREAD_DETAIL_GET); ipc.removeHandler(AGENT_ATTACHMENT_PREVIEW); ipc.removeHandler(AGENT_GIT_REFS); ipc.removeHandler(AGENT_GIT_CHANGED_FILES); ipc.removeHandler(AGENT_GIT_PULL_REQUEST); ipc.removeHandler(AGENT_COMMAND); ipc.removeHandler(AGENT_SPEECH); ipc.removeHandler(AGENT_SPEECH_CANCEL); ipc.removeHandler(AGENT_GROK_VOICES); ipc.removeHandler(AGENT_VOICE_MODEL) }
 }
