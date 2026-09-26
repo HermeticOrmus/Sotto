@@ -1,0 +1,42 @@
+# Images are staged once and carried by handle
+
+Accepted September 26, 2026. Issue #320, phase 3 of the performance tickets. The owner chose not to review this record before the code; the review stage checks the code against it. It amends [ADR-0025](0025-headless-host-and-client-identity.md) by adding a host feature, and finishes for drafts and the follow-up queue what `docs/perf/state-pipeline.md` did for submitted previews in history.
+
+## Context
+
+An image the user attached traveled as a base64 data URL inside everything that mentioned its draft. With one 8 MiB screenshot in a thread's draft, on `origin/main` at `e093bd6c`:
+
+- every debounced text save sent the image again, 11.2 MB from the window to main and 11.2 MB back in the answer;
+- every shell, which main pushes to the main window and the widget as often as a thread streams, carried it: 11.2 MB per window per push, and `shell()` hashed it again to report the draft's save state;
+- every write of `agents.json` held it, 11.2 MB, after cloning, stringifying and hashing it;
+- a send with the image rewrote `attachment-previews.json`, one file of up to 100 MiB, in full.
+
+The queue of follow-ups carried the same bytes in `followups.json` and the shell.
+
+## Decision
+
+**A staged image is named by its handle.** The window hands an image's bytes to main once, through a preload call, and gets back a handle: an ID for this attachment, the file name, the MIME type, the byte length and the SHA-256 digest of the content. Drafts, the coordinator's draft, queued follow-ups, commands, the outbox, the shell, the persisted state and every broadcast carry handles only. `CONTEXT.md` calls this a **staged image**.
+
+**One attachment store per host, owned by main.** `src/main/agents/attachmentStore.ts` keeps each distinct content as one file, `attachments/<digest>.<png|jpg|gif|webp>`, in the host's data folder, with a small index, `attachments/index.json`, that lists digest, type, size and when it was staged. The index holds no names, no thread IDs and no text. Staging checks the type, the 10 MiB limit and the file's signature, writes the bytes to a temporary file and renames it into place, then writes the index, and only then answers with the handle, so a draft can never be saved pointing at content that was not yet on disk. The same bytes staged twice are stored once. A command that carries a handle the store does not hold, or whose type or size disagrees with it, is refused before anything else happens.
+
+**What owns content keeps it.** Content is kept while a thread's draft, the coordinator's draft, a follow-up in the queue in any status, an outbox send or steer whose result is not known (it records the digests it carried), or a submitted preview names it. Nothing else counts: not the window's own copy, not a delivery record. Content nothing owns is removed once it has been unowned for an hour. The store is swept at start and with the preview upkeep every 30 seconds. At start every indexed content counts as unowned from that moment, so an image staged just before a crash, whose draft was never saved, is found through the index and removed an hour into the next run. A file the index does not name, and a temporary file a crash left, is removed at start. The hour is what lets a refused prompt go back to its composer, or be sent again from the window's copy, without staging again. Clearing, cancelling or refusing a prompt therefore releases its content on that rule, not at the press. Turning history off removes at once content that only previews owned.
+
+**Previews keep their own rules.** `attachment-previews.json` becomes version 2: each entry is a thread, message and command with the handles its message carried, a few hundred bytes. The seven-day and 100 MiB limits still apply to entries, measured by the handles' sizes; a preview's content is removed only when nothing else owns it either. A version 1 file is converted at start by staging its bytes.
+
+**History off keeps new content in memory.** While Keep local history is off, staging writes nothing: the bytes stay in memory, and so nothing new reaches disk. After a restart a draft or follow-up whose content was only in memory comes back without that image. A follow-up that lost one is paused and says why instead of being sent without it. Content already on disk when history is turned off stays until nothing owns it. Previews are already off in that mode.
+
+**Bytes are read for three things only.** A composer restoring a chip it holds no copy of (after a restart, or a draft another window wrote), a submitted preview, and provider submission. The window keeps its own bounded thumbnail for each chip, at most 256 pixels on the long side, keyed by digest for the life of the window.
+
+**Adapters build the provider's form at the protocol boundary.** An adapter's send and steer carry `PromptImage`s: the handle and a `read()` of its content from the store on the provider's host. Claude gets a base64 image block, as before. Codex gets a data URL `image` input, as before. Codex's `localImage`, a path on the provider's host, was considered and not taken: Codex loads a local image itself and scales it to fit its own limits before sending, which a data URL is not, so taking it would decide how screenshots are downscaled, which #321 decides. The store's path makes switching a one-line change once that is settled. Grok and Devin refuse an image before the provider hears anything, as before, because neither reports image input. `tests/integration/adapterContract.ts` sends a staged image through every adapter.
+
+**Remote hosts stage where the provider runs.** The window's staging call names the thread (or, for the coordinator's composer, the selected host), and the desktop router hands it to the host that runs it. Over the socket this is the host feature `attachment-staging`, with two requests: `stage-attachment` (the bytes as base64 in one frame, within the 16 MiB limit) and `attachment-content` (a staged image's bytes by digest, for a chip). A host that does not list the feature is older; the desktop sends it nothing and says which side to update, as it does for the other features. Protocol version stays 1: the envelope is unchanged, and a host and a client of different Sotto versions already meet the version sentence when thread and command shapes differ (the September 23 amendment of ADR-0025), which the draft's attachment shape now does.
+
+**Old files are converted at start.** Inline images in `agents.json` (the coordinator's draft and thread drafts), `followups.json` and version 1 previews are staged and rewritten as handles when the coordinator starts. A file that fails to convert is left as it was and start stops, the way a failed migration of host identity does.
+
+## Consequences
+
+- With the same 8 MiB screenshot in a draft, a text-only draft save, a shell push to each window and a write of `agents.json` each carry a few kilobytes instead of 11.2 MB, and a send with the image writes a preview entry of a few hundred bytes instead of rewriting every stored image. The figures are in `docs/perf/2026-09-26-attachment-handles.md`.
+- A prompt's digest (`followupDigest`) now covers each image's content digest rather than its base64. A prompt with images whose delivery was uncertain across the upgrade is reconciled by its draft ID, which every outbox entry has carried since per-thread drafts.
+- Private image bytes now live as individual files in `attachments/` under the data folder of the machine that runs the thread, named by their content digest, instead of inside `agents.json`, `followups.json` and `attachment-previews.json`. The README says so under "Privacy and cost".
+- A digest names content; it is not a secret. The content request is on the main window's bridge only, never the widget's, and answers only for content the host still keeps.
+- An image attached to two drafts, or attached and then submitted, is stored once.
