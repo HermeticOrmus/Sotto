@@ -498,19 +498,18 @@ export type AgentState = z.infer<typeof agentStateSchema>
 /**
  * A model catalog as it may cross the `AGENT_STATE` broadcast on `sotto:agents:state` (issue #286): the
  * full array, tagged with the revision it represents, or that revision alone when the window it is going
- * to was already sent it. `AGENT_GET` and a command's own answer are read on demand, once, so they always
- * carry the array in full; only the coalesced broadcast in `src/main/index.ts` ever omits one, and only
- * after a send it knows reached that window. The revision is what keeps an omission from ever being read
- * as an empty catalog: a window missing the one it names — fresh, reloaded, or a message it never saw —
- * asks `AGENT_GET` for the whole state instead of showing no models. Nothing parses this shape: the
- * preload forwards it to the page unparsed (contextBridge would otherwise copy a catalog it just put
- * back together a second time crossing back), and the page's own reassembly reads it structurally, the
- * same way `trustedState` does for the rest of this channel. See ADR-0028 and
- * `src/renderer/src/agents/agentStateCatalogs.ts`.
+ * to was already sent it. Only the coalesced broadcast in `src/main/index.ts` ever sends a catalog in full
+ * this way, and it omits one only after a send it knows reached that window. The revision is what keeps
+ * an omission from ever being read as an empty catalog: a window missing the one it names — fresh,
+ * reloaded, or a message it never saw — asks `AGENT_GET` for the whole state instead of showing no
+ * models. Nothing parses this shape: the preload forwards it to the page unparsed (contextBridge would
+ * otherwise copy a catalog it just put back together a second time crossing back), and the page's own
+ * reassembly reads it structurally, the same way `trustedState` does for the rest of this channel. See
+ * ADR-0028 and `src/renderer/src/agents/agentStateCatalogs.ts`.
  */
 export type AgentModelCatalogBroadcast =
   | { revision: number; models: AgentModel[] }
-  | { revision: number; omitted: true }
+  | AgentModelCatalogRevision
 export type AgentClientHostBroadcast = Omit<AgentClientHost, 'models'> & { models: AgentModelCatalogBroadcast }
 export type AgentHostSnapshotBroadcast = Omit<AgentHostSnapshot, 'models' | 'clientHosts'> & {
   models: AgentModelCatalogBroadcast
@@ -518,6 +517,31 @@ export type AgentHostSnapshotBroadcast = Omit<AgentHostSnapshot, 'models' | 'cli
 }
 /** What actually crosses `sotto:agents:state`: `AgentState` with its catalogs replaced by `AgentModelCatalogBroadcast`. */
 export type AgentStateBroadcast = Omit<AgentState, 'host'> & { host: AgentHostSnapshotBroadcast }
+
+/**
+ * A catalog named by its catalog revision alone. The broadcast sends one in place of a catalog the window
+ * was already sent, and a command receipt always does (issue #323).
+ */
+export const agentModelCatalogRevisionSchema = z.object({ revision: z.number().int().nonnegative(), omitted: z.literal(true) }).strict()
+export type AgentModelCatalogRevision = z.infer<typeof agentModelCatalogRevisionSchema>
+const agentReceiptCatalogSchema = z.union([agentModelCatalogRevisionSchema, z.array(agentModelSchema)])
+
+/**
+ * What `AGENT_COMMAND` answers the window with (issue #323, ADR-0028's September 26 amendment): the shell
+ * after the command, with its outcome (`error`, `notice`), its evidence (`threadDraftPersistence` for the
+ * draft revision saved, `configuration` for the effective settings) and every other changed field whole,
+ * but each model catalog named by its catalog revision instead of listed. The revisions come from the same
+ * counter as the broadcast's, so the page resolves a receipt from the catalogs the broadcast already sent
+ * it and recovers through `AGENT_GET` when it holds a different revision. A whole array is still accepted,
+ * for a caller that registered the handler without a receipt encoder, as tests do.
+ */
+export const agentCommandReceiptSchema = agentStateSchema.extend({
+  host: agentHostSnapshotSchema.extend({
+    models: agentReceiptCatalogSchema,
+    clientHosts: z.array(agentClientHostSchema.extend({ models: agentReceiptCatalogSchema })).optional(),
+  }),
+})
+export type AgentCommandReceipt = z.infer<typeof agentCommandReceiptSchema>
 
 /**
  * One viewed thread's history, pushed and fetched apart from the shell stream: its messages and the

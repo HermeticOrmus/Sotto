@@ -182,4 +182,80 @@ describe('wrapAgentBridge', () => {
     const { bridge } = fakeBridge(() => Promise.reject(new Error('unused')))
     expect(wrapAgentBridge(bridge)).toBe(wrapAgentBridge(bridge))
   })
+
+  describe('command receipts', () => {
+    /** A bridge whose `command` answers with the given receipts in turn, as main's handler would. */
+    function receiptBridge(get: () => Promise<AgentState>, ...answers: unknown[]) {
+      const fake = fakeBridge(get)
+      ;(fake.bridge.command as ReturnType<typeof vi.fn>).mockImplementation(async () => answers.shift())
+      return fake
+    }
+    const voice = { type: 'voice', action: 'mute' } as const
+
+    it('puts back the catalog the broadcast sent, without asking main', async () => {
+      const models = [model('gpt-5')]
+      const { bridge, emit, get } = receiptBridge(() => Promise.reject(new Error('unused')), broadcast({ revision: 1, omitted: true }))
+      const wrapped = wrapAgentBridge(bridge)
+      wrapped.onState(() => undefined)
+      emit(broadcast({ revision: 1, models }))
+      const reply = await wrapped.command(voice)
+      expect(reply.host.models).toBe(models)
+      expect(get).not.toHaveBeenCalled()
+    })
+
+    it('answers with the receipt\'s own fields, never the recovery\'s', async () => {
+      const recovered = { ...fullState([model('gpt-5')]), error: 'from get', configuration: { ...defaultAgentConfiguration(), speak: false } }
+      const receipt = { ...(broadcast({ revision: 4, omitted: true }) as AgentState), threadDraftPersistence: [{ threadId: 't', draftId: '11111111-1111-4111-8111-111111111111', status: 'saved' as const }] }
+      const { bridge } = receiptBridge(() => Promise.resolve(recovered), receipt)
+      const reply = await wrapAgentBridge(bridge).command(voice)
+      expect(reply.host.models).toEqual([model('gpt-5')])
+      expect(reply.threadDraftPersistence).toEqual(receipt.threadDraftPersistence)
+      expect(reply.error).toBeNull()
+      expect(reply.configuration).toEqual(defaultAgentConfiguration())
+    })
+
+    it('files a catalog recovered for a receipt where the next broadcast naming it finds it', async () => {
+      const { bridge, emit, get } = receiptBridge(() => Promise.resolve(fullState([model('gpt-5')])), broadcast({ revision: 2, omitted: true }))
+      const wrapped = wrapAgentBridge(bridge)
+      const delivered: AgentState[] = []
+      wrapped.onState(state => delivered.push(state))
+      await wrapped.command(voice)
+      emit(broadcast({ revision: 2, omitted: true }))
+      expect(delivered[0]!.host.models).toEqual([model('gpt-5')])
+      expect(get).toHaveBeenCalledTimes(1)
+    })
+
+    it('stands in the catalog it last held when a recovery fails, and fails the reply when it holds none', async () => {
+      const held = [model('gpt-5')]
+      const { bridge, emit } = receiptBridge(() => Promise.reject(new Error('offline')), broadcast({ revision: 2, omitted: true }))
+      const wrapped = wrapAgentBridge(bridge)
+      wrapped.onState(() => undefined)
+      emit(broadcast({ revision: 1, models: held }))
+      expect((await wrapped.command(voice)).host.models).toBe(held)
+
+      const empty = receiptBridge(() => Promise.reject(new Error('offline')), broadcast({ revision: 2, omitted: true }))
+      await expect(wrapAgentBridge(empty.bridge).command(voice)).rejects.toThrow('offline')
+    })
+
+    it('passes a whole reply through untouched', async () => {
+      const whole = fullState([model('gpt-5')])
+      const { bridge, get } = receiptBridge(() => Promise.reject(new Error('unused')), whole)
+      const reply = await wrapAgentBridge(bridge).command(voice)
+      expect(reply.host.models).toBe(whole.host.models)
+      expect(get).not.toHaveBeenCalled()
+    })
+    it('never files a recovery for an older revision over the newer catalog the window holds', async () => {
+      const newer = [model('gpt-5.1')]
+      const { bridge, emit, get } = receiptBridge(() => Promise.resolve(fullState(newer)), broadcast({ revision: 1, omitted: true }))
+      const wrapped = wrapAgentBridge(bridge)
+      const delivered: AgentState[] = []
+      wrapped.onState(state => delivered.push(state))
+      emit(broadcast({ revision: 2, models: newer }))
+      // A receipt naming revision 1 the window no longer holds: it reads main once and answers with what it holds.
+      expect((await wrapped.command(voice)).host.models).toBe(newer)
+      emit(broadcast({ revision: 2, omitted: true }))
+      expect(delivered[1]!.host.models).toBe(newer)
+      expect(get).toHaveBeenCalledTimes(1)
+    })
+  })
 })

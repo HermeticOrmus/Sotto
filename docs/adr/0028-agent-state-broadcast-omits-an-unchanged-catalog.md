@@ -20,7 +20,7 @@ The catalog itself rarely changes — a model list is edited by a subscription o
 
 - On the owner's 608-model catalog (measured with `node:v8`'s `serialize`, which approximates what Electron's structured clone puts on the wire): an unchanged repeat fell from 649 KB to 1.1 KB, a 99.8% reduction. The first send after a real change is unaffected (649 KB plus 37 bytes of revision bookkeeping). Detecting "unchanged" with `isDeepStrictEqual` across both destinations costs about 0.5 ms per publish on that catalog, paid in main, not on the window's own thread. This figure is unchanged by moving reassembly to the page — it measures main's own encoding, not where the window puts the catalog back — and the page-side saving from not cloning the reassembled array a second time across `contextBridge` has not been separately measured; see `docs/verification/catalog-broadcast-omission.md`.
 - A window's own memory of what it holds lives only as long as its wrapped bridge's closure does, so a reload or a fresh window empties it at exactly the moment the window's actual knowledge also empties, without main needing to notice the window came back — correctness does not depend on `windowManager.ts`'s `loadedRendererUrls` catching every reload path, only on `deliver()`'s return value gating what main assumes was received.
-- `AGENT_GET` and `AGENT_COMMAND` (`src/main/agents/ipc.ts`) are unchanged: both still answer with a whole `AgentState`, model arrays included, because they are the recovery path this design depends on.
+- `AGENT_GET` and `AGENT_COMMAND` (`src/main/agents/ipc.ts`) are unchanged: both still answer with a whole `AgentState`, model arrays included, because they are the recovery path this design depends on. The September 26 amendment below changes this for `AGENT_COMMAND`; `AGENT_GET` still answers whole.
 - The remote host socket protocol (`src/host/socketServer.ts`, `socketHostService.ts`) is untouched. It still sends a whole `AgentState` on every event; a catalog omission is only a property of the desktop's own broadcast to its two windows; see `docs/agent-control.md` if that protocol's own cost is addressed later.
 
 ### September 25 amendment: routine replies do not copy histories
@@ -44,3 +44,39 @@ catalog, and repeated immutable history arrays reuse their reconciled identity.
 Theme inspection and working-copy presence use explicit attributes rather than
 broad descendant `:has()` selectors that invalidated the window on textarea edits.
 See [the follow-up verification](../verification/composer-typing-followup.md).
+
+### September 26 amendment: a command's answer is a receipt
+
+Issue #323. This changes the Decision above, which kept a command's answer whole as a recovery path. After the
+September 25 amendment a reply no longer copied histories, but every draft save and every chip press still
+carried the whole model catalog to the window. On a synthetic 608-model catalog that is 542 KB for one draft
+save, cloned into the window and parsed there by the preload's schema on every save.
+
+**`AGENT_COMMAND` now answers with a command receipt.** It is the shell after the command, with its outcome
+(`error`, `notice`), the evidence its caller acts on (`threadDraftPersistence` for the exact draft revision
+saved, `configuration` for the effective settings) and every other changed field whole. The model catalogs are
+the exception: `host.models` and each `host.clientHosts[].models` cross as `{ revision, omitted: true }`, naming
+their catalog revision. `AgentStateBroadcaster.receipt` encodes it with the same revision counter the broadcast
+uses, so there is one ordering for a catalog, not a second one for replies. A receipt records nothing as sent,
+so the next broadcast to that window is what it would have been without the receipt. The preload parses it
+with `agentCommandReceiptSchema`.
+
+**The page puts the catalog back from the cache the broadcast fills.** `wrapAgentBridge` now wraps `command` as
+well as `onState`, and the two share one cache per page. A receipt whose revisions the window holds resolves
+at once. One whose revisions it does not hold (nothing broadcast yet, or a catalog this command changed whose
+broadcast has not landed) recovers through `bridge.get()` once. Receipts naming the same revisions while that
+is in flight wait for the same answer. The recovered catalog is filed under the receipt's revisions, where the
+next receipt or broadcast naming them finds it. The caller always gets the receipt's own fields, never the
+recovery's. If the recovery fails, the catalog the window last held stands in until the next broadcast; with
+nothing held at all, the reply fails the way a lost reply does. Where the reply is committed against
+broadcasts is unchanged: `AgentContext` still drops a reply that a broadcast overtook (issue #306 is open and
+may change that). The catalog revision orders only catalogs.
+
+`AGENT_GET` is unchanged and still answers whole: it is the one recovery path for both. The remote host socket
+protocol is untouched. A content comparison now serves every key that holds the same array: `host.models` and
+the selected host's `clientHosts[]` entry are one array in a shell, and one shell is encoded for both windows.
+A receipt costs main one comparison of the catalog (about 0.8 ms on the synthetic 608 models), and a publish
+of one host's shell to both windows costs one where it used to cost four.
+
+The draft save's reply fell from 542 KB to 2.3 KB. The preload's parse of it fell from about 2.5 ms to 0.04 ms
+and its copy from about 2.2 ms to 0.015 ms. See [the measurement](../perf/2026-09-26-command-receipt.md).
