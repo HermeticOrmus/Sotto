@@ -1,8 +1,9 @@
-import React, { memo, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
-import { ChevronRight, Users } from 'lucide-react'
-import type { SubagentAssignment, SubagentRow, SubagentsBridge } from '../../../shared/subagents'
+import React, { memo, useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
+import { ArrowLeft, ChevronRight, Users } from 'lucide-react'
+import type { WorkflowProgress } from '../../../shared/agentActivity'
+import { distinctModels, type SubagentAssignment, type SubagentRow, type SubagentsBridge } from '../../../shared/subagents'
 import { type SubagentsStore, useThreadSubagents } from './subagentsStore'
-import { ToolsChrome } from './ToolsChrome'
+import { ToolsChrome, ToolsChromeLead } from './ToolsChrome'
 import './agentsSurface.css'
 
 const STATUS: Record<SubagentRow['status'], string> = { running: 'Working', completed: 'Finished', failed: 'Failed', interrupted: 'Interrupted', unknown: 'Last seen working' }
@@ -94,7 +95,7 @@ const AgentRow = memo(function AgentRow({ threadId, row, depth, bridge }: { read
   return <li className="subagent-item" data-agent-id={row.id} data-nested={depth > 0 || undefined} style={{ '--subagent-depth': Math.min(depth, 4) } as React.CSSProperties} onKeyDown={event => { if (open && event.key === 'Escape' && !event.defaultPrevented) { event.preventDefault(); setOpen(false); button.current?.focus() } }}>
     <button ref={button} type="button" className="subagent-head tt-focusable" aria-expanded={open} aria-controls={id} onClick={() => setOpen(!open)}>
       <span className="subagent-dot" data-status={row.status} aria-hidden="true" />
-      <span className="subagent-main"><span className="subagent-title">{row.title || 'Agent task'}</span>
+      <span className="subagent-main"><span className="subagent-title" title={row.title || undefined}>{row.title || 'Agent task'}</span>
         {row.description && row.description !== row.title ? <span className="subagent-description">{row.description}</span> : null}
         <span className="subagent-meta"><span className="subagent-model">{row.model || 'Model not reported'}</span>{row.assignmentCount > 1 ? <span className="subagent-run">· Run {row.assignmentCount}</span> : null}</span>
       </span>
@@ -128,19 +129,121 @@ export function nestedSubagents(rows: readonly SubagentRow[]): { row: SubagentRo
   return result
 }
 
+type StripStatus = 'running' | 'completed' | 'failed' | 'interrupted' | 'queued'
+const stripStatus = (status: SubagentRow['status']): StripStatus => status === 'unknown' ? 'running' : status
+
+/** A workflow's count in words: what has finished, then what failed or stopped. "4 of 6 finished · 1 failed". */
+export function workflowCount(progress: WorkflowProgress | undefined): string {
+  if (!progress?.total) return 'No agents reported yet'
+  return [`${progress.completed} of ${progress.total} finished`, ...(progress.failed ? [`${progress.failed} failed`] : []), ...(progress.interrupted ? [`${progress.interrupted} interrupted`] : [])].join(' · ')
+}
+
+/** Past this many agents, neighbouring segments in the same state join into one, so the strip keeps to its row. */
+const STRIP_SEGMENTS = 40
+
+/**
+ * One segment per agent, in the order they were queued, coloured by state. The agents the roster has loaded draw
+ * it, followed by the agents still waiting to start; until every started agent has loaded, the workflow's own counts do.
+ */
+function WorkflowStrip({ progress, agents }: { readonly progress: WorkflowProgress | undefined; readonly agents: readonly SubagentRow[] }): ReactNode {
+  if (!progress?.total) return null
+  const queued = progress.queued ?? 0
+  const waiting = Array<StripStatus>(queued).fill('queued')
+  const segments: StripStatus[] = agents.length === progress.total - queued ? [...agents.map(agent => stripStatus(agent.status)), ...waiting]
+    : [...Array<StripStatus>(progress.completed).fill('completed'), ...Array<StripStatus>(progress.failed).fill('failed'), ...Array<StripStatus>(progress.interrupted).fill('interrupted'), ...Array<StripStatus>(progress.working).fill('running'), ...waiting]
+  const label = [workflowCount(progress), ...(progress.working ? [`${progress.working} working`] : []), ...(queued ? [`${queued} waiting to start`] : [])].join(', ').replaceAll(' · ', ', ')
+  const runs: { status: StripStatus; count: number }[] = []
+  for (const status of segments) {
+    const last = runs.at(-1)
+    if (segments.length > STRIP_SEGMENTS && last?.status === status) last.count++
+    else runs.push({ status, count: 1 })
+  }
+  return <span className="subagent-strip" role="img" aria-label={label}>{runs.map(({ status, count }, index) => <i key={index} data-status={status} style={count > 1 ? { flexGrow: count } : undefined} />)}</span>
+}
+
+/** A workflow in the roster: one row with its strip and count. Pressing it opens the workflow page. */
+const WorkflowRow = memo(function WorkflowRow({ row, agents, onOpen }: { readonly row: SubagentRow; readonly agents: readonly SubagentRow[]; readonly onOpen: (id: string) => void }): ReactNode {
+  const count = workflowCount(row.progress)
+  return <li className="subagent-item subagent-item--workflow" data-agent-id={row.id}>
+    <button type="button" className="subagent-head tt-focusable" aria-label={`Open the workflow ${row.title || 'Workflow'}: ${count.replaceAll(' · ', ', ')}, ${STATUS[row.status]}`} onClick={() => onOpen(row.id)}>
+      <span className="subagent-dot" data-status={row.status} aria-hidden="true" />
+      <span className="subagent-main"><span className="subagent-title" title={row.title || undefined}>{row.title || 'Workflow'}</span>
+        <WorkflowStrip progress={row.progress} agents={agents} />
+        <span className="subagent-meta"><span className="subagent-kind">Workflow</span><span className="subagent-count">{count}</span>
+          {row.description && row.description !== row.title ? <span className="subagent-model">{row.description}</span> : null}</span>
+      </span>
+      <span className="subagent-right"><span className="subagent-time"><SubagentElapsed row={row} /><ChevronRight size={12} aria-hidden="true" /></span><span>{STATUS[row.status]}</span></span>
+    </button>
+  </li>
+})
+
+/**
+ * The workflow page: one workflow's run and its agents, in place of the roster. Its line of chrome goes back to
+ * all agents; so does Escape when nothing on the page is open.
+ */
+function WorkflowPage({ threadId, row, agents, bridge }: { readonly threadId: string; readonly row: SubagentRow; readonly agents: readonly { row: SubagentRow; depth: number }[]; readonly bridge: SubagentsBridge | undefined }): ReactNode {
+  const models = distinctModels(agents.map(({ row: agent }) => agent.model))
+  return <>
+    <section className="subagent-workflow" aria-label="Workflow">
+      <WorkflowStrip progress={row.progress} agents={agents.filter(({ depth }) => depth === 0).map(({ row: agent }) => agent)} />
+      <p className="subagent-workflow__facts"><strong>{workflowCount(row.progress)}</strong><SubagentElapsed row={row} />
+        {row.description && row.description !== row.title ? <span>{row.description}</span> : null}
+        {models.length ? <span>{models.join(', ')}</span> : null}</p>
+      <div className="subagent-details subagent-workflow__details"><AssignmentDetails threadId={threadId} row={row} bridge={bridge} /></div>
+    </section>
+    <h3 className="subagent-workflow__heading" id={`${row.id}-agents`}>Agents</h3>
+    {!agents.length ? <p className="subagent-workflow__empty">No agents reported yet.</p> : null}
+    <ul className="subagents-list" aria-labelledby={`${row.id}-agents`}>{agents.map(({ row: agent, depth }) => <AgentRow key={agent.id} threadId={threadId} row={agent} depth={depth} bridge={bridge} />)}</ul>
+  </>
+}
+
 export function AgentsSurface({ threadId, store, bridge }: { readonly threadId: string; readonly store: SubagentsStore; readonly bridge: SubagentsBridge | undefined }): ReactNode {
   const state = useThreadSubagents(store, threadId)
   useEffect(() => { store.activate(bridge, threadId); return () => store.deactivate() }, [store, bridge, threadId])
-  const rows = useMemo(() => nestedSubagents(state.rows), [state.rows])
+  const [page, setPage] = useState<{ threadId: string; id: string } | null>(null)
+  const surface = useRef<HTMLDivElement>(null)
+  // Focus moves only after the user opens or leaves a workflow page, never when a thread switch or reset does it.
+  const focusNext = useRef<{ back: true } | { row: string } | null>(null)
+  useEffect(() => { setPage(null) }, [threadId])
+  // A workflow's agents are on its page; the roster shows the workflow as one row.
+  const { roster, members } = useMemo(() => {
+    const workflows = new Set(state.rows.filter(row => row.kind === 'workflow').map(row => row.id))
+    const members = new Map<string, SubagentRow[]>()
+    for (const row of state.rows) if (row.parentId && workflows.has(row.parentId)) members.set(row.parentId, [...members.get(row.parentId) ?? [], row])
+    return { roster: nestedSubagents(state.rows.filter(row => !row.parentId || !workflows.has(row.parentId))), members }
+  }, [state.rows])
+  const open = page?.threadId === threadId ? state.rows.find(row => row.id === page.id && row.kind === 'workflow') : undefined
+  const pageAgents = useMemo(() => open ? nestedSubagents(members.get(open.id) ?? []) : [], [open, members])
+  const openId = open?.id
+  const back = (): void => { if (openId) focusNext.current = { row: openId }; setPage(null) }
+  const openPage = useCallback((id: string): void => { focusNext.current = { back: true }; setPage({ threadId, id }) }, [threadId])
+  useEffect(() => {
+    const next = focusNext.current
+    focusNext.current = null
+    if (next && 'back' in next) surface.current?.querySelector<HTMLButtonElement>('.subagents-back')?.focus()
+    else if (next) surface.current?.querySelector<HTMLButtonElement>(`[data-agent-id="${CSS.escape(next.row)}"] .subagent-head`)?.focus()
+  }, [openId])
   const { total, working, unknown } = state.summary
-  // The roster's count leads its line of chrome; what is working, or not confirmed, sits beside it.
-  return <div className="subagents-surface">
-    <ToolsChrome title={total > 0 ? `${total} ${total === 1 ? 'agent' : 'agents'}` : 'Agents'} detail={total > 0 ? working ? `${working} working` : unknown ? 'Activity not confirmed' : 'None working' : null} />
+  const loadEarlier = state.before !== undefined ? <button type="button" className="files-link tt-focusable subagents-older" disabled={state.loading} onClick={() => void store.page(threadId, true)}>{state.loading ? 'Loading agents…' : 'Load earlier agents'}</button> : null
+  const error = state.error ? <p role="status">{state.error} <button type="button" className="files-link tt-focusable" onClick={() => void store.page(threadId)}>Try again</button></p> : null
+  // An open agent inside the page answers Escape first; only then does Escape leave the page.
+  return <div className="subagents-surface" ref={surface} onKeyDown={event => { if (open && event.key === 'Escape' && !event.defaultPrevented) { event.preventDefault(); back() } }}>
+    {open ? <div className="tools-chrome">
+      <button type="button" className="tools-chrome__button subagents-back tt-focusable" aria-label="Back to all agents" title="Back to all agents" onClick={back}><ArrowLeft size={15} aria-hidden="true" /><span className="tools-chrome__button-label">All agents</span></button>
+      <span className="subagents-back__rule" aria-hidden="true" />
+      <ToolsChromeLead title={open.title || 'Workflow'} detail={workflowCount(open.progress)} />
+    </div>
+    // The roster's count leads its line of chrome; what is working, or not confirmed, sits beside it.
+      : <ToolsChrome title={total > 0 ? `${total} ${total === 1 ? 'agent' : 'agents'}` : 'Agents'} detail={total > 0 ? working ? `${working} working` : unknown ? 'Activity not confirmed' : 'None working' : null} />}
     <div className="subagents-roster">
-      {!rows.length && !state.error ? <div className="subagents-empty"><Users size={25} aria-hidden="true" /><p>{state.loading ? 'Loading agents…' : 'No agents spawned in this thread yet.'}</p></div> : null}
-      <ul className="subagents-list" aria-label="Spawned agents">{rows.map(({ row, depth }) => <AgentRow key={`${state.resetVersion}:${row.id}`} threadId={threadId} row={row} depth={depth} bridge={bridge} />)}</ul>
-      {state.error ? <p role="status">{state.error} <button type="button" className="files-link tt-focusable" onClick={() => void store.page(threadId)}>Try again</button></p> : null}
-      {state.before !== undefined ? <button type="button" className="files-link tt-focusable subagents-older" disabled={state.loading} onClick={() => void store.page(threadId, true)}>{state.loading ? 'Loading agents…' : 'Load earlier agents'}</button> : null}
+      {open ? <WorkflowPage key={`${state.resetVersion}:${open.id}`} threadId={threadId} row={open} agents={pageAgents} bridge={bridge} /> : <>
+        {!roster.length && !state.error ? <div className="subagents-empty"><Users size={25} aria-hidden="true" /><p>{state.loading ? 'Loading agents…' : 'No agents spawned in this thread yet.'}</p></div> : null}
+        <ul className="subagents-list" aria-label="Spawned agents">{roster.map(({ row, depth }) => row.kind === 'workflow'
+          ? <WorkflowRow key={`${state.resetVersion}:${row.id}`} row={row} agents={members.get(row.id) ?? []} onOpen={openPage} />
+          : <AgentRow key={`${state.resetVersion}:${row.id}`} threadId={threadId} row={row} depth={depth} bridge={bridge} />)}</ul>
+      </>}
+      {error}
+      {loadEarlier}
     </div>
   </div>
 }

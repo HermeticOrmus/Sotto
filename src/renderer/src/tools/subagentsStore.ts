@@ -13,6 +13,17 @@ export interface ThreadSubagents {
 }
 const EMPTY: ThreadSubagents = { rows: [], resetVersion: 0, revision: -1, summary: EMPTY_SUBAGENT_SUMMARY, loading: false, error: null }
 
+/**
+ * The newest rows up to the capacity, and where earlier ones begin. A parent older than the cut stays with the rows
+ * under it, so a workflow keeps its one row in the roster however its agents fall across pages.
+ */
+export function newestRows(ordered: readonly SubagentRow[], capacity: number): { rows: SubagentRow[]; before: number | undefined } {
+  if (ordered.length <= capacity) return { rows: [...ordered], before: undefined }
+  const kept = ordered.slice(-capacity)
+  const parents = new Set(kept.flatMap(row => row.parentId ? [row.parentId] : []))
+  return { rows: [...ordered.slice(0, -capacity).filter(row => parents.has(row.id)), ...kept], before: kept[0]?.sequence }
+}
+
 /** Current rows only. Full tasks and results belong to the open detail, never this cache or agent state. */
 export class SubagentsStore {
   private readonly threads = new Map<string, ThreadSubagents>()
@@ -73,10 +84,9 @@ export class SubagentsStore {
         held.set(row.id, previous && previous.revision >= row.revision ? previous : row)
       }
       const ordered = [...held.values()].sort((a, b) => a.sequence - b.sequence)
-      const capacity = this.capacities.get(threadId) ?? SUBAGENT_PAGE_SIZE
-      const kept = ordered.slice(-capacity)
-      this.publish(threadId, { rows: kept, resetVersion: latest.resetVersion, revision: Math.max(page.revision, latest.revision),
-        summary: latest.revision > page.revision ? latest.summary : page.summary, before: ordered.length > capacity ? kept[0]?.sequence : page.before, loading: false, error: null })
+      const kept = newestRows(ordered, this.capacities.get(threadId) ?? SUBAGENT_PAGE_SIZE)
+      this.publish(threadId, { rows: kept.rows, resetVersion: latest.resetVersion, revision: Math.max(page.revision, latest.revision),
+        summary: latest.revision > page.revision ? latest.summary : page.summary, before: kept.before ?? page.before, loading: false, error: null })
     } catch {
       if (generation === this.generation) this.publish(threadId, { ...this.thread(threadId), loading: false, error: 'Could not load agents. Saved work is unchanged. Try again.' })
     }
@@ -100,9 +110,8 @@ export class SubagentsStore {
       if (!previous || previous.revision < row.revision) rows.set(row.id, row)
     }
     const ordered = [...rows.values()].sort((a, b) => a.sequence - b.sequence)
-    const capacity = this.capacities.get(change.threadId) ?? SUBAGENT_PAGE_SIZE
-    const kept = ordered.slice(-capacity)
-    this.publish(change.threadId, { ...current, rows: kept, before: ordered.length > capacity ? kept[0]?.sequence : current.before, revision: change.revision, summary: change.summary })
+    const kept = newestRows(ordered, this.capacities.get(change.threadId) ?? SUBAGENT_PAGE_SIZE)
+    this.publish(change.threadId, { ...current, rows: kept.rows, before: kept.before ?? current.before, revision: change.revision, summary: change.summary })
   }
 
   private publish(threadId: string, value: ThreadSubagents): void {
