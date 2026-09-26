@@ -1,7 +1,7 @@
 import React, { useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Check, ChevronDown, Search, X } from 'lucide-react'
 import type { AgentModel } from '../../../shared/agents'
-import { catalogModel, chosenModelId, findModel } from '../../../shared/modelCatalog'
+import { catalogEntry, resolveModel } from '../../../shared/modelCatalog'
 import { moveListboxFocus } from './listboxKeys'
 import { OPTION_CHIP_NAMES } from './optionChipNames'
 import { ProviderMark } from './ProviderMark'
@@ -41,8 +41,8 @@ export function ModelPicker({ models, modelId, disabled, onChange, note }: {
   readonly note?: string | undefined
 }): ReactNode {
   // A long-context variant the catalog does not list (`opus[1m]`) shows as its base model's entry, by that name.
-  const current = findModel(models, modelId)
-  const currentEntryId = catalogModel(models, modelId)?.id
+  const current = resolveModel(models, modelId)
+  const currentEntryId = catalogEntry(models, modelId)?.id
   const [open, setOpen] = useState(false)
   const [provider, setProvider] = useState('')
   const [query, setQuery] = useState('')
@@ -115,7 +115,7 @@ export function ModelPicker({ models, modelId, disabled, onChange, note }: {
         </header>
         <div ref={list} role="listbox" aria-label={`${selectedProvider?.name ?? ''} models`} className="model-picker__models" onKeyDown={event => moveListboxFocus(event, list.current)}>
           {filtered.map(model => <button type="button" role="option" key={model.id} aria-selected={model.id === currentEntryId} disabled={disabled || !model.ready}
-            onClick={() => { onChange(chosenModelId(models, model.id, modelId)); setOpen(false) }}><span>{model.name}{!model.ready && <small>Unavailable</small>}</span>{model.id === currentEntryId && <Check size={14} aria-hidden="true" />}</button>)}
+            onClick={() => { onChange(model.id); setOpen(false) }}><span>{model.name}{!model.ready && <small>Unavailable</small>}</span>{model.id === currentEntryId && <Check size={14} aria-hidden="true" />}</button>)}
           {!filtered.length && <p className="model-picker__empty">No matching models.</p>}
         </div>
         {note ? <p className="model-picker__note">{note}</p> : null}

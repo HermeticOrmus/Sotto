@@ -27,7 +27,6 @@ import { CodexSessionLogWatcher, promptDigest, textOf } from './codexSessionLog'
 import { answerRequest, declineRequest, pendingRequest, requestKey, type CodexPendingRequest } from './codexRequests'
 import { needsPerson, unreadableRequest } from './nativeRequests'
 import { effortAfterChange, validatePromptAttachments, validateThreadOptions } from './threadOptions'
-import { findModel } from '../../shared/modelCatalog'
 import { CodexActivityProjection, codexItemSchema } from './codexActivity'
 import { SessionReaper } from './sessionReaper'
 import { codexTurnIdentitySchema, compatibleClient, identityTurn, messageIdentity, messageOrigin, reconcileMessageIdentities, type IdentityItem } from './codexMessageIdentity'
@@ -802,7 +801,7 @@ export class CodexAppServerHost implements AgentHost {
         if (this.creating.has(command.threadId)) return { accepted: false, uncertain: true }
         const project = command.type === 'create-thread' ? this.state.projects.find(p => p.id === command.projectId) : undefined
         if (command.type === 'create-thread' && !project) throw new Error('Choose a known Codex project.')
-        if (!findModel(this.state.models, command.modelId)?.ready) throw new Error('Choose an available Codex model.')
+        if (!this.state.models.some(m => m.id === command.modelId && m.ready)) throw new Error('Choose an available Codex model.')
         validateThreadOptions(this.state, command)
         const cwd = await existingWorkingDirectory(command.workingDirectory ?? project!.path)
         this.creating.add(command.threadId)

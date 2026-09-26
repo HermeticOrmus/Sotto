@@ -3,7 +3,7 @@ import React, { useState, type ReactNode } from 'react'
 import { Mic, MicOff, Settings2, Volume2, VolumeX } from 'lucide-react'
 import { isThreadClosed } from '../../../shared/threadActivity'
 import { capabilitiesForThread, isThreadBusy, isThreadProviderConnected, supportsAgentSupervision, type AgentThread } from '../../../shared/agents'
-import { findModel } from '../../../shared/modelCatalog'
+import { resolveModel } from '../../../shared/modelCatalog'
 import { Button } from '../components/Button'
 import { SideSheet } from '../components/SideSheet'
 import { useAgents } from './AgentContext'
@@ -52,7 +52,7 @@ export function AgentRoom({ onOpenThreads, initialSheet = null }: { readonly onO
     const result = await command({ type: 'select-thread', threadId: thread.id })
     if (result && !result.error) setSheet('session')
   }
-  const provider = (thread: AgentThread): string => findModel(hostForThread(state.host, thread).models, thread.modelId)?.provider ?? state.configuration.provider
+  const provider = (thread: AgentThread): string => resolveModel(hostForThread(state.host, thread).models, thread.modelId)?.provider ?? state.configuration.provider
   return <div className="agent-room">
     <div className="agent-room__tools">
       <Button variant="ghost" iconOnly aria-label="Configure agents" onClick={() => setSheet('settings')}><Settings2 size={17} /></Button>
@@ -77,7 +77,7 @@ export function AgentRoom({ onOpenThreads, initialSheet = null }: { readonly onO
     {sheet === 'settings' ? <SideSheet title="Agent configuration" onClose={() => setSheet(null)}><AgentSetupFields /><div className="agent-actions"><Button variant="secondary" onClick={() => void command({ type: 'configure', patch: { enabled: !state.configuration.enabled } })}>{state.configuration.enabled ? 'Turn off agent control' : 'Enable agent control'}</Button></div></SideSheet> : null}
     {sheet === 'new' ? <NewThreadDialog state={state} command={command} managed onClose={() => setSheet(null)} onCreated={() => setSheet('session')} /> : null}
     {sheet === 'session' ? <SideSheet title={active?.title ?? 'Session'} onClose={() => setSheet(null)}>
-      {active ? <><p className="agent-muted">{project?.title} · {findModel(state.host.models, active.modelId)?.name ?? active.modelId}</p><AgentManualNotice state={state} command={command} />
+      {active ? <><p className="agent-muted">{project?.title} · {resolveModel(state.host.models, active.modelId)?.name ?? active.modelId}</p><AgentManualNotice state={state} command={command} />
         <div className="agent-actions">{assignment ? <><Button variant="ghost" onClick={() => void command({ type: assignment.paused || assignment.mode === 'manual' ? 'resume' : 'pause', threadId: active.id })}>{assignment.paused || assignment.mode === 'manual' ? 'Resume management' : 'Pause management'}</Button><Button variant="ghost" onClick={() => void command({ type: 'unassign', threadId: active.id })}>Stop managing</Button></> : <Button variant="secondary" disabled={!isThreadProviderConnected(state.host, active) || state.globalLaneBusy || !supportsAgentSupervision(capabilitiesForThread(state.host, active))} onClick={() => void command({ type: 'assign', threadId: active.id })}>Manage this thread</Button>}{active.status === 'running' && !isThreadClosed(active) && capabilitiesForThread(state.host, active).interrupt ? <Button variant="ghost" disabled={!isThreadProviderConnected(state.host, active) || isThreadBusy(state, active.id)} onClick={() => void command({ type: 'interrupt', threadId: active.id })}>Stop agent</Button> : null}</div>
         <div className="agent-transcript" aria-label="Session transcript">{active.messages.length ? active.messages.map(message => <article key={message.id}><small>{message.role === 'user' ? 'You' : 'Agent'}</small><p>{message.text}</p></article>) : <p className="agent-muted">No messages yet.</p>}</div></> : <p>Select a thread to read its transcript.</p>}
       {attention.items.some(item => item.threadId === state.activeThreadId) ? <AgentQueue approvalLabel="Allow" state={attentionState} command={command} compact /> : null}

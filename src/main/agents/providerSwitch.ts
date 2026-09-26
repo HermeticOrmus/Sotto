@@ -6,8 +6,8 @@ import { AtomicJsonStore } from '../storage/atomicJsonStore'
 import { cloneHostSnapshot } from './cloneHostSnapshot'
 import { cloneActivitySnapshot, subscribeActivitySnapshots } from './activitySnapshots'
 import { join, resolve } from 'node:path'
-import { EMPTY_AGENT_HOST, PROVIDER_LABELS, providerIdSchema, publicProviderEntityId, type AgentCapabilities, type AgentHostSnapshot, type AgentProviderStatus, type ProviderId } from '../../shared/agents'
-import { findModel } from '../../shared/modelCatalog'
+import { EMPTY_AGENT_HOST, PROVIDER_LABELS, parsePublicProviderEntityId, providerIdSchema, publicProviderEntityId, type AgentCapabilities, type AgentHostSnapshot, type AgentProviderStatus, type ProviderId } from '../../shared/agents'
+import { resolveModel } from '../../shared/modelCatalog'
 import { confirmedSettingsSnapshot, type AgentHost, type AgentHostCommand, type AgentHostResult, type AgentSkillScope, type RestoredThreadHistory, type ShortTextPrompt, type ThreadHistorySource, type ThreadHostEvent } from './host'
 
 /** Public IDs are opaque to callers and reversible only at the provider boundary. */
@@ -15,9 +15,9 @@ export function providerEntityId(provider: ProviderId, kind: 'model' | 'project'
   return publicProviderEntityId(provider, kind, value)
 }
 function nativeEntityId(provider: ProviderId, kind: 'model' | 'project', value: string): string {
-  const prefix = `native:${provider}:${kind}:`
-  if (!value.startsWith(prefix)) throw new Error(`Choose a ${kind} belonging to ${PROVIDER_LABELS[provider]}.`)
-  return decodeURIComponent(value.slice(prefix.length))
+  const parsed = parsePublicProviderEntityId(value)
+  if (parsed?.provider !== provider || parsed.kind !== kind) throw new Error(`Choose a ${kind} belonging to ${PROVIDER_LABELS[provider]}.`)
+  return parsed.value
 }
 function folderKey(path: string): string { const key = resolve(path); return process.platform === 'win32' ? key.toLowerCase() : key }
 type Slot = { snapshot: AgentHostSnapshot; status: AgentProviderStatus; wanted: boolean; epoch: number; connecting?: Promise<void> | undefined;
@@ -248,7 +248,7 @@ export class ConfiguredProviderHost implements AgentHost {
       return this.options.hosts[id].execute({ ...command, projectId: nativeId })
     }
     if (command.type === 'create-thread') {
-      const model = findModel(this.aggregate().models, this.resolveModelId(command.modelId))
+      const model = resolveModel(this.aggregate().models, this.resolveModelId(command.modelId))
       if (!model?.providerId || !model.ready) throw new Error('Choose an available model and provider.')
       const id = model.providerId; this.requireConnected(id)
       if (!this.slots.get(id)!.status.capabilities.threads) throw new Error('This provider cannot create threads.')

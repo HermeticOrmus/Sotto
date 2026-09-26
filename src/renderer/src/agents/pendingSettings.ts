@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import { hostForThread, type AgentCommand, type AgentModel, type AgentRuntimeMode, type AgentState, type AgentThread } from '../../../shared/agents'
-import { findModel } from '../../../shared/modelCatalog'
+import { resolveModel } from '../../../shared/modelCatalog'
 
 /** The three settings an option chip changes. */
 export type SettingKind = 'model' | 'effort' | 'permissions'
@@ -52,7 +52,7 @@ interface Entry {
 
 /** Each setting's value on this thread as its own model reads it: the defaults are the model's. */
 export function settingValues(state: AgentState, thread: AgentThread): SettingValues {
-  const model = findModel(hostForThread(state.host, thread).models, thread.modelId)
+  const model = resolveModel(hostForThread(state.host, thread).models, thread.modelId)
   return settingValuesFor(thread, model)
 }
 export function settingValuesFor(thread: Pick<AgentThread, 'modelId' | 'reasoningEffort' | 'runtimeMode' | 'providerMode'>, model: AgentModel | undefined): SettingValues {

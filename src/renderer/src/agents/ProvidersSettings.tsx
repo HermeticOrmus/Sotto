@@ -1,7 +1,7 @@
 import React, { useId, useRef, useState, type ReactNode } from 'react'
 import { RefreshCw } from 'lucide-react'
 import { defaultThreadModelId, enabledThreadProviders, PROVIDER_LABELS, providerIdSchema, type ProviderClientUpdate, type ProviderId } from '../../../shared/agents'
-import { catalogModel } from '../../../shared/modelCatalog'
+import { catalogEntry } from '../../../shared/modelCatalog'
 import { Button } from '../components/Button'
 import { Toggle } from '../components/Toggle'
 import { useOptionalAgents } from './AgentContext'
@@ -77,7 +77,7 @@ export function ProvidersSettings(): ReactNode {
   }
   const inheritedModelId = defaultThreadModelId(state.configuration, state.host.models, state.reasoningAccounts)
   // A long-context variant the catalog does not list (`opus[1m]`) is its base model's entry here.
-  const inheritedEntryId = catalogModel(models, inheritedModelId)?.id
+  const inheritedEntryId = catalogEntry(models, inheritedModelId)?.id
   return <div className="providers-settings">
     <div className="providers-workspace">
       <nav className="providers-list" aria-label="Thread providers">{providerIdSchema.options.map(provider => {

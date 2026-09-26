@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { agentRequestSchema, providerIdSchema, type AgentHostSnapshot, type AgentRequest, type AgentThread, type ProviderId } from './agents'
-import { findModel } from './modelCatalog'
+import { resolveModel } from './modelCatalog'
 
 const id = z.string().min(1).max(256)
 export const requestDraftOwnerSchema = z.object({ kind: z.enum(['thread', 'personal']), ownerId: id, providerId: providerIdSchema }).strict()
@@ -50,7 +50,7 @@ export interface RequestDraftBridge {
 export const requestDraftOwnerKey = (owner: RequestDraftOwner): string => JSON.stringify([owner.kind, owner.providerId, owner.ownerId])
 /** Legacy single-provider snapshots can identify the owner through its model instead of providerId. */
 export function requestDraftProvider(host: AgentHostSnapshot, thread: AgentThread, fallback: ProviderId): ProviderId {
-  const model = findModel(host.models, thread.modelId)
+  const model = resolveModel(host.models, thread.modelId)
   return thread.providerId ?? model?.providerId ?? providerIdSchema.safeParse(model?.provider.toLowerCase()).data ?? fallback
 }
 export const requestDraftKey = (target: RequestDraftTarget): string => JSON.stringify([target.kind, target.providerId, target.ownerId, target.requestId, requestQuestionsSignature(target.questions)])

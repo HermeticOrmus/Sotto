@@ -1,3 +1,4 @@
+import { parsePublicProviderEntityId } from '../agents'
 import type { TerminalProvider } from '../terminalWorkspace'
 import { claudeCommand } from './claude'
 import { codexCommand } from './codex'
@@ -31,7 +32,6 @@ export function commandLine(argv: readonly string[]): string {
 /** The CLI's model name from Sotto's public model ID (`native:<provider>:model:<encoded>`); other IDs pass through. */
 export function nativeModelName(modelId: string): string | null {
   if (!modelId) return null
-  const match = /^native:(?:codex|claude|grok):model:(.+)$/u.exec(modelId)
-  if (!match) return modelId
-  try { return decodeURIComponent(match[1]!) } catch { return match[1]! }
+  const parsed = parsePublicProviderEntityId(modelId)
+  return parsed?.kind === 'model' ? parsed.value : modelId
 }

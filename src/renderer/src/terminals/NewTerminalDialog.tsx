@@ -2,7 +2,7 @@ import { parseHostEntityKey } from '../../../shared/clientIdentity'
 import React, { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 import { ArrowLeft, ChevronRight, Folder, X } from 'lucide-react'
 import { PROVIDER_LABELS, defaultThreadModelId, isSubscriptionReasoning, type AgentModel, type AgentProject, type AgentState } from '../../../shared/agents'
-import { catalogModel, findModel } from '../../../shared/modelCatalog'
+import { catalogEntry, chosenModelId, resolveModel } from '../../../shared/modelCatalog'
 import { TERMINAL_PERMISSIONS, TERMINAL_PERMISSION_LABELS, commandLine, nativeModelName, providerCommand, type TerminalPermission } from '../../../shared/terminalCommands'
 import { terminalProviderSchema, type TerminalProvider, type TerminalLaunch, type TerminalWorkspaceBridge } from '../../../shared/terminalWorkspace'
 import type { AgentConnection } from '../agents/AgentContext'
@@ -58,7 +58,7 @@ export function NewTerminalDialog({ state, command, store, bridge, shell, onClos
   const [workingCopy, setWorkingCopy] = useState<WorkingCopyChoice>('shared')
   const catalogProviders = useMemo(() => providersOf(state.host.models), [state.host.models])
   const inheritedModelId = defaultThreadModelId(state.configuration, state.host.models, state.reasoningAccounts)
-  const defaultModel = findModel(state.host.models, inheritedModelId)
+  const defaultModel = resolveModel(state.host.models, inheritedModelId)
   const nativeAgent = isSubscriptionReasoning(state.configuration.reasoning) ? state.configuration.reasoning : null
   const defaultProvider = nativeAgent ?? (defaultModel ? providerOf(defaultModel) : undefined) ?? catalogProviders[0] ?? null
   const defaultModelId = nativeAgent || (defaultModel && providerOf(defaultModel) === defaultProvider) ? inheritedModelId
@@ -68,12 +68,12 @@ export function NewTerminalDialog({ state, command, store, bridge, shell, onClos
   const choiceMade = useRef(false)
   const providers = [...new Set([...catalogProviders, ...(provider ? [provider] : [])])]
   const catalogModels = state.host.models.filter(model => providerOf(model) === provider)
-  const accountModel = findModel(state.reasoningAccounts.find(account => account.provider === provider)?.models ?? [], nativeModelName(modelId))
-  const model: AgentModel | undefined = findModel(catalogModels, modelId) ?? (provider && modelId ? {
+  const accountModel = resolveModel(state.reasoningAccounts.find(account => account.provider === provider)?.models ?? [], nativeModelName(modelId))
+  const model: AgentModel | undefined = resolveModel(catalogModels, modelId) ?? (provider && modelId ? {
     id: modelId, name: accountModel?.name ?? nativeModelName(modelId) ?? PROVIDER_LABELS[provider],
     providerId: provider, provider: PROVIDER_LABELS[provider], ready: false,
   } : undefined)
-  const models = model && !catalogModel(catalogModels, model.id) ? [...catalogModels, model] : catalogModels
+  const models = model && !catalogEntry(catalogModels, model.id) ? [...catalogModels, model] : catalogModels
   const [reasoning, setReasoning] = useState<string | undefined>()
   const [permission, setPermission] = useState<TerminalPermission>('ask')
   useEffect(() => {
@@ -161,7 +161,7 @@ export function NewTerminalDialog({ state, command, store, bridge, shell, onClos
           <option value="">None, just a shell</option>
           {providers.map(id => <option key={id} value={id}>{PROVIDER_LABELS[id]}</option>)}
         </select></label>
-        {provider !== null && models.length ? <div className="thread-options__model"><span>Model</span><ModelPicker models={models} modelId={modelId} disabled={submitting} onChange={id => { choiceMade.current = true; setModelId(id); setReasoning(undefined) }} /></div> : null}
+        {provider !== null && models.length ? <div className="thread-options__model"><span>Model</span><ModelPicker models={models} modelId={modelId} disabled={submitting} onChange={id => { choiceMade.current = true; setModelId(chosenModelId(models, id, modelId, defaultModelId)); setReasoning(undefined) }} /></div> : null}
         {provider !== null && !!model?.reasoningEfforts?.length ? <label><span>Reasoning</span><select aria-label="Terminal reasoning" title="Reasoning" value={effort ?? ''} disabled={submitting} onChange={event => setReasoning(event.target.value)}>
           {effort !== null && !model.reasoningEfforts.includes(effort) ? <option value={effort} disabled>{effort}</option> : null}
           {model.reasoningEfforts.map(item => <option key={item} value={item}>{item.charAt(0).toUpperCase() + item.slice(1)}</option>)}

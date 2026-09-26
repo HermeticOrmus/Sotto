@@ -2,7 +2,7 @@ import { hostEntityKey, parseHostEntityKey } from '../../../shared/clientIdentit
 import React, { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { ArrowLeft, ChevronRight, Folder, Laptop, Server, X } from 'lucide-react'
 import { hostForThread, defaultThreadModelId, isSubscriptionReasoning, PROVIDER_LABELS, type AgentModel, type AgentProject, type AgentRuntimeMode, type AgentState, type AgentThread } from '../../../shared/agents'
-import { catalogModel, chosenModelId, findModel } from '../../../shared/modelCatalog'
+import { catalogEntry, chosenModelId, resolveModel } from '../../../shared/modelCatalog'
 import type { AgentConnection } from './AgentContext'
 import { Button } from '../components/Button'
 import { draftThread, UNCONFIRMED_CREATION } from './draftThreads'
@@ -114,15 +114,15 @@ export function NewThreadDialog({ state, command, onClose, onCreated, onCreating
   const inheritedProvider = isSubscriptionReasoning(state.configuration.reasoning) ? state.configuration.reasoning : null
   const inheritedModelId = defaultThreadModelId(state.configuration, projectHost.models, state.reasoningAccounts)
   const inheritedAccount = state.reasoningAccounts.find(account => account.provider === inheritedProvider)
-  const inheritedModel = findModel(inheritedAccount?.models ?? [], state.configuration.reasoningModel || inheritedAccount?.defaultModelId)
-  const selectedModel: AgentModel | undefined = findModel(projectHost.models, modelId)
+  const inheritedModel = resolveModel(inheritedAccount?.models ?? [], state.configuration.reasoningModel || inheritedAccount?.defaultModelId)
+  const selectedModel: AgentModel | undefined = resolveModel(projectHost.models, modelId)
     ?? (inheritedProvider && modelId === inheritedModelId ? {
       id: modelId, providerId: inheritedProvider, provider: PROVIDER_LABELS[inheritedProvider], ready: false,
       name: inheritedModel?.name || state.configuration.reasoningModel || (PROVIDER_LABELS[inheritedProvider] + ' default'),
     } : undefined)
   // The permission setting shown is the one sent, so an unchosen one is the first the provider offers.
   const startMode = startingProviderMode(selectedModel, providerMode)
-  const modelChoices = selectedModel && !catalogModel(projectHost.models, selectedModel.id) ? [...projectHost.models, selectedModel] : projectHost.models
+  const modelChoices = selectedModel && !catalogEntry(projectHost.models, selectedModel.id) ? [...projectHost.models, selectedModel] : projectHost.models
   const selectedProvider = projectHost.providers?.find(provider => provider.id === selectedModel?.providerId)
   const canCreateThread = selectedProvider?.capabilities.threads ?? projectHost.capabilities.threads
   const connected = selectedModel?.ready === true && (selectedModel.providerId && projectHost.providers
@@ -208,7 +208,7 @@ export function NewThreadDialog({ state, command, onClose, onCreated, onCreating
         <div className="new-thread-dialog__option-fields">
           <label>Thread name<input className="tt-input" placeholder="New thread" value={title} disabled={submitting} onChange={event => setTitle(event.target.value)} /></label>
           <ThreadOptionFields models={modelChoices} modelId={modelId} reasoningEffort={reasoningEffort} runtimeMode={runtimeMode} providerMode={providerMode}
-            disabled={submitting} onModel={id => { modelChosen.current = true; setModelId(chosenModelId(projectHost.models, id, inheritedModelId)); setReasoningEffort(undefined); setRuntimeMode(undefined); setProviderMode(undefined) }}
+            disabled={submitting} onModel={id => { modelChosen.current = true; setModelId(chosenModelId(projectHost.models, id, modelId, inheritedModelId)); setReasoningEffort(undefined); setRuntimeMode(undefined); setProviderMode(undefined) }}
             onReasoning={setReasoningEffort} onRuntime={setRuntimeMode} onProviderMode={setProviderMode} />
         </div>
       </details>
