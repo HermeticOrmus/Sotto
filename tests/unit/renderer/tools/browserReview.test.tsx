@@ -11,6 +11,8 @@ import { ToolsPanelStore } from '../../../../src/renderer/src/tools/toolsPanelSt
 import { ToolsPanelToggle } from '../../../../src/renderer/src/tools/ToolsPanel'
 import { ThreadDraftStore } from '../../../../src/renderer/src/agents/threadDraftStore'
 import { threadsStateFixture } from '../liveAgentState'
+import { handleOf } from '../../../fixtures/stagedImages'
+import type { AgentAttachmentStageRequest } from '../../../../src/shared/agents'
 
 const workspace = { threadId: 'visual-gate', projectId: 'workshop', workingDirectory: 'D:/work', workspaceId: 'workspace' }
 const page: BrowserPage = { id: '11111111-1111-4111-8111-111111111111', workspace, url: 'http://localhost:5173/', title: 'Preview', status: 'ready', error: null, canGoBack: false, canGoForward: false }
@@ -282,7 +284,7 @@ describe('the browser task details in Tools', () => {
 
 describe('browser feedback', () => {
   it('selects an element by keyboard, then adds its screenshot and comment only on request', async () => {
-    const browser = fake(); const add = vi.fn(() => null); const close = vi.fn()
+    const browser = fake(); const add = vi.fn(async () => null); const close = vi.fn()
     vi.mocked(browser.bridge.capture).mockResolvedValue(ok({ ...capture, element: { tag: 'button', role: 'button', name: 'Save', text: 'Save', selector: '#save' } }))
     render(<BrowserFeedback page={page} initial={capture} bridge={browser.bridge} onAdd={add} onClose={close} />)
     const select = screen.getByRole('button', { name: /Select page element/ })
@@ -293,11 +295,11 @@ describe('browser feedback', () => {
     fireEvent.change(screen.getByRole('textbox', { name: 'Browser feedback comment' }), { target: { value: 'Give this more space' } })
     fireEvent.click(screen.getByRole('button', { name: 'Add to draft' }))
     expect(add).toHaveBeenCalledWith(expect.objectContaining({ element: expect.objectContaining({ selector: '#save' }) }), 'Give this more space')
-    expect(close).toHaveBeenCalledOnce()
+    await waitFor(() => expect(close).toHaveBeenCalledOnce())
   })
   it('selects a region entirely from the keyboard and binds it to the captured frame', async () => {
     const browser = fake()
-    render(<BrowserFeedback page={page} initial={{ ...capture, captureId: 'frame-id' }} bridge={browser.bridge} onAdd={() => null} onClose={() => undefined} />)
+    render(<BrowserFeedback page={page} initial={{ ...capture, captureId: 'frame-id' }} bridge={browser.bridge} onAdd={async () => null} onClose={() => undefined} />)
     fireEvent.change(screen.getByRole('combobox', { name: 'Selection mode' }), { target: { value: 'region' } })
     const select = screen.getByRole('button', { name: /Select page region/ })
     fireEvent.keyDown(select, { key: ' ' })
@@ -306,19 +308,25 @@ describe('browser feedback', () => {
     fireEvent.keyDown(select, { key: 'Enter' })
     await waitFor(() => expect(browser.bridge.capture).toHaveBeenCalledWith(expect.objectContaining({ region: { x: 640, y: 400, width: 10, height: 10 }, captureId: 'frame-id' })))
   })
-  it('appends to the latest draft without submitting or replacing existing text and attachments', () => {
-    vi.useFakeTimers()
-    const command = vi.fn(async () => null); const drafts = new ThreadDraftStore(command)
-    drafts.edit('visual-gate', { text: 'Keep this thought' })
-    expect(appendBrowserFeedback(drafts, 'visual-gate', capture, 'This button needs room', true)).toBeNull()
-    expect(drafts.draft('visual-gate').text).toContain('Keep this thought\n\nBrowser feedback:')
-    expect(drafts.draft('visual-gate').attachments).toHaveLength(1)
-    expect(drafts.submissions()).toEqual([])
-    expect(command).not.toHaveBeenCalled()
-    const before = drafts.draft('visual-gate')
-    expect(appendBrowserFeedback(drafts, 'visual-gate', capture, 'Other', false)).toContain('image support')
-    expect(drafts.draft('visual-gate')).toBe(before)
-    drafts.edit('visual-gate', { requestId: 'question' })
-    expect(appendBrowserFeedback(drafts, 'visual-gate', capture, 'Other', true)).toContain('answers a question')
+  it('stages the screenshot and appends to the latest draft without submitting or replacing existing text and attachments', async () => {
+    const staged: AgentAttachmentStageRequest[] = []
+    vi.stubGlobal('sotto', { agents: { stageAttachment: vi.fn(async (request: AgentAttachmentStageRequest) => { staged.push(request); return handleOf(request.bytes, 'feedback', request.name) }) } })
+    try {
+      const command = vi.fn(async () => null); const drafts = new ThreadDraftStore(command, 60_000)
+      drafts.edit('visual-gate', { text: 'Keep this thought' })
+      expect(await appendBrowserFeedback(drafts, 'visual-gate', capture, 'This button needs room', true)).toBeNull()
+      expect(drafts.draft('visual-gate').text).toContain('Keep this thought\n\nBrowser feedback:')
+      // The draft carries the handle; the bytes went to main once, for this thread.
+      expect(drafts.draft('visual-gate').attachments).toEqual([expect.objectContaining({ id: 'feedback', name: 'Browser feedback.png', mimeType: 'image/png' })])
+      expect(staged).toEqual([expect.objectContaining({ threadId: 'visual-gate', name: 'Browser feedback.png', mimeType: 'image/png', bytes: new Uint8Array(Buffer.from('abc')) })])
+      expect(drafts.submissions()).toEqual([])
+      expect(command).not.toHaveBeenCalled()
+      const before = drafts.draft('visual-gate')
+      expect(await appendBrowserFeedback(drafts, 'visual-gate', capture, 'Other', false)).toContain('image support')
+      expect(drafts.draft('visual-gate')).toBe(before)
+      drafts.edit('visual-gate', { requestId: 'question' })
+      expect(await appendBrowserFeedback(drafts, 'visual-gate', capture, 'Other', true)).toContain('answers a question')
+      expect(staged).toHaveLength(1)
+    } finally { vi.unstubAllGlobals() }
   })
 })

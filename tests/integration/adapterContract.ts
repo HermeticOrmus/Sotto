@@ -9,6 +9,8 @@ import type { AgentActivity } from '../../src/shared/agentActivity'
 import type { AgentHostSnapshot, AgentRuntimeMode, AgentThread } from '../../src/shared/agents'
 import type { ThreadEventKind } from '../../src/shared/threadEvents'
 import type { RecordedRpc } from '../fixtures/codexFixture'
+import { handleOf, PIXEL_PNG } from '../fixtures/stagedImages'
+import { resolveModel } from '../../src/shared/modelCatalog'
 
 /** Short reaper settings so a test can watch a session be stopped instead of waiting out a real hour. */
 export interface AdapterSessionOptions { reaperSweepMs?: number; sessionIdleMs?: number }
@@ -159,6 +161,29 @@ export function describeAdapterContract(name: string, factory: (session?: Adapte
       expect(JSON.stringify(await f.driver.requests())).not.toContain('Side-writing marker 7c1f')
       expect((await thread()).messages.map(message => message.id)).toEqual(messages)
       expect(events.slice(published).filter(event => event.threadId === sessionId).map(event => event.event.kind)).toEqual([])
+    })
+    it('sends a staged image through the handle contract, reading its bytes only at the provider boundary (ADR-0030)', async () => {
+      const snapshot = await f.host.snapshot()
+      const supported = resolveModel(snapshot.models, f.modelId)?.supportsImages === true
+      const handle = handleOf(PIXEL_PNG, 'contract-image', 'Contract.png')
+      let reads = 0
+      const image = { ...handle, read: async () => { reads += 1; return PIXEL_PNG } }
+      const command = { type: 'send' as const, threadId: sessionId, commandId: randomUUID(), messageId: 'image-message', text: 'Look at this', attachments: [image] }
+      const base64 = PIXEL_PNG.toString('base64')
+      if (!supported) {
+        // A provider that takes no images refuses before it hears anything, and the bytes are never read.
+        await expect(f.host.execute(command)).rejects.toThrow(/image support/)
+        expect(reads).toBe(0)
+        expect(JSON.stringify(await f.driver.requests())).not.toContain(base64)
+        return
+      }
+      expect(await f.host.execute(command)).toEqual({ accepted: true })
+      expect(reads).toBeGreaterThan(0)
+      // The provider heard the image itself, in its own form, and the thread records the handle's reference, not the bytes.
+      await expect.poll(async () => JSON.stringify(await f.driver.requests()).includes(base64)).toBe(true)
+      await expect.poll(async () => (await thread()).messages.find(message => message.id === 'image-message')?.attachments)
+        .toEqual([{ id: handle.id, name: handle.name, mimeType: handle.mimeType, sizeBytes: handle.sizeBytes }])
+      expect(JSON.stringify(await thread())).not.toContain(base64)
     })
     it('cancels a running turn', async () => {
       await send()

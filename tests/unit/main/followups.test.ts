@@ -12,6 +12,7 @@ import { E2EAgentHost, e2eAgentReasoner } from '../../../src/main/e2e/agentEffec
 import { AtomicJsonStore } from '../../../src/main/storage/atomicJsonStore'
 import { agentCommandSchema, type AgentHostSnapshot, type AgentThread } from '../../../src/shared/agents'
 import { immediatePublishScheduler } from '../../fixtures/publishScheduler'
+import { handleOf, PIXEL_PNG, pngOfSize, stageInto } from '../../fixtures/stagedImages'
 
 const roots: string[] = []; const controls: AgentControl[] = []
 afterEach(async () => {
@@ -55,7 +56,7 @@ async function fixture() {
       membership: { status: async () => ({ status: 'beta', label: 'Test', expiresAt: null }), action: async () => ({ status: 'beta', label: 'Test', expiresAt: null }) } })
     controls.push(c); return c
   }
-  const control = create(); await control.start(); await control.command({ type: 'connect' })
+  const control = create(); await control.start(); await stageInto(control, PIXEL_PNG); await control.command({ type: 'connect' })
   return { root, host, control, create }
 }
 const queued = (text: string, threadId = 'workshop') => ({ type: 'queue-followup' as const, threadId, draftId: randomUUID(), text })
@@ -394,7 +395,7 @@ it('steers a selected edited queue item once, preserving the remaining queue and
   f.host.update('workshop', { status: 'running' })
   await f.control.command(queued('first'))
   const prompt = { ...queued('$build second @README.md'), skills: [{ name: 'build', path: 'C:/skills/build/SKILL.md' }], files: [{ path: 'README.md' }],
-    attachments: [{ id: randomUUID(), name: 'reference.png', mimeType: 'image/png' as const, dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a5FoAAAAASUVORK5CYII=' }] }
+    attachments: [handleOf(PIXEL_PNG, randomUUID(), 'reference.png')] }
   await f.control.command(prompt)
   const item = f.control.get().followups![1]!
   await f.control.command({ type: 'edit-followup', threadId: item.threadId, itemId: item.id, text: '$build edited second @README.md' })
@@ -403,7 +404,7 @@ it('steers a selected edited queue item once, preserving the remaining queue and
   const request = { type: 'steer-followup' as const, threadId: item.threadId, itemId: item.id }
   expect(agentCommandSchema.safeParse(request).success).toBe(true)
   await Promise.all([f.control.command(request), f.control.command(request)])
-  expect(f.host.attempts).toEqual([expect.objectContaining({ type: 'steer', text: '$build edited second @README.md', skills: prompt.skills, files: prompt.files, attachments: prompt.attachments })])
+  expect(f.host.attempts).toEqual([expect.objectContaining({ type: 'steer', text: '$build edited second @README.md', skills: prompt.skills, files: prompt.files, attachments: [expect.objectContaining(prompt.attachments[0])] })])
   expect(f.control.get().followups?.map(item => item.text)).toEqual(['first'])
   expect(f.control.get().threadDrafts).toEqual([expect.objectContaining({ draftId: newer.draftId, text: newer.text })])
   complete(f.host)
@@ -451,8 +452,8 @@ it('reconciles a late steer confirmation behind an untouched queue head', async 
 it('reads a waiting image follow-up without copying the queue on every streaming snapshot', async () => {
   const f = await fixture(); f.host.update('workshop', { status: 'running' })
   // A 3 MB screenshot waiting behind a running turn: the case that made every copy cost milliseconds.
-  const dataUrl = `data:image/png;base64,${Buffer.alloc(3 * 1024 * 1024, 7).toString('base64')}`
-  await f.control.command({ ...queued('look at this'), attachments: [{ id: 'shot', name: 'shot.png', mimeType: 'image/png', dataUrl }] })
+  const shot = pngOfSize(3 * 1024 * 1024, 7); await stageInto(f.control, shot)
+  await f.control.command({ ...queued('look at this'), attachments: [handleOf(shot, 'shot', 'shot.png')] })
   const copies = vi.spyOn(FollowupStore.prototype, 'get')
   const reads = vi.spyOn(FollowupStore.prototype, 'peek')
   for (let chunk = 0; chunk < 50; chunk += 1) f.host.update('workshop', { title: `streaming ${chunk}` })
@@ -460,7 +461,7 @@ it('reads a waiting image follow-up without copying the queue on every streaming
   expect(reads.mock.calls.length).toBeGreaterThanOrEqual(50)
   expect(copies).not.toHaveBeenCalled()
   expect(f.host.attempts).toHaveLength(0)
-  expect(f.control.get().followups?.[0]?.attachments[0]?.dataUrl).toBe(dataUrl)
+  expect(f.control.get().followups?.[0]?.attachments[0]?.digest).toBe(handleOf(shot).digest)
 })
 
 it('keeps a view it handed out unchanged when the queue changes after it', async () => {

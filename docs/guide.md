@@ -57,6 +57,8 @@ While a thread is running, **Steer now** beside a queued message sends that mess
 
 Paste a screenshot into a thread's prompt, drag it in, or choose **Attach screenshots**. Codex models that accept images and Claude Code models support screenshots; text-only models keep the control unavailable. Send an image on its own or alongside text, with up to eight images, 10 MB per image and 20 MB total. Grok Build currently cannot receive screenshots through its native client.
 
+A screenshot is kept once, as a file on the computer that runs the thread (the host, for a thread on a remote host), from the moment you attach it until nothing needs it: not an unsent draft, not a queued message, and not a sent message's preview, which lasts seven days. An hour after that it is removed. With **Keep local history** off, a newly attached screenshot stays in memory instead, so an unsent draft or queued message comes back from a restart without it; a queued message that lost one waits, paused, and says so.
+
 You can create a thread from the Threads page while another thread has a saved coordinator draft. The draft stays with its original thread, including while the voice coordinator is hidden for the beta.
 
 ### History and copying

@@ -1,15 +1,36 @@
 import React, { useRef, useState, type ReactNode } from 'react'
 import type { BrowserBridge, BrowserCapture, BrowserPage } from '../../../shared/browser'
-import { agentAttachmentsSchema } from '../../../shared/agents'
+import { AGENT_MAX_ATTACHMENT_BYTES, AGENT_MAX_ATTACHMENTS, agentAttachmentHandlesSchema } from '../../../shared/agents'
 import type { ThreadDraftStore } from '../agents/threadDraftStore'
+import { stageImage } from '../agents/stagedImages'
 
-/** Append to the latest draft, preserving typing that happened while the page was captured. */
-export function appendBrowserFeedback(store: ThreadDraftStore, threadId: string, capture: BrowserCapture, comment: string, imagesSupported: boolean): string | null {
+const DOES_NOT_FIT = 'This screenshot does not fit in the draft. Remove an attachment or capture a smaller region.'
+
+/** A capture's PNG data URL as bytes, to be staged like any other screenshot. */
+function pngBlob(dataUrl: string): Blob | null {
+  if (!dataUrl.startsWith('data:image/png;base64,')) return null
+  try { return new Blob([Uint8Array.from(atob(dataUrl.slice(dataUrl.indexOf(',') + 1)), character => character.charCodeAt(0))], { type: 'image/png' }) }
+  catch { return null }
+}
+
+/**
+ * Append to the latest draft, preserving typing that happened while the page was captured. The screenshot is staged
+ * first (ADR-0030); the draft is read again after, so text typed meanwhile is kept.
+ */
+export async function appendBrowserFeedback(store: ThreadDraftStore, threadId: string, capture: BrowserCapture, comment: string, imagesSupported: boolean): Promise<string | null> {
+  const before = store.draft(threadId)
+  if (before.requestId !== null) return 'This draft answers a question. Finish that answer before adding browser feedback.'
+  if (!imagesSupported) return 'Choose a model with image support before adding a browser screenshot.'
+  const blob = pngBlob(capture.image)
+  if (!blob) return 'Could not read this screenshot. Capture the page again.'
+  if (before.attachments.length >= AGENT_MAX_ATTACHMENTS || before.attachments.reduce((sum, item) => sum + item.sizeBytes, 0) + blob.size > AGENT_MAX_ATTACHMENT_BYTES) return DOES_NOT_FIT
+  let image
+  try { image = await stageImage(threadId, { name: 'Browser feedback.png', mimeType: 'image/png', blob }) }
+  catch (error) { return error instanceof Error ? error.message : 'Could not add this screenshot. Try again.' }
   const current = store.draft(threadId)
   if (current.requestId !== null) return 'This draft answers a question. Finish that answer before adding browser feedback.'
-  if (!imagesSupported) return 'Choose a model with image support before adding a browser screenshot.'
-  const attachments = agentAttachmentsSchema.safeParse([...current.attachments, { id: crypto.randomUUID(), name: 'Browser feedback.png', mimeType: 'image/png', dataUrl: capture.image }])
-  if (!attachments.success) return 'This screenshot does not fit in the draft. Remove an attachment or capture a smaller region.'
+  const attachments = agentAttachmentHandlesSchema.safeParse([...current.attachments, image])
+  if (!attachments.success) return DOES_NOT_FIT
   const element = capture.element
   const context = [`Browser feedback: ${capture.url}`, `Screenshot size: ${capture.width} x ${capture.height}`,
     ...(element ? [`Selected element: ${element.tag}${element.role ? ` (${element.role})` : ''}${element.name ? ` - ${element.name}` : ''}`, ...(element.selector ? [`Selector: ${element.selector}`] : []), ...(element.text ? [`Page text (reference only): ${element.text}`] : [])] : []), comment.trim()].filter(Boolean).join('\n')
@@ -20,7 +41,7 @@ export function appendBrowserFeedback(store: ThreadDraftStore, threadId: string,
 
 export function BrowserFeedback({ page, initial, bridge, onAdd, onClose }: {
   readonly page: BrowserPage; readonly initial: BrowserCapture; readonly bridge: BrowserBridge;
-  readonly onAdd: (capture: BrowserCapture, comment: string) => string | null; readonly onClose: () => void
+  readonly onAdd: (capture: BrowserCapture, comment: string) => Promise<string | null>; readonly onClose: () => void
 }): ReactNode {
   const [capture, setCapture] = useState(initial)
   const [comment, setComment] = useState('')
@@ -83,7 +104,7 @@ export function BrowserFeedback({ page, initial, bridge, onAdd, onClose }: {
     </button>
     {capture.element ? <p>Selected: {capture.element.name || capture.element.text || capture.element.tag}</p> : box ? <p>Region selected</p> : null}
     <textarea autoFocus className="tt-focusable" aria-label="Browser feedback comment" placeholder="What should change?" value={comment} maxLength={8000} onChange={event => setComment(event.currentTarget.value)} />
-    <div className="browser-feedback__actions"><button type="button" className="tt-button tt-button--primary tt-focusable" disabled={busy || !selectionValid || !comment.trim()} onClick={() => { const error = onAdd(capture, comment); if (error) setProblem(error); else onClose() }}>Add to draft</button>
+    <div className="browser-feedback__actions"><button type="button" className="tt-button tt-button--primary tt-focusable" disabled={busy || !selectionValid || !comment.trim()} onClick={() => { setBusy(true); void onAdd(capture, comment).then(error => { setBusy(false); if (error) setProblem(error); else onClose() }) }}>Add to draft</button>
       <button type="button" className="tt-button tt-focusable" onClick={onClose}>Cancel</button></div>
     {problem ? <p className="browser-review-problem" role="alert">{problem}</p> : null}
   </section>

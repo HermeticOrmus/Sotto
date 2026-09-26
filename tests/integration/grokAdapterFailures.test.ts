@@ -6,6 +6,7 @@ import { afterEach, expect, it } from 'vitest'
 import { grokFixture } from '../fixtures/fakeGrokThreadFixture'
 import { grokEnvironment } from '../../src/main/agents/grokRpc'
 import { SottoThreadHost, ThreadRegistry } from '../../src/main/agents/threads'
+import { PIXEL_PNG, promptImageOf } from '../fixtures/stagedImages'
 let f: Awaited<ReturnType<typeof grokFixture>> | undefined
 afterEach(async()=> {await f?.cleanup();f=undefined})
 async function setup() {
@@ -37,9 +38,7 @@ it('connects to a client newer than the verified version and says which version 
 it('rejects screenshots before sending when the native Grok client cannot accept images',async()=>{
  const id=await setup()
  expect((await f!.host.snapshot()).models.every(model=>model.supportsImages===false)).toBe(true)
- await expect(f!.host.execute({type:'send',threadId:id,commandId:'image',messageId:'image',text:'',attachments:[{
-  id:'shot',name:'Screenshot.png',mimeType:'image/png',dataUrl:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aH1sAAAAASUVORK5CYII=',
- }]})).rejects.toThrow('image support')
+ await expect(f!.host.execute({type:'send',threadId:id,commandId:'image',messageId:'image',text:'',attachments:[promptImageOf(PIXEL_PNG,'shot','Screenshot.png')]})).rejects.toThrow('image support')
  expect((await f!.driver.requests()).some(request=>request.method==='session/prompt')).toBe(false)
 })
 it('filters API keys and keeps native home/auth paths without disabling coding tools',()=>{

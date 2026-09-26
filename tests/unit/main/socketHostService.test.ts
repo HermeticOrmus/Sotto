@@ -71,6 +71,9 @@ describe('SocketHostService git-refs feature', () => {
     await expect(client.gitRefs({ threadId: randomUUID() })).rejects.toMatchObject({ code: 'version_mismatch', message: hostVersionMismatch(packageVersion, '0.1.16', true) })
     await expect(client.gitChangedFiles({ threadId: randomUUID() })).rejects.toMatchObject({ code: 'version_mismatch' })
     await expect(client.gitPullRequest({ threadId: randomUUID() })).rejects.toMatchObject({ code: 'version_mismatch' })
+    // A host from before staged images is sent no image, and has none to hand back.
+    await expect(client.stageAttachment({ name: 'Shot.png', mimeType: 'image/png', bytes: new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]) })).rejects.toMatchObject({ code: 'version_mismatch' })
+    await expect(client.attachmentContent('a'.repeat(64))).resolves.toBeNull()
     expect(requested).toEqual(['/v1/health', '/v1/session'])
   })
 })

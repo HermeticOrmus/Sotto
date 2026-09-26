@@ -233,6 +233,16 @@ export async function startSocketServer(options: SocketServerOptions) {
       case 'git-pull-request':
         if (!service.gitPullRequest) throw new Refusal('invalid_request')
         try { return await service.gitPullRequest(request.request) } catch { throw new Refusal('unavailable') }
+      case 'stage-attachment': {
+        if (!service.stageAttachment) throw new Refusal('invalid_request')
+        const bytes = Buffer.from(request.image.data, 'base64')
+        try { return await service.stageAttachment({ name: request.image.name, mimeType: request.image.mimeType, bytes: new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength) }) }
+        catch { throw new Refusal('unavailable') }
+      }
+      case 'attachment-content': {
+        const content = await service.attachmentContent?.(request.digest) ?? null
+        return content && { mimeType: content.mimeType, data: Buffer.from(content.bytes).toString('base64') }
+      }
       case 'preview':
         if (peer.preview) throw new Refusal('busy')
         peer.preview = true
@@ -273,7 +283,7 @@ export async function startSocketServer(options: SocketServerOptions) {
       catch (error) { const code = error instanceof Refusal ? error.code : 'unavailable'; response = { v: 1, id: request.id, ok: false, error: { code, message: errors[code] } } }
       // A revocation while an operation was pending also denies its response.
       if (!authenticated(peer)) { peer.frames.send({ v: 1, id: request.id, ok: false, error: { code: 'unauthenticated', message: errors.unauthenticated } }); peer.frames.close() }
-      else deliver(peer, response, request.op === 'detail' ? 'thread' : request.op === 'preview' ? 'preview' : 'list')
+      else deliver(peer, response, request.op === 'detail' ? 'thread' : request.op === 'preview' || request.op === 'attachment-content' ? 'preview' : 'list')
     })().finally(() => { peer.inFlight-- }))
   }
   const bearer = (request: IncomingMessage): string => /^Bearer ([A-Za-z0-9_.-]{1,2048})$/.exec(request.headers.authorization ?? '')?.[1] ?? ''

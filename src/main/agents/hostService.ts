@@ -1,6 +1,6 @@
 import { userInfo } from 'node:os'
 
-import type { AgentCommand, AgentState, AgentThreadDetail, AgentThreadDetailUpdate, AgentAttachmentPreviewRequest, AgentAttachmentPreviewResult } from '../../shared/agents'
+import type { AgentAttachmentContent, AgentAttachmentHandle, AgentAttachmentUpload, AgentCommand, AgentState, AgentThreadDetail, AgentThreadDetailUpdate, AgentAttachmentPreviewRequest, AgentAttachmentPreviewResult } from '../../shared/agents'
 import type { StoredThreadEvent } from '../../shared/threadEvents'
 import type { GitRefsPage, GitRefsRequest } from '../../shared/gitRefs'
 import type { GitChangedFiles, GitChangedFilesRequest } from '../../shared/gitChangedFiles'
@@ -40,6 +40,10 @@ export interface HostService {
   command(command: AgentCommand, client: ClientIdentity): Promise<AgentState>
   subscribeThreadDetail?(listener: (update: AgentThreadDetailUpdate) => void): () => void
   attachmentPreview?(request: AgentAttachmentPreviewRequest): AgentAttachmentPreviewResult | Promise<AgentAttachmentPreviewResult>
+  /** Keeps an image's bytes on this host once and answers with the handle a draft carries instead (ADR-0030). */
+  stageAttachment?(image: AgentAttachmentUpload): Promise<AgentAttachmentHandle>
+  /** A staged image's bytes, for a composer restoring a chip it has no copy of; null once the host no longer keeps it. */
+  attachmentContent?(digest: string): Promise<AgentAttachmentContent | null>
   /** The branches a thread's folder offers, read on request (ADR-0027). */
   gitRefs?(request: GitRefsRequest): Promise<GitRefsPage>
   /** The changed files of a thread's folder, for the commit dialog (ADR-0027). */
@@ -83,7 +87,9 @@ export interface LocalHostControl {
   /** Runs one client's command and answers with the shell, without copying any history. */
   commandShell(command: AgentCommand, client?: ClientIdentity): Promise<AgentState>
   subscribeThreadDetail?(listener: (update: AgentThreadDetailUpdate) => void): () => void
-  attachmentPreview?(request: AgentAttachmentPreviewRequest): AgentAttachmentPreviewResult
+  attachmentPreview?(request: AgentAttachmentPreviewRequest): Promise<AgentAttachmentPreviewResult>
+  stageAttachment?(image: AgentAttachmentUpload): Promise<AgentAttachmentHandle>
+  attachmentContent?(digest: string): Promise<AgentAttachmentContent | null>
   gitRefs?(request: GitRefsRequest): Promise<GitRefsPage>
   /** The changed files of a thread's folder, for the commit dialog (ADR-0027). */
   gitChangedFiles?(request: GitChangedFilesRequest): Promise<GitChangedFiles>
@@ -116,7 +122,12 @@ export class LocalHostService implements HostService {
   shell(): AgentState { return this.control.shell() }
   threadDetail(threadId: string): AgentThreadDetail | null { return this.control.threadDetail(threadId) }
   subscribeThreadDetail(listener: (update: AgentThreadDetailUpdate) => void): () => void { return this.control.subscribeThreadDetail?.(listener) ?? (() => undefined) }
-  attachmentPreview(request: AgentAttachmentPreviewRequest): AgentAttachmentPreviewResult { return this.control.attachmentPreview?.(request) ?? null }
+  async attachmentPreview(request: AgentAttachmentPreviewRequest): Promise<AgentAttachmentPreviewResult> { return await this.control.attachmentPreview?.(request) ?? null }
+  stageAttachment(image: AgentAttachmentUpload): Promise<AgentAttachmentHandle> {
+    if (!this.control.stageAttachment) return Promise.reject(new Error('Images are unavailable on this host.'))
+    return this.control.stageAttachment(image)
+  }
+  async attachmentContent(digest: string): Promise<AgentAttachmentContent | null> { return await this.control.attachmentContent?.(digest) ?? null }
   gitRefs(request: GitRefsRequest): Promise<GitRefsPage> {
     if (!this.control.gitRefs) return Promise.reject(new Error('Branches are unavailable on this host.'))
     return this.control.gitRefs(request)

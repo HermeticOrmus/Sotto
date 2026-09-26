@@ -1,4 +1,4 @@
-import { agentAttachmentsSchema, hasRasterImageSignature, type AgentAttachment, type AgentHostSnapshot, type AgentThreadOptions } from '../../shared/agents'
+import { agentAttachmentHandlesSchema, type AgentAttachmentHandle, type AgentHostSnapshot, type AgentThreadOptions } from '../../shared/agents'
 import { resolveModel } from '../../shared/modelCatalog'
 
 /** Validate against the active provider's advertised model, never a substitute. */
@@ -22,11 +22,12 @@ export function effortAfterChange(snapshot: AgentHostSnapshot, options: AgentThr
   return resolveModel(snapshot.models, options.modelId)?.defaultReasoningEffort
 }
 
-export function validatePromptAttachments(snapshot: AgentHostSnapshot, modelId: string, attachments: AgentAttachment[] = []): AgentAttachment[] {
-  const parsed = agentAttachmentsSchema.parse(attachments)
-  if (parsed.length && !resolveModel(snapshot.models, modelId)?.supportsImages) throw new Error('This model does not advertise image support.')
-  for (const attachment of parsed) {
-    if (!hasRasterImageSignature(attachment)) throw new Error('The image content does not match its file type.')
-  }
-  return parsed
+/**
+ * A prompt's staged images against the thread's model. The content itself was checked when it was staged; what is
+ * checked here is the handles (count, total, unique IDs) and that the model takes images at all.
+ */
+export function validatePromptAttachments<T extends AgentAttachmentHandle>(snapshot: AgentHostSnapshot, modelId: string, attachments: readonly T[] = []): T[] {
+  agentAttachmentHandlesSchema.parse(attachments.map(({ id, name, mimeType, sizeBytes, digest }) => ({ id, name, mimeType, sizeBytes, digest })))
+  if (attachments.length && !resolveModel(snapshot.models, modelId)?.supportsImages) throw new Error('This model does not advertise image support.')
+  return [...attachments]
 }

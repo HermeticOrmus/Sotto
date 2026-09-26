@@ -1,16 +1,27 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { z } from 'zod'
-import { agentFollowupSchema, agentDeliveryReceiptsSchema, MAX_DELIVERED_DRAFTS, type AgentFollowup } from '../../shared/agents'
+import { agentAttachmentHandleSchema, agentAttachmentSchema, agentFollowupSchema, agentDeliveryReceiptsSchema, MAX_DELIVERED_DRAFTS,
+  type AgentAttachment, type AgentAttachmentHandle, type AgentFollowup } from '../../shared/agents'
 import { AtomicJsonStore } from '../storage/atomicJsonStore'
 
+/** Why a follow-up came back from a restart without an image it had. */
+export const LOST_IMAGES = 'An image in this follow-up was not kept after Sotto restarted, because history is off. Attach it again or remove the follow-up.'
 export function followupDigest(input: Pick<AgentFollowup, 'text' | 'attachments' | 'skills' | 'files'>): string {
   const base = input.skills?.length ? [input.text.trim(), input.attachments, input.skills] : [input.text.trim(), input.attachments]
   // Mentioned files join the digest only when there are any, so revisions without them keep their existing identity.
   return createHash('sha256').update(JSON.stringify(input.files?.length ? [...base, input.files] : base)).digest('hex')
 }
-const schema = z.object({ items: z.array(agentFollowupSchema), receipts: z.array(agentDeliveryReceiptsSchema.element.extend({ digest: z.string().optional() })).max(MAX_DELIVERED_DRAFTS) })
-type State = z.infer<typeof schema>
+const receiptsSchema = z.array(agentDeliveryReceiptsSchema.element.extend({ digest: z.string().optional() })).max(MAX_DELIVERED_DRAFTS)
+type State = { items: AgentFollowup[]; receipts: z.infer<typeof receiptsSchema> }
+/**
+ * What the file may hold: a follow-up written before ADR-0030 kept its images inline. Each is read as it stands and
+ * staged when the store loads, so an upgrade never discards the queue as unreadable.
+ */
+const storedSchema = z.object({ items: z.array(agentFollowupSchema.extend({ attachments: z.array(z.union([agentAttachmentHandleSchema, agentAttachmentSchema])) })), receipts: receiptsSchema })
+type Stored = z.infer<typeof storedSchema>
+/** Stages one image a follow-up held inline, answering with its handle, or null for one that is not the image it claims. */
+export type StageInline = (attachment: AgentAttachment) => Promise<AgentAttachmentHandle | null>
 /** The durable queue as it stands, for reading only. */
 export interface FollowupView {
   readonly items: readonly Readonly<State['items'][number]>[]
@@ -21,13 +32,36 @@ export interface FollowupView {
 export class FollowupStore {
   private state: State = { items: [], receipts: [] }
   private tail: Promise<unknown> = Promise.resolve()
-  private readonly store: AtomicJsonStore<State>
+  private readonly store: AtomicJsonStore<Stored>
   constructor(directory: string) {
-    this.store = new AtomicJsonStore(join(directory, 'followups.json'), schema.parse, () => ({ items: [], receipts: [] }))
+    this.store = new AtomicJsonStore<Stored>(join(directory, 'followups.json'), storedSchema.parse, () => ({ items: [], receipts: [] }))
   }
-  async load(): Promise<void> {
-    this.state = await this.store.read()
+  /**
+   * Reads the queue, staging any image an older version kept inline. `kept` says whether a follow-up's content is
+   * still there; one that lost an image (kept in memory while history was off) is paused and says so, never sent
+   * without it.
+   */
+  async load(stage?: StageInline, kept: (handle: AgentAttachmentHandle) => boolean = () => true): Promise<void> {
+    const stored = await this.store.read()
+    const items: State['items'] = []
+    for (const item of stored.items) {
+      const attachments: AgentAttachmentHandle[] = []
+      for (const attachment of item.attachments) {
+        if (!('dataUrl' in attachment)) { attachments.push(attachment); continue }
+        if (!stage) throw new Error('This queue holds images from an earlier version and cannot be read without staging them.')
+        const handle = await stage(attachment)
+        if (handle) attachments.push(handle)
+      }
+      items.push(agentFollowupSchema.parse({ ...item, attachments }))
+    }
+    this.state = { items, receipts: stored.receipts }
     await this.change(state => {
+      for (const item of state.items) {
+        const remaining = item.attachments.filter(kept)
+        if (remaining.length === item.attachments.length) continue
+        item.attachments = remaining
+        if (['queued', 'paused', 'failed'].includes(item.status)) { item.status = 'paused'; item.error = LOST_IMAGES }
+      }
       for (const item of state.items) if (item.status === 'dispatching') {
         item.status = 'uncertain'; item.error = 'Dispatch was interrupted. Refresh to reconcile; this message will not be replayed.'
       }

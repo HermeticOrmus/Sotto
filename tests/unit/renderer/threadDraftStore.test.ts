@@ -34,6 +34,18 @@ beforeEach(() => { vi.useFakeTimers() })
 afterEach(() => { vi.useRealTimers() })
 
 describe('ThreadDraftStore revisions and saves', () => {
+  it('saves a text edit beside an 8 MiB screenshot with the handle alone, no image bytes (ADR-0030)', () => {
+    const held = heldCommand()
+    const store = new ThreadDraftStore(held.command, 250, uuids())
+    const screenshot = { id: 'shot', name: 'Screenshot.png', mimeType: 'image/png' as const, sizeBytes: 8 * 1024 * 1024, digest: 'e'.repeat(64) }
+    store.edit('thread', { text: 'Look', attachments: [screenshot] })
+    store.edit('thread', { text: 'Look at this' })
+    vi.advanceTimersByTime(250)
+    const [save] = held.saves()
+    expect(save).toMatchObject({ text: 'Look at this', attachments: [screenshot] })
+    // What crosses IPC is the command as it stands: a few hundred bytes, whatever the image weighs.
+    expect(JSON.stringify(save).length).toBeLessThan(1024)
+  })
   it('allows reload only after the latest revisions have durability evidence', async () => {
     const held = heldCommand()
     const store = new ThreadDraftStore(held.command, 250, uuids())

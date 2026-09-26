@@ -11,12 +11,17 @@ describeAdapterContract('Codex App Server', session => codexFixture(undefined, f
 describeAdapterContract('Fake provider', async (): Promise<AdapterFixture> => {
   const root = await mkdtemp(join(tmpdir(), 'sotto-contract-'))
   const host = new FakeProviderHost()
+  host.state.models[0]!.supportsImages = true
   // This fixture has no process transport or durable server; those checks run in Codex's fixture.
   const records: RecordedRpc[] = []
   const execute = host.execute.bind(host)
   host.execute = async command => {
     if (command.type === 'answer') records.push({ result: command.approved === undefined ? { answers: command.answer } : { decision: command.approved ? 'accept' : 'decline' } })
-    return execute(command)
+    const seen = host.images.length
+    const result = await execute(command)
+    // What the fake provider was given: each image's bytes, as a provider's own form would carry them.
+    if (host.images.length > seen) records.push({ method: command.type, params: { images: host.images.slice(seen).map(bytes => Buffer.from(bytes).toString('base64')) } })
+    return result
   }
   const get = (id: string) => host.state.threads.find(t => t.id === id)!
   return { root, host, projectId: 'contract-project', modelId: 'fake:model',

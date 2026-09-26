@@ -10,8 +10,9 @@ import { AgentCredentials } from '../../../src/main/agents/credentials'
 import type { AgentHostCommand, AgentHostResult } from '../../../src/main/agents/host'
 import { E2EAgentHost, e2eAgentReasoner } from '../../../src/main/e2e/agentEffects'
 import { AtomicJsonStore } from '../../../src/main/storage/atomicJsonStore'
-import { agentCommandSchema, agentStateSchema, type AgentAttachment, type AgentState } from '../../../src/shared/agents'
+import { agentCommandSchema, agentStateSchema, type AgentAttachmentHandle, type AgentState } from '../../../src/shared/agents'
 import { immediatePublishScheduler } from '../../fixtures/publishScheduler'
+import { handleOf, PIXEL_PNG, pngOfSize, stageInto } from '../../fixtures/stagedImages'
 
 const roots: string[] = []
 const controls = new Set<AgentControl>()
@@ -24,7 +25,8 @@ afterEach(async () => {
     await rm(root, { recursive: true, force: true })
   }
 })
-const image: AgentAttachment = { id: 'image', name: 'pixel.png', mimeType: 'image/png', dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWZ0AAAAASUVORK5CYII=' }
+const image = handleOf(PIXEL_PNG)
+const OTHER_PNG = pngOfSize(64, 1)
 function deferred<T>() {
   let resolve!: (value: T) => void
   const promise = new Promise<T>(done => { resolve = done })
@@ -53,17 +55,17 @@ async function fixture() {
     controls.add(control); return control
   }
   let control = create()
-  await control.start(); await control.command({ type: 'connect' })
+  await control.start(); await stageInto(control, PIXEL_PNG, OTHER_PNG); await control.command({ type: 'connect' })
   const disk = async () => JSON.parse(await readFile(join(root, 'agents.json'), 'utf8'))
   return { root, host, disk, get control() { return control }, disableHistory() { history = false },
     async restart(transform?: (saved: Awaited<ReturnType<typeof disk>>) => void) {
       control.dispose(); await control.privacyChanged(); controls.delete(control)
       if (transform) { const saved = await disk(); transform(saved); await writeFile(join(root, 'agents.json'), JSON.stringify(saved)) }
-      control = create(); await control.start()
+      control = create(); await control.start(); await stageInto(control, PIXEL_PNG, OTHER_PNG)
     },
   }
 }
-const save = (threadId: string, text: string, attachments: AgentAttachment[] = [], draftId = randomUUID()) =>
+const save = (threadId: string, text: string, attachments: AgentAttachmentHandle[] = [], draftId = randomUUID()) =>
   ({ type: 'save-thread-draft' as const, threadId, draftId, text, attachments })
 const send = (draft: ReturnType<typeof save>) => ({ ...draft, type: 'manual-send' as const })
 
@@ -100,7 +102,7 @@ describe('persistent per-thread drafts', () => {
 
   it('restores independent text and exact attachment bytes across navigation, disconnect and restart', async () => {
     const f = await fixture()
-    const a = save('workshop', 'A\nwith newline', [image]); const b = save('docs', '', [{ ...image, dataUrl: 'data:image/png;base64,d29ybGQ=' }])
+    const a = save('workshop', 'A\nwith newline', [image]); const b = save('docs', '', [handleOf(OTHER_PNG)])
     await f.control.command(a); await f.control.command({ type: 'select-thread', threadId: 'docs' })
     await f.control.command({ type: 'disconnect' }); await f.control.command(b)
     await f.restart()
@@ -168,7 +170,7 @@ describe('persistent per-thread drafts', () => {
     await f.control.command(save('workshop', ''))
     await f.restart()
     expect(f.control.get().threadDrafts).toEqual([expect.objectContaining({ threadId: 'docs', text: 'B' })])
-    expect(agentCommandSchema.safeParse(save('docs', 'Bad', [{ ...image, dataUrl: 'file:///secret' }])).success).toBe(false)
+    expect(agentCommandSchema.safeParse(save('docs', 'Bad', [{ ...image, digest: 'file:///secret' }])).success).toBe(false)
   })
 
   it('keeps managed compose revisions and clears in sync with the per-thread draft', async () => {

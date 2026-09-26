@@ -394,7 +394,7 @@ function ThreadComposerEditor({ row, state, command, store, composerId, editable
     <SkillPicker model={picker} listId={listId} provider={row.provider} selected={draft.skills} onSelect={skill => selectSkill(picker.options.indexOf(skill))} />
     <FilePicker model={files} listId={fileListId} selected={draft.files} onSelect={(entry: FileEntry) => selectFile(files.options.indexOf(entry))} />
     {children}
-    <ScreenshotInput key={threadId} attachments={[...draft.attachments]} disabled={!editable} supported={supported}
+    <ScreenshotInput key={threadId} target={threadId} attachments={draft.attachments} disabled={!editable} supported={supported}
       onReadingChange={onReadingChange} onChange={attachments => edit({ attachments })}>
       <textarea ref={textarea} id={composerId} rows={3} value={draft.text} disabled={!editable} spellCheck
         aria-describedby={statusId}

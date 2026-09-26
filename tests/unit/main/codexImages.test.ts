@@ -2,13 +2,13 @@
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
-import { AGENT_MAX_IMAGE_BYTES, attachmentSizeBytes, type AgentAttachment } from '../../../src/shared/agents'
+import { AGENT_MAX_IMAGE_BYTES, type AgentAttachmentHandle } from '../../../src/shared/agents'
+import { PIXEL_DATA_URL, PIXEL_PNG, promptImageOf } from '../../fixtures/stagedImages'
 import { codexFixture } from '../../fixtures/codexFixture'
 
 const fixtures: Awaited<ReturnType<typeof codexFixture>>[] = []
-const image: AgentAttachment = { id: 'shot', name: 'Screenshot.png', mimeType: 'image/png',
-  dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aH1sAAAAASUVORK5CYII=' }
-const reference = (attachment: AgentAttachment) => ({ id: attachment.id, name: attachment.name, mimeType: attachment.mimeType, sizeBytes: attachmentSizeBytes(attachment.dataUrl) })
+const image = promptImageOf(PIXEL_PNG, 'shot', 'Screenshot.png')
+const reference = (attachment: AgentAttachmentHandle) => ({ id: attachment.id, name: attachment.name, mimeType: attachment.mimeType, sizeBytes: attachment.sizeBytes })
 afterEach(async () => { for (const f of fixtures.splice(0)) await f.cleanup() })
 async function fixture(models?: unknown[], requestTimeoutMs = 2000) {
   const f = await codexFixture(undefined, false, requestTimeoutMs); fixtures.push(f)
@@ -62,7 +62,7 @@ it('sends image-only input, steers with another screenshot, and restores both re
   const second = { type: 'steer' as const, commandId: 'image-steer', messageId: 'steer-message', threadId: 'thread', text: 'Compare these', attachments: [{ ...image, id: 'shot-2', name: 'Second.png' }] }
   expect(await f.host.execute(second)).toEqual({ accepted: true })
   for (const method of ['turn/start', 'turn/steer']) {
-    expect((await f.driver.requests()).find(request => request.method === method)?.params?.input).toContainEqual({ type: 'image', url: image.dataUrl })
+    expect((await f.driver.requests()).find(request => request.method === method)?.params?.input).toContainEqual({ type: 'image', url: PIXEL_DATA_URL })
   }
   await f.driver.completeTurn('thread', 'Compared')
   await expect.poll(async () => (await f.host.snapshot()).threads[0]?.status).toBe('idle')
@@ -76,7 +76,7 @@ it('sends image-only input, steers with another screenshot, and restores both re
   expect(await f.host.execute(first)).toEqual({ accepted: true })
   expect((await f.driver.requests()).filter(request => request.method === 'turn/start')).toHaveLength(1)
   const aliases = await readFile(join(f.root, 'codex-threads.json'), 'utf8')
-  expect(aliases).not.toContain(image.dataUrl)
+  expect(aliases).not.toContain(PIXEL_DATA_URL)
   expect(aliases).not.toContain(first.text || second.text)
 })
 
@@ -95,13 +95,13 @@ it('reconciles a screenshot with a lost acknowledgement instead of sending it tw
 it('accepts a full 20 MiB batch and accumulated image history across steering, later turns and reconnect', async () => {
   const f = await fixture(undefined, 15_000)
   const bytes = Buffer.alloc(AGENT_MAX_IMAGE_BYTES)
-  Buffer.from(image.dataUrl.split(',')[1]!, 'base64').copy(bytes)
-  const large = { ...image, dataUrl: 'data:image/png;base64,' + bytes.toString('base64') }
+  PIXEL_PNG.copy(bytes)
+  const large = promptImageOf(bytes, 'shot', 'Screenshot.png')
   const attachments = [large, { ...large, id: 'shot-2' }]
   const result = await f.host.execute({ type: 'send', commandId: 'large', messageId: 'large-message', threadId: 'thread', text: 'Large screenshots', attachments })
   expect(result).toEqual({ accepted: true })
   expect((await f.adapter.refreshThread('thread')).threads[0]?.messages).toContainEqual(expect.objectContaining({ id: 'large-message', attachments: attachments.map(reference) }))
-  const followup = { ...image, dataUrl: 'data:image/png;base64,' + bytes.subarray(0, 2 * 1024 * 1024).toString('base64') }
+  const followup = promptImageOf(bytes.subarray(0, 2 * 1024 * 1024), 'shot', 'Screenshot.png')
   expect(await f.host.execute({ type: 'steer', commandId: 'large-steer', messageId: 'steer-message', threadId: 'thread', text: '', attachments: [followup] })).toEqual({ accepted: true })
   await f.driver.completeTurn('thread', 'Compared the screenshots')
   await expect.poll(async () => (await f.host.snapshot()).threads[0]?.status).toBe('idle')

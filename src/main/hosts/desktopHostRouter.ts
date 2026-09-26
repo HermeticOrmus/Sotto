@@ -1,4 +1,4 @@
-import { agentCommandSchema, agentShell, isThreadProviderConnected, type AgentCommand, type AgentState, type AgentThreadDetail, type AgentThreadDetailUpdate, type AgentAttachmentPreviewRequest, type AgentAttachmentPreviewResult } from '../../shared/agents'
+import { agentCommandSchema, agentShell, isThreadProviderConnected, type AgentAttachmentContent, type AgentAttachmentContentRequest, type AgentAttachmentHandle, type AgentAttachmentStageRequest, type AgentAttachmentUpload, type AgentCommand, type AgentState, type AgentThreadDetail, type AgentThreadDetailUpdate, type AgentAttachmentPreviewRequest, type AgentAttachmentPreviewResult } from '../../shared/agents'
 import { clientAgentState, hostEntityKey, mapHostReferences, parseHostEntityKey } from '../../shared/clientIdentity'
 import type { ClientIdentity, HostService } from '../agents/hostService'
 import type { GitRefsPage, GitRefsRequest } from '../../shared/gitRefs'
@@ -12,6 +12,9 @@ export interface DesktopHostConnection {
   service: Pick<HostService, 'shell' | 'command' | 'subscribe'>
   detail(threadId: string): AgentThreadDetail | null | Promise<AgentThreadDetail | null>
   preview(request: AgentAttachmentPreviewRequest): AgentAttachmentPreviewResult | Promise<AgentAttachmentPreviewResult>
+  /** Stages on this host, the one that runs the thread (ADR-0030). */
+  stage?(image: AgentAttachmentUpload): Promise<AgentAttachmentHandle>
+  content?(digest: string): Promise<AgentAttachmentContent | null>
   gitRefs?(request: GitRefsRequest): Promise<GitRefsPage>
   gitChangedFiles?(request: GitChangedFilesRequest): Promise<GitChangedFiles>
   gitPullRequest?(request: GitPullRequestRequest): Promise<GitPullRequestDetail | null>
@@ -114,6 +117,18 @@ export class DesktopHostRouter {
   async attachmentPreview(request: AgentAttachmentPreviewRequest): Promise<AgentAttachmentPreviewResult> {
     const { connection, id } = this.target(request.threadId)
     return connection.preview({ ...request, threadId: id! })
+  }
+  /** An image goes to the host that runs the thread it is for, or the selected host for the coordinator's composer. */
+  async stageAttachment(request: AgentAttachmentStageRequest): Promise<AgentAttachmentHandle> {
+    const { connection } = this.target(request.threadId ?? undefined)
+    if (!connection.stage) throw new Error('Images are unavailable on this host.')
+    if (connection.available?.() === false) throw new Error('This host is disconnected. Connect again before attaching images. Nothing was attached.')
+    return connection.stage({ name: request.name, mimeType: request.mimeType, bytes: request.bytes })
+  }
+  async attachmentContent(request: AgentAttachmentContentRequest): Promise<AgentAttachmentContent | null> {
+    const { connection } = this.target(request.threadId ?? undefined)
+    if (!connection.content || connection.available?.() === false) return null
+    return connection.content(request.digest)
   }
   async gitRefs(request: GitRefsRequest): Promise<GitRefsPage> {
     const { connection, id } = this.target(request.threadId)

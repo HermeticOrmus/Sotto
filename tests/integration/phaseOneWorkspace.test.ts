@@ -10,15 +10,15 @@ import { ConfiguredProviderHost } from '../../src/main/agents/providerSwitch'
 import { SottoThreadHost, ThreadRegistry } from '../../src/main/agents/threads'
 import { WorkspaceHost } from '../../src/main/agents/workspace'
 import { AtomicJsonStore } from '../../src/main/storage/atomicJsonStore'
-import type { AgentAttachment, AgentCommand } from '../../src/shared/agents'
+import type { AgentCommand } from '../../src/shared/agents'
 import { FakeProviderHost } from '../fixtures/fakeProviderHost'
 import { runWorktreeGit as git } from '../../src/main/agents/threadWorktrees'
 import { immediatePublishScheduler } from '../fixtures/publishScheduler'
+import { handleOf, PIXEL_DATA_URL, PIXEL_PNG, stageInto } from '../fixtures/stagedImages'
 
 const cleanup: Array<() => Promise<void>> = []
 afterEach(async () => { vi.restoreAllMocks(); for (const close of cleanup.splice(0).reverse()) await close() })
-const image: AgentAttachment = { id: 'draft-image', name: 'reference.png', mimeType: 'image/png',
-  dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWZ0AAAAASUVORK5CYII=' }
+const image = handleOf(PIXEL_PNG, 'draft-image', 'reference.png')
 
 /** A store's file and any write-ahead log beside it, so a search for what was said covers both. */
 async function onDisk(directory: string, name: string): Promise<string> {
@@ -51,7 +51,7 @@ async function fixture() {
       reasoner: { intent: async () => ({ type: 'clarify', text: 'Choose a thread' }), decide: async () => ({ decision: 'human', text: 'Review' }) },
       membership: { status: async () => ({ status: 'beta', label: 'Fixture', expiresAt: null }),
         action: async () => ({ status: 'beta', label: 'Fixture', expiresAt: null }) } })
-    await control.start()
+    await control.start(); await stageInto(control, PIXEL_PNG)
     return { control, host, registry }
   }
   let current = await create()
@@ -134,14 +134,14 @@ describe('integrated Phase 1 workspace persistence', () => {
     })
     await expect(f.control.privacyChanged()).rejects.toThrow('Private storage unavailable')
     if (failedStore === 'preview') expect(await onDisk(f.directory, 'threads.sqlite')).not.toContain('PRIVATE SENT TRANSCRIPT')
-    else expect(await readFile(join(f.directory, 'attachment-previews.json'), 'utf8')).not.toContain(image.dataUrl)
+    else expect(await readFile(join(f.directory, 'attachment-previews.json'), 'utf8')).not.toContain(PIXEL_DATA_URL)
     expect(await readFile(join(f.directory, 'agents.json'), 'utf8')).not.toContain('PRIVATE SENT TRANSCRIPT')
     failure.mockRestore()
     const maintenance = intervals.mock.calls.find(([, milliseconds]) => milliseconds === 30_000)?.[0]
     expect(maintenance).toBeTypeOf('function')
     if (typeof maintenance === 'function') maintenance()
     await vi.waitFor(async () => {
-      expect(await readFile(join(f.directory, 'attachment-previews.json'), 'utf8')).not.toContain(image.dataUrl)
+      expect(await readFile(join(f.directory, 'attachment-previews.json'), 'utf8')).not.toContain(PIXEL_DATA_URL)
       expect(await onDisk(f.directory, 'threads.sqlite')).not.toContain('PRIVATE SENT TRANSCRIPT')
     })
   })
@@ -214,7 +214,7 @@ describe('integrated Phase 1 workspace persistence', () => {
     expect(sent.deliveries).toContainEqual(expect.objectContaining({ threadId: thread.id, draftId: draft.draftId, status: 'accepted' }))
     const sentMessage = sent.host.threads.find(item => item.id === thread.id)!.messages.at(-1)!
     expect(sentMessage.attachments).toContainEqual(expect.objectContaining({ id: image.id, preview: { available: true } }))
-    expect(f.control.attachmentPreview({ threadId: thread.id, messageId: sentMessage.id, attachmentId: image.id })).toEqual({ dataUrl: image.dataUrl })
+    expect(await f.control.attachmentPreview({ threadId: thread.id, messageId: sentMessage.id, attachmentId: image.id })).toEqual({ dataUrl: PIXEL_DATA_URL })
     expect(sent.assignments).toEqual([])
     await f.command({ type: 'settle-project', projectId: project.id })
     await f.restart()
@@ -226,7 +226,7 @@ describe('integrated Phase 1 workspace persistence', () => {
     expect(f.control.get().host.threads.find(item => item.id === thread.id)).toMatchObject({ providerId: 'claude', projectId: project.id, nativeSessionStarted: true })
     const restored = f.control.get().host.threads.find(item => item.id === thread.id)!.messages.at(-1)!
     expect(restored.attachments).toContainEqual(expect.objectContaining({ id: image.id, preview: { available: true } }))
-    expect(f.control.attachmentPreview({ threadId: thread.id, messageId: restored.id, attachmentId: image.id })).toEqual({ dataUrl: image.dataUrl })
+    expect(await f.control.attachmentPreview({ threadId: thread.id, messageId: restored.id, attachmentId: image.id })).toEqual({ dataUrl: PIXEL_DATA_URL })
     expect(f.control.get().threadDrafts?.some(item => item.threadId === thread.id)).toBe(false)
   })
 })

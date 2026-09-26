@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { afterEach, expect, it, vi } from 'vitest'
 import { draftHandoffFixture } from '../fixtures/draftHandoffFixture'
 import { AtomicJsonStore } from '../../src/main/storage/atomicJsonStore'
+import { handleOf, PIXEL_PNG } from '../fixtures/stagedImages'
 
 const fixtures: Awaited<ReturnType<typeof draftHandoffFixture>>[] = []
 async function fixture() { const f = await draftHandoffFixture(); fixtures.push(f); return f }
@@ -23,7 +24,7 @@ it('does not let a delayed manual autosave overwrite a newer managed revision', 
   expect(store.draft(threadId).text).toBe('Pending manual edit')
 })
 
-const image = { id: 'image', name: 'pixel.png', mimeType: 'image/png' as const, dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWZ0AAAAASUVORK5CYII=' }
+const image = handleOf(PIXEL_PNG, 'image', 'pixel.png')
 const skills = [{ name: 'build', path: 'C:/synthetic/skills/build/SKILL.md' }]
 function gate() { let release!: () => void; return { promise: new Promise<void>(done => { release = done }), release: () => release() } }
 

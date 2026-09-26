@@ -216,6 +216,8 @@ Answering a question or permission request and creating a project are also part 
 
 **Draft.** An unsent prompt or answer, including its attachments, owned by a thread or personal chat and optionally a question request. Each conversation retains its own drafts across navigation and restart. Sending ends a draft: the press starts a fresh empty revision, and what was sent is a sent message from then on. Accepting one submitted revision never clears a newer revision.
 
+**Staged image.** An image attached to a draft, whose bytes the host that runs the thread has kept once in its attachment store, and which everything else names by its handle: an ID, the file name, the type, the size and the SHA-256 digest of the content (ADR-0030). Drafts, queued follow-ups, commands, the outbox, the shell and every broadcast carry the handle; the bytes are read only to draw a chip the window has no thumbnail for, to show a sent message's preview, and by the adapter as it hands the image to the provider. The store keeps one file per content under `attachments/` in the host's data folder, with an index of digest, type, size and staging time, and keeps it while a draft, a queued follow-up, a send whose result is unknown or a preview names it, then an hour more. With history off, a newly staged image is kept in memory only. Avoid: "attachment" alone for the bytes, "upload".
+
 **Sent message.** What the user sent from this window, drawn in the transcript where it will be read from the press onwards, with the state of its delivery beside it: queued, sending, unconfirmed or not sent. It becomes an ordinary message when the provider's own history carries it. A refused one comes back to an empty composer, or is offered back when something newer is written there; an unconfirmed one stays in its message, because Sotto will not send it twice. Avoid: "optimistic message", "ghost message".
 
 **Answer draft.** Saved choices and text for a particular provider question in its original conversation, recoverable even if the provider closes or changes that question. Retaining or copying an answer does not recreate the question, confirm delivery, or grant authority to send it.
@@ -349,7 +351,8 @@ Answering a question or permission request and creating a project are also part 
 - `src/shared/themes/` — the theme model: the built-in palettes, colour parsing, token engine, library and file format, VS Code import; `src/renderer/src/features/settings/themes/` — the Light and Dark columns, editor, inspector and import dialog; `src/main/themes/` — export and the Open VSX client behind IPC.
 - `src/shared/agents.ts` — schemas for state, commands and snapshots shared with the renderer.
 - `src/main/agents/control.ts` — the coordinator (`AgentControl`): assignments, queue, drafts, outbox.
-- `src/main/agents/host.ts` — the `AgentHost` interface and command shapes.
+- `src/main/agents/host.ts` — the `AgentHost` interface and command shapes, including the `PromptImage` an adapter reads a staged image through.
+- `src/main/agents/attachmentStore.ts` — each host's staged images: staging, the index, and removing content nothing owns; `attachmentPreviews.ts` keeps a sent message's handles for its preview; `src/renderer/src/agents/stagedImages.ts` stages from the window and draws the chips' thumbnails.
 - `src/main/agents/threads.ts` — thread registry and `SottoThreadHost`.
 - `src/main/agents/turns.ts` — the turn recorder and turn record schema.
 - `src/main/agents/codex.ts` — the Codex App Server provider adapter and its provider session aliases; `codexRequests.ts` normalises Codex permission and question requests and their answers; `codexSessionLog.ts` reads the Codex session log for takeover detection.

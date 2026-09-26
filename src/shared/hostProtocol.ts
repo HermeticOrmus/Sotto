@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { agentAttachmentPreviewRequestSchema, agentCommandSchema, agentStateSchema, agentThreadDetailDeltaSchema, agentThreadDetailResultSchema, type AgentState, type AgentThreadDetail, type AgentThreadDetailDelta } from './agents'
+import { AGENT_IMAGE_MIME_TYPES, agentAttachmentPreviewRequestSchema, attachmentDigestSchema, agentCommandSchema, agentStateSchema, agentThreadDetailDeltaSchema, agentThreadDetailResultSchema, type AgentState, type AgentThreadDetail, type AgentThreadDetailDelta } from './agents'
 import { threadEventSchema, type StoredThreadEvent } from './threadEvents'
 import { gitRefsRequestSchema } from './gitRefs'
 import { gitChangedFilesRequestSchema } from './gitChangedFiles'
@@ -18,9 +18,11 @@ export const HOST_PROTOCOL_VERSION = 1 as const
  * `git-refs` request with a page of a thread's branches for the branch picker. `git-changed-files`: the
  * host answers the `git-changed-files` request with a thread's changed files for the commit dialog.
  * `git-pull-request`: the host answers the `git-pull-request` request with one of a thread's pull requests,
- * read through gh, for the Pull request surface and its dialogs.
+ * read through gh, for the Pull request surface and its dialogs. `attachment-staging`: the host keeps an image a client
+ * sends once and answers with its handle (`stage-attachment`), and hands a staged image back by digest
+ * (`attachment-content`); drafts and commands carry the handle (ADR-0030).
  */
-export const HOST_FEATURES = ['detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request'] as const
+export const HOST_FEATURES = ['detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging'] as const
 export type HostFeature = typeof HOST_FEATURES[number]
 /**
  * Whether a host's Sotto version is later than this client's, by release number. A version that cannot
@@ -56,6 +58,10 @@ const id = z.string().min(1).max(512)
 const featureList = z.array(z.string().min(1).max(64)).max(64)
 const sottoVersion = z.string().min(1).max(64)
 const base = { v: z.literal(1), id, session: z.string().min(1).max(2048) }
+/** An image as it crosses the socket: base64 inside one frame, at most 10 MiB of bytes. */
+const imageData = z.string().max(Math.ceil(10 * 1024 * 1024 / 3) * 4).regex(/^[A-Za-z0-9+/]*={0,2}$/u)
+export const hostAttachmentSchema = z.object({ name: z.string().trim().min(1).max(255), mimeType: z.enum(AGENT_IMAGE_MIME_TYPES), data: imageData }).strict()
+export const hostAttachmentContentSchema = z.object({ mimeType: z.enum(AGENT_IMAGE_MIME_TYPES), data: imageData }).strict().nullable()
 /** Just enough of a request to answer it: a request the host cannot otherwise read is refused by its id. */
 export const hostRequestEnvelopeSchema = z.object(base)
 export const hostRequestSchema = z.discriminatedUnion('op', [
@@ -73,6 +79,10 @@ export const hostRequestSchema = z.discriminatedUnion('op', [
   z.object({ ...base, op: z.literal('git-changed-files'), request: gitChangedFilesRequestSchema }).strict(),
   /** One of a thread's pull requests, read through gh for the Pull request surface; read on request (ADR-0027). */
   z.object({ ...base, op: z.literal('git-pull-request'), request: gitPullRequestRequestSchema }).strict(),
+  /** An image for a draft on this host, sent once; the answer is its handle (ADR-0030). */
+  z.object({ ...base, op: z.literal('stage-attachment'), image: hostAttachmentSchema }).strict(),
+  /** A staged image's bytes by digest, for a chip the client holds no copy of; null once the host no longer keeps it. */
+  z.object({ ...base, op: z.literal('attachment-content'), digest: attachmentDigestSchema }).strict(),
 ])
 export type HostRequest = z.infer<typeof hostRequestSchema>
 export type HostOperation = HostRequest extends infer R ? R extends HostRequest ? Omit<R, 'v' | 'id' | 'session'> : never : never

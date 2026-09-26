@@ -10,7 +10,8 @@ import type { AgentHostCommand, AgentHostResult } from '../../../src/main/agents
 import type { AgentIntent } from '../../../src/main/agents/reasoning'
 import { E2EAgentHost, e2eAgentReasoner } from '../../../src/main/e2e/agentEffects'
 import { AtomicJsonStore } from '../../../src/main/storage/atomicJsonStore'
-import { agentCommandSchema, type AgentAttachment, type AgentHostSnapshot, type AgentState } from '../../../src/shared/agents'
+import { agentCommandSchema, type AgentHostSnapshot, type AgentState } from '../../../src/shared/agents'
+import { handleOf, PIXEL_PNG, pngOfSize, stageInto } from '../../fixtures/stagedImages'
 import { immediatePublishScheduler } from '../../fixtures/publishScheduler'
 
 const roots: string[] = []
@@ -36,8 +37,8 @@ function deferred<T>() {
   const promise = new Promise<T>(done => { resolve = done })
   return { promise, resolve }
 }
-const image: AgentAttachment = { id: 'image', name: 'same.png', mimeType: 'image/png',
-  dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWZ0AAAAASUVORK5CYII=' }
+const image = handleOf(PIXEL_PNG, 'image', 'same.png')
+const OTHER_PNG = pngOfSize(64, 3)
 class FixtureHost extends E2EAgentHost {
   attempts: AgentHostCommand[] = []
   observeThreads = vi.fn<(ids: string[]) => void>()
@@ -61,17 +62,17 @@ async function fixture(receiptIds: string[] = []) {
     } }); controls.add(control); return control
   }
   let control = create()
-  await control.start(); await control.command({ type: 'connect' })
+  await control.start(); await stageInto(control, PIXEL_PNG, OTHER_PNG); await control.command({ type: 'connect' })
   if (receiptIds.length) {
     control.dispose(); await control.privacyChanged(); controls.delete(control)
     const saved = JSON.parse(await readFile(join(root, 'agents.json'), 'utf8'))
     saved.deliveredDrafts = receiptIds.map(draftId => ({ threadId: 'workshop', draftId }))
     await writeFile(join(root, 'agents.json'), JSON.stringify(saved))
-    control = create(); await control.start(); await control.command({ type: 'connect' })
+    control = create(); await control.start(); await stageInto(control, PIXEL_PNG, OTHER_PNG); await control.command({ type: 'connect' })
   }
   return { root, host, reasoner, get control() { return control }, async restart() {
     control.dispose(); await control.privacyChanged(); controls.delete(control)
-    control = create(); await control.start()
+    control = create(); await control.start(); await stageInto(control, PIXEL_PNG, OTHER_PNG)
   } }
 }
 
@@ -360,7 +361,7 @@ describe('manual delivery receipts', () => {
     await f.control.command({ type: 'manual-send', threadId: 'workshop', draftId, text: 'Look', attachments: [image] })
     const text = edit === 'text' ? 'Changed' : 'Look'
     // Same name, size, and attachment ID; changed bytes must remain an edit.
-    const replacement = edit === 'image' ? { ...image, dataUrl: image.dataUrl.replace('AAAAASUV', 'AAABASUV') } : image
+    const replacement = edit === 'image' ? handleOf(OTHER_PNG, 'image', 'same.png') : image
     await f.control.command({ type: 'compose', text, attachments: [replacement] })
     await f.host.acknowledge()
     expect(f.control.get()).toMatchObject({ draft: text, draftThreadId: 'workshop', draftAttachments: [replacement], deliveredDrafts: [{ threadId: 'workshop', draftId }] })
