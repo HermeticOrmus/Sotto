@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
-import { fitLongEdge, prepareScreenshot, prepareScreenshotDataUrl, readImageHeader, SCREENSHOT_MAX_LONG_EDGE, wasResized, type ImageSize, type ScreenshotDecoder } from '../../../src/renderer/src/agents/screenshotResize'
+import { fitLongEdge, prepareScreenshot, prepareScreenshotDataUrl, readImageHeader, SCREENSHOT_MAX_LONG_EDGE, wasResized, type ScreenshotDecoder } from '../../../src/renderer/src/agents/screenshotResize'
+import type { AgentImageSize } from '../../../src/shared/agents'
 
 /** A decoder that reports `size` and writes a blob of `encodedBytes` bytes in whatever type it is asked for. */
-function fakeDecoder(size: ImageSize, encodedBytes = 10) {
-  const encode = vi.fn(async (_size: ImageSize, mimeType: string) => new Blob([new Uint8Array(encodedBytes)], { type: mimeType }))
+function fakeDecoder(size: AgentImageSize, encodedBytes = 10) {
+  const encode = vi.fn(async (_size: AgentImageSize, mimeType: string) => new Blob([new Uint8Array(encodedBytes)], { type: mimeType }))
   const close = vi.fn()
   const decode: ScreenshotDecoder = async () => ({ size, encode, close })
   return { decode, encode, close }

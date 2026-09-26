@@ -64,6 +64,7 @@ export function attachmentSizeBytes(dataUrl: string): number {
 }
 /** An image's size in whole pixels, 1 to 65,535 on each side. The composer's resizer trusts no size this refuses. */
 export const agentImageSizeSchema = z.object({ width: z.number().int().min(1).max(65_535), height: z.number().int().min(1).max(65_535) }).strict()
+export type AgentImageSize = z.infer<typeof agentImageSizeSchema>
 /**
  * An image's size in pixels as the user attached it and as it is sent, which differ only when the composer
  * scaled it down to the screenshot bound. Sizes only, never image content.

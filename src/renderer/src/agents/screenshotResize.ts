@@ -1,4 +1,4 @@
-import { agentImageSizeSchema, type AgentAttachmentDimensions } from '../../../shared/agents'
+import { agentImageSizeSchema, type AgentAttachmentDimensions, type AgentImageSize } from '../../../shared/agents'
 
 /**
  * The longest edge, in pixels, that any model Sotto sends a screenshot to reads. Claude 4.7 and later
@@ -20,10 +20,8 @@ const RESIZABLE = new Set(['image/png', 'image/jpeg', 'image/webp'])
  */
 const HEADER_BYTES = 256 * 1024
 
-export interface ImageSize { readonly width: number; readonly height: number }
-
 /** `size` scaled down so its longer edge is `bound`, with its aspect ratio kept, or `size` itself when it already fits. */
-export function fitLongEdge(size: ImageSize, bound = SCREENSHOT_MAX_LONG_EDGE): ImageSize {
+export function fitLongEdge(size: AgentImageSize, bound = SCREENSHOT_MAX_LONG_EDGE): AgentImageSize {
   const long = Math.max(size.width, size.height)
   if (long <= bound) return size
   const scale = bound / long
@@ -32,12 +30,12 @@ export function fitLongEdge(size: ImageSize, bound = SCREENSHOT_MAX_LONG_EDGE): 
     : { width: Math.max(1, Math.round(size.width * scale)), height: bound }
 }
 
-const sameSize = (a: ImageSize, b: ImageSize): boolean => a.width === b.width && a.height === b.height
+const sameSize = (a: AgentImageSize, b: AgentImageSize): boolean => a.width === b.width && a.height === b.height
 
 /** What a file's first bytes say about it, before anything is decoded. */
 export interface ImageHeader {
   /** The size the image is shown at: a JPEG turned by its EXIF orientation has its sides swapped, as the decoder does. */
-  readonly size: ImageSize
+  readonly size: AgentImageSize
   /** An animated PNG or WebP. Scaling one down would keep only its first frame, so it is never scaled. */
   readonly animated: boolean
 }
@@ -152,9 +150,9 @@ async function headerOf(file: Blob): Promise<ImageHeader | null> {
 
 /** An image decoded once, which can be drawn again at another size. */
 export interface DecodedScreenshot {
-  readonly size: ImageSize
+  readonly size: AgentImageSize
   /** The image drawn at `size` and written as `mimeType`, or null when that cannot be done here. */
-  encode(size: ImageSize, mimeType: string): Promise<Blob | null>
+  encode(size: AgentImageSize, mimeType: string): Promise<Blob | null>
   close(): void
 }
 export type ScreenshotDecoder = (file: Blob) => Promise<DecodedScreenshot | null>
@@ -190,7 +188,7 @@ export interface PreparedScreenshot {
   readonly dimensions?: AgentAttachmentDimensions
 }
 
-const untouched = (file: Blob, size: ImageSize): PreparedScreenshot => ({ blob: file, dimensions: { original: size, sent: size } })
+const untouched = (file: Blob, size: AgentImageSize): PreparedScreenshot => ({ blob: file, dimensions: { original: size, sent: size } })
 
 /**
  * The screenshot as the composer hands it on. One whose longer edge is past `bound` is scaled down to it in
