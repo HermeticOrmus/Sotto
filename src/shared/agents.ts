@@ -62,9 +62,17 @@ export function attachmentSizeBytes(dataUrl: string): number {
   const base64 = dataUrl.slice(dataUrl.indexOf(',') + 1)
   return base64.length / 4 * 3 - (base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0)
 }
+const imageSizeSchema = z.object({ width: z.number().int().min(1).max(65_535), height: z.number().int().min(1).max(65_535) }).strict()
+/**
+ * An image's size in pixels as the user attached it and as it is sent, which differ only when the composer
+ * scaled it down to the screenshot bound. Sizes only, never image content.
+ */
+export const agentAttachmentDimensionsSchema = z.object({ original: imageSizeSchema, sent: imageSizeSchema }).strict()
+export type AgentAttachmentDimensions = z.infer<typeof agentAttachmentDimensionsSchema>
 export const agentAttachmentSchema = z.object({
   id: z.string().min(1).max(128).regex(/^[a-z0-9_-]+$/iu), name: z.string().trim().min(1).max(255),
   mimeType: z.enum(AGENT_IMAGE_MIME_TYPES), dataUrl: z.string().max(14_000_000),
+  dimensions: agentAttachmentDimensionsSchema.optional(),
 }).strict().refine(attachment => {
   const prefix = `data:${attachment.mimeType};base64,`
   if (!attachment.dataUrl.startsWith(prefix)) return false

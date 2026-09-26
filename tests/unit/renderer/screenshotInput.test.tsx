@@ -92,3 +92,60 @@ describe('screenshot attachment input', () => {
     expect(change).not.toHaveBeenCalled()
   })
 })
+
+/**
+ * Chromium's decoder and offscreen canvas, as far as the composer uses them: each file decodes to the size
+ * `sizes` gives its name, and a canvas writes a short blob of whatever type it is asked for.
+ */
+function stubCanvas(sizes: Record<string, { width: number, height: number }>) {
+  const drawn: { width: number, height: number, type: string }[] = []
+  vi.stubGlobal('createImageBitmap', async (source: File) => ({ ...sizes[source.name]!, close: () => undefined }))
+  vi.stubGlobal('OffscreenCanvas', class {
+    constructor(readonly width: number, readonly height: number) {}
+    getContext() { return { drawImage: () => undefined } }
+    async convertToBlob({ type }: { type: string }) { drawn.push({ width: this.width, height: this.height, type }); return new Blob([new Uint8Array(12)], { type }) }
+  })
+  return drawn
+}
+const screenshotOf = (name: string, type: string) => new File([new Uint8Array(4096)], name, { type })
+const decodedBytes = (dataUrl: string) => atob(dataUrl.slice(dataUrl.indexOf(',') + 1)).length
+async function attach(name: string, type: string): Promise<{ attachment: AgentAttachment, change: ReturnType<typeof vi.fn>, rerender: (attachments: AgentAttachment[]) => void }> {
+  const change = vi.fn()
+  const input = (attachments: AgentAttachment[]) => <ScreenshotInput attachments={attachments} onChange={change} disabled={false} supported><textarea aria-label="Prompt" /></ScreenshotInput>
+  const view = render(input([]))
+  fireEvent.change(screen.getByLabelText('Screenshot files'), { target: { files: [screenshotOf(name, type)] } })
+  await waitFor(() => expect(change).toHaveBeenCalledTimes(1))
+  const [attachment] = change.mock.calls[0]![0] as AgentAttachment[]
+  return { attachment: attachment!, change, rerender: attachments => view.rerender(input(attachments)) }
+}
+
+describe('scaling screenshots down to the bound', () => {
+  it('scales a 3840x2160 PNG to 2576x1449, keeps it a PNG and says so on its chip', async () => {
+    const drawn = stubCanvas({ '4k.png': { width: 3840, height: 2160 } })
+    const { attachment, rerender } = await attach('4k.png', 'image/png')
+    expect(drawn).toEqual([{ width: 2576, height: 1449, type: 'image/png' }])
+    expect(attachment).toMatchObject({ name: '4k.png', mimeType: 'image/png', dimensions: { original: { width: 3840, height: 2160 }, sent: { width: 2576, height: 1449 } } })
+    expect(attachment.dataUrl.startsWith('data:image/png;base64,')).toBe(true)
+    expect(decodedBytes(attachment.dataUrl)).toBe(12)
+    rerender([attachment])
+    expect(screen.getByText('Resized', { exact: true }).parentElement).toHaveAttribute('title', 'Resized from 3840 by 2160 to 2576 by 1449 pixels')
+    expect(screen.getByText('Resized from 3840 by 2160 to 2576 by 1449 pixels')).toHaveClass('tt-visually-hidden')
+  })
+  it('hands a 1200x800 PNG on byte for byte and shows no note', async () => {
+    const drawn = stubCanvas({ 'small.png': { width: 1200, height: 800 } })
+    const { attachment, rerender } = await attach('small.png', 'image/png')
+    expect(drawn).toEqual([])
+    expect(decodedBytes(attachment.dataUrl)).toBe(4096)
+    expect(attachment.dimensions).toEqual({ original: { width: 1200, height: 800 }, sent: { width: 1200, height: 800 } })
+    rerender([attachment])
+    expect(screen.getByRole('img', { name: 'small.png' })).toBeVisible()
+    expect(screen.queryByText('Resized', { exact: true })).not.toBeInTheDocument()
+  })
+  it('keeps a JPEG a JPEG', async () => {
+    const drawn = stubCanvas({ 'photo.jpg': { width: 4032, height: 3024 } })
+    const { attachment } = await attach('photo.jpg', 'image/jpeg')
+    expect(drawn).toEqual([{ width: 2576, height: 1932, type: 'image/jpeg' }])
+    expect(attachment).toMatchObject({ mimeType: 'image/jpeg', dimensions: { sent: { width: 2576, height: 1932 } } })
+    expect(attachment.dataUrl.startsWith('data:image/jpeg;base64,')).toBe(true)
+  })
+})

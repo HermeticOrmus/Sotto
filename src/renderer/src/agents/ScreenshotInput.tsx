@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Paperclip, X } from 'lucide-react'
-import { AGENT_IMAGE_MIME_TYPES, AGENT_MAX_ATTACHMENT_BYTES, AGENT_MAX_ATTACHMENTS, AGENT_MAX_IMAGE_BYTES, agentAttachmentsSchema, attachmentSizeBytes, type AgentAttachment } from '../../../shared/agents'
+import { AGENT_IMAGE_MIME_TYPES, AGENT_MAX_ATTACHMENT_BYTES, AGENT_MAX_ATTACHMENTS, AGENT_MAX_IMAGE_BYTES, agentAttachmentsSchema, attachmentSizeBytes, type AgentAttachment, type AgentAttachmentDimensions } from '../../../shared/agents'
 import { Button } from '../components/Button'
+import { prepareScreenshot, wasResized } from './screenshotResize'
 import './screenshots.css'
 
 // The refusals a file's own type and size decide, checked before anything is read.
@@ -15,12 +16,19 @@ function checkImage(file: File): void {
 }
 
 function readImage(file: File): Promise<AgentAttachment> {
-  return new Promise((resolve, reject) => {
+  // A screenshot larger than any model reads is scaled down before it is encoded, so the bytes past the
+  // bound never become a data URL at all (`screenshotResize.ts`).
+  return prepareScreenshot(file).then(({ blob, dimensions }) => new Promise((resolve, reject) => {
     const reader = new FileReader()
     reader.onerror = () => reject(new Error('Could not read this screenshot. Try selecting it again.'))
-    reader.onload = () => resolve({ id: crypto.randomUUID(), name: file.name || 'Screenshot.png', mimeType: file.type as AgentAttachment['mimeType'], dataUrl: String(reader.result) })
-    reader.readAsDataURL(file)
-  })
+    reader.onload = () => resolve({ id: crypto.randomUUID(), name: file.name || 'Screenshot.png', mimeType: file.type as AgentAttachment['mimeType'], dataUrl: String(reader.result), ...(dimensions ? { dimensions } : {}) })
+    reader.readAsDataURL(blob)
+  }))
+}
+
+/** "Resized from 3840 by 2160 to 2576 by 1449 pixels": sizes only, for the chip's tooltip and accessible name. */
+function resizedDescription({ original, sent }: AgentAttachmentDimensions): string {
+  return `Resized from ${original.width} by ${original.height} to ${sent.width} by ${sent.height} pixels`
 }
 
 export function ScreenshotInput({ attachments, onChange, disabled, supported, children, onReadingChange }: {
@@ -70,6 +78,8 @@ export function ScreenshotInput({ attachments, onChange, disabled, supported, ch
     {children}
     {attachments.length > 0 && <div className="screenshot-previews" aria-label="Attached screenshots">{attachments.map(attachment => <figure key={attachment.id}>
       <img src={attachment.dataUrl} alt={attachment.name} /><figcaption title={attachment.name}>{attachment.name}</figcaption>
+      {wasResized(attachment.dimensions) && <small className="screenshot-previews__resized" title={resizedDescription(attachment.dimensions)}>
+        <span aria-hidden="true">Resized</span><span className="tt-visually-hidden">{resizedDescription(attachment.dimensions)}</span></small>}
       <button type="button" title={`Remove ${attachment.name}`} aria-label={`Remove ${attachment.name}`} disabled={disabled || busy} onClick={() => onChange(current.current.filter(item => item.id !== attachment.id))}><X size={12} /></button>
     </figure>)}</div>}
     <div className="screenshot-input__tools"><input ref={picker} type="file" accept={AGENT_IMAGE_MIME_TYPES.join(',')} multiple aria-label="Screenshot files" hidden onChange={event => { const files = [...(event.target.files ?? [])]; event.target.value = ''; void add(files) }} />

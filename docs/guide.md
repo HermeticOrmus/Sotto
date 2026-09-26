@@ -57,6 +57,8 @@ While a thread is running, **Steer now** beside a queued message sends that mess
 
 Paste a screenshot into a thread's prompt, drag it in, or choose **Attach screenshots**. Codex models that accept images and Claude Code models support screenshots; text-only models keep the control unavailable. Send an image on its own or alongside text, with up to eight images, 10 MB per image and 20 MB total. Grok Build currently cannot receive screenshots through its native client.
 
+A screenshot longer than 2576 pixels on either side is scaled down to that as it is added, in the same format, and its thumbnail says **Resized**; hover over it for the sizes before and after. That is the most any model Sotto sends screenshots to reads, so the model sees the same image. A screenshot the smaller copy would not make smaller in bytes, and any GIF, goes as you attached it. The size limits apply to the files as you attach them.
+
 You can create a thread from the Threads page while another thread has a saved coordinator draft. The draft stays with its original thread, including while the voice coordinator is hidden for the beta.
 
 ### History and copying
