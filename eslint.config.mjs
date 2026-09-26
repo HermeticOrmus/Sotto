@@ -15,6 +15,7 @@ export default tseslint.config(
       'artifacts/settled-folder-new-thread/**',
       'artifacts/agents-view/**',
       'artifacts/queued-steering/**',
+      'artifacts/screenshot-resize-run/**',
       '.worktrees/**',
       '.claude/tmp/**',
       // Agent worktrees are whole checkouts of this repository, so linting them would lint
