@@ -10,7 +10,7 @@ import { useAgents, type AgentConnection } from './AgentContext'
 import { draftThreads, gateOnCreation, overlayDraftThreads, useDraftThreads } from './draftThreads'
 import { describeThreads, organizeWorkspace, type ThreadRow } from './threadFacts'
 import { NewThreadDialog } from './NewThreadDialog'
-import { beginNewThread, type ThreadCreationStart } from './newThread'
+import { beginNewThread, unusedNewThread, type ThreadCreationStart } from './newThread'
 import { newThreadChord, newThreadChordLabel, newThreadChordPressed } from './newThreadShortcut'
 import { ProviderUpgradeNotice } from './ProviderUpgradeNotice'
 import { THREAD_PROMPT_ID } from './ThreadComposer'
@@ -174,11 +174,13 @@ export function ThreadsView({ onOpenAgents, now: fixedNow, updateControl, tools,
   const createThreadIn = useCallback((project: AgentProject): void => {
     if (state === null) return
     setNewThreadError(null)
+    const unused = unusedNewThread(state, project)
+    if (unused) { openThread(unused.id); focusNewComposer(); return }
     void beginNewThread(state, command, project).then(start => {
       if ('error' in start) { setNewThreadError(start.error); return }
       handleCreationStart(start)
     })
-  }, [state, command, handleCreationStart])
+  }, [state, command, handleCreationStart, openThread])
   const startNewThread = useCallback((projectId?: string): void => {
     setNewThreadError(null)
     const project = projectId !== undefined ? state?.host.projects.find(item => item.id === projectId) : undefined

@@ -5,6 +5,7 @@ Checked on September 26, 2026, on Windows, in the built app (`npm run build`, th
 ## Starting a thread
 
 - `fresh-thread-dark-1280.png`, `fresh-thread-light-820.png`, `fresh-thread-dark-1600.png` and `fresh-thread-dark-1600-reduced-motion.png`: the pen on a project row opens an empty "New thread" in that project at once, selected, with its composer focused and the default model, effort and permissions on its chips. No dialog opens. The thread names itself from its first exchange.
+- Pressing the pen or the shortcut again while the project has a new thread that was never used (default title, no message, at rest, not settled) returns to that thread instead of opening another, so an accidental press leaves nothing behind (`tests/unit/renderer/unusedNewThread.test.tsx`).
 - `chooser-dark-1280.png` and `chooser-light-820.png`: the sidebar's top **New thread** button asks only which project; choosing one opens the thread the same way.
 - The Agents room's own managed flow is unchanged: it still asks name, model, reasoning effort and permissions in its own form once a project is chosen, before the thread opens (`tests/unit/renderer/newThreadProjectCreation.test.tsx`, "the managed flow's own form").
 - **Ctrl+Shift+N** opens a new thread in the focused thread's project, or the chooser when no thread is focused. It stands down when the dictation hotkey claims the chord (`tests/unit/renderer/newThreadShortcut.test.ts`).

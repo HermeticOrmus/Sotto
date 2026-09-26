@@ -42,6 +42,16 @@ export async function projectWorkingCopy(state: AgentState, project: AgentProjec
  * (`newThreadDefaults.ts`), so the chips read the Settings defaults from the first frame instead of the
  * provider's own defaults until main's snapshot arrives.
  */
+/**
+ * A thread the project already has that was opened and never used: still on its default title, nothing sent, at rest
+ * and not settled. New thread returns to it instead of leaving another empty thread behind (#347), so a press made by
+ * accident, or twice, costs nothing.
+ */
+export function unusedNewThread(state: AgentState, project: AgentProject): AgentThread | undefined {
+  return state.host.threads.find(thread => thread.projectId === project.id && thread.titleSource === 'default' && thread.status === 'idle'
+    && !thread.settledAt && !thread.archivedAt && (thread.summary?.messageCount ?? thread.messages.length) === 0)
+}
+
 export async function beginNewThread(state: AgentState, command: AgentConnection['command'], project: AgentProject, managed = false): Promise<ThreadCreationStart | { readonly error: string }> {
   const projectHost = hostForThread(state.host, { hostId: projectHostId(state, project) })
   const modelId = defaultNewThreadModelId(state.configuration, projectHost.models, state.reasoningAccounts)
