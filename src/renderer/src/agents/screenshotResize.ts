@@ -143,9 +143,7 @@ export function readImageHeader(bytes: Uint8Array): ImageHeader | null {
 }
 
 async function headerOf(file: Blob): Promise<ImageHeader | null> {
-  const start = file.slice(0, HEADER_BYTES)
-  if (typeof start.arrayBuffer !== 'function') return null
-  return readImageHeader(new Uint8Array(await start.arrayBuffer().catch(() => new ArrayBuffer(0))))
+  return readImageHeader(new Uint8Array(await file.slice(0, HEADER_BYTES).arrayBuffer().catch(() => new ArrayBuffer(0))))
 }
 
 /** An image decoded once, which can be drawn again at another size. */
