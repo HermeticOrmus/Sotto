@@ -23,6 +23,13 @@ export interface DesktopHostConnection {
   available?: () => boolean
 }
 
+/**
+ * The commands whose point is to move the host's selection: Later and Next go to another queued thread, a new thread or
+ * project opens, an attention item or a paused draft is taken up, a spoken request picks a thread. Selecting a thread
+ * or a project is the window's own and is handled on its own.
+ */
+const SELECTING_COMMANDS: ReadonlySet<AgentCommand['type']> = new Set(['later', 'next', 'create-thread', 'create-project', 'select-attention', 'resume-draft', 'utterance'])
+
 /** Routing happens in main, before host-local IDs or privileged command schemas are decoded. */
 export class DesktopHostRouter {
   private readonly hosts = new Map<string, { connection: DesktopHostConnection; off: (() => void)[] }>()
@@ -32,6 +39,8 @@ export class DesktopHostRouter {
   private selectedThreadId: string | null | undefined
   private selectedProjectId: string | null = null
   private notice: string | undefined
+  /** Counts the window's own selections, so a command that ends after one does not undo it. */
+  private selections = 0
 
   constructor(private readonly empty: () => AgentState) {}
 
@@ -55,7 +64,7 @@ export class DesktopHostRouter {
   }
   select(hostId: string): void {
     if (!this.hosts.has(hostId)) throw new Error('Connect this host before selecting it.')
-    this.selectedHostId = hostId; this.selectedThreadId = null; this.selectedProjectId = null; this.emit()
+    this.selectedHostId = hostId; this.selectedThreadId = null; this.selectedProjectId = null; this.selections++; this.emit()
   }
   /** A saved host was renamed: its threads and badges take the new name at once. */
   rename(hostId: string, name: string): void {
@@ -170,7 +179,7 @@ export class DesktopHostRouter {
     const { connection } = this.target(hostId ? hostEntityKey(hostId, '_') : undefined)
     const command = agentCommandSchema.parse(mapHostReferences(input, id => parseHostEntityKey(id)?.id ?? id))
     if (command.type === 'select-thread' || command.type === 'select-project') {
-      this.selectedHostId = connection.hostId
+      this.selectedHostId = connection.hostId; this.selections++
       if (command.type === 'select-thread') {
         this.selectedThreadId = command.threadId ? hostEntityKey(connection.hostId, command.threadId) : null
         this.selectedProjectId = this.shell().host.threads.find(thread => thread.id === this.selectedThreadId)?.projectId ?? null
@@ -187,10 +196,30 @@ export class DesktopHostRouter {
     }
     if (connection.available?.() === false) throw new Error('This host is disconnected. Connect again before sending. No command was sent.')
     if (connection.kind === 'remote' && ['open-thread-folder', 'open-folder'].includes(command.type)) throw new Error('This folder is on the host machine. Open it there.')
-    const result = await connection.service.command(command as AgentCommand, client)
-    if (result.error) this.notice = result.error
+    // Read as values: a host's shell can be its live state, which the command is about to change.
+    const { activeThreadId, activeProjectId } = connection.service.shell()
+    const selections = this.selections
+    try {
+      const result = await connection.service.command(command as AgentCommand, client)
+      if (result.error) this.notice = result.error
+    } finally {
+      if (SELECTING_COMMANDS.has(command.type) && selections === this.selections) this.follow(connection, { activeThreadId, activeProjectId })
+    }
     this.emit()
     return agentShell(this.shell())
+  }
+  /**
+   * The window goes where one of its selecting commands took the host, so the thread it shows is the one the host
+   * composes and sends to. It does not follow a move it did not ask for: another thread's turn ending, another
+   * client's selection, or the host presenting its next queued thread after an answer. A selection the user made
+   * while the command ran wins over the command.
+   */
+  private follow(connection: DesktopHostConnection, before: Pick<AgentState, 'activeThreadId' | 'activeProjectId'>): void {
+    const after = connection.service.shell()
+    if (after.activeThreadId === before.activeThreadId && after.activeProjectId === before.activeProjectId) return
+    this.selectedHostId = connection.hostId
+    this.selectedThreadId = after.activeThreadId === null ? null : hostEntityKey(connection.hostId, after.activeThreadId)
+    this.selectedProjectId = after.activeProjectId === null ? null : hostEntityKey(connection.hostId, after.activeProjectId)
   }
   private emit(): void { const state = this.shell(); for (const listener of this.listeners) listener(state) }
   dispose(): void { for (const hostId of [...this.hosts.keys()]) this.remove(hostId); this.listeners.clear(); this.detailListeners.clear() }
