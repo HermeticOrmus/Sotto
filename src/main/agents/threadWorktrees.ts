@@ -18,7 +18,11 @@ export const runWorktreeGit: RunGit = (cwd, args) => new Promise((accept, reject
 
 export async function existingWorkingDirectory(path: string): Promise<string> {
   if (!isAbsolute(path)) throw new Error('The working folder must be an absolute path.')
-  const canonical = await realpath(path)
+  // A project whose folder was moved or deleted says so in plain words rather than as the file system's error code.
+  const canonical = await realpath(path).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') throw new Error(`The folder ${path} is not there any more. Move it back, or add the project again from where it is now.`)
+    throw error
+  })
   if (!(await stat(canonical)).isDirectory()) throw new Error('The working folder is not a directory.')
   return canonical
 }
