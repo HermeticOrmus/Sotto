@@ -172,11 +172,11 @@ export class SottoThreadHost implements AgentHost {
     })
     if (mine.length) await this.inner.restoreThreadHistory(mine)
   }
-  async refreshThread(threadId: string, read?: ThreadRead): Promise<AgentHostSnapshot> {
+  async refreshThread(threadId: string, purpose?: ThreadRead): Promise<AgentHostSnapshot> {
     await this.registry.load()
     const binding = this.registry.byThread(threadId)
     if (!binding || binding.provider !== this.provider) throw new Error('This thread is not known to Sotto. Refresh and select it again.')
-    return this.read(() => this.inner.refreshThread?.(binding.sessionId, read) ?? this.inner.snapshot())
+    return this.read(() => this.inner.refreshThread?.(binding.sessionId, purpose) ?? this.inner.snapshot())
   }
 
   /** The adapter is asked about its own session; a thread bound to another provider is none of its business. */

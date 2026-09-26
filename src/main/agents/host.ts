@@ -165,7 +165,7 @@ export interface AgentHost {
   snapshot(provider?: ProviderId): Promise<AgentHostSnapshot>
   /** Refresh only this thread's authoritative history/status, returning the full cached snapshot.
    * Native adapters must not join a refresh blocked on another thread or model discovery. */
-  refreshThread?(threadId: string, read?: ThreadRead): Promise<AgentHostSnapshot>
+  refreshThread?(threadId: string, purpose?: ThreadRead): Promise<AgentHostSnapshot>
   /** Throws only for a definitive rejection before commitment; unknown delivery returns uncertain. */
   execute(command: AgentHostCommand): Promise<AgentHostResult>
   /** Resolve saved pre-composite IDs without changing provider session identity. */

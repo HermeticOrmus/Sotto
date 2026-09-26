@@ -203,10 +203,10 @@ export class ConfiguredProviderHost implements AgentHost {
   async restoreThreadHistory(threads: readonly RestoredThreadHistory[]): Promise<void> {
     await Promise.all(providerIdSchema.options.map(id => this.options.hosts[id].restoreThreadHistory?.(threads)))
   }
-  async refreshThread(threadId: string, read?: ThreadRead): Promise<AgentHostSnapshot> {
+  async refreshThread(threadId: string, purpose?: ThreadRead): Promise<AgentHostSnapshot> {
     const id = this.owner(threadId); this.requireConnected(id)
     const slot = this.slots.get(id)!; const epoch = slot.epoch; const host = this.options.hosts[id]
-    const snapshot = await (host.refreshThread?.(threadId, read) ?? host.snapshot())
+    const snapshot = await (host.refreshThread?.(threadId, purpose) ?? host.snapshot())
     if (slot.epoch !== epoch) throw new Error('This thread provider disconnected while reading the thread.')
     this.accept(id, snapshot); this.publish(); return cloneHostSnapshot(this.aggregate())
   }

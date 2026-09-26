@@ -1536,13 +1536,13 @@ export class WorkspaceHost implements AgentHost {
   async snapshot(provider?: ProviderId): Promise<AgentHostSnapshot> {
     await this.initialize(); this.accept(await this.inner.snapshot(provider)); await this.flush(); return this.workspaceSnapshot()
   }
-  async refreshThread(threadId: string, read?: ThreadRead): Promise<AgentHostSnapshot> {
+  async refreshThread(threadId: string, purpose?: ThreadRead): Promise<AgentHostSnapshot> {
     await this.initialize()
     const thread = this.thread(threadId)
     if (thread.nativeSessionStarted === false || !isThreadProviderConnected(this.state.snapshot, thread)) return this.workspaceSnapshot()
     const creation = this.state.creations.find(item => item.threadId === threadId)
     this.accept(await (creation && creation.phase !== 'started' ? this.inner.snapshot(thread.providerId)
-      : this.inner.refreshThread?.(threadId, read) ?? this.inner.snapshot(thread.providerId)))
+      : this.inner.refreshThread?.(threadId, purpose) ?? this.inner.snapshot(thread.providerId)))
     await this.flush(); this.publish(); return this.workspaceSnapshot()
   }
   async setWorkspaceSettled(kind: 'project' | 'thread', id: string, settled: boolean): Promise<AgentHostSnapshot> {
