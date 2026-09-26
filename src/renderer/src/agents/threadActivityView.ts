@@ -370,9 +370,11 @@ export function activityLabel(record: AgentActivity): ActivityLabel {
     }
     case 'subagent': {
       const input = activityInput(record)
+      // A workflow's own entry stands for its run, so the count is of its agents.
+      const agents = record.agents?.filter(agent => agent.kind !== 'workflow').length ?? 0
       const described = typeof input?.description === 'string' && input.description.trim() ? oneLine(input.description) : ''
       return { lead: '', subject: described || toolName(record.title), mono: false,
-        preview: record.agents?.length ? plural(record.agents.length, 'agent', 'agents') : input ? '' : plainLine(record.text) }
+        preview: agents ? plural(agents, 'agent', 'agents') : input ? '' : plainLine(record.text) }
     }
     case 'plan': {
       const steps = record.steps ?? []

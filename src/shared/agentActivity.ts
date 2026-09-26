@@ -3,6 +3,13 @@ import { z } from 'zod'
 export const MAX_AGENT_ACTIVITIES = 2_000
 export const MAX_ACTIVITY_TEXT = 65_536
 const detail = z.string().max(MAX_ACTIVITY_TEXT)
+const count = z.number().int().nonnegative()
+/**
+ * How far a workflow's agents have got, counted where the provider reports them. `total` includes the agents still
+ * waiting for a place to start (`queued`); those have no row of their own until they start.
+ */
+export const workflowProgressSchema = z.object({ total: count, working: count, completed: count, failed: count, interrupted: count, queued: count.optional() })
+export type WorkflowProgress = z.infer<typeof workflowProgressSchema>
 export const agentActivitySchema = z.object({
   id: z.string(), turnId: z.string(), sequence: z.number().int().nonnegative(),
   afterMessageId: z.string().optional(),
@@ -22,6 +29,9 @@ export const agentActivitySchema = z.object({
   /** Display identities only. These cannot address provider sessions or grant authority. */
   agents: z.array(z.object({
     id: z.string(), status: detail, message: detail.optional(),
+    /** A workflow runs agents of its own, observed as children whose `parentId` is the workflow's id. */
+    kind: z.literal('workflow').optional(),
+    progress: workflowProgressSchema.optional(),
     /** Stable observational assignment and parent identities, never provider addresses. */
     assignmentId: z.string().optional(), parentId: z.string().optional(),
     /** Hashed identity aliases for adapter point lookups; never routable native addresses. */
@@ -42,6 +52,7 @@ export type ObservedAgent = NonNullable<AgentActivity['agents']>[number]
 export function compactAgentIdentity(agent: ObservedAgent): ObservedAgent {
   return {
     id: agent.id, status: agent.status,
+    ...(agent.kind !== undefined ? { kind: agent.kind } : {}),
     ...(agent.assignmentId !== undefined ? { assignmentId: agent.assignmentId } : {}),
     ...(agent.parentId !== undefined ? { parentId: agent.parentId } : {}),
     ...(agent.aliasIds !== undefined ? { aliasIds: agent.aliasIds.slice(0, 8).map(id => id.slice(0, 128)) } : {}),
@@ -86,7 +97,9 @@ export function mergeAgentActivities(previous: readonly AgentActivity[] = [], in
       ...(old.completedAt && isTerminalActivity(old.status) ? { completedAt: old.completedAt } : {}),
       ...(record.agents ? { agents: record.agents.map(agent => {
         const prior = old.agents?.find(candidate => candidate.id === agent.id)
-        return prior && prior.assignmentId === agent.assignmentId && terminalAgent(prior.status) && !terminalAgent(agent.status) ? prior : { ...prior, ...agent }
+        if (prior && prior.assignmentId === agent.assignmentId && terminalAgent(prior.status) && !terminalAgent(agent.status)) return prior
+        // A new assignment of the same agent starts clean: the earlier one's result and times stay with it.
+        return prior && prior.assignmentId !== undefined && agent.assignmentId !== undefined && prior.assignmentId !== agent.assignmentId ? agent : { ...prior, ...agent }
       }) } : {}),
     } : { ...record, sequence: sequence++ })
   }

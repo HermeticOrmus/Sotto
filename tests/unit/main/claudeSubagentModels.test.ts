@@ -3,7 +3,7 @@ import { appendFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { ClaudeSubagentModels, MAX_SUBAGENT_TRANSCRIPTS, claudeWorkflowModels, type ClaudeModelTarget } from '../../../src/main/agents/claudeSubagentModels'
+import { ClaudeSubagentModels, MAX_SUBAGENT_TRANSCRIPTS, type ClaudeModelTarget } from '../../../src/main/agents/claudeSubagentModels'
 
 const roots: string[] = []
 afterEach(async () => {
@@ -30,14 +30,15 @@ async function agentFile(folder: string, agentId: string, content: string, run?:
 const agent = (id: string, agentId = id, settled = false): ClaudeModelTarget => ({ id, transcript: { agentId }, settled })
 
 describe('Claude subagent models from their own transcripts', () => {
-  it('reads the first assistant model of a spawned agent and of a workflow run, and nothing else', async () => {
+  it('reads the first assistant model of a spawned agent and of each of a workflow\'s agents, and nothing else', async () => {
     const folder = await session()
     await agentFile(folder, 'a1b2', task + line({ type: 'attachment', attachment: { type: 'skill_listing' } }) + reply('claude-opus-5-5') + reply('claude-later'))
     await agentFile(folder, 'a3', task + reply('claude-opus-5-5'), 'wf_79f40664-5f1')
     await agentFile(folder, 'a4', task + reply('claude-haiku-4-5'), 'wf_79f40664-5f1')
     const reader = new ClaudeSubagentModels()
-    const models = await reader.read(folder, [agent('claude-agent-one', 'a1b2'), { id: 'claude-agent-run', transcript: { runId: 'wf_79f40664-5f1' }, settled: false }])
-    expect([...models]).toEqual([['claude-agent-one', 'claude-opus-5-5'], ['claude-agent-run', 'claude-opus-5-5, claude-haiku-4-5']])
+    const member = (id: string, agentId: string): ClaudeModelTarget => ({ id, transcript: { runId: 'wf_79f40664-5f1', agentId }, settled: false })
+    const models = await reader.read(folder, [agent('claude-agent-one', 'a1b2'), member('workflow:agent-1', 'a3'), member('workflow:agent-2', 'a4')])
+    expect([...models]).toEqual([['claude-agent-one', 'claude-opus-5-5'], ['workflow:agent-1', 'claude-opus-5-5'], ['workflow:agent-2', 'claude-haiku-4-5']])
     expect(JSON.stringify([...models])).not.toMatch(/PRIVATE/u)
   })
 
@@ -71,7 +72,7 @@ describe('Claude subagent models from their own transcripts', () => {
   it('opens a bounded number of files per poll, in the order the targets come', async () => {
     const folder = await session()
     const targets = Array.from({ length: MAX_SUBAGENT_TRANSCRIPTS + 4 }, (_, index) => agent(`child-${index}`, `a${index}`))
-    for (const target of targets) await agentFile(folder, 'agentId' in target.transcript ? target.transcript.agentId : '', task + reply('claude-opus-5-5'))
+    for (const target of targets) await agentFile(folder, target.transcript.agentId, task + reply('claude-opus-5-5'))
     const reader = new ClaudeSubagentModels()
     const first = await reader.read(folder, targets)
     expect(first.size).toBe(MAX_SUBAGENT_TRANSCRIPTS)
@@ -85,13 +86,7 @@ describe('Claude subagent models from their own transcripts', () => {
     const folder = await session()
     await agentFile(folder, 'a1', task + reply('claude-opus-5-5'))
     const reader = new ClaudeSubagentModels()
-    const models = await reader.read(folder, [agent('escape', '../subagents/agent-a1'), { id: 'run', transcript: { runId: '..' }, settled: false }])
+    const models = await reader.read(folder, [agent('escape', '../subagents/agent-a1'), { id: 'run', transcript: { runId: '..', agentId: 'a1' }, settled: false }])
     expect(models.size).toBe(0)
-  })
-
-  it('lists a workflow\'s models once each, in the order seen, up to four', () => {
-    expect(claudeWorkflowModels(undefined, [])).toBeUndefined()
-    expect(claudeWorkflowModels('claude-opus-5-5', ['claude-opus-5-5', 'claude-haiku-4-5'])).toBe('claude-opus-5-5, claude-haiku-4-5')
-    expect(claudeWorkflowModels('a, b', ['c', 'd', 'e'])).toBe('a, b, c, d')
   })
 })

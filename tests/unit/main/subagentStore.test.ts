@@ -51,6 +51,35 @@ describe('retained subagent roster', () => {
     expect(detail.assignments[0]).toMatchObject({ prompt: observation().prompt, result: 'Exact result\nwith newlines.' })
     expect(store.ingest('thread', [observation({ status: 'running', observedAt: at(5) })])).toBeUndefined()
   })
+  it('counts a workflow\'s agents and not the workflow, and keeps its progress when a later sighting omits it', async () => {
+    const { store } = await fixture()
+    const progress = { total: 2, working: 1, completed: 1, failed: 0, interrupted: 0 }
+    const workflow = observation({ id: 'flow', assignmentId: 'flow-task', kind: 'workflow', title: 'Run the phase', description: 'phase-1', prompt: 'Run the phase', progress })
+    const first = store.ingest('thread', [observation({ id: 'solo' }), workflow,
+      observation({ id: 'flow:agent-1', assignmentId: 'flow-task:agent-1', parentId: 'flow', title: '#311 lane' }),
+      observation({ id: 'flow:agent-2', assignmentId: 'flow-task:agent-2', parentId: 'flow', title: '#312 lane', status: 'completed', completedAt: at(3) })])!
+    expect(subagentChangeSchema.safeParse(first).success).toBe(true)
+    expect(first.summary).toMatchObject({ total: 3, working: 2, completed: 1 })
+    expect(first.rows.find(row => row.id === 'flow')).toMatchObject({ kind: 'workflow', progress, title: 'Run the phase', description: 'phase-1' })
+    // The launch's tool row reports the workflow again without its progress.
+    const again = store.ingest('thread', [{ ...workflow, progress: undefined, observedAt: at(1) }])!
+    expect(again.rows[0]).toMatchObject({ kind: 'workflow', progress })
+    expect(again.summary).toMatchObject({ total: 3, working: 2 })
+    const unknown = store.markUnknown('thread')!
+    expect(unknown.rows.map(row => row.id).sort()).toEqual(['flow', 'flow:agent-1', 'solo'])
+    expect(unknown.summary).toMatchObject({ total: 3, working: 0, unknown: 2, completed: 1 })
+    expect(store.unsettled('thread').find(agent => agent.id === 'flow')).toMatchObject({ kind: 'workflow', progress })
+  })
+  it('brings a workflow\'s row along with a page that holds only some of its agents', async () => {
+    const { store } = await fixture()
+    store.ingest('thread', [observation({ id: 'flow', assignmentId: 'flow-task', kind: 'workflow', title: 'Run' }),
+      ...Array.from({ length: 60 }, (_, index) => observation({ id: `flow:agent-${index}`, assignmentId: `flow-task:agent-${index}`, parentId: 'flow', title: `Agent ${index}` }))])
+    const page = store.page({ threadId: 'thread' })
+    expect(subagentPageSchema.safeParse(page).success).toBe(true)
+    expect(page.rows[0]).toMatchObject({ id: 'flow', kind: 'workflow' })
+    expect(page.rows).toHaveLength(51)
+    expect(page.before).toBe(page.rows[1]!.sequence)
+  })
   it('preserves a complete prompt when later compact lifecycle observations only repeat the description', async () => {
     const { store } = await fixture()
     store.ingest('thread', [observation({ prompt: 'Full original task with detailed instructions', description: 'Brief task' })])

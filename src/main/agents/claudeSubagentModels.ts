@@ -1,21 +1,19 @@
-import { open, readdir } from 'node:fs/promises'
+import { open } from 'node:fs/promises'
 import { join } from 'node:path'
 import { object } from './claudeProtocol'
 
 /**
  * Where a Claude subagent keeps its own transcript under its parent session's folder: a spawned agent
- * files `subagents/agent-<agentId>.jsonl`, a workflow's agents `subagents/workflows/<runId>/agent-<id>.jsonl`.
+ * files `subagents/agent-<agentId>.jsonl`, a workflow's agent `subagents/workflows/<runId>/agent-<agentId>.jsonl`.
  * Checked against Claude Code 2.1.280; see docs/verification/subagent-model-from-transcript.md.
  */
-export type ClaudeSubagentTranscript = { readonly agentId: string } | { readonly runId: string }
+export type ClaudeSubagentTranscript = { readonly agentId: string; readonly runId?: string | undefined }
 /** An agent whose row still has no model, and whether it has stopped (so its transcript is finished). */
 export interface ClaudeModelTarget { readonly id: string; readonly transcript: ClaudeSubagentTranscript; readonly settled: boolean }
 /** Native agent and run identifiers are short tokens. Anything else is not a file name Sotto will build. */
 export const CLAUDE_TRANSCRIPT_ID = /^[A-Za-z0-9_-]{1,128}$/u
 /** Transcript files opened per thread per poll, across every agent still missing a model. */
 export const MAX_SUBAGENT_TRANSCRIPTS = 16
-/** A workflow row names at most this many of its agents' models. */
-export const MAX_WORKFLOW_MODELS = 4
 /** Bytes read from one file per poll. The first assistant line follows the task and a few attachments. */
 const POLL_BYTES = 256 * 1024
 /** A line longer than this is skipped unread: an assistant line that names a model is far smaller. */
@@ -24,17 +22,10 @@ const LINE_BYTES = 1024 * 1024
 const FILE_BYTES = 8 * 1024 * 1024
 /** Reads after an agent stops before its transcript is given up: the file can trail the notification. */
 const SETTLED_ATTEMPTS = 3
-const AGENT_FILE = /^agent-[A-Za-z0-9_-]{1,128}\.jsonl$/u
 const NEWLINE = 0x0a
 
 interface FileState { offset: number; pending: Buffer[]; pendingBytes: number; skipping: boolean; done: boolean }
 interface TargetState { files: Map<string, FileState>; attempts: number; abandoned: boolean }
-
-/** Joins what a workflow's agents ran on, keeping the order they were first seen and a short list. */
-export function claudeWorkflowModels(known: string | undefined, reported: readonly string[]): string | undefined {
-  const models = [...new Set([...(known ? known.split(', ') : []), ...reported].filter(Boolean))].slice(0, MAX_WORKFLOW_MODELS)
-  return models.length ? models.join(', ') : undefined
-}
 
 /**
  * Reads the model a Claude subagent ran on from the first assistant line of its own transcript, for the
@@ -66,16 +57,12 @@ export class ClaudeSubagentModels {
       let state = this.targets.get(target.id)
       if (!state) this.targets.set(target.id, state = { files: new Map(), attempts: 0, abandoned: false })
       if (state.abandoned) continue
-      const files = await this.files(sessionFolder, target.transcript)
-      const models: string[] = []
-      for (const path of files.slice(0, budget)) {
-        budget--
-        let file = state.files.get(path)
-        if (!file) state.files.set(path, file = { offset: 0, pending: [], pendingBytes: 0, skipping: false, done: false })
-        const model = await firstModel(path, file)
-        if (model) models.push(model)
-      }
-      const model = 'runId' in target.transcript ? claudeWorkflowModels(undefined, models) : models[0]
+      const path = transcriptPath(sessionFolder, target.transcript)
+      if (!path) continue
+      budget--
+      let file = state.files.get(path)
+      if (!file) state.files.set(path, file = { offset: 0, pending: [], pendingBytes: 0, skipping: false, done: false })
+      const model = await firstModel(path, file)
       if (model) { found.set(target.id, model); this.targets.delete(target.id); continue }
       // A stopped agent's transcript is finished; a few more reads cover a file written just after the notice.
       if (target.settled && ++state.attempts >= SETTLED_ATTEMPTS) { state.abandoned = true; state.files.clear() }
@@ -83,14 +70,13 @@ export class ClaudeSubagentModels {
     return found
   }
 
-  private async files(sessionFolder: string, transcript: ClaudeSubagentTranscript): Promise<string[]> {
-    const subagents = join(sessionFolder, 'subagents')
-    if ('agentId' in transcript) return CLAUDE_TRANSCRIPT_ID.test(transcript.agentId) ? [join(subagents, `agent-${transcript.agentId}.jsonl`)] : []
-    if (!CLAUDE_TRANSCRIPT_ID.test(transcript.runId)) return []
-    const run = join(subagents, 'workflows', transcript.runId)
-    const names = await readdir(run).catch(() => [] as string[])
-    return names.filter(name => AGENT_FILE.test(name)).sort().map(name => join(run, name))
-  }
+}
+
+/** The one file an agent's transcript is, or nothing when an identifier is not a native token. */
+function transcriptPath(sessionFolder: string, transcript: ClaudeSubagentTranscript): string | undefined {
+  if (!CLAUDE_TRANSCRIPT_ID.test(transcript.agentId) || (transcript.runId !== undefined && !CLAUDE_TRANSCRIPT_ID.test(transcript.runId))) return undefined
+  const subagents = join(sessionFolder, 'subagents')
+  return join(...(transcript.runId !== undefined ? [subagents, 'workflows', transcript.runId] : [subagents]), `agent-${transcript.agentId}.jsonl`)
 }
 
 /** Scans on from where the last poll stopped, for the first assistant line's model. Never throws. */

@@ -86,3 +86,6 @@ artifacts/git-settings/
 artifacts/phase-three-themes/
 artifacts/thread-browser-player/
 artifacts/screenshot-resize-run/
+
+# A workflow's agents in the roster (#339): every e2e capture; the note cites a copy in artifacts/workflow-agent-rows/
+artifacts/workflow-agent-rows-run/

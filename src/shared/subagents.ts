@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { workflowProgressSchema } from './agentActivity'
 
 export const SUBAGENTS_PAGE = 'sotto:subagents:page'
 export const SUBAGENTS_ASSIGNMENTS = 'sotto:subagents:assignments'
@@ -27,6 +28,8 @@ export const subagentRowSchema = z.object({
   title: z.string().max(240), description: z.string().max(400), model: z.string().max(512).optional(),
   status: subagentStatusSchema, startedAt: z.string().optional(), completedAt: z.string().optional(),
   lastObservedAt: z.string(), durationMs: z.number().nonnegative().optional(),
+  /** A workflow's row stands for the run; its agents are rows of their own under it and it is not counted as one. */
+  kind: z.literal('workflow').optional(), progress: workflowProgressSchema.optional(),
 })
 export type SubagentRow = z.infer<typeof subagentRowSchema>
 export const subagentSummarySchema = z.object({ total: z.number().int().nonnegative(), working: z.number().int().nonnegative(), completed: z.number().int().nonnegative(), failed: z.number().int().nonnegative(), interrupted: z.number().int().nonnegative(), unknown: z.number().int().nonnegative() })
@@ -49,4 +52,18 @@ export interface SubagentsBridge {
   page(request: SubagentPageRequest): Promise<SubagentPage>
   assignments(request: SubagentAssignmentsRequest): Promise<SubagentAssignmentsPage>
   onChanged(listener: (change: SubagentChange) => void): () => void
+}
+
+/** Claude Code's model aliases, which a launch may name before the agent's resolved model is known. */
+const MODEL_ALIAS = /^(opus|sonnet|haiku)(\[1m\])?$/u
+/**
+ * The models a workflow's agents ran on, once each in the order first seen. An alias such as `opus` is left out
+ * once a resolved name of the same family (`claude-opus-5-5[1m]`) is in the list, so one model is never named twice.
+ */
+export function distinctModels(models: readonly (string | undefined)[]): string[] {
+  const named = [...new Set(models.filter((model): model is string => !!model))]
+  return named.filter(model => {
+    const alias = MODEL_ALIAS.exec(model)
+    return !alias || !named.some(other => other !== model && other.startsWith(`claude-${alias[1]}-`))
+  })
 }
