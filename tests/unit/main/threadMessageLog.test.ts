@@ -24,6 +24,15 @@ describe('the append path a provider rail is handed to', () => {
     expect(log.summaryBeside('t', source).runningTurnStartedAt).toBeUndefined()
     expect(log.summaryBeside('t', owned).runningTurnStartedAt).toBe('2026-09-23T10:00:00Z')
   })
+  it('knows a thread has messages from seeded identities alone, and asking does not block a later seed', () => {
+    const log = new ThreadMessageLog()
+    expect(log.hasMessages('t')).toBe(false)
+    log.seed('t', [{ id: 'u0', role: 'user' }])
+    expect(log.hasMessages('t')).toBe(true)
+    expect(log.lastMessageId('t')).toBeUndefined()
+    log.add('other', message('a', 'assistant', 'Reply'))
+    expect(log.hasMessages('other')).toBe(true)
+  })
   it('treats a shorter or partial list as a partial read, never as a rewind', () => {
     const log = new ThreadMessageLog()
     const events: ThreadHostEvent[] = []

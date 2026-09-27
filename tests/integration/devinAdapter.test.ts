@@ -212,15 +212,71 @@ describe('Devin dispatch and decision boundaries', () => {
     expect((await f.driver.requests()).some(record => f.protocol.permissionDecision(record) === true)).toBe(false)
   })
 
-  it('does not recreate an empty session whose owner crashed', async () => {
+  it('gives an empty thread whose owner crashed a new provider session, since nothing was sent to resend', async () => {
     const native = await f.realId(threadId)
     await f.action(threadId, { type: 'malformed' })
     await expect.poll(async () => (await thread()).status).toBe('error')
     f = await f.driver.restart(); await f.host.connect()
     const createsBefore = (await f.driver.requests()).filter(record => record.method === 'session/new').length
+    await f.adapter.refreshThread(threadId)
+    expect(await f.realId(threadId)).not.toBe(native)
+    expect((await f.driver.requests()).filter(record => record.method === 'session/new')).toHaveLength(createsBefore + 1)
+    expect(await thread()).toMatchObject({ status: 'idle', modelId: f.modelId })
+    expect((await f.driver.requests()).filter(record => record.method === 'session/prompt')).toHaveLength(0)
+  })
+
+  it('never gives a new provider session to a thread whose stored history holds a message', async () => {
+    const native = await f.realId(threadId)
+    await f.action(threadId, { type: 'malformed' })
+    await expect.poll(async () => (await thread()).status).toBe('error')
+    f = await f.driver.restart()
+    // The store hands over identities only, so the log knows the message without its words.
+    f.host.useThreadHistory({ messageIdentities: id => id === threadId ? [{ id: 'stored-user-message', role: 'user' }] : [] })
+    await f.host.connect()
+    const createsBefore = (await f.driver.requests()).filter(record => record.method === 'session/new').length
     await expect(f.adapter.refreshThread(threadId)).rejects.toThrow('Devin could not find this saved session')
     expect(await f.realId(threadId)).toBe(native)
     expect((await f.driver.requests()).filter(record => record.method === 'session/new')).toHaveLength(createsBefore)
+  })
+
+  it('gives an empty thread whose creation was never confirmed a new provider session on the next connect', async () => {
+    await f.script({ enableMcpAfterNew: true })
+    const unconfirmed = randomUUID()
+    await expect(f.host.execute({ type: 'create-thread', commandId: randomUUID(), threadId: unconfirmed,
+      projectId: f.projectId, modelId: f.modelId, providerMode: 'bypass', title: 'Unconfirmed creation' })).rejects.toThrow('MCP servers')
+    const native = await f.realId(unconfirmed)
+    await f.script({}); await rm(join(f.root, 'integrations.json'), { force: true })
+    f = await f.driver.restart()
+    f.host.observeThreads([unconfirmed])
+    const connected = await f.host.connect()
+    expect(connected.connected).toBe(true)
+    expect(connected.error).toBeUndefined()
+    const renewed = await f.realId(unconfirmed)
+    expect(renewed).not.toBe(native)
+    expect(await thread(unconfirmed)).toMatchObject({ status: 'idle', modelId: f.modelId, providerMode: 'bypass' })
+    expect((await f.driver.requests()).some(record => record.method === 'session/set_config_option'
+      && record.params?.sessionId === renewed && record.params?.configId === 'mode' && record.params?.value === 'bypass')).toBe(true)
+    await send(unconfirmed, 'First prompt after renewal')
+    await expect.poll(async () => (await thread(unconfirmed)).messages.filter(message => message.role === 'user').length).toBe(1)
+  })
+
+  it('stays connected when an observed thread cannot be opened, and marks only that thread', async () => {
+    await send()
+    await f.driver.completeTurn(threadId, 'Reply')
+    await expect.poll(async () => (await thread()).status).toBe('idle')
+    const native = await f.realId(threadId)
+    const other = await create()
+    f = await f.driver.restart()
+    await rm(join(f.root, `native-${native}.json`))
+    f.host.observeThreads([threadId, other])
+    for (const attempt of [1, 2]) {
+      const connected = await f.host.connect()
+      expect(connected.connected, `connect ${attempt}`).toBe(true)
+      expect(connected.error).toMatch(/could not find this saved session/u)
+    }
+    expect(await f.realId(threadId)).toBe(native)
+    expect((await thread()).status).toBe('error')
+    expect((await thread(other)).status).toBe('idle')
   })
 
   it('keeps creation uncertain after losing its acknowledgement instead of creating again', async () => {
