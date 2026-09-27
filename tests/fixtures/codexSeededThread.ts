@@ -24,7 +24,9 @@ export function seededTurn(index: number, cwd: string): Record<string, unknown> 
 /**
  * A fixture whose Codex holds a thread with `turns` completed turns, restarted and not yet connected, so the
  * adapter holds no history for it and the first open reads it whole. `wrapped` puts the adapter behind the Sotto
- * thread host, so the coordinator addresses it by Sotto thread ID. `script` is handed to the restarted fake.
+ * thread host, so the coordinator addresses it by Sotto thread ID. The workspace and provider hosts the app also
+ * puts between them hand a read's purpose on unchanged (threadReadPurpose.test.ts) and are left out. `script` is
+ * handed to the restarted fake.
  */
 export async function seededCodexThread(turns: number, wrapped = false, script: Record<string, unknown> = {}): Promise<{ f: CodexFixture; id: string }> {
   const first = await codexFixture(undefined, wrapped, 60_000)
