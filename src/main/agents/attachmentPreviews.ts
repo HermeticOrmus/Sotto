@@ -111,9 +111,14 @@ export class AttachmentPreviews {
   digests(): Set<string> {
     return new Set([...this.live().values()].flatMap(entry => entry.attachments.map(attachment => attachment.digest)))
   }
-  /** Every content any entry still names, live or not: what a privacy change may be about to release. */
-  named(): Set<string> {
-    return new Set(this.entries.flatMap(entry => entry.attachments.map(attachment => attachment.digest)))
+  /**
+   * Every content any entry still names, live or not, with when its latest entry was stored: what a privacy change
+   * may be about to release. Content staged again after that belongs to a draft instead.
+   */
+  named(): Map<string, number> {
+    const named = new Map<string, number>()
+    for (const entry of this.entries) for (const { digest } of entry.attachments) named.set(digest, Math.max(named.get(digest) ?? entry.storedAt, entry.storedAt))
+    return named
   }
   /**
    * Records the images a prompt carried once the provider has it. The entry is live at once, so the next publish

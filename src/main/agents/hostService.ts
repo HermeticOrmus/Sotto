@@ -1,6 +1,6 @@
 import { userInfo } from 'node:os'
 
-import type { AgentAttachmentContent, AgentAttachmentHandle, AgentAttachmentUpload, AgentCommand, AgentState, AgentThreadDetail, AgentThreadDetailUpdate, AgentAttachmentPreviewRequest, AgentAttachmentPreviewResult } from '../../shared/agents'
+import { HOST_CANNOT_STAGE_SCREENSHOTS, type AgentAttachmentContent, type AgentAttachmentHandle, type AgentAttachmentUpload, type AgentCommand, type AgentState, type AgentThreadDetail, type AgentThreadDetailUpdate, type AgentAttachmentPreviewRequest, type AgentAttachmentPreviewResult } from '../../shared/agents'
 import type { StoredThreadEvent } from '../../shared/threadEvents'
 import type { GitRefsPage, GitRefsRequest } from '../../shared/gitRefs'
 import type { GitChangedFiles, GitChangedFilesRequest } from '../../shared/gitChangedFiles'
@@ -124,7 +124,7 @@ export class LocalHostService implements HostService {
   subscribeThreadDetail(listener: (update: AgentThreadDetailUpdate) => void): () => void { return this.control.subscribeThreadDetail?.(listener) ?? (() => undefined) }
   async attachmentPreview(request: AgentAttachmentPreviewRequest): Promise<AgentAttachmentPreviewResult> { return await this.control.attachmentPreview?.(request) ?? null }
   stageAttachment(image: AgentAttachmentUpload): Promise<AgentAttachmentHandle> {
-    if (!this.control.stageAttachment) return Promise.reject(new Error('This host cannot keep screenshots. Update Sotto there, then attach them again. Nothing was attached.'))
+    if (!this.control.stageAttachment) return Promise.reject(new Error(HOST_CANNOT_STAGE_SCREENSHOTS))
     return this.control.stageAttachment(image)
   }
   async attachmentContent(digest: string): Promise<AgentAttachmentContent | null> { return await this.control.attachmentContent?.(digest) ?? null }
