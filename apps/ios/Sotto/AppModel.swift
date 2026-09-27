@@ -234,7 +234,9 @@ struct Live {
             pending = markers
             computers = computers.filter { $0.hostID != computer.hostID } + [computer]
             live[computer.hostID] = Live()
-            self.found = nil; working = false; adding = false
+            // Sheet state belongs to whichever Add computer is open now; a pairing that finishes after
+            // Cancel is saved but leaves a newer sheet alone.
+            if current == pairGeneration { self.found = nil; working = false; adding = false }
             await connect(computer.hostID)
         } catch { if current == pairGeneration { pairFeedback = error.localizedDescription; working = false } }
     }
