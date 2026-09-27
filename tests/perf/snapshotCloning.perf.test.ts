@@ -6,15 +6,20 @@
  * over the fake CLI with 1, 4 and 8 open threads, short and long histories, and a window showing one of them
  * or none, then publishes the same unchanged state repeatedly and times each stage. It counts objects rather
  * than reading them: nothing a thread said is printed. It asserts no time, so it runs only under
- * `SOTTO_PERF_BENCH=1` (`tests/fixtures/perfBench.ts`):
+ * `SOTTO_PERF_BENCH=1` (`tests/fixtures/perfBench.ts`); the default suite runs only the check that the private
+ * members it wraps still exist:
  *
  *   SOTTO_PERF_BENCH=1 npx vitest run tests/perf/snapshotCloning.perf.test.ts --maxWorkers=1 --disable-console-intercept
  */
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { setFlagsFromString } from 'node:v8'
 import { runInNewContext } from 'node:vm'
 import { describe, expect, it } from 'vitest'
 import { subscribeActivitySnapshots } from '../../src/main/agents/activitySnapshots'
 import { cloneHostSnapshot } from '../../src/main/agents/cloneHostSnapshot'
+import { ClaudeStreamJsonHost } from '../../src/main/agents/claude'
+import { ProviderSnapshotPublisher } from '../../src/main/agents/providerSnapshotPublisher'
 import { ConfiguredProviderHost } from '../../src/main/agents/providerSwitch'
 import { SottoThreadHost, ThreadRegistry } from '../../src/main/agents/threads'
 import { WorkspaceHost } from '../../src/main/agents/workspace'
@@ -30,8 +35,12 @@ const HISTORIES = { short: 20, long: 1000 } as const
 const WINDOWS = { pane: 1, none: 0 } as const
 const WORDS = 'lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor '
 
-setFlagsFromString('--expose-gc')
-const collect = runInNewContext('gc') as () => void
+let exposedGc: (() => void) | undefined
+/** A full collection, with the flag set only when a benchmark first asks, so a default suite run changes nothing. */
+function collect(): void {
+  if (!exposedGc) { setFlagsFromString('--expose-gc'); exposedGc = runInNewContext('gc') as () => void }
+  exposedGc()
+}
 
 /** Objects and arrays a copy would visit, skipping frozen ones: a frozen activity tree is shared, never copied. */
 function objects(value: unknown, seen = new Set<object>()): number {
@@ -56,6 +65,15 @@ function timed(target: object, method: string, stage: Stage, totals: Record<Stag
     try { return original(...args) } finally { totals[stage] += performance.now() - started }
   }
 }
+
+/**
+ * The private members the benchmark wraps or calls, by owner. Renaming one breaks the benchmark, which CI
+ * never runs, so the test at the end of this file checks each still exists.
+ */
+const PRIVATE_MEMBERS = {
+  claudeAdapter: ['emit', 'view'], claudeAdapterFields: ['publisher'], publisher: ['emit'],
+  providerSwitch: ['accept', 'publish'], workspace: ['accept'],
+} as const
 
 async function measure(threads: number, history: keyof typeof HISTORIES, window: keyof typeof WINDOWS) {
   const f = await claudeFixture(undefined, 10_000)
@@ -129,6 +147,17 @@ async function measure(threads: number, history: keyof typeof HISTORIES, window:
     workspace.disconnect(); await f.adapter.closed(); await workspace.privacyChanged(); workspace.dispose(); await registry.flush(); await f.cleanup()
   }
 }
+
+it('still finds the private members the snapshot cloning benchmark times', () => {
+  for (const member of PRIVATE_MEMBERS.claudeAdapter) expect(typeof (ClaudeStreamJsonHost.prototype as unknown as Record<string, unknown>)[member]).toBe('function')
+  for (const member of PRIVATE_MEMBERS.providerSwitch) expect(typeof (ConfiguredProviderHost.prototype as unknown as Record<string, unknown>)[member]).toBe('function')
+  for (const member of PRIVATE_MEMBERS.workspace) expect(typeof (WorkspaceHost.prototype as unknown as Record<string, unknown>)[member]).toBe('function')
+  const publisher = new ProviderSnapshotPublisher(() => undefined) as unknown as Record<string, unknown>
+  for (const member of PRIVATE_MEMBERS.publisher) expect(typeof publisher[member]).toBe('function')
+  // The adapter's publisher is an instance field. Constructing an adapter reads, writes and starts nothing.
+  const adapter = new ClaudeStreamJsonHost({ userDataPath: join(tmpdir(), 'sotto-snapshot-cloning-members') }) as unknown as Record<string, unknown>
+  for (const member of PRIVATE_MEMBERS.claudeAdapterFields) expect(adapter[member]).toBeInstanceOf(ProviderSnapshotPublisher)
+})
 
 describe.skipIf(!PERF_BENCH)('snapshot cloning with held threads', () => {
   for (const window of ['pane', 'none'] as const) for (const history of ['short', 'long'] as const) for (const threads of [1, 4, 8]) {
