@@ -4,12 +4,13 @@ Issue #352. Opening a Codex thread Sotto holds no history for reads it whole wit
 `includeTurns: true` and applies every turn. #324 found that at 2,000 turns an open took 6-17 s on the fake
 app-server while the real Codex CLI 0.157.1 sent the same transcript in 117-150 ms, so nearly all of the wait was
 Sotto's own work, and it grew faster than the thread did (`2026-09-26-codex-send-read.md`). The likely cause it
-named was `applyTurn` in `src/main/agents/codex.ts` calling `orderMessages`, which sorts the whole message window, once
-for every turn. The issue asked for the open to be split into phases first.
+named was `applyTurn` in `src/main/agents/codex.ts` calling `orderMessages`, which sorts the whole message window,
+once for every turn. The issue asked for the open to be split into phases first.
 
-The decision: the numbers put about a fifth of the cost on that sort and most of the rest on the thread activity, so
-both changed; identity reconciliation and the rest stayed as they were. A whole read now orders the message window once
-rather than once a turn, and the Codex activity projection places each record instead of rebuilding its list.
+The decision: the numbers put about a fifth of the cost on that sort and most of the rest on the thread activity,
+so both changed; identity reconciliation and the rest stayed as they were. A whole read now orders the message
+window once rather than once a turn, and the Codex activity projection places each record instead of rebuilding
+its list.
 At 2,000 turns an open went from 6.6-8.7 s to 1.0-1.5 s, and the read now costs about the same per turn at every
 size.
 
@@ -27,14 +28,15 @@ Each figure is the median of the five opens in a run, and each range is across t
 - **Sending**: from the request going out to the adapter starting to parse the reply. Against the fake this is
   the fake building its reply and the pipe carrying it, not Codex.
 - **Parsing**: `JSON.parse` of the reply line, then the frame and thread schemas, up to applying the thread.
-- **Reconciling**: `reconcileTurn`, which settles each turn's message identities.
+- **Reconciling**: `reconcileTurn`, which settles each turn's message identities. The identity lookups made for
+  each message as it is applied count under applying items and the rest.
 - **Applying items**: `applyItem` for every item, which records the messages in the thread's log (**recording**)
   and projects commands and reasoning into the thread's activity.
 - **Thread activity**: the Codex activity projection's `item`, `anchor` and `turn` calls. The first two run inside
   applying items and `turn` in the rest, so this column overlaps both.
 - **Ordering**: every `orderMessages` call inside the read, and how many there were.
 - **Rest**: `applyThread` and the read's settling, less reconciling, applying items and ordering.
-- **Saving**: the thread record saved after applying.
+- **Saving**: the adapter's state saved after applying (`persist`), outside the rest.
 
 "Before" is `codex.ts` and `codexActivity.ts` as of `origin/main` (`020df63a`) under the same benchmark; "after" is
 this change.
@@ -68,7 +70,7 @@ At 500 turns applying items went from 554-1,020 ms to 130-221 ms, the thread act
 
 Before the change, sending and parsing were under 2% of the read at 2,000 turns. The rest was applying: the
 thread activity about 60%, ordering about 22%, identities, recording and the rest the remainder.
-Reconciling also fell after the change, though it did not change; the busier machine during the "before" runs and
+Reconciling also fell after the change, though its code did not change; the busier machine during the "before" runs and
 the garbage the old sort and merge left behind are the likely reason, and its figures are the least certain here.
 The rest fell partly for the same reason and partly because it holds the thread activity's `turn` calls.
 
@@ -78,14 +80,13 @@ The rest fell partly for the same reason and partly because it holds the thread 
   put the turn identities in Codex's order, where it already did. Nothing done while applying a turn reads the
   message window's order: the anchors and the thread activity use the last message recorded, and the log's
   lookups go by ID. A live turn, a turn the newest-turn check applies and a turn a send reads back still order
-  the message window as before. The two
-  orderings a read now makes are that one and the settling one after it.
+  the message window as before. The two orderings a read now makes are that one and the settling one after it.
 - **Hashing a turn's activity ID once.** `anchor`, which runs for every user message applied, searched the
   thread activity for the turn's record with the SHA-256 of its ID computed inside the search, so once for every
   record it passed: up to 2,000 hashes for each message. It now computes the ID once. This was most of the
   thread activity's cost.
-- **Placing an activity record.** Every activity record put on a thread rebuilt the whole list: a map of every record,
-  its highest sequence, a sort and a slice, up to 2,000 records each time and several times a turn. The
+- **Placing an activity record.** Every activity record put on a thread rebuilt the whole list: a map of every
+  record, its highest sequence, a sort and a slice, up to 2,000 records each time and several times a turn. The
   projection now remembers the list it last installed on the thread. While the thread still holds that list, it
   is already the merge's output, in sequence order with one record per ID, so a known record is replaced in
   place by the same merge rule and a new one is appended with the next sequence, dropping the oldest and marking
@@ -94,8 +95,8 @@ The rest fell partly for the same reason and partly because it holds the thread 
 
 ## What a read shows
 
-- **Message order and identities.** The message window's final order is the same: a rank that is unique for every message
-  in Codex's turn identities, and a stable sort that keeps the rest in the order they were recorded. Identities
+- **Message order and identities.** The message window's final order is the same: a rank that is unique for every
+  message in Codex's turn identities, and a stable sort that keeps the rest in the order they were recorded. Identities
   are reconciled by the same code in the same order. Every adapter contract case and every Codex history,
   identity, rollback and newest-turn test passes unchanged.
 - **Takeover detection.** The Codex session log's entries are the one place where the old per-turn ordering could
@@ -117,8 +118,8 @@ left at 2,000 turns is spread thin. One inspector profile of an open there put t
 activity's searches of up to 2,000 records for each item, about 0.4 s; identity reconciliation's check that a new
 message ID is not used anywhere in the thread, about 0.25 s, which does grow with the square of the thread but is
 small at these sizes; a zod schema built afresh for every message's content, about 0.2 s; and the message log's
-search of the message window for each message recorded, about 0.1 s. None is worth an issue of its own at these sizes;
-the identity check is the one that would show first on a much longer thread.
+search of the message window for each message recorded, about 0.1 s. None is worth an issue of its own at these
+sizes; the identity check is the one that would show first on a much longer thread.
 
 ## What these numbers are not
 
