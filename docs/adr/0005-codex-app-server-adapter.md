@@ -95,7 +95,7 @@ Anything else reads the whole transcript, as it always did. This is the full lis
 - a reply that arrived after the thread moved on;
 - any refusal, or no reply in time. A reply that comes later is dropped, as a late whole read is.
 
-Only a refusal that says Codex does not have the request at all stops Sotto asking on that connection: JSON-RPC's "method not found", or the invalid request naming `thread/turns/list` as an unknown variant that 0.157.1 sends. Codex names an unknown value inside the params the same way, and that refusal is asked again on the next send.
+A refusal that says Codex does not have the request, or does not know a value the request sends, stops Sotto asking on that connection: JSON-RPC's "method not found", or the invalid request naming an unknown variant that 0.157.1 sends for either. The check sends the same values every time, so such a Codex would refuse every send's check and each would cost a whole read on top. Any other refusal is asked again on the next send.
 
 This is not a cache. Nothing is trusted because of when it was read, and the session log is still polled before the check and again before `turn/start`. The coordinator's reconciliation read after Codex accepts a send is unchanged and still whole; it happens only when Codex's own echo has not already settled the send.
 

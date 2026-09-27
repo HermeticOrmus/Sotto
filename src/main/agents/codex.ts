@@ -100,8 +100,7 @@ class Rejected extends Error {
   readonly missingThreadId: string | undefined
   /**
    * The name Codex said it does not know. Codex 0.157.1 answers a request it does not have as an invalid request
-   * naming an unknown variant, and names an unknown value inside the params the same way, so a caller compares it
-   * with the method it asked for.
+   * naming an unknown variant, and names an unknown value inside the params the same way.
    */
   readonly unknownVariant: string | undefined
   /** JSON-RPC's own "method not found". */
@@ -146,7 +145,7 @@ export class CodexAppServerHost implements AgentHost {
   private readonly resuming = new Map<string, Promise<void>>()
   private readonly opening = new Map<string, Promise<void>>()
   private readonly threadReads = new Map<string, Promise<void>>()
-  /** Whether this connection's Codex answers `thread/turns/list`; an older one says the method is unknown once. */
+  /** Whether this connection's Codex answers `thread/turns/list` as Sotto asks for it; one that cannot says so once. */
   private turnsListSupported = true
   private readonly revisions = new Map<string, number>()
   private readonly dispatching = new Set<string>()
@@ -554,8 +553,9 @@ export class CodexAppServerHost implements AgentHost {
         confirmed = true
       })
     } catch (error) {
-      // Any refusal, and a reply that never came, reads the whole transcript.
-      if (error instanceof Rejected && (error.methodNotFound || error.unknownVariant === 'thread/turns/list')) this.turnsListSupported = false
+      // A Codex without the request, or without a value the request sends, answers the same way on every send, so
+      // this connection stops asking. Any refusal, and a reply that never came, reads the whole transcript.
+      if (error instanceof Rejected && (error.methodNotFound || error.unknownVariant)) this.turnsListSupported = false
       return false
     } finally { current = false }
     return confirmed
