@@ -1,19 +1,12 @@
 import React, { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { BrowserBridge, BrowserCapture, BrowserPage } from '../../../shared/browser'
 import { AGENT_MAX_ATTACHMENT_BYTES, AGENT_MAX_ATTACHMENTS, agentAttachmentHandlesSchema } from '../../../shared/agents'
-import { prepareScreenshotDataUrl, wasResized } from '../agents/screenshotResize'
+import { dataUrlBlob, prepareScreenshot, wasResized, type PreparedScreenshot } from '../agents/screenshotResize'
 import type { ThreadDraftStore } from '../agents/threadDraftStore'
 import { stageImage } from '../agents/stagedImages'
 
 const ANSWERING = 'This draft answers a question. Finish that answer before adding browser feedback.'
 const DOES_NOT_FIT = 'This screenshot does not fit in the draft. Remove an attachment or capture a smaller region.'
-
-/** A capture's PNG data URL as bytes, to be staged like any other screenshot. */
-function pngBlob(dataUrl: string): Blob | null {
-  if (!dataUrl.startsWith('data:image/png;base64,')) return null
-  try { return new Blob([Uint8Array.from(atob(dataUrl.slice(dataUrl.indexOf(',') + 1)), character => character.charCodeAt(0))], { type: 'image/png' }) }
-  catch { return null }
-}
 
 /**
  * Append to the latest draft, preserving typing that happened while the page was captured or its screenshot
@@ -22,17 +15,19 @@ function pngBlob(dataUrl: string): Blob | null {
  * added, or when `signal` was aborted meanwhile, in which case the draft is left as it is.
  */
 export async function appendBrowserFeedback(store: ThreadDraftStore, threadId: string, capture: BrowserCapture, comment: string, imagesSupported: boolean,
-  { prepare = prepareScreenshotDataUrl, signal }: { readonly prepare?: typeof prepareScreenshotDataUrl; readonly signal?: AbortSignal } = {}): Promise<string | null> {
+  { prepare = prepareScreenshot, signal }: { readonly prepare?: (image: Blob) => Promise<PreparedScreenshot>; readonly signal?: AbortSignal } = {}): Promise<string | null> {
   if (store.draft(threadId).requestId !== null) return ANSWERING
   if (!imagesSupported) return 'Choose a model with image support before adding a browser screenshot.'
-  const { dataUrl, dimensions } = await prepare(capture.image)
+  // The capture is decoded from its data URL once; its size is then read from these bytes, and they are what is staged when nothing is scaled.
+  const source = dataUrlBlob(capture.image, 'image/png')
+  if (!source) return 'Could not read this screenshot, so nothing was added. Capture the page again.'
+  const prepared = await prepare(source)
   if (signal?.aborted) return null
-  const blob = pngBlob(dataUrl)
-  if (!blob) return 'Could not read this screenshot. Capture the page again.'
+  const { dimensions } = prepared
   const before = store.draft(threadId)
-  if (before.attachments.length >= AGENT_MAX_ATTACHMENTS || before.attachments.reduce((sum, item) => sum + item.sizeBytes, 0) + blob.size > AGENT_MAX_ATTACHMENT_BYTES) return DOES_NOT_FIT
+  if (before.attachments.length >= AGENT_MAX_ATTACHMENTS || before.attachments.reduce((sum, item) => sum + item.sizeBytes, 0) + prepared.blob.size > AGENT_MAX_ATTACHMENT_BYTES) return DOES_NOT_FIT
   let image
-  try { image = await stageImage(threadId, { name: 'Browser feedback.png', mimeType: 'image/png', blob, ...(dimensions ? { dimensions } : {}) }) }
+  try { image = await stageImage(threadId, { name: 'Browser feedback.png', mimeType: 'image/png', ...prepared }) }
   catch (error) { return error instanceof Error ? error.message : 'Could not add this screenshot. Nothing was added. Try again.' }
   if (signal?.aborted) return null
   const current = store.draft(threadId)
