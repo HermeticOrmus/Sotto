@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { AGENT_MAX_ATTACHMENT_BYTES, type AgentAttachmentHandle, type AgentAttachmentStageRequest } from '../../../src/shared/agents'
+import { AGENT_MAX_ATTACHMENT_BYTES, SCREENSHOT_NOT_ITS_TYPE, SCREENSHOT_WRONG_TYPE, SCREENSHOT_TOO_LARGE, SCREENSHOTS_TOO_LARGE_IN_TOTAL, type AgentAttachmentHandle, type AgentAttachmentStageRequest } from '../../../src/shared/agents'
 import { ScreenshotInput } from '../../../src/renderer/src/agents/ScreenshotInput'
 import { handleOf } from '../../fixtures/stagedImages'
 
@@ -45,7 +45,7 @@ describe('screenshot attachment input', () => {
   it('rejects unsupported files and models with useful feedback', async () => {
     const view = render(<Harness />)
     fireEvent.change(screen.getByLabelText('Screenshot files'), { target: { files: [new File(['text'], 'note.txt', { type: 'text/plain' })] } })
-    expect(await screen.findByRole('alert')).toHaveTextContent('PNG, JPEG, GIF, or WebP')
+    expect(await screen.findByRole('alert')).toHaveTextContent(SCREENSHOT_WRONG_TYPE)
     view.rerender(<Harness supported={false} />)
     expect(screen.getByRole('button', { name: 'Attach screenshots' })).toBeDisabled()
     fireEvent.paste(screen.getByRole('textbox'), { clipboardData: { items: [{ kind: 'file', getAsFile: file }] } })
@@ -53,11 +53,11 @@ describe('screenshot attachment input', () => {
     expect(staged).toEqual([])
   })
   it('says so when main refuses to stage an image, and attaches nothing', async () => {
-    vi.stubGlobal('sotto', { agents: { stageAttachment: vi.fn(async () => { throw new Error('The image content does not match its file type.') }) } })
+    vi.stubGlobal('sotto', { agents: { stageAttachment: vi.fn(async () => { throw new Error(SCREENSHOT_NOT_ITS_TYPE) }) } })
     const change = vi.fn()
     render(<ScreenshotInput target="workshop" attachments={[]} onChange={change} disabled={false} supported><textarea aria-label="Prompt" /></ScreenshotInput>)
     fireEvent.change(screen.getByLabelText('Screenshot files'), { target: { files: [file()] } })
-    expect(await screen.findByRole('alert')).toHaveTextContent('The image content does not match its file type.')
+    expect(await screen.findByRole('alert')).toHaveTextContent(SCREENSHOT_NOT_ITS_TYPE)
     expect(change).not.toHaveBeenCalled()
   })
   it('refuses dropped screenshots that total more than 20 MB before staging any of them', () => {
@@ -65,7 +65,7 @@ describe('screenshot attachment input', () => {
     const read = vi.fn(() => () => undefined)
     render(<ScreenshotInput target="workshop" attachments={[]} onChange={change} onRead={read} disabled={false} supported><textarea aria-label="Prompt" /></ScreenshotInput>)
     fireEvent.drop(screen.getByRole('textbox'), { dataTransfer: { files: [sized('a.png', 8 * MB), sized('b.png', 8 * MB), sized('c.png', 8 * MB)], types: ['Files'] } })
-    expect(screen.getByRole('alert')).toHaveTextContent('Screenshots must total 20 MB or less. Remove an image or choose smaller files.')
+    expect(screen.getByRole('alert')).toHaveTextContent(SCREENSHOTS_TOO_LARGE_IN_TOTAL)
     expect(staged).toEqual([])
     expect(read).not.toHaveBeenCalled()
     expect(change).not.toHaveBeenCalled()
@@ -89,7 +89,7 @@ describe('screenshot attachment input', () => {
   it('names the oversized screenshot rather than the total when one file is over 10 MB', () => {
     render(<Harness />)
     fireEvent.drop(screen.getByRole('textbox'), { dataTransfer: { files: [sized('huge.png', 25 * MB)], types: ['Files'] } })
-    expect(screen.getByRole('alert')).toHaveTextContent('Each screenshot must be 10 MB or smaller.')
+    expect(screen.getByRole('alert')).toHaveTextContent(SCREENSHOT_TOO_LARGE)
     expect(staged).toEqual([])
   })
   it('does not attach an in-flight staging to a thread after the input unmounts', async () => {

@@ -312,7 +312,7 @@ describe('browser feedback', () => {
     const failing = vi.fn(async (): Promise<string | null> => { throw new Error('bridge gone') })
     rerender(<BrowserFeedback page={page} initial={capture} bridge={browser.bridge} onAdd={failing} onClose={close} />)
     fireEvent.click(button)
-    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Could not add this screenshot to the draft. Nothing was added. Try again.'))
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Could not add this screenshot. Nothing was attached. Try again.'))
     await waitFor(() => expect(button).toBeEnabled())
   })
   it('selects a region entirely from the keyboard and binds it to the captured frame', async () => {

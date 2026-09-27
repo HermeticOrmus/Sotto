@@ -1,4 +1,4 @@
-import { agentCommandSchema, agentShell, isThreadProviderConnected, type AgentAttachmentContent, type AgentAttachmentContentRequest, type AgentAttachmentHandle, type AgentAttachmentStageRequest, type AgentAttachmentUpload, type AgentCommand, type AgentState, type AgentThreadDetail, type AgentThreadDetailUpdate, type AgentAttachmentPreviewRequest, type AgentAttachmentPreviewResult } from '../../shared/agents'
+import { agentCommandSchema, HOST_CANNOT_STAGE_SCREENSHOTS, agentShell, isThreadProviderConnected, type AgentAttachmentContent, type AgentAttachmentContentRequest, type AgentAttachmentHandle, type AgentAttachmentStageRequest, type AgentAttachmentUpload, type AgentCommand, type AgentState, type AgentThreadDetail, type AgentThreadDetailUpdate, type AgentAttachmentPreviewRequest, type AgentAttachmentPreviewResult } from '../../shared/agents'
 import { clientAgentState, hostEntityKey, mapHostReferences, parseHostEntityKey } from '../../shared/clientIdentity'
 import type { ClientIdentity, HostService } from '../agents/hostService'
 import type { GitRefsPage, GitRefsRequest } from '../../shared/gitRefs'
@@ -130,7 +130,7 @@ export class DesktopHostRouter {
   /** An image goes to the host that runs the thread it is for, or the selected host for the coordinator's composer. */
   async stageAttachment(request: AgentAttachmentStageRequest): Promise<AgentAttachmentHandle> {
     const { connection } = this.target(request.threadId ?? undefined)
-    if (!connection.stage) throw new Error('This host cannot keep screenshots. Update Sotto there, then attach them again. Nothing was attached.')
+    if (!connection.stage) throw new Error(HOST_CANNOT_STAGE_SCREENSHOTS)
     if (connection.available?.() === false) throw new Error('This host is disconnected. Connect again before attaching images. Nothing was attached.')
     return connection.stage({ name: request.name, mimeType: request.mimeType, bytes: request.bytes, ...(request.dimensions ? { dimensions: request.dimensions } : {}) })
   }

@@ -172,4 +172,18 @@ describe('AgentStateBroadcaster', () => {
     expect(broadcaster.encodeReceipt(fresh()).host.models).toEqual({ revision: 1, omitted: true })
     expect(compare.spy).toHaveBeenCalledTimes(1)
   })
+
+  it('compares afresh when a catalog it compared gains a model in place, rather than reusing the answer', () => {
+    const broadcaster = new AgentStateBroadcaster()
+    const sent: AgentStateBroadcast[] = []
+    const deliver = (payload: AgentStateBroadcast): boolean => { sent.push(payload); return true }
+    broadcaster.send(state([model('gpt-5')]), 'main', deliver)
+    const repeat = state([model('gpt-5')])
+    broadcaster.send(repeat, 'main', deliver)
+    expect(sent[1]!.host.models).toEqual({ revision: 1, omitted: true })
+    // A shell is rebuilt, never edited; this is the edit that assumption rules out.
+    repeat.host.models.push(model('gpt-5-mini'))
+    broadcaster.send(repeat, 'main', deliver)
+    expect(sent[2]!.host.models).toEqual({ revision: 2, models: repeat.host.models })
+  })
 })

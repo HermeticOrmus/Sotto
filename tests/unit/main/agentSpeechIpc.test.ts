@@ -32,7 +32,7 @@ function fixture() {
   disposables.push(registerAgentIpc(ipc, control, { command: command => control.command(command) }, () => [main, widget], 'win32', {
     status: async () => ({ ready: true, completedBytes: 1, totalBytes: 1 }),
     download: async () => ({ ready: true, completedBytes: 1, totalBytes: 1 }),
-  }, grok, kokoro, { receipts: new AgentStateBroadcaster() }))
+  }, grok, kokoro, { encodeReceipt: new AgentStateBroadcaster().encodeReceipt }))
   const invoke = async (channel: string, payload?: unknown, source = main, frame = source.webContents.mainFrame) => listeners.get(channel)!({ sender: source.webContents, senderFrame: frame }, payload)
   // A command answers with a receipt: the shell with its catalog named by revision (issue #323).
   const reply = new AgentStateBroadcaster().encodeReceipt(agentShell(state))

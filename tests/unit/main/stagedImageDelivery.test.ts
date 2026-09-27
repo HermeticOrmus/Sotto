@@ -219,6 +219,38 @@ describe('staged images through the coordinator (ADR-0031)', () => {
     await f.control.privacyChanged()
     expect((await f.files()).sort()).toEqual([`${drafted.digest}.png`, `${pending.digest}.png`].sort())
   })
+  it('keeps, when history is turned off, content a preview names that was attached again since for a draft not saved yet', async () => {
+    const f = await fixture()
+    const bytes = pngOfSize(1024, 20)
+    const sent = await f.stage(bytes, 'Sent.png')
+    await f.control.command({ type: 'manual-send', threadId: 'workshop', text: 'Sent', attachments: [sent] })
+    await expect.poll(async () => (await f.disk('attachment-previews.json')).includes(sent.digest)).toBe(true)
+    // A moment later the user attaches the same screenshot to another draft, and turns history off before it is saved.
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 1000)
+    const again = await f.stage(bytes, 'Again.png')
+    f.setHistory(false)
+    await f.control.privacyChanged()
+    expect(await f.files()).toEqual([`${sent.digest}.png`])
+    const saved = await f.control.command({ type: 'save-thread-draft', threadId: 'docs', draftId: randomUUID(), text: 'Again', attachments: [again], requestId: null })
+    expect(saved.error).toBeNull()
+    expect(saved.threadDrafts).toEqual([expect.objectContaining({ threadId: 'docs', attachments: [again] })])
+  })
+  it('keeps an image an earlier version saved inline in a draft across restarts while history is off', async () => {
+    const f = await fixture(); f.setHistory(false)
+    const bytes = pngOfSize(4096, 21)
+    const inline = { id: 'legacy', name: 'Legacy.png', mimeType: 'image/png', dataUrl: `data:image/png;base64,${bytes.toString('base64')}` }
+    const saved = JSON.parse(await f.disk('agents.json'))
+    saved.threadDrafts = [{ threadId: 'docs', draftId: randomUUID(), text: 'Old draft', attachments: [inline], requestId: null, updatedAt: new Date().toISOString() }]
+    f.control.dispose()
+    await writeFile(join(f.root, 'agents.json'), JSON.stringify(saved))
+    await f.crash()
+    const handle: AgentAttachmentHandle = { ...handleOf(bytes, 'legacy', 'Legacy.png') }
+    expect(f.control.get().threadDrafts).toEqual([expect.objectContaining({ threadId: 'docs', attachments: [handle] })])
+    // Those bytes were on disk already, inside agents.json; moving them to the store is not new content reaching disk.
+    expect(await f.files()).toEqual([`${handle.digest}.png`])
+    await f.crash()
+    expect(f.control.get().threadDrafts).toEqual([expect.objectContaining({ threadId: 'docs', attachments: [handle] })])
+  })
   it('saves a draft’s text without an image no longer kept, and says so', async () => {
     const f = await fixture()
     const kept = await f.stage(pngOfSize(512, 16))

@@ -232,6 +232,8 @@ Answering a question or permission request and creating a project are also part 
 
 **Sent message.** What the user sent from this window, drawn in the transcript where it will be read from the press onwards, with the state of its delivery beside it: queued, sending, unconfirmed or not sent. It becomes an ordinary message when the provider's own history carries it. A refused one comes back to an empty composer, or is offered back when something newer is written there; an unconfirmed one stays in its message, because Sotto will not send it twice. Avoid: "optimistic message", "ghost message".
 
+**Delivery receipt.** Main's record that one draft of a thread was accepted, by thread ID and draft ID: sent to its provider (`deliveredDrafts`) or taken into its follow-up queue (`followupReceipts`). The composer and transcript read it to stop showing that draft as unsent, and main reads it to refuse sending the same draft twice. Distinct from a command receipt, which is main's answer to one command. Avoid: "receipt" alone.
+
 **Answer draft.** Saved choices and text for a particular provider question in its original conversation, recoverable even if the provider closes or changes that question. Retaining or copying an answer does not recreate the question, confirm delivery, or grant authority to send it.
 
 **Follow-up queue.** The ordered messages the user has prepared for a thread after its current provider turn, editable or removable until dispatch. It is distinct from the attention queue and the outbox of already-dispatched commands.

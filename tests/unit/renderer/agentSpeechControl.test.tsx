@@ -13,6 +13,7 @@ import { AgentCredentials } from '../../../src/main/agents/credentials'
 import { E2EAgentHost, e2eAgentReasoner } from '../../../src/main/e2e/agentEffects'
 import { useAttentionReview } from '../../../src/renderer/src/agents/attentionReview'
 import { immediatePublishScheduler } from '../../fixtures/publishScheduler'
+import { agentWireBridge } from '../../fixtures/agentBridge'
 
 const external = vi.hoisted(() => ({ dependencies: null as AgentVoiceDependencies | null }))
 vi.mock('../../../src/renderer/src/e2e/agentVoiceEffects', () => ({ createE2EAgentVoiceEffects: () => external.dependencies }))
@@ -67,7 +68,7 @@ describe('speech interruption from the renderer', () => {
     state.queue = state.host.threads[0]!.requests.map(request => ({ id: request.id, threadId: 'thread', requestId: request.id, kind: request.kind, text: request.text, createdAt: '2026-09-11T00:00:00Z', deferred: false }))
     let receive!: (state: AgentState) => void
     const command = vi.fn<AgentBridge['command']>(async () => state)
-    vi.stubGlobal('sotto', { agents: { get: async () => state, onState: (listener: typeof receive) => { receive = listener; return () => undefined }, command } })
+    vi.stubGlobal('sotto', { agents: agentWireBridge({ get: async () => state, onState: (listener: typeof receive) => { receive = listener; return () => undefined }, command }) })
     let controls!: ReturnType<typeof useAgents>
     function Room() { controls = useAgents(); return null }
     const view = (room: boolean) => <AgentProvider settings={null} dictation={{ status: 'idle' }}>{room ? <Room /> : null}</AgentProvider>
@@ -103,7 +104,7 @@ describe('speech interruption from the renderer', () => {
       if (request.type === 'select-attention') state.queue = [...state.queue].sort((a, b) => Number(b.id === request.itemId) - Number(a.id === request.itemId))
       return structuredClone(state)
     })
-    vi.stubGlobal('sotto', { agents: { get: async () => state, onState: () => () => undefined, command } })
+    vi.stubGlobal('sotto', { agents: agentWireBridge({ get: async () => state, onState: () => () => undefined, command }) })
     let controls!: ReturnType<typeof useAgents>
     function Room() { controls = useAgents(); return null }
     render(<AgentProvider settings={null} dictation={{ status: 'idle' }}><Room /></AgentProvider>)
@@ -153,7 +154,7 @@ describe('speech interruption from the renderer', () => {
       speech: { speak, stop }, createId: () => 'test', setTimer: (callback, delay) => setTimeout(callback, delay), clearTimer: timer => clearTimeout(timer as ReturnType<typeof setTimeout>),
     }
     vi.stubGlobal('sottoE2E', {})
-    vi.stubGlobal('sotto', { agents: { get: async () => state, onState: (listener: typeof receive) => { receive = listener; return () => undefined }, command: async () => state } })
+    vi.stubGlobal('sotto', { agents: agentWireBridge({ get: async () => state, onState: (listener: typeof receive) => { receive = listener; return () => undefined }, command: async () => state }) })
     let controls!: ReturnType<typeof useAgents>
     function Controls() { controls = useAgents(); return null }
     render(<AgentProvider settings={{ ...DEFAULT_SETTINGS, onboardingComplete: true, voiceCoordinatorEnabled: true }} dictation={{ status: 'idle' }}><Controls /></AgentProvider>)
@@ -186,7 +187,7 @@ describe('speech interruption from the renderer', () => {
       speech: { speak, stop: vi.fn() }, createId: () => 'test', setTimer: (callback, delay) => setTimeout(callback, delay), clearTimer: timer => clearTimeout(timer as ReturnType<typeof setTimeout>),
     }
     vi.stubGlobal('sottoE2E', {})
-    vi.stubGlobal('sotto', { agents: { get: async () => state, onState: (listener: typeof receive) => { receive = listener; return () => undefined }, command: async () => state } })
+    vi.stubGlobal('sotto', { agents: agentWireBridge({ get: async () => state, onState: (listener: typeof receive) => { receive = listener; return () => undefined }, command: async () => state }) })
     let controls!: ReturnType<typeof useAgents>
     function Controls() { controls = useAgents(); return null }
     render(<AgentProvider settings={{ ...DEFAULT_SETTINGS, onboardingComplete: true }} dictation={{ status: 'idle' }}><Controls /></AgentProvider>)
