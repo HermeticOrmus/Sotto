@@ -17,7 +17,7 @@ import { handleOf, PIXEL_DATA_URL, PIXEL_PNG, stageInto } from '../../fixtures/s
 const image = handleOf(PIXEL_PNG, 'image', 'Screenshot.png')
 /** The preview store over a real attachment store on `root`, with the pixel image staged in it. */
 async function previews(root: string, historyEnabled: () => boolean = () => true, now: () => number = Date.now) {
-  const content = new AttachmentStore(root, historyEnabled, now); await content.load()
+  const content = new AttachmentStore(root, { historyEnabled, now }); await content.load()
   await stageInto(content, PIXEL_PNG)
   const store = new AttachmentPreviews(root, content, historyEnabled, now); await store.load()
   return store
@@ -169,7 +169,7 @@ describe('app-owned submitted attachment previews', () => {
     await writeFile(join(root, 'attachment-previews.json.tmp-123-11111111-1111-4111-8111-111111111111'), PIXEL_DATA_URL)
     await writeFile(join(root, 'agents.json.tmp-123-11111111-1111-4111-8111-111111111111'), 'other store')
     await writeFile(join(root, 'attachment-previews.json.tmp-personal'), 'unrelated file')
-    await new AttachmentPreviews(root, new AttachmentStore(root, () => false), () => false).load()
+    await new AttachmentPreviews(root, new AttachmentStore(root, { historyEnabled: () => false }), () => false).load()
     expect(await readdir(root)).toEqual(expect.arrayContaining(['attachment-previews.json', 'attachment-previews.json.tmp-personal',
       'agents.json.tmp-123-11111111-1111-4111-8111-111111111111']))
     expect(await readdir(root)).toHaveLength(3)

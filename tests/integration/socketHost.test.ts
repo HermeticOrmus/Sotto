@@ -13,7 +13,7 @@ import { startHeadlessHost } from '../../src/host'
 import { SocketHostService } from '../../src/main/agents/socketHostService'
 import { E2EAgentHost, e2eAgentReasoner } from '../../src/main/e2e/agentEffects'
 import { execFileSync } from 'node:child_process'
-import type { AgentCommand, AgentThreadDetail, AgentThreadDetailDelta, AgentThreadDetailUpdate } from '../../src/shared/agents'
+import { SCREENSHOT_NOT_ITS_TYPE, type AgentCommand, type AgentThreadDetail, type AgentThreadDetailDelta, type AgentThreadDetailUpdate } from '../../src/shared/agents'
 import { hostVersionMismatch } from '../../src/shared/hostProtocol'
 import { version as packageVersion } from '../../package.json'
 import { HOST_BUSY, HOST_EVENT_PAGE_SIZE } from '../../src/shared/hostProtocol'
@@ -521,8 +521,14 @@ describe('staged images over the socket (ADR-0031)', () => {
     // device, as it does previews, and the client queues them behind one another, so none is refused as busy.
     const many = await Promise.all(Array.from({ length: 4 }, () => client.attachmentContent(handle.digest)))
     expect(many.map(item => item?.bytes.byteLength)).toEqual(Array(4).fill(bytes.length))
+    // Staging takes the same one-at-a-time guard, and the client queues it with the reads, so several at once all land.
+    const staged = await Promise.all(Array.from({ length: 3 }, (_, index) => {
+      const each = Buffer.from(bytes); each[bytes.length - 1] = index
+      return client.stageAttachment({ name: `Remote ${index}.png`, mimeType: 'image/png', bytes: each })
+    }).concat([client.attachmentContent(handle.digest).then(() => handle)]))
+    expect(new Set(staged.map(item => item.digest)).size).toBe(4)
     // Content that is not the image it claims is refused on the host, whoever sent it, and the desktop is told why.
-    await expect(client.stageAttachment({ name: 'Fake.png', mimeType: 'image/png', bytes: Buffer.from('<svg/>') })).rejects.toMatchObject({ code: 'invalid_request', message: 'The image content does not match its file type.' })
+    await expect(client.stageAttachment({ name: 'Fake.png', mimeType: 'image/png', bytes: Buffer.from('<svg/>') })).rejects.toMatchObject({ code: 'invalid_request', message: SCREENSHOT_NOT_ITS_TYPE })
   })
 })
 
