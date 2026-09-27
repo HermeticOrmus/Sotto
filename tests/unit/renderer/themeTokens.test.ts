@@ -159,6 +159,7 @@ describe('main-window theme tokens', () => {
     const owned = [
       'src/renderer/src/features/settings/hosts.css',
       'src/renderer/src/features/settings/gitSettings.css',
+      'src/renderer/src/features/settings/phones.css',
       'src/renderer/src/agents/hostBadge.css',
       'src/renderer/src/agents/requests/requests.css',
       'src/renderer/src/styles/global.css',
