@@ -24,7 +24,7 @@ import { verifyFileMentions } from './promptFiles'
 import { ClaudeSubscriptionClient } from './subscriptionClaude'
 import { ClaudeProtocol, ClaudeRejected, object, type ClaudeFrame } from './claudeProtocol'
 import { claudeTurnFailure } from './claudeTurnFailure'
-import { authoredClaudeUser, claudeDigest, ClaudeSessionLog, claudeText, selfStartedClaudeTurn } from './claudeSessionLog'
+import { authoredClaudeUser, claudeDigest, ClaudeSessionLog, claudeText } from './claudeSessionLog'
 import { claudeAnswer, claudeDenial, claudePending, type ClaudePending } from './claudeRequests'
 import { unreadableRequest } from './nativeRequests'
 import { effortAfterChange, validatePromptAttachments, validateThreadOptions } from './threadOptions'
@@ -859,10 +859,11 @@ export class ClaudeStreamJsonHost implements AgentHost {
         this.acknowledgements.get(uuid)?.()
       }
     }
-    // Claude Code answers some prompts it gives itself, such as a report once background work ends. Its result
+    // Claude Code answers some prompts it gives itself, such as a report once background work ends. It sends no
+    // prompt for these, so the turn first shows as a model request made while the thread was not running. Its result
     // ends the turn the way it ends one Sotto sent, and a stop ends it without reading as a failure. A prompt of
-    // Sotto's waiting to go out sees the thread running and is refused rather than sent into the report.
-    else if (selfStartedClaudeTurn(frame) && thread.status !== 'running' && !compactionPending(alias.compaction)) {
+    // Sotto's waiting to go out sees the thread running and is refused rather than queued behind the report.
+    if (frame.type === 'system' && frame.subtype === 'status' && frame.status === 'requesting' && thread.status !== 'running' && !compactionPending(alias.compaction)) {
       thread.status = 'running'
       if (typeof frame.uuid === 'string' && frame.uuid) { thread.lastTurn = { id: frame.uuid, status: 'running' }; this.selfTurns.set(id, frame.uuid) }
     }
@@ -898,8 +899,9 @@ export class ClaudeStreamJsonHost implements AgentHost {
       this.usage.claudeResult(id, frame)
       thread.usage = this.usage.get(id)
       this.messageLog.dropEmpty(id); this.streaming.delete(id)
-      // Claude Code leaves its own prompt's identity off the result of a turn it gave itself.
-      const origin = typeof frame.user_message_uuid === 'string' ? frame.user_message_uuid : this.selfTurns.get(id) ?? alias.origins.at(-1)?.uuid
+      // Claude Code leaves its own prompt's identity off the result of a turn it gave itself and says where that prompt
+      // came from instead, so such a result never ends a prompt of Sotto's still waiting to go out.
+      const origin = typeof frame.user_message_uuid === 'string' ? frame.user_message_uuid : this.selfTurns.get(id) ?? (object(frame.origin) ? undefined : alias.origins.at(-1)?.uuid)
       this.selfTurns.delete(id)
       // A turn the user stopped ends in an error result, which is no failure of Claude Code's.
       const stopped = this.interrupting.has(id) || thread.lastTurn?.status === 'interrupted' && (!origin || thread.lastTurn.id === origin)

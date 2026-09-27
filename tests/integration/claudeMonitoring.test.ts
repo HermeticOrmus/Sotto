@@ -119,9 +119,11 @@ it('keeps background work through the turn result and clears it on interrupt, an
   expect((await thread(f)).backgroundWork ?? []).toEqual([])
 })
 
-// Claude Code files a finished task as a prompt of its own, answers it unasked, and leaves its identity off the result.
-const report = { type: 'user', uuid: '4b7c1c1e-5f3a-4b8e-9d51-2f0c0f6f9a11', parent_tool_use_id: null, origin: { kind: 'task-notification' },
-  message: { role: 'user', content: '<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n</task-notification>' } }
+// Claude Code 2.1.283 answers a finished task with a turn of its own and sends no prompt for it: the turn starts as a
+// model request the thread did not make, and its result says where the prompt came from instead of which prompt it was.
+const reporting = { type: 'system', subtype: 'status', status: 'requesting', uuid: '4b7c1c1e-5f3a-4b8e-9d51-2f0c0f6f9a11' }
+const reported = { type: 'result', subtype: 'success', is_error: false, result: 'The review found nothing.', origin: { kind: 'task-notification' } }
+const promptTurn = async (f: Awaited<ReturnType<typeof fixture>>) => (await thread(f)).activities?.find(activity => activity.kind === 'turn' && activity.turnId === 'prompt')?.status
 async function prompted(f: Awaited<ReturnType<typeof fixture>>) {
   expect(await f.host.execute({ type: 'send', commandId: 'send', messageId: 'prompt', threadId: 'thread', text: 'Review the diff in the background.' })).toEqual({ accepted: true })
   await f.driver.backgroundWork!.completeLeaving('thread', 'Left an agent running.', 'Review the diff')
@@ -129,21 +131,37 @@ async function prompted(f: Awaited<ReturnType<typeof fixture>>) {
   expect((await thread(f)).backgroundWork).toHaveLength(1)
   await f.driver.backgroundWork!.end('thread')
   await expect.poll(async () => (await thread(f)).backgroundWork ?? []).toEqual([])
-  await raw(f, report)
+  await raw(f, reporting)
   await expect.poll(async () => (await thread(f)).status).toBe('running')
 }
 
 it('shows the turn Claude Code starts on its own to report finished work as running until its result', async () => {
   const f = await fixture()
   await prompted(f)
-  expect((await thread(f)).lastTurn).toEqual({ id: report.uuid, status: 'running' })
+  expect((await thread(f)).lastTurn).toEqual({ id: reporting.uuid, status: 'running' })
   await f.action('thread', { type: 'raw-burst', frames: [
     { type: 'stream_event', event: { type: 'message_start', message: { id: 'report', role: 'assistant' } } },
     { type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'The review found nothing.' } } },
-    { type: 'result', subtype: 'success', is_error: false, result: 'The review found nothing.' }] })
+    reported] })
   await expect.poll(async () => (await thread(f)).status).toBe('idle')
-  expect((await thread(f)).lastTurn).toEqual({ id: report.uuid, status: 'completed' })
+  expect((await thread(f)).lastTurn).toEqual({ id: reporting.uuid, status: 'completed' })
   await expect.poll(async () => (await thread(f)).messages.at(-1)?.text).toBe('The review found nothing.')
+})
+
+it('starts a prompt that waited behind a turn Claude Code gave itself instead of ending it with that turn', async () => {
+  const f = await fixture()
+  // Claude Code holds a prompt that arrives as its own turn begins and hands it back once that turn's result is out.
+  await writeFile(join(f.root, 'script.json'), JSON.stringify({ delay: 1000 }))
+  const sent = f.host.execute({ type: 'send', commandId: 'send', messageId: 'prompt', threadId: 'thread', text: 'Anything new?' })
+  await expect.poll(async () => (await thread(f)).status).toBe('running')
+  await raw(f, reported)
+  await expect.poll(async () => (await thread(f)).status).toBe('idle')
+  expect(await sent).toEqual({ accepted: true })
+  expect((await thread(f)).status).toBe('running')
+  expect((await thread(f)).lastTurn?.status).toBe('running')
+  expect(await promptTurn(f)).toBe('running')
+  await f.driver.completeTurn('thread', 'Nothing new.')
+  await expect.poll(async () => promptTurn(f)).toBe('completed')
 })
 
 it('stops a turn Claude Code started on its own without calling it a failure', async () => {
@@ -155,8 +173,9 @@ it('stops a turn Claude Code started on its own without calling it a failure', a
   await raw(f, agent)
   await expect.poll(async () => (await thread(f)).backgroundWork?.length).toBe(1)
   expect((await thread(f)).status).toBe('idle')
-  expect((await thread(f)).lastTurn).toEqual({ id: report.uuid, status: 'interrupted' })
+  expect((await thread(f)).lastTurn).toEqual({ id: reporting.uuid, status: 'interrupted' })
   expect((await f.host.snapshot()).error).toBeUndefined()
+  expect(await promptTurn(f)).toBe('completed')
 })
 
 // A shell left running in the background: stopping the CLI under it would stop the command too.
