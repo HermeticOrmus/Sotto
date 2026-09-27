@@ -96,6 +96,13 @@ function revisionOf(catalog: unknown): number | undefined {
     ? (catalog as { revision: number }).revision : undefined
 }
 
+/** Each catalog `state` names, as `key@revision` under the keys main counts revisions by. */
+function catalogRevisions(state: AgentState | AgentCommandReceipt): string[] {
+  const named = (key: string, catalog: unknown): string => `${key}@${revisionOf(catalog) ?? '?'}`
+  return [named(hostCatalogKey(state.host.hostId), state.host.models),
+    ...(state.host.clientHosts ?? []).map(client => named(clientCatalogKey(client.hostId), client.models))]
+}
+
 /**
  * `state` with every catalog put back, or undefined when one names a revision this window does not hold.
  * `options.newer` is `resolveCatalog`'s; `options.fallback` answers for an unresolved catalog instead, once
@@ -160,8 +167,8 @@ function catalogIn(full: AgentState, key: string): AgentModel[] | undefined {
 function createReceiptCompleter(bridge: Pick<AgentBridge, 'get'>, catalogs: CatalogCache, lastRead: LastRead): (reply: AgentCommandReceipt) => Promise<AgentState> {
   const recoveries = new Map<string, Promise<AgentState>>()
   const recover = (reply: AgentCommandReceipt): Promise<AgentState> => {
-    // Main counts revisions per host, so the key names each host beside its revision.
-    const named = JSON.stringify([reply.host.hostId ?? null, revisionOf(reply.host.models), ...(reply.host.clientHosts ?? []).map(client => [client.hostId, revisionOf(client.models)])])
+    // Main counts revisions per catalog key, so the key names each catalog by the key main files it under.
+    const named = catalogRevisions(reply).join(' ')
     let recovery = recoveries.get(named)
     if (recovery === undefined) {
       recovery = bridge.get().catch(() => bridge.get()).then(full => { rememberRecovered(catalogs, reply, full); return full })
