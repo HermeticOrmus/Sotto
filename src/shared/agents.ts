@@ -622,8 +622,8 @@ export type AgentModelCatalogRevision = z.infer<typeof agentModelCatalogRevision
 /**
  * What `AGENT_COMMAND` answers the window with (issue #323, ADR-0028's September 26 amendment): the shell
  * after the command, with its outcome (`error`, `notice`), its evidence (`threadDraftPersistence` for the
- * draft revision saved, `configuration` for the effective settings) and every other changed field whole,
- * but each model catalog named by its catalog revision instead of listed. The revisions come from the same
+ * draft revision saved, `configuration` for the effective settings) and every other field of the shell whole,
+ * changed or not, but each model catalog named by its catalog revision instead of listed. The revisions come from the same
  * counter as the broadcast's, so the page resolves a receipt from the catalogs the broadcast already sent
  * it and recovers through `AGENT_GET` when it holds a different revision.
  */

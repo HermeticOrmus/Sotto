@@ -54,8 +54,9 @@ save, cloned into the window and parsed there by the preload's schema on every s
 
 **`AGENT_COMMAND` now answers with a command receipt.** It is the shell after the command, with its outcome
 (`error`, `notice`), the evidence its caller acts on (`threadDraftPersistence` for the exact draft revision
-saved, `configuration` for the effective settings) and every other changed field whole. The model catalogs are
-the exception: `host.models` and each `host.clientHosts[].models` cross as `{ revision, omitted: true }`, naming
+saved, `configuration` for the effective settings) and every other field of the shell, whole, whether or not
+the command changed it. It is not a diff: without the catalogs the shell is about 2.3 KB, and a diff would need
+an ordering of its own against the broadcast. The model catalogs are the exception: `host.models` and each `host.clientHosts[].models` cross as `{ revision, omitted: true }`, naming
 their catalog revision. `AgentStateBroadcaster.encodeReceipt` encodes it with the same revision counter the broadcast
 uses, so there is one ordering for a catalog, not a second one for replies. A receipt records nothing as sent,
 so the next broadcast to that window is what it would have been without the receipt. The preload parses it
@@ -69,8 +70,8 @@ at once. So does one naming an older revision than the window holds: revisions o
 was built before a broadcast the window already has, and the newer catalog is the one to show. One whose
 revisions the window does not hold at all (nothing broadcast yet, or a catalog this command changed whose
 broadcast has not landed) recovers through `bridge.get()`. Receipts naming the same hosts at the same revisions
-while that is in flight wait for the same answer; the host is part of that match because main counts revisions
-per host. The recovered catalog is filed under the receipt's revisions, where the next receipt or broadcast
+while that is in flight wait for the same answer; the match names each catalog by the key main counts its
+revisions under (`hostCatalogKey`, `clientCatalogKey`). The recovered catalog is filed under the receipt's revisions, where the next receipt or broadcast
 naming them finds it, and a catalog the cache still cannot name is taken from the recovery's own answer. The
 caller always gets the receipt's own fields, never the recovery's. A recovery that fails is asked once more
 before anything else, because main has already run the command and a failed reply tells the user it may not

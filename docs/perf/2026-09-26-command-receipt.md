@@ -33,8 +33,8 @@ Medians of 40 saves after 5 warm-up saves, three runs each, on the development m
 Core Ultra 9 275HX, Node v24.14.1). Other agents' builds and suites were running on it, so read them as
 sizes rather than budgets. "Before" is the same benchmark run once, before it was committed, with
 `agentStateBroadcast.ts`, `ipc.ts`, `src/preload/index.ts`, `src/shared/agents.ts` and `agentStateCatalogs.ts`
-taken from `origin/main` and the handler registered without a receipt encoder. The committed benchmark
-measures only the code as it now is.
+taken from `origin/main` at `e093bd6c` (Release 0.1.19), the commit the branch started from, and the handler
+registered without a receipt encoder. The committed benchmark measures only the code as it now is.
 
 | What was measured | Before | After |
 | --- | ---: | ---: |
