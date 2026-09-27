@@ -22,9 +22,11 @@ What each provider read on September 26, 2026, from its primary sources (links a
 
 The bound is one long edge, not a per-provider size. Codex still scales past 2048 itself, and a squarer image at 2576 px can still be over Claude's token budget; the provider does the rest. That way the composer never removes a pixel any model Sotto sends screenshots to would read.
 
-Each attachment records its original and sent sizes in pixels, and nothing else about the image (since [ADR-0031](0031-images-are-staged-once-and-carried-by-handle.md), on its handle; the scaled copy is what is staged), so the chip can say **Resized to** and the sent size, and give both sizes in its tooltip and to a screen reader.
+Each attachment records its original and sent sizes in pixels, and nothing else about the image (since [ADR-0031](0031-images-are-staged-once-and-carried-by-handle.md), on its handle; the scaled copy is what is staged), so the chip can say **Resized from** the size before **to** the sent size, where a keyboard user sees both, and a screen reader reads them as words.
 
-The work happens in the renderer on Chromium's own decoder and an offscreen canvas. It touches no host and adds no dependency.
+The work happens in the renderer on Chromium's own decoder and an offscreen canvas. It touches no host and adds no dependency. An image whose first bytes name more pixels than Chromium's largest canvas, 16384 x 16384, is never decoded: it would take more than a gigabyte in the renderer, and the file size limit alone does not stop a flat 10 MB PNG naming that many. It goes as the user attached it, as it did before this decision.
+
+Added after the review of #349: the decision on #321 did not include the rule that a scaled copy is used only when it is smaller in bytes, which leaves a flat 3840 x 2160 capture of text and panels at full size. It stays, because the point of the bound is bytes carried and a larger copy defeats it, and the provider scales that image itself. Zach can overrule it on the pull request that records this.
 
 ## Consequences
 
