@@ -15,7 +15,7 @@ import { describeThreads } from '../../../src/renderer/src/agents/threadFacts'
 import { AtomicJsonStore } from '../../../src/main/storage/atomicJsonStore'
 import type { AgentBridge, AgentState } from '../../../src/shared/agents'
 import { immediatePublishScheduler } from '../../fixtures/publishScheduler'
-import { agentBridgeFor } from '../../fixtures/agentBridge'
+import { agentBridgeFor, agentWireBridge } from '../../fixtures/agentBridge'
 import { handleOf, PIXEL_PNG, stageInto } from '../../fixtures/stagedImages'
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
@@ -80,7 +80,7 @@ describe('thread draft recovery through the real connection and disk', () => {
       await f.control.command({ type: 'save-thread-draft', threadId: 'workshop', draftId: newId, text: 'Independent newer draft' })
       await f.control.command({ type: 'select-thread', threadId: 'workshop' })
       expect((await f.disk()).deliveries).toContainEqual(expect.objectContaining({ draftId: oldId, status: 'uncertain' }))
-      vi.stubGlobal('sotto', { agents: f.bridge })
+      vi.stubGlobal('sotto', { agents: agentWireBridge(f.bridge) })
       render(<AgentProvider settings={null} dictation={{ status: 'idle' }}><ThreadsView onOpenAgents={() => undefined} /></AgentProvider>)
       const check = await screen.findByRole('button', { name: 'Check again' })
       expect(screen.getByLabelText('Pending message')).not.toHaveTextContent('Original unconfirmed prompt')
@@ -176,7 +176,7 @@ describe('thread draft recovery through the real connection and disk', () => {
     let spy: ReturnType<typeof vi.spyOn> | undefined
     try {
       await f.control.command({ type: 'select-thread', threadId: 'workshop' })
-      vi.stubGlobal('sotto', { agents: f.bridge })
+      vi.stubGlobal('sotto', { agents: agentWireBridge(f.bridge) })
       const view = render(page(true))
       await screen.findByRole('textbox', { name: 'Prompt', exact: true })
       const store = controls.threadDrafts
@@ -341,7 +341,7 @@ describe('thread navigation through the real renderer connection and controller'
     try {
       await f.control.command({ type: 'select-thread', threadId: 'workshop' })
       f.host.event({ type: 'manual', threadId: 'workshop', text: 'Start the long job' })
-      vi.stubGlobal('sotto', { agents: f.bridge })
+      vi.stubGlobal('sotto', { agents: agentWireBridge(f.bridge) })
       render(<AgentProvider settings={null} dictation={{ status: 'idle' }}><Observer /><ThreadsView onOpenAgents={() => undefined} /></AgentProvider>)
       const prompt = await screen.findByRole('textbox', { name: 'Prompt', exact: true })
       await screen.findByRole('button', { name: 'Stop agent' })

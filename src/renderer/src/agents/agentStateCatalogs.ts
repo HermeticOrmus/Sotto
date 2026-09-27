@@ -65,9 +65,9 @@ function isStateLike(raw: unknown): raw is AgentState {
 }
 
 /**
- * One catalog as it crossed: a bare array is complete already (a whole `AgentState` from a test bridge
- * standing in for main, since the preload refuses one from main's command); a full catalog is cached under its revision; a revision alone is read
- * back from the cache when the window holds that revision, and is otherwise unresolved.
+ * One catalog as it crossed: a full catalog is cached under its revision, and a revision alone is read back
+ * from the cache when the window holds that revision. Anything else is unresolved, a bare array included:
+ * main never sends one on either channel, so the page recovers through `get()` rather than trusting it.
  *
  * `newer` lets a held revision newer than the one named stand in for it. A command receipt asks for that:
  * main's revisions only advance, so a receipt naming an older revision than the window holds was built
@@ -76,7 +76,6 @@ function isStateLike(raw: unknown): raw is AgentState {
  * is one the window missed.
  */
 function resolveCatalog(catalogs: CatalogCache, key: string, catalog: unknown, newer = false): AgentModel[] | undefined {
-  if (Array.isArray(catalog)) return catalog as AgentModel[]
   if (catalog && typeof catalog === 'object') {
     const record = catalog as { revision?: unknown; models?: unknown; omitted?: unknown }
     if (typeof record.revision === 'number' && Array.isArray(record.models)) {

@@ -19,6 +19,7 @@ import {
 } from '../../../src/shared/contracts'
 import { platformCopy } from '../../../src/renderer/src/platformCopy'
 import { DEFAULT_SETTINGS, type AppSettings } from '../../../src/shared/settings'
+import { agentWireBridge } from '../../fixtures/agentBridge'
 
 const OK = Object.freeze({ ok: true as const })
 
@@ -205,7 +206,7 @@ describe('shared main-window frame', () => {
     const state = threadsStateFixture()
     window.sotto = {
       ...bridge,
-      agents: { get: async () => state, command: async () => state, onState: () => () => undefined },
+      agents: agentWireBridge({ get: async () => state, command: async () => state, onState: () => () => undefined }),
     }
     try {
       const { container } = renderApp(bridge)

@@ -14,6 +14,7 @@ import { platformCopy } from '../../../src/renderer/src/platformCopy'
 import { APP_ICON_BRAND, APP_ICON_BRAND_ATTRIBUTE, DEFAULT_WIDGET_PALETTE, themeBrand, widgetPaletteFor } from '../../../src/shared/themeBranding'
 import { DEFAULT_THEME_ID } from '../../../src/shared/themes/library'
 import { threadsStateFixture } from './liveAgentState'
+import { agentWireBridge } from '../../fixtures/agentBridge'
 import {
   WidgetApp,
   WidgetEntry,
@@ -1280,7 +1281,7 @@ describe('WidgetEntry', () => {
     }
     const { bridge, emit } = liveBridge()
     let commits = 0
-    render(<Profiler id="widget" onRender={() => { commits += 1 }}><WidgetEntry bridge={{ ...bridge, agents }} platform="win32" preview={null} /></Profiler>)
+    render(<Profiler id="widget" onRender={() => { commits += 1 }}><WidgetEntry bridge={{ ...bridge, agents: agentWireBridge(agents) }} platform="win32" preview={null} /></Profiler>)
     /** One streamed chunk per shell, each a new state, the way main publishes while an agent works. */
     const stream = (count: number): void => {
       for (let index = 0; index < count; index += 1) {
