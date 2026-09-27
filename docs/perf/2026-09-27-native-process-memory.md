@@ -10,10 +10,11 @@ adapters, records the split, and gives the figures before #322, after it, and af
 In short: with eight held threads of 1,002 messages and no pane, main's heap is about 31 MiB with Claude and
 36 MiB with Codex, its working set about 145 and 155 MiB, the renderer's about 141 and 145 MiB, and the fake
 providers 527 MiB for eight Claude CLIs with their console hosts and 72 MiB for one Codex app server. #322 took
-4.1 MiB off main's heap with eight Claude threads and nothing measurable with Codex; #368 changed no settled
-figure, and shortened what main keeps for a minute after reading eight long Codex histories.
+4.1 MiB off main's heap with eight Claude threads and nothing measurable with Codex. The later changes, #368
+among them, moved no settled figure; they did shorten what main keeps for a minute after reading eight long Codex
+histories, most likely through #352's faster open rather than #368.
 
-## How it runs
+## How it was measured
 
 `tests/e2e/native-process-memory.spec.ts` launches the built app in a throwaway profile. A development-only
 switch in `src/main/index.ts`, `SOTTO_E2E_NATIVE_FIXTURE_ROOT` with `SOTTO_E2E_NATIVE_FIXTURE_EXECUTABLE`, puts
@@ -28,10 +29,12 @@ For each provider and for 1, 4 and 8 threads, one launch:
 1. Connects the provider, leaves the Threads page for Dictate, so no pane shows a thread, and creates the
    threads in one project on the shared checkout. Each thread is sent one prompt, which opens its provider
    session: one CLI a thread for Claude, one app server for all of them for Codex.
-2. Gives every thread a history of 1,002 messages: the first exchange and 500 filler exchanges of 160 and 640
+2. Gives every thread a history of 1,002 messages: the first exchange and 500 filler exchanges of 154 and 616
    characters, the sizes the snapshot-cloning benchmark used.
    - Claude: each CLI streams the 1,000 filler messages and writes them to its session log, as Claude Code
-     does, then finishes the turn (`raw-burst` with `persist`, then `complete`).
+     does, then finishes the turn (`raw-burst` with `persist`, then `complete`). That is one long turn, where
+     the Codex threads have 500 turns, so the Claude figures leave out the per-turn activity a real Claude
+     thread of 500 exchanges would also hold, and the two providers' per-thread costs are not like for like.
    - Codex: the fake adds 500 completed turns to each thread's history the way another Codex on the same
      session would (`native-turn` with `count`). Main then disconnects and connects Codex and watches every
      thread once, which reads each history whole, as the first pane on a thread does after Sotto starts, and
@@ -46,9 +49,9 @@ For each provider and for 1, 4 and 8 threads, one launch:
 6. Goes back to Dictate and measures again (`noPane`).
 
 A measurement waits twenty seconds, forces three rounds of full collections in main (`gc` through `--expose-gc`,
-set at run time) and in the window's renderer (`HeapProfiler.collectGarbage` through `webContents.debugger`),
-waits a second, and takes five samples half a second apart. It reports the median of each: for main and the renderer the working
-set, private bytes (Windows only) and V8 heap used; for everything else the working set. Main's working set
+set at run time) and in the window's renderer (`HeapProfiler.collectGarbage` through `webContents.debugger`), waits
+a second, and takes five samples half a second apart. It reports the median of each: for main and the renderer the
+working set, private bytes (Windows only) and V8 heap used; for everything else the working set. Main's working set
 and private bytes do not follow its heap down at once: the pages it read the histories into stay committed for
 somewhere between twenty seconds and a minute and a half after the collections free them, and then are released
 together. The first no-pane figure usually still carries them, which is why the spec measures no pane a second
@@ -62,8 +65,9 @@ before the pane, the first thread after it. The Electron processes come from
 from `Win32_Process` (`ps` on macOS); on Windows each of them also has a console host, counted beside it. The
 spec prints sizes and counts only. It asserts no size, so it runs only under `SOTTO_PERF_BENCH=1`.
 
-The provider figures are the fake CLIs', Node processes that keep the history they were given. They show what
-Sotto's traffic costs a provider process, not what Claude Code or Codex hold, which is their own business.
+The provider figures are the fake CLIs'. The Codex fake keeps every history it was given; the Claude fake writes
+what it streams to its session log and keeps almost nothing, so its figure is a Node process's baseline. They show
+what Sotto's traffic costs a provider process, not what Claude Code or Codex hold, which is their own business.
 
 ## Results
 
@@ -75,10 +79,12 @@ them the median of five samples, with the range of the three runs in brackets wh
 
 Three revisions were measured, each with this spec and its three supporting changes applied:
 
-- **Before #322**: `37cc4a99`, the first parent of #370's merge, in a scratch worktree with its own `npm ci`.
+- **Before #322**: `37cc4a99`, the first parent of the merge of #370, #322's pull request, in a scratch
+  worktree with its own `npm ci`.
 - **After #322**: `020df63a`, `main` when this work started.
-- **After #368**: this branch with `main` at `7b5fdb84` merged in, which adds #370's follow-ups #375 (#368,
-  refreshes and settings results without held histories) and #374 (#352, opening a long Codex thread).
+- **After #368**: this branch with `main` at `7b5fdb84` merged in. Against `020df63a` that adds #368
+  (refreshes and settings results without held histories), #352 (opening a long Codex thread), #373 (a Claude
+  turn Claude Code starts on its own) and #371 (the host folder browser, which touches no adapter).
 
 The before and after #322 runs were taken back to back; the after #368 runs about an hour later.
 
@@ -111,10 +117,12 @@ the read's copies do not stay in the switch's slot the way an activity snapshot'
 costs main about 1.1 MiB. #368 changed no settled figure beyond the spread, as expected: it removes copies made
 for a refresh or a settings result, which the next emit used to replace anyway.
 
-What #368 and #352 did change is the first no-pane figure, taken twenty seconds after main read eight Codex
-histories: 413 MiB working set before and after #322 (412.8-419.2), 343 MiB after #368 (339.3-403.0), with the
-same 35 MiB heap. That memory is released a minute or so later either way (the `noPane` rows), so it is what
-opening many long Codex threads costs for that minute, not what holding them costs. The same figure for eight
+What did change after #322 is the first no-pane figure, taken twenty seconds after main read eight Codex histories:
+413 MiB working set before and after #322 (412.8-419.2), 343 MiB after #368 (339.3-403.0), with the same 35 MiB
+heap. That memory is released a minute or so later either way (the `noPane` rows), so it is what opening many long
+Codex threads costs for that minute, not what holding them costs. Which change moved it was not measured on its
+own: #352 rewrote how a long Codex read is applied and is the likely cause, and #368 and #373 are in the same
+build. With three runs and a range reaching 403 MiB, it is a hint rather than a result. The same figure for eight
 Claude threads is 217 MiB after #322 against 151 MiB before; a burst of streamed history leaves its pages on a
 different schedule, and the number says more about when V8 decommits than about what is held.
 
@@ -155,8 +163,10 @@ The provider figures did not change between revisions beyond the spread.
 
 The other Electron processes do not depend on threads or panes: the GPU process 111-118 MiB, the utility process
 48 MiB, and one other renderer, the floating widget, 107-113 MiB once settled (about 152 MiB in the first
-measurement after launch). A whole Sotto with eight held Claude threads and no pane comes to about 1,090 MiB,
-of which the providers are 527; with eight Codex threads, about 650 MiB.
+measurement after launch). Added up, the working sets of a whole Sotto with eight held Claude threads and no
+pane come to about 1,090 MiB, of which the providers are 527; with eight Codex threads, about 650 MiB. A sum of
+working sets counts shared pages once for every process that maps them, so these totals overstate what the
+machine gives Sotto.
 
 ### Spread
 
@@ -164,7 +174,7 @@ Heaps agree across the three runs of a revision to within 0.3 MiB. Settled worki
 to within about 5 MiB, and the fake Claude processes to within about 20 MiB at eight. The first no-pane figure is
 the one to distrust: its range reaches 60 MiB, depending on whether main had already let its pages go.
 
-## Rerun
+## Re-run
 
 On an idle machine, after a build:
 
