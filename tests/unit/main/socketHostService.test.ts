@@ -24,7 +24,7 @@ async function hostAnswering(health: unknown): Promise<string> {
 afterEach(async () => { await new Promise<void>(resolve => server ? server.close(() => resolve()) : resolve()); server = undefined })
 
 const hostId = randomUUID()
-const frozen = { v: 1, status: 'ready', hostId, pid: 4242, port: 4319, sottoVersion: '0.1.16', features: ['detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request'] }
+const frozen = { v: 1, status: 'ready', hostId, pid: 4242, port: 4319, sottoVersion: '0.1.16', features: ['detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'host-folders'] }
 
 describe('SocketHostService version check', () => {
   it('names a host from before protocol v1 froze and says how to start the new version, before sending it anything', async () => {
@@ -74,6 +74,16 @@ describe('SocketHostService git-refs feature', () => {
     // A host from before staged images is sent no image, and has none to hand back.
     await expect(client.stageAttachment({ name: 'Shot.png', mimeType: 'image/png', bytes: new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]) })).rejects.toMatchObject({ code: 'version_mismatch' })
     await expect(client.attachmentContent('a'.repeat(64))).resolves.toBeNull()
+    expect(requested).toEqual(['/v1/health', '/v1/session'])
+  })
+})
+
+describe('SocketHostService host-folders feature', () => {
+  it('sends host-folders to no host that does not list the feature, and names the version instead', async () => {
+    const url = await hostAnswering({ ...frozen, features: ['detail-delta'] })
+    const client = new SocketHostService({ url, token: 'paired-token', owned: true })
+    await expect(client.connect()).rejects.toMatchObject({ code: 'unauthenticated' })
+    await expect(client.hostFolders({})).rejects.toMatchObject({ code: 'version_mismatch', message: hostVersionMismatch(packageVersion, '0.1.16', true) })
     expect(requested).toEqual(['/v1/health', '/v1/session'])
   })
 })

@@ -419,6 +419,7 @@ export class DesktopHosts {
       detail: id => socket.readThreadDetail(id), preview: request => socket.attachmentPreview(request), observe: ids => socket.observe(ids),
       stage: image => socket.stageAttachment(image), content: digest => socket.attachmentContent(digest),
       gitRefs: request => socket.gitRefs(request), gitChangedFiles: request => socket.gitChangedFiles(request), gitPullRequest: request => socket.gitPullRequest(request),
+      hostFolders: request => socket.hostFolders(request),
       subscribeDetail: listener => socket.subscribeThreadDetail(listener), available: () => connected,
     })
     active.registeredHostId = hello.hostId

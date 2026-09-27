@@ -222,6 +222,7 @@ export function SidebarFrame({ state, command, mode, onMode, label, query, searc
         onKeyDown={event => { if (event.key === 'Escape' && query) { event.preventDefault(); onQuery('') } }} />
       {query ? <button type="button" className="threads-search__clear tt-focusable" aria-label="Clear search" title="Clear search" onClick={() => onQuery('')}><X size={14} /></button> : null}
     </label>
+    {addProject.dialog}
     {addProject.error ? <p className="thread-nav__error" role="alert">{addProject.error}<button type="button" className="thread-nav__action tt-focusable" aria-label="Dismiss" onClick={addProject.clearError}><X size={14} aria-hidden="true" /></button></p> : null}
     {extraError ? <p className="thread-nav__error" role="alert">{extraError}{onDismissExtraError ? <button type="button" className="thread-nav__action tt-focusable" aria-label="Dismiss" onClick={onDismissExtraError}><X size={14} aria-hidden="true" /></button> : null}</p> : null}
     <div className="thread-nav__scroll">{children}</div>
