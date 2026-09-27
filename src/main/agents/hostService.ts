@@ -5,6 +5,8 @@ import type { StoredThreadEvent } from '../../shared/threadEvents'
 import type { GitRefsPage, GitRefsRequest } from '../../shared/gitRefs'
 import type { GitChangedFiles, GitChangedFilesRequest } from '../../shared/gitChangedFiles'
 import type { GitPullRequestDetail, GitPullRequestRequest } from '../../shared/gitPullRequests'
+import type { HostFoldersRequest, HostFoldersResult } from '../../shared/hostFolders'
+import { listHostFolders } from './hostFolders'
 
 /**
  * Who is speaking to the host. The desktop window on this machine is `ipc`; a paired remote client
@@ -50,6 +52,8 @@ export interface HostService {
   gitChangedFiles?(request: GitChangedFilesRequest): Promise<GitChangedFiles>
   /** One pull request of a thread's, for the Pull request surface and its dialogs (ADR-0027). */
   gitPullRequest?(request: GitPullRequestRequest): Promise<GitPullRequestDetail | null>
+  /** One folder's subfolders on this host, for the Add project dialog's folder browser. */
+  hostFolders?(request: HostFoldersRequest): Promise<HostFoldersResult>
 }
 
 /** The part of the event store a client is allowed to read through the host. */
@@ -140,6 +144,9 @@ export class LocalHostService implements HostService {
     if (!this.control.gitPullRequest) return Promise.reject(new Error('Pull requests are unavailable on this host.'))
     return this.control.gitPullRequest(request)
   }
+  // The folder browser reads this machine, not the coordinator, so it goes straight to the filesystem
+  // rather than through `LocalHostControl`.
+  hostFolders(request: HostFoldersRequest): Promise<HostFoldersResult> { return listHostFolders(request) }
   command(command: AgentCommand, client: ClientIdentity): Promise<AgentState> {
     if (command.type === 'observe-threads') {
       if (command.threadIds.length) this.observations.set(client.clientId, command.threadIds)

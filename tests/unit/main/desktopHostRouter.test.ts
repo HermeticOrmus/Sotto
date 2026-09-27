@@ -128,6 +128,27 @@ describe('desktop host routing', () => {
     expect(router.shell().activeThreadId).toBe(hostEntityKey(offline.connection.hostId, 'thread'))
     expect(offline.command).not.toHaveBeenCalled()
   })
+  it('sends host-folders to the named host, not the selected one, and names the trouble when it cannot', async () => {
+    const router = new DesktopHostRouter(emptyDesktopState), local = fixture(LOCAL, 'local'), remote = fixture(REMOTE, 'remote')
+    const hostFolders = { local: vi.fn(async () => ({ status: 'listed' as const, path: 'C:\\', home: 'C:\\Users\\local', separator: '\\' as const, crumbs: [{ name: 'This computer', path: null }], folders: [], truncated: false })),
+      remote: vi.fn(async () => ({ status: 'listed' as const, path: '/repo', home: '/home/forge', separator: '/' as const, crumbs: [{ name: '/', path: '/' }], folders: [], truncated: false })) }
+    router.add({ ...local.connection, hostFolders: hostFolders.local })
+    router.add({ ...remote.connection, hostFolders: hostFolders.remote })
+    router.select(REMOTE) // selection must not matter: the request names its own host
+    const result = await router.hostFolders({ hostId: LOCAL, path: undefined })
+    expect(result.path).toBe('C:\\')
+    expect(hostFolders.local).toHaveBeenCalledWith({})
+    expect(hostFolders.remote).not.toHaveBeenCalled()
+    await router.hostFolders({ hostId: REMOTE, path: '/repo' })
+    expect(hostFolders.remote).toHaveBeenCalledWith({ path: '/repo' })
+    await expect(router.hostFolders({ hostId: 'missing-host' })).rejects.toThrow('not connected')
+    router.remove(REMOTE)
+    router.add({ ...remote.connection, hostFolders: hostFolders.remote, available: () => false })
+    await expect(router.hostFolders({ hostId: REMOTE })).rejects.toThrow('disconnected')
+    router.remove(LOCAL)
+    router.add({ ...local.connection })
+    await expect(router.hostFolders({ hostId: LOCAL })).rejects.toThrow('cannot list its folders yet')
+  })
   it('splits observed threads, routes attention IDs, and refuses cross-host commands and local folder actions', async () => {
     const router = new DesktopHostRouter(emptyDesktopState), local = fixture(LOCAL, 'local'), remote = fixture(REMOTE, 'remote')
     router.add(local.connection); router.add(remote.connection)

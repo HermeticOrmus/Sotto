@@ -94,6 +94,7 @@ for (const provider of ['codex', 'claude', 'grok'] as const) {
       await page.getByRole('button', { name: 'New thread', exact: true }).first().click()
       const dialog = page.getByRole('dialog', { name: 'New thread', exact: true })
       await dialog.getByRole('button', { name: /Local folder/ }).click()
+      await page.getByRole('dialog', { name: /Choose a folder for the new thread/ }).getByRole('button', { name: 'Browse with File Explorer' }).click()
       await expect(dialog).toContainText(project)
       await dialog.getByRole('textbox', { name: 'Thread name' }).fill(title)
       await expect(dialog.getByRole('combobox', { name: 'Thread model', exact: true })).toHaveText(connection.model.name)

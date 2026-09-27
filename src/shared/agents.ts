@@ -11,6 +11,7 @@ import { gitActionProgressSchema, gitStackedActionSchema } from './gitActions'
 import type { GitRefsPage, GitRefsRequest } from './gitRefs'
 import type { GitChangedFiles, GitChangedFilesRequest } from './gitChangedFiles'
 import { GIT_PULL_REQUEST_LINKS_MAX, gitPullRequestActionSchema, gitPullRequestLinkSchema, gitPullRequestMergeMethodSchema, gitPullRequestUrlSchema, type GitPullRequestDetail, type GitPullRequestRequest } from './gitPullRequests'
+import type { HostFoldersClientRequest, HostFoldersResult } from './hostFolders'
 
 /** Clock origin is the last voiced PCM frame received by the renderer, not hardware acoustic capture. */
 export const agentVoiceTimingSchema = z.object({
@@ -819,6 +820,8 @@ export interface AgentBridge {
   gitChangedFiles?(request: GitChangedFilesRequest): Promise<GitChangedFiles>
   /** One pull request of a thread's, with its checks and what the surface may do; null when the thread has none. */
   gitPullRequest?(request: GitPullRequestRequest): Promise<GitPullRequestDetail | null>
+  /** One folder's subfolders on a named host, for the Add project dialog's folder browser. */
+  hostFolders?(request: HostFoldersClientRequest): Promise<HostFoldersResult>
   chooseProjectDirectory?(): Promise<string | null>
   prepareWake?(): Promise<AgentWakeDetection>
   detectWake?(audio: Float32Array): Promise<AgentWakeDetection>

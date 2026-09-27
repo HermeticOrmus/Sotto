@@ -1856,7 +1856,11 @@ export class AgentControl {
         const targetProvider = this.state.host.providers?.find(status => status.id === provider)
         if (targetProvider && targetProvider.connection !== 'connected') throw new Error(`Connect ${PROVIDER_LABELS[provider]} before creating a project.`)
         if (!(targetProvider?.capabilities ?? this.state.host.capabilities).projects) throw new Error('This provider does not support creating projects.')
-        if (/[<>:"/\\|?*]/u.test(command.title) || /[. ]$/u.test(command.title) || /^(\.|\.\.|con|prn|aux|nul|com\d|lpt\d)$/iu.test(command.title)) throw new Error('Choose a project name that can be used as a folder name.')
+        // The name is a folder's on this host, so this host's own rules decide it: Windows refuses more than Linux or macOS.
+        const unusableName = process.platform === 'win32'
+          ? /[<>:"/\\|?*]/u.test(command.title) || /[. ]$/u.test(command.title) || /^(\.|\.\.|con|prn|aux|nul|com\d|lpt\d)$/iu.test(command.title)
+          : command.title.includes('/') || /^\.\.?$/u.test(command.title)
+        if (unusableName) throw new Error('Choose a project name that can be used as a folder name.')
         const target = command.path || (this.state.configuration.projectsDirectory ? join(this.state.configuration.projectsDirectory, command.title) : '')
         if (!target || !isAbsolute(target)) throw new Error('Choose an absolute project folder or configure a default projects directory.')
         const path = resolve(target)

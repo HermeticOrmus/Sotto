@@ -73,6 +73,8 @@ test('creates a thread in a centered popup, configures it, and sends file and pa
     // Choosing the folder opens the thread at once, on defaults from Settings → Agents; there is no options
     // form left to fill in here (issue #347). The rest of this test configures it from its own composer instead.
     await dialog.getByRole('button', { name: /Local folder/ }).click()
+    // This computer's folders open in Sotto's browser; its File Explorer button is the system dialog the fixture answers.
+    await page.getByRole('dialog', { name: /Choose a folder for the new thread/ }).getByRole('button', { name: 'Browse with File Explorer' }).click()
     await expect(dialog).toHaveCount(0)
     await expect(page.getByRole('heading', { name: 'New thread', exact: true })).toBeVisible()
     await expect(page.getByRole('heading', { name: 'Threads', exact: true })).toBeAttached()
