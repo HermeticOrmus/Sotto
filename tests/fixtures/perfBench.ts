@@ -6,9 +6,10 @@
  *   PowerShell:  $env:SOTTO_PERF_BENCH = '1'; npx vitest run tests/perf/<file> --maxWorkers=1 --disable-console-intercept
  *   sh:          SOTTO_PERF_BENCH=1 npx vitest run tests/perf/<file> --maxWorkers=1 --disable-console-intercept
  *
- * Gate the whole file with `describe.skipIf(!PERF_BENCH)`. A benchmark that asserts a count or a work bound
- * rather than a time stays in the default run, like `markdownRender.perf.test.tsx`, and a stopwatch budget is
- * `SOTTO_PERF_ASSERT`'s (`perfBudget.ts`).
+ * Gate the whole file with `describe.skipIf(!PERF_BENCH)`; a Playwright benchmark such as
+ * `tests/e2e/native-process-memory.spec.ts` starts each test with `test.skip(!PERF_BENCH)` instead. A benchmark
+ * that asserts a count or a work bound rather than a time stays in the default run, like
+ * `markdownRender.perf.test.tsx`, and a stopwatch budget is `SOTTO_PERF_ASSERT`'s (`perfBudget.ts`).
  */
 export const PERF_BENCH = process.env.SOTTO_PERF_BENCH === '1'
 
