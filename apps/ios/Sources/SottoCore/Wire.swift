@@ -32,13 +32,14 @@ public enum JSONValue: Codable, Equatable, Sendable {
 
 public enum ClientError: Error, LocalizedError, Equatable {
     case invalidHost, invalidProtocol, invalidIdentity, invalidRequest, disconnected, uncertain, rejected(String)
-    case hostNotFound(String), hostUnreachable(String), notASottoHost(String), invalidCode
+    case hostNotFound(String), hostUnreachable(String), notASottoHost(String), sottoNotRunning(String), invalidCode
     public var errorDescription: String? {
         switch self {
         case .invalidHost: return "Enter the computer's name on your tailnet, such as forge, or its full address ending in .ts.net."
         case .hostNotFound(let name): return "Couldn't find \(name) on your tailnet. Check that Tailscale is connected on this iPhone and MagicDNS is on for your tailnet, or enter the full address ending in .ts.net."
         case .hostUnreachable(let name): return "Couldn't reach \(name). Check that it's online and that Tailscale is connected on this iPhone."
         case .notASottoHost(let name): return "\(name) answered, but Sotto isn't listening there. In Sotto on \(name), turn on phone access in Settings > Phones. For a host without a screen, check that Tailscale Serve forwards to it."
+        case .sottoNotRunning(let name): return "\(name) answered, but Sotto isn't running there. Nothing was lost. Open Sotto on \(name) and try again."
         case .invalidCode: return "A pairing code is eight letters and numbers. Check the code on that computer."
         case .invalidProtocol: return "This computer uses a different connection format. Update Sotto before connecting."
         case .invalidIdentity: return "A different computer answered at this address. Remove it and add it again if you meant to change computers."

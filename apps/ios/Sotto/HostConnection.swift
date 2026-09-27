@@ -125,10 +125,21 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
         guard let response = response as? HTTPURLResponse, response.url == endpoint.route(route) else { throw ClientError.disconnected }
         // Retrying Forget after revocation succeeded but local deletion failed is safe.
         if route == "/v1/revoke" && response.statusCode == 401 { return .object(["v": .number(1), "revoked": .bool(true)]) }
-        guard (200..<300).contains(response.statusCode) else {
-            throw ClientError.rejected(route == "/v1/pair" ? "That code didn't work. Codes work once and last five minutes; get a new one on that computer." : "This iPhone is no longer paired with that computer. Remove it in Computers and add it again.")
-        }
+        guard (200..<300).contains(response.statusCode) else { throw Self.refusal(route: route, status: response.statusCode, name: endpoint.machine) }
         return try Wire.decode(data)
+    }
+}
+extension HostConnection {
+    /// What a refused request means. Only 401 and 403 say the pairing is gone; anything else from a
+    /// computer that answered (a 502 from Tailscale Serve while Sotto is closed there) means Sotto isn't running.
+    nonisolated static func refusal(route: String, status: Int, name: String) -> ClientError {
+        if route == "/v1/pair" && (400..<500).contains(status) {
+            return .rejected("That code didn't work. Codes work once and last five minutes; get a new one on that computer.")
+        }
+        if status == 401 || status == 403 {
+            return .rejected("This iPhone is no longer paired with \(name). Remove it in Computers and add it again.")
+        }
+        return .sottoNotRunning(name)
     }
 }
 struct HostRefusal: Error, LocalizedError {
