@@ -45,7 +45,9 @@ Native Electron coverage is Claude. Codex/Grok accounting is covered by unit/int
 - [x] Actual native accounting, replay, graceful drain and restart.
 - [x] Original prompt/final reply restored before new replay; composer usable.
 - [x] Original screenshots inspected and hashes/pixel equality verified.
-- [ ] Independent native Astra Standards review, arranged by root.
-- [ ] Independent native Astra Spec review, arranged by root.
+- [x] Independent native GPT-6 Astra/high Standards review: zero substantiated findings.
+- [x] Independent native GPT-6 Astra/high Spec review: zero substantiated findings.
 
-Cross-model review was not performed. Automatic approval review rejected external review destinations; the user retained an Astra-only boundary. All implementation used GPT-6 Astra at high reasoning.
+Root confirmed from the authoritative spawn calls that Standards reviewer `/root/fix_378` and Spec reviewer `/root/fix_377` each used `gpt-6-astra`, high reasoning, `fork_turns: none` and the worker role. Both independently reviewed baseline `7b5fdb84` through production/E2E revision `f3a80bb1`, then the final documentation/evidence delta through `0cc23d5d59acff35a62a84eece853a17fdce2f9b`. Each reported zero substantiated findings; no source changes were needed.
+
+Cross-model review was unavailable because automatic approval review rejected the external review destinations; those calls were not retried. The user specified Astra builders, not an Astra-only reviewer restriction. Two independent native axes were completed, not four cross-model reviews. All implementation used GPT-6 Astra at high reasoning.

@@ -61,7 +61,7 @@ npx vitest run tests/perf/nativeUsageWrites.perf.test.ts --maxWorkers=1 --disabl
 Remove-Item Env:SOTTO_PERF_BENCH
 ```
 
-## Delivery evidence and remaining review
+## Delivery evidence and independent review
 
 The [native Electron verification note](../verification/2026-09-27-native-usage-writes.md) records the actual Claude adapter/ledger journey, exact totals, shutdown drain, replay after restart, visible history, isolation and selected screenshots. The original PNGs are complete; an earlier misleading image preview was incorrectly diagnosed as a capture defect. Original-file inspection and pixel comparison corrected that conclusion. No app or compositor defect was demonstrated.
 
@@ -71,7 +71,9 @@ The [native Electron verification note](../verification/2026-09-27-native-usage-
 - [x] `npm test -- --maxWorkers=2`: 440 files passed, 35 skipped; 5,775 tests passed, 135 skipped; 614.58 seconds, reported by the runner. Source, unit/integration tests and shared fixtures stayed frozen during the run.
 - [x] Runtime preparation and `npm run build`, completed by the runner. Production source is unchanged since `5e1cb954`.
 - [x] Focused E2E lint/typecheck and the native Electron journey passed for the final `f3a80bb1` test content; original screenshots inspected. Only the excluded E2E spec and documentation changed after the broad-gate revision.
-- [ ] Independent native Astra Standards review, arranged by root.
-- [ ] Independent native Astra Spec review, arranged by root.
+- [x] Independent native GPT-6 Astra/high Standards review: zero substantiated findings.
+- [x] Independent native GPT-6 Astra/high Spec review: zero substantiated findings.
 
-Implementation used GPT-6 Astra at high reasoning. Cross-model review is unavailable: automatic approval review rejected external destinations, and the user's Astra-only boundary prohibits invoking them. It is not counted as completed coverage.
+Root confirmed both reviewers' GPT-6 Astra/high configuration from the authoritative spawn calls. Standards reviewer `/root/fix_378` and Spec reviewer `/root/fix_377` independently reviewed baseline `7b5fdb84` through production/E2E revision `f3a80bb1`, then the final documentation/evidence delta through `0cc23d5d59acff35a62a84eece853a17fdce2f9b`. Both reported zero substantiated findings; no source changes were needed.
+
+Implementation used GPT-6 Astra at high reasoning. Cross-model review was unavailable because automatic approval review rejected the external review destinations; those calls were not retried. The user specified Astra builders, not an Astra-only reviewer restriction. Completed coverage is two independent native review axes, not four cross-model reviews.
