@@ -3,11 +3,10 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { codexFixture } from './codexFixture'
 
-/**
- * A long Codex thread for the benchmarks under `tests/perf/`: the fake app-server holds a thread with a given
- * number of completed turns, each of the shape a coding turn has, and every text in it is filler. A whole read of
- * it is about 4.4 KB a turn.
- */
+// A long Codex thread for the benchmarks under `tests/perf/`: the fake app-server holds a thread with a given
+// number of completed turns, each of the shape a coding turn has, and every text in it is filler. A whole read of
+// it is about 4.4 KB a turn.
+
 export type CodexFixture = Awaited<ReturnType<typeof codexFixture>>
 export type FakeThread = { turns: { id: string; items: { type: string }[] }[] }
 
