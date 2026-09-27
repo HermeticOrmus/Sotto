@@ -186,6 +186,8 @@ export class ClaudeStreamJsonHost implements AgentHost {
   private readonly completedOrigins = new Set<string>()
   /** The prompt each thread's running turn answers when Claude Code gave it to itself; its result need not name it. */
   private readonly selfTurns = new Map<string, string>()
+  /** Threads whose CLI has opened a query since its last result; Claude Code opens every turn with `system/init`. */
+  private readonly queries = new Set<string>()
   private readonly assistantBlocks = new Map<string, Map<string, string>>()
   /** Watched set: the threads the coordinator asked for. Their CLIs are started eagerly and never reaped. */
   private readonly observed = new Set<string>()
@@ -285,7 +287,7 @@ export class ClaudeStreamJsonHost implements AgentHost {
       threadId: id, messages: this.messageLog.messages(id), activities: thread.activities ?? [], ...(thread.historyEpoch ? { historyEpoch: thread.historyEpoch } : {}),
     }]))
     this.messageLog.forgetAll()
-    this.threads.clear(); this.logs.clear(); this.activity.clear(); this.subagentModels.clear(); this.logOrigins.clear(); this.lastLogDigest.clear(); this.staleContexts.clear(); this.completedOrigins.clear(); this.selfTurns.clear(); this.interrupting.clear(); this.assistantBlocks.clear()
+    this.threads.clear(); this.logs.clear(); this.activity.clear(); this.subagentModels.clear(); this.logOrigins.clear(); this.lastLogDigest.clear(); this.staleContexts.clear(); this.completedOrigins.clear(); this.selfTurns.clear(); this.queries.clear(); this.interrupting.clear(); this.assistantBlocks.clear()
     for (const [id, stored] of Object.entries(aliases)) {
       let alias = stored
       if (alias.rollbackPending?.targetSessionId) {
@@ -783,7 +785,7 @@ export class ClaudeStreamJsonHost implements AgentHost {
         // Work still going in the background is lost with the session too, so the thread asks for attention.
         const cut = running || !!thread.monitoring?.length || !!thread.backgroundWork?.length
         this.clearMonitoring(id)
-        this.runtimes.delete(id); this.selfTurns.delete(id); this.interrupting.delete(id); this.reaper.forget(id); this.messageLog.dropEmpty(id); this.messageLog.release(id); this.streaming.delete(id); this.flushCursors(); thread.requests = []
+        this.runtimes.delete(id); this.selfTurns.delete(id); this.queries.delete(id); this.interrupting.delete(id); this.reaper.forget(id); this.messageLog.dropEmpty(id); this.messageLog.release(id); this.streaming.delete(id); this.flushCursors(); thread.requests = []
         if (saved?.compaction?.status === 'running') {
           saved.compaction = { ...saved.compaction, status: 'uncertain', error: 'Native compaction was interrupted when Claude Code stopped. Its result is read from the native session; it will not be retried.' }
           thread.compaction = saved.compaction; this.closures.push(this.persist().catch(() => undefined))
@@ -823,6 +825,7 @@ export class ClaudeStreamJsonHost implements AgentHost {
     if (frame.type === 'system' && frame.subtype === 'init') {
       if (typeof frame.claude_code_version === 'string') this.state.version = frame.claude_code_version
       this.checkApprovalSurface(frame)
+      this.queries.add(id)
     }
     if (frame.type === 'control_request') {
       if (typeof frame.request_id === 'string' && runtime.answered.has(frame.request_id)) return
@@ -860,10 +863,11 @@ export class ClaudeStreamJsonHost implements AgentHost {
       }
     }
     // Claude Code answers some prompts it gives itself, such as a report once background work ends. It sends no
-    // prompt for these, so the turn first shows as a model request made while the thread was not running. Its result
-    // ends the turn the way it ends one Sotto sent, and a stop ends it without reading as a failure. A prompt of
-    // Sotto's waiting to go out sees the thread running and is refused rather than queued behind the report.
-    if (frame.type === 'system' && frame.subtype === 'status' && frame.status === 'requesting' && thread.status !== 'running' && !compactionPending(alias.compaction)) {
+    // prompt for these, so the turn first shows as a query it opened and a model request made while the thread was
+    // not running; Sotto's own prompts set the thread running before they go out, and a prompt held behind such a
+    // turn keeps it running (see the result below). Its result ends the turn the way it ends one Sotto sent, and a
+    // stop ends it without reading as a failure. A prompt sent while it runs is refused rather than queued behind it.
+    if (frame.type === 'system' && frame.subtype === 'status' && frame.status === 'requesting' && this.queries.has(id) && thread.status !== 'running' && !compactionPending(alias.compaction)) {
       thread.status = 'running'
       if (typeof frame.uuid === 'string' && frame.uuid) { thread.lastTurn = { id: frame.uuid, status: 'running' }; this.selfTurns.set(id, frame.uuid) }
     }
@@ -902,7 +906,7 @@ export class ClaudeStreamJsonHost implements AgentHost {
       // Claude Code leaves its own prompt's identity off the result of a turn it gave itself and says where that prompt
       // came from instead, so such a result never ends a prompt of Sotto's still waiting to go out.
       const origin = typeof frame.user_message_uuid === 'string' ? frame.user_message_uuid : this.selfTurns.get(id) ?? (object(frame.origin) ? undefined : alias.origins.at(-1)?.uuid)
-      this.selfTurns.delete(id)
+      this.selfTurns.delete(id); this.queries.delete(id)
       // A turn the user stopped ends in an error result, which is no failure of Claude Code's.
       const stopped = this.interrupting.has(id) || thread.lastTurn?.status === 'interrupted' && (!origin || thread.lastTurn.id === origin)
       this.interrupting.delete(id)
@@ -914,7 +918,9 @@ export class ClaudeStreamJsonHost implements AgentHost {
       }
       const failure = frame.is_error === true && !stopped ? claudeTurnFailure(frame, this.assistantErrors.get(id)) : null
       this.assistantErrors.delete(id)
-      thread.status = failure !== null ? 'error' : 'idle'; runtime.requests.clear(); thread.requests = []
+      // A prompt of Sotto's that Claude Code held behind its own turn starts next, so the thread goes straight on to it.
+      const held = alias.origins.some(value => this.acknowledgements.has(value.uuid))
+      thread.status = failure !== null ? 'error' : held ? 'running' : 'idle'; runtime.requests.clear(); thread.requests = []
       if (frame.is_error === true) this.clearMonitoring(id)
       if (failure !== null) { this.turnFailures.set(id, failure); this.state.error = failure }
       else if (frame.is_error !== true) this.clearTurnFailure(id)
