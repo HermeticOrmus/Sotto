@@ -20,6 +20,17 @@ test('native Claude usage survives replay and a graceful quit with its latest ar
   let app: ElectronApplication | undefined
   let page: Page
   let closing: Promise<void> | undefined
+  const capture = async (name: string) => {
+    // Capture the actual foreground window without changing renderer styles or graphics mode.
+    // The resulting bitmap still needs visual inspection; DOM visibility is not pixel evidence.
+    await page.bringToFront()
+    await app!.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows().find(value => value.webContents.getURL().endsWith('/index.html'))!
+      window.show(); window.focus()
+    })
+    await expect.poll(() => page.evaluate(() => document.visibilityState === 'visible' && document.hasFocus()), persistenceWait).toBe(true)
+    await page.screenshot({ path: join(artifacts, name), animations: 'disabled' })
+  }
   const events = async () => (await readFile(join(root, 'events.jsonl'), 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line) as { event: string })
   const writes = async () => (await events()).filter(row => row.event === 'usage-write').length
   const archive = async () => JSON.parse(await readFile(join(profile, 'claude-usage.json'), 'utf8')) as Record<string, { view: ThreadUsage; entries: Record<string, unknown> }>
@@ -45,6 +56,9 @@ test('native Claude usage survives replay and a graceful quit with its latest ar
     } })
     page = await firstSottoWindow(app)
     await page.waitForFunction(() => !!window.sotto?.agents)
+    // Preload exists before main finishes admitting the loaded renderer as an IPC sender.
+    // Retry a read, never configuration or a native turn, until that boundary is ready.
+    await expect(async () => expect(await page.evaluate(() => window.sotto!.agents!.get())).toHaveProperty('host')).toPass(persistenceWait)
     expect(await page.evaluate(() => typeof window.sottoE2E)).toBe('undefined')
     expect(await app.evaluate(({ app }) => app.getPath('userData'))).toBe(profile)
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find(window => window.webContents.getURL().endsWith('/index.html'))!.setContentSize(1280, 800))
@@ -113,6 +127,32 @@ test('native Claude usage survives replay and a graceful quit with its latest ar
       }) }))
       nativeId = alias.sessionId
     }).toPass(persistenceWait)
+    const visibleHistory = async (stage: 'initial' | 'restored' | 'replayed') => {
+      const transcript = page.getByLabel('Thread transcript')
+      try {
+        await expect(transcript.getByText('Exercise the synthetic usage ledger.', { exact: true })).toBeVisible(persistenceWait)
+        await expect(transcript.getByText('Synthetic usage reply 1', { exact: true })).toBeVisible(persistenceWait)
+        await expect(transcript.getByText('Exercise the synthetic usage ledger.', { exact: true })).toBeInViewport(persistenceWait)
+        await expect(transcript.getByText('Synthetic usage reply 1', { exact: true })).toBeInViewport(persistenceWait)
+        await expect(transcript).toHaveAttribute('aria-busy', 'false', persistenceWait)
+      } catch (error) {
+        // This fixture owns every profile and message. Capture the failed boundaries before cleanup;
+        // reading detail happens only after failure so it cannot repair the journey being asserted.
+        await Promise.allSettled([
+          capture(`native-history-${stage}-failure.png`),
+          page.evaluate(async threadId => {
+            const dom = document.querySelector('[aria-label="Thread transcript"]')?.outerHTML
+            const agents = window.sotto!.agents!
+            const thread = (await agents.get()).host.threads.find(value => value.id === threadId)
+            const detail = await agents.threadDetail!(threadId)
+            return { dom, thread, detail }
+          }, id).then(evidence => writeFile(join(artifacts, `native-history-${stage}-failure.json`), JSON.stringify(evidence, null, 2))),
+          readFile(join(home, '.claude', 'projects', project.replace(/[^a-zA-Z0-9]/gu, '-'), `${nativeId}.jsonl`), 'utf8')
+            .then(transcript => writeFile(join(artifacts, `native-history-${stage}-transcript.jsonl`), transcript)),
+        ])
+        throw error
+      }
+    }
     // Every accounting observation below crosses stdout from the scripted CLI into the real adapter.
     const first = usageFrame(nativeId, 0, 100), second = usageFrame(nativeId, 1, 200)
     await action(nativeId, { type: 'raw', persist: true, frame: first })
@@ -138,7 +178,8 @@ test('native Claude usage survives replay and a graceful quit with its latest ar
     await composer().fill('An unsent draft stays editable after replay.')
     await expect(composer()).toHaveValue('An unsent draft stays editable after replay.')
     await composer().fill('')
-    await page!.screenshot({ path: join(artifacts, 'native-usage-after-replay.png'), animations: 'disabled' })
+    await visibleHistory('initial')
+    await capture('native-usage-after-replay.png')
     await writeFile(join(root, 'hold-usage-write'), '')
     await action(nativeId, { type: 'raw', persist: true, frame: usageFrame(nativeId, 1, 250) })
     await expect.poll(() => bridgeUsage(id)).toMatchObject({ total: { output: 350 }, latest: { output: 250 } })
@@ -165,6 +206,9 @@ test('native Claude usage survives replay and a graceful quit with its latest ar
     }, id)
     await expect(async () => expect(await bridgeSnapshot(id)).toEqual(latestSnapshot)).toPass(persistenceWait)
     const restored = (await bridgeUsage(id))!
+    await openThreads(page!)
+    // Usage restores independently of messages. Prove history before replay can supply any text.
+    await visibleHistory('restored')
     // A second replay goes through the restarted native process, using the persisted request identity.
     const restartWrites = await writes()
     await action(nativeId, { type: 'raw-burst', frames: [...Array.from({ length: 100 }, () => first), result(nativeId, 333)] })
@@ -178,12 +222,22 @@ test('native Claude usage survives replay and a graceful quit with its latest ar
     await composer().fill('Still usable after restart.')
     await expect(composer()).toHaveValue('Still usable after restart.')
     await expect(page!.getByRole('button', { name: 'Send prompt', exact: true })).toBeEnabled()
-    await page!.screenshot({ path: join(artifacts, 'native-usage-after-restart.png'), animations: 'disabled' })
+    await visibleHistory('replayed')
+    const renderedHistory = await page!.getByLabel('Thread transcript').evaluate(element => ({
+      text: element.textContent, busy: element.getAttribute('aria-busy'),
+      scrollTop: element.scrollTop, scrollHeight: element.scrollHeight, clientHeight: element.clientHeight,
+      messages: [...element.querySelectorAll('.thread-message')].map(message => ({
+        text: message.textContent, rect: message.getBoundingClientRect().toJSON(),
+        visibility: getComputedStyle(message).visibility, opacity: getComputedStyle(message).opacity,
+      })),
+    }))
+    await capture('native-usage-after-restart.png')
     expect(await readFile(join(client, 'violations.jsonl'), 'utf8').catch(() => '')).toBe('')
     expect((await events()).some(row => row.event === 'scripted-claude-launch')).toBe(true)
     await writeFile(join(artifacts, 'native-usage-evidence.json'), JSON.stringify({ syntheticOnly: true, provider: 'claude', before,
       afterReplay, afterDrain: drained, afterRestart: restored, afterRestartReplay: await bridgeUsage(id),
-      replayWrites: 1, shutdownHeldUntilRelease: true, productTestBridgeAbsent: true }, null, 2))
+      replayWrites: 1, shutdownHeldUntilRelease: true, productTestBridgeAbsent: true,
+      restoredHistoryVisibleBeforeReplay: true, restoredHistoryVisibleAfterReplay: true, renderedHistory }, null, 2))
   } finally {
     await rm(join(root, 'hold-usage-write'), { force: true })
     if (closing) await closing
