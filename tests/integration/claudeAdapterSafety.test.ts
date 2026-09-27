@@ -12,6 +12,7 @@ import { AgentControl } from '../../src/main/agents/control'
 import { AgentCredentials } from '../../src/main/agents/credentials'
 import { e2eAgentReasoner } from '../../src/main/e2e/agentEffects'
 import { immediatePublishScheduler } from '../fixtures/publishScheduler'
+import { handleOf, PIXEL_DATA_URL, PIXEL_PNG, promptImageOf, stageInto } from '../fixtures/stagedImages'
 
 describe('Claude native request mapping', () => {
   it('rejects malformed permissions and questions', () => {
@@ -98,7 +99,7 @@ describe('Claude recovery and safety', () => {
   })
   it('reconciles image-only native frames over 1 MiB and restores references without persisting image bytes', async () => {
     const image = Buffer.alloc(1024 * 1024); Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(image)
-    const attachment = { id: 'image', name: 'image.png', mimeType: 'image/png' as const, dataUrl: `data:image/png;base64,${image.toString('base64')}` }
+    const attachment = promptImageOf(image, 'image', 'image.png')
     expect(await f.host.execute({ type: 'send', commandId: 'image-command', messageId: 'image-message', threadId: id, text: '', attachments: [attachment] })).toEqual({ accepted: true })
     expect((await thread()).messages[0]).toMatchObject({ id: 'image-message', text: '', attachments: [{ id: 'image', sizeBytes: image.length }] })
     const stored = await readFile(join(f.root, 'claude-threads.json'), 'utf8')
@@ -107,8 +108,7 @@ describe('Claude recovery and safety', () => {
     expect((await thread()).messages[0]).toMatchObject({ id: 'image-message', commandId: 'image-command', attachments: [{ id: 'image', sizeBytes: image.length }] })
   })
   it('restores submitted image previews through control after native restart under the same Sotto thread and message', async () => {
-    const image = { id: 'preview', name: 'Screenshot.png', mimeType: 'image/png' as const,
-      dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWZ0AAAAASUVORK5CYII=' }
+    const image = handleOf(PIXEL_PNG, 'preview', 'Screenshot.png')
     const credentials = new AgentCredentials(f.root, { isEncryptionAvailable: () => false, encryptString: value => Buffer.from(value), decryptString: value => value.toString() })
     await credentials.load()
     let registry = new ThreadRegistry(f.root)
@@ -117,24 +117,24 @@ describe('Claude recovery and safety', () => {
       membership: { status: async () => ({ status: 'beta', label: 'Test', expiresAt: null }), action: async () => ({ status: 'beta', label: 'Test', expiresAt: null }) } })
     let control = create()
     try {
-      await control.start(); await control.command({ type: 'connect' })
+      await control.start(); await stageInto(control, PIXEL_PNG); await control.command({ type: 'connect' })
       const sottoId = registry.all().find(binding => binding.sessionId === id)!.threadId
       expect(sottoId).not.toBe(id)
       const result = await control.command({ type: 'manual-send', threadId: sottoId, text: '', attachments: [image] })
       expect(result.error).toBeNull()
       const message = result.host.threads.find(thread => thread.id === sottoId)!.messages[0]!
       expect(message.attachments?.[0]?.preview).toEqual({ available: true })
-      expect(control.attachmentPreview({ threadId: sottoId, messageId: message.id, attachmentId: image.id })).toEqual({ dataUrl: image.dataUrl })
+      expect(await control.attachmentPreview({ threadId: sottoId, messageId: message.id, attachmentId: image.id })).toEqual({ dataUrl: PIXEL_DATA_URL })
       const cache = await readFile(join(f.root, 'attachment-previews.json'), 'utf8')
       expect(JSON.parse(cache).entries[0]).toMatchObject({ threadId: sottoId, messageId: message.id, commandId: message.commandId })
       expect(cache).not.toContain(id)
-      expect(await readFile(join(f.root, 'claude-threads.json'), 'utf8')).not.toContain(image.dataUrl)
+      expect(await readFile(join(f.root, 'claude-threads.json'), 'utf8')).not.toContain(PIXEL_DATA_URL)
       control.dispose(); await control.privacyChanged(); await f.adapter.closed(); await registry.flush()
       f = await f.driver.restart() as typeof f
       registry = new ThreadRegistry(f.root); wrapped = new SottoThreadHost('claude', f.adapter, registry)
       control = create(); await control.start(); await control.command({ type: 'connect' })
       expect(control.get().host.threads.find(thread => thread.id === sottoId)!.messages[0]).toEqual(message)
-      expect(control.attachmentPreview({ threadId: sottoId, messageId: message.id, attachmentId: image.id })).toEqual({ dataUrl: image.dataUrl })
+      expect(await control.attachmentPreview({ threadId: sottoId, messageId: message.id, attachmentId: image.id })).toEqual({ dataUrl: PIXEL_DATA_URL })
       expect((await f.driver.requests()).filter(record => record.method === 'user')).toHaveLength(1)
     } finally { control.dispose(); await control.privacyChanged(); await f.adapter.closed(); await registry.flush() }
   })

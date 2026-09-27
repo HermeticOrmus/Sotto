@@ -64,8 +64,11 @@ describe.skipIf(!PERF_BENCH)('send with an image', () => {
       const previews = (control as unknown as { attachmentPreviews: AttachmentPreviews }).attachmentPreviews
       const heard: number[] = []; const acknowledged: number[] = []; const completed: number[] = []; const saved: number[] = []
       for (let index = 0; index < SENDS; index++) {
+        // Staged before the clock starts, as the window does when the image is attached (ADR-0031).
+        const sent = Buffer.from(png(MiB, `sent-${index}`).dataUrl.split(',')[1]!, 'base64'); sent[8] = index
+        const image = await control.stageAttachment({ name: `sent-${index}.png`, mimeType: 'image/png', bytes: sent })
         const admittedAt = performance.now()
-        const result = await control.command({ type: 'manual-send', threadId: 'workshop', text: '', attachments: [png(MiB, `sent-${index}`)] })
+        const result = await control.command({ type: 'manual-send', threadId: 'workshop', text: '', attachments: [image] })
         const doneAt = performance.now()
         // A person does not send the next screenshot while the last one is still being written; neither does this.
         await previews.maintain()

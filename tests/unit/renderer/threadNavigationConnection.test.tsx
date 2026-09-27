@@ -16,6 +16,7 @@ import { AtomicJsonStore } from '../../../src/main/storage/atomicJsonStore'
 import type { AgentBridge, AgentState } from '../../../src/shared/agents'
 import { immediatePublishScheduler } from '../../fixtures/publishScheduler'
 import { agentBridgeFor } from '../../fixtures/agentBridge'
+import { handleOf, PIXEL_PNG, stageInto } from '../../fixtures/stagedImages'
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
@@ -25,7 +26,7 @@ async function draftFixture() {
   const credentials = new AgentCredentials(root, { isEncryptionAvailable: () => false, encryptString: value => Buffer.from(value), decryptString: value => value.toString() })
   const control = new AgentControl({ schedule: immediatePublishScheduler, directory: root, host, credentials, reasoner: e2eAgentReasoner,
     membership: { status: async () => ({ status: 'beta', label: 'Test', expiresAt: null }), action: async () => ({ status: 'beta', label: 'Test', expiresAt: null }) } })
-  await credentials.load(); await control.start(); await control.command({ type: 'connect' })
+  await credentials.load(); await control.start(); await stageInto(control, PIXEL_PNG); await control.command({ type: 'connect' })
   const bridge: AgentBridge = agentBridgeFor(control)
   return { control, host, bridge, disk: async () => JSON.parse(await readFile(join(root, 'agents.json'), 'utf8')),
     followupsOnDisk: async () => JSON.parse(await readFile(join(root, 'followups.json'), 'utf8')),
@@ -168,7 +169,7 @@ describe('thread draft recovery through the real connection and disk', () => {
     let release!: () => void
     const gate = new Promise<void>(done => { release = done })
     let writing = false
-    const image = { id: 'retained-image', name: 'pixel.png', mimeType: 'image/png' as const, dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWZ0AAAAASUVORK5CYII=' }
+    const image = handleOf(PIXEL_PNG, 'retained-image', 'pixel.png')
     let controls!: ReturnType<typeof useAgents>
     function Observer() { controls = useAgents(); return null }
     const page = (shown: boolean) => <AgentProvider settings={null} dictation={{ status: 'idle' }}><Observer />{shown ? <ThreadsView onOpenAgents={() => undefined} /> : null}</AgentProvider>
@@ -255,7 +256,7 @@ describe('thread navigation through the real renderer connection and controller'
     let sending: Promise<AgentState | null> | undefined
     let saving: Promise<AgentState | null> | undefined
     try {
-      await credentials.load(); await control.start(); await control.command({ type: 'connect' })
+      await credentials.load(); await control.start(); await stageInto(control, PIXEL_PNG); await control.command({ type: 'connect' })
       const execute = host.execute.bind(host)
       vi.spyOn(host, 'execute').mockImplementation(async command => { if (command.type === 'send') await gate; return execute(command) })
       const bridge: AgentBridge = agentBridgeFor(control)
@@ -294,7 +295,7 @@ describe('thread navigation through the real renderer connection and controller'
     let selection: Promise<AgentState | null> | undefined
     const gate = new Promise<void>(done => { release = done })
     try {
-      await credentials.load(); await control.start(); await control.command({ type: 'connect' })
+      await credentials.load(); await control.start(); await stageInto(control, PIXEL_PNG); await control.command({ type: 'connect' })
       await control.command({ type: 'select-thread', threadId: 'workshop' })
       if (pending === 'refresh') await control.command({ type: 'compose', text: 'Bound to A' })
       const cached = control.get()

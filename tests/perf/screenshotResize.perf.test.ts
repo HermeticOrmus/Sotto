@@ -1,6 +1,5 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
-import { attachmentSizeBytes } from '../../src/shared/agents'
 import { closeSotto, launchSotto, type LaunchedSotto } from '../e2e/support/sottoLaunch'
 import { decodedSize, openWorkshopComposer, pasteDrawnScreenshot, savedAttachment, type DrawnScreenshot } from '../fixtures/drawnScreenshot'
 import { median, PERF_BENCH, round } from '../fixtures/perfBench'
@@ -14,12 +13,12 @@ interface Run { readonly ms: number, readonly fileBytes: number, readonly sentBy
 async function pasteOnce({ page }: LaunchedSotto, screenshot: DrawnScreenshot): Promise<Run> {
   const prompt = page.getByRole('textbox', { name: 'Prompt', exact: true })
   const { ms, fileBytes } = await pasteDrawnScreenshot(prompt, screenshot)
-  const { dataUrl } = await savedAttachment(page, screenshot.name)
+  const staged = await savedAttachment(page, screenshot.name)
   // Sizes only: the pixel size the window decodes from the data URL, and its decoded byte count.
-  const sent = await decodedSize(page, dataUrl)
+  const sent = await decodedSize(page, staged)
   await page.getByRole('button', { name: `Remove ${screenshot.name}`, exact: true }).click()
   await expect.poll(async () => page.getByAltText(screenshot.name, { exact: true }).count()).toBe(0)
-  return { ms, fileBytes, sentBytes: attachmentSizeBytes(dataUrl), sent }
+  return { ms, fileBytes, sentBytes: staged.sizeBytes, sent }
 }
 
 async function measure(launched: LaunchedSotto, label: string, screenshot: Omit<DrawnScreenshot, 'name'>) {

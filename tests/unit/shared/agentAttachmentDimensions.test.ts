@@ -1,9 +1,11 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
-import { agentAttachmentSchema, agentAttachmentsSchema, agentCommandSchema, type AgentAttachment } from '../../../src/shared/agents'
+import { agentAttachmentHandleSchema, agentAttachmentSchema, agentAttachmentsSchema, agentCommandSchema, type AgentAttachment, type AgentAttachmentHandle } from '../../../src/shared/agents'
 
 const image: AgentAttachment = { id: 'shot-1', name: 'Screenshot.png', mimeType: 'image/png',
   dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWZ0AAAAASUVORK5CYII=' }
+/** The same image as a draft carries it once staged (ADR-0031). */
+const handle: AgentAttachmentHandle = { id: 'shot-1', name: 'Screenshot.png', mimeType: 'image/png', sizeBytes: 68, digest: 'a'.repeat(64) }
 const dimensions = { original: { width: 3840, height: 2160 }, sent: { width: 2576, height: 1449 } }
 
 describe('an attachment\'s recorded sizes', () => {
@@ -12,7 +14,7 @@ describe('an attachment\'s recorded sizes', () => {
   })
   it('carry the original and sent sizes through a saved draft', () => {
     const parsed = agentCommandSchema.parse({ type: 'save-thread-draft', composer: 'manual', threadId: 'thread-1', draftId: crypto.randomUUID(), text: '',
-      attachments: [{ ...image, dimensions }], requestId: null })
+      attachments: [{ ...handle, dimensions }], requestId: null })
     expect(parsed).toMatchObject({ attachments: [{ dimensions }] })
   })
   it('hold sizes only, as whole pixels', () => {
@@ -21,6 +23,9 @@ describe('an attachment\'s recorded sizes', () => {
       { original: { width: 1.5, height: 10 }, sent: { width: 1, height: 1 } },
       { original: { width: 10, height: 10 }, sent: { width: 10, height: 10 }, preview: 'data:image/png;base64,AAAA' },
       { original: { width: 10, height: 10, dataUrl: 'data:image/png;base64,AAAA' }, sent: { width: 10, height: 10 } },
-    ]) expect(agentAttachmentsSchema.safeParse([{ ...image, dimensions: bad }]).success).toBe(false)
+    ]) {
+      expect(agentAttachmentsSchema.safeParse([{ ...image, dimensions: bad }]).success).toBe(false)
+      expect(agentAttachmentHandleSchema.safeParse({ ...handle, dimensions: bad }).success).toBe(false)
+    }
   })
 })

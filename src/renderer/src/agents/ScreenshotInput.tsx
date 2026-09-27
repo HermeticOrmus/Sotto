@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Paperclip, X } from 'lucide-react'
-import { AGENT_IMAGE_MIME_TYPES, AGENT_MAX_ATTACHMENT_BYTES, AGENT_MAX_ATTACHMENTS, AGENT_MAX_IMAGE_BYTES, agentAttachmentsSchema, attachmentSizeBytes, type AgentAttachment, type AgentAttachmentDimensions } from '../../../shared/agents'
+import { AGENT_IMAGE_MIME_TYPES, AGENT_MAX_ATTACHMENT_BYTES, AGENT_MAX_ATTACHMENTS, AGENT_MAX_IMAGE_BYTES, agentAttachmentHandlesSchema, type AgentAttachmentDimensions, type AgentAttachmentHandle } from '../../../shared/agents'
 import { Button } from '../components/Button'
-import { readScreenshot, wasResized } from './screenshotResize'
+import { prepareScreenshot, wasResized } from './screenshotResize'
+import { stageImage, useThumbnail } from './stagedImages'
 import './screenshots.css'
 
 // The refusals a file's own type and size decide, checked before anything is read.
@@ -15,9 +16,10 @@ function checkImage(file: File): void {
   if (file.size > AGENT_MAX_IMAGE_BYTES) throw new Error(TOO_LARGE)
 }
 
-async function readImage(file: File): Promise<AgentAttachment> {
-  const { dataUrl, dimensions } = await readScreenshot(file)
-  return { id: crypto.randomUUID(), name: file.name || 'Screenshot.png', mimeType: file.type as AgentAttachment['mimeType'], dataUrl, ...(dimensions ? { dimensions } : {}) }
+/** Scales a screenshot past the bound down in its own format (ADR-0030), then stages what is sent (ADR-0031). */
+async function stageFile(target: string | null, file: File): Promise<AgentAttachmentHandle> {
+  const { blob, dimensions } = await prepareScreenshot(file)
+  return stageImage(target, { name: file.name || 'Screenshot.png', mimeType: file.type, blob, ...(dimensions ? { dimensions } : {}) })
 }
 
 /** "Resized from 3840 by 2160 to 2576 by 1449 pixels": sizes only, for the chip's tooltip and what a screen reader reads. */
@@ -25,15 +27,33 @@ function resizedDescription({ original, sent }: AgentAttachmentDimensions): stri
   return `Resized from ${original.width} by ${original.height} to ${sent.width} by ${sent.height} pixels`
 }
 
-export function ScreenshotInput({ attachments, onChange, onAddAfterClose, disabled, supported, children, onRead, pending = false, notice = null }: {
-  readonly attachments: AgentAttachment[]
-  readonly onChange: (attachments: AgentAttachment[]) => void
+/** One attached image: its thumbnail, drawn in this window, or its name alone while there is none. */
+function Chip({ target, attachment, disabled, onRemove }: { readonly target: string | null; readonly attachment: AgentAttachmentHandle; readonly disabled: boolean; readonly onRemove: () => void }): ReactNode {
+  const thumbnail = useThumbnail(target, attachment)
+  return <figure>
+    {thumbnail ? <img src={thumbnail} alt={attachment.name} /> : <span className="screenshot-previews__pending" role="img" aria-label={attachment.name} />}
+    <figcaption title={attachment.name}>{attachment.name}</figcaption>
+    {wasResized(attachment.dimensions) && <small className="screenshot-previews__resized" title={resizedDescription(attachment.dimensions)}>
+      <span aria-hidden="true">Resized to {attachment.dimensions.sent.width} x {attachment.dimensions.sent.height}</span><span className="tt-visually-hidden">{resizedDescription(attachment.dimensions)}</span></small>}
+    <button type="button" title={`Remove ${attachment.name}`} aria-label={`Remove ${attachment.name}`} disabled={disabled} onClick={onRemove}><X size={12} /></button>
+  </figure>
+}
+
+/**
+ * Where screenshots join a draft. Each is scaled to the screenshot bound when it is past it, then staged once, on
+ * the host that runs `target` (ADR-0031), and the draft carries its handle; the chips draw their own thumbnails.
+ */
+export function ScreenshotInput({ target, attachments, onChange, onAddAfterClose, disabled, supported, children, onRead, pending = false, notice = null }: {
+  /** The thread the draft belongs to, or null for the coordinator's composer. */
+  readonly target: string | null
+  readonly attachments: readonly AgentAttachmentHandle[]
+  readonly onChange: (attachments: AgentAttachmentHandle[]) => void
   /**
-   * Where screenshots go that finish reading after this composer has closed, as it does when the user moves to
+   * Where screenshots go that finish staging after this composer has closed, as it does when the user moves to
    * another thread while they are read. It is given only the new ones, to add to the draft they were attached
    * to. Without it they are dropped.
    */
-  readonly onAddAfterClose?: (images: AgentAttachment[]) => void
+  readonly onAddAfterClose?: (images: AgentAttachmentHandle[]) => void
   readonly disabled: boolean
   readonly supported: boolean
   readonly children: ReactNode
@@ -65,19 +85,19 @@ export function ScreenshotInput({ attachments, onChange, onAddAfterClose, disabl
     if (!supported) { setError('This model does not support screenshots. Choose a model with image support.'); return }
     setError(null)
     if (files.length + current.current.length > AGENT_MAX_ATTACHMENTS) { setError(`Attach up to ${AGENT_MAX_ATTACHMENTS} screenshots at a time.`); return }
-    // Every refusal that the file sizes alone can decide comes before any file is read and encoded.
+    // Every refusal that the file sizes alone can decide comes before any file is read and staged.
     try { files.forEach(checkImage) } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not read these screenshots.'); return }
-    const total = current.current.reduce((sum, item) => sum + attachmentSizeBytes(item.dataUrl), 0) + files.reduce((sum, file) => sum + file.size, 0)
+    const total = current.current.reduce((sum, item) => sum + item.sizeBytes, 0) + files.reduce((sum, file) => sum + file.size, 0)
     if (total > AGENT_MAX_ATTACHMENT_BYTES) { setError(TOO_LARGE_IN_TOTAL); return }
     reading.current = true; setReadingHere(true)
     const handedOn = onRead?.()
     try {
       // One at a time, so at most one decoded image is held in memory however many are added at once.
-      const images: AgentAttachment[] = []
-      for (const file of files) images.push(await readImage(file))
+      const images: AgentAttachmentHandle[] = []
+      for (const file of files) images.push(await stageFile(target, file))
       if (!mounted.current) { latestAddAfterClose.current?.(images); return }
-      // The schema stays the authority: it checks what was actually read, not what the files claimed.
-      const result = agentAttachmentsSchema.safeParse([...current.current, ...images])
+      // The schema stays the authority: it checks what was actually staged, not what the files claimed.
+      const result = agentAttachmentHandlesSchema.safeParse([...current.current, ...images])
       if (!result.success) { setError(TOO_LARGE_IN_TOTAL); return }
       latestChange.current(result.data)
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not read these screenshots.') }
@@ -93,12 +113,9 @@ export function ScreenshotInput({ attachments, onChange, onAddAfterClose, disabl
     if (event.dataTransfer.files.length) { event.preventDefault(); void add([...event.dataTransfer.files]) }
   }}>
     {children}
-    {attachments.length > 0 && <div className="screenshot-previews" aria-label="Attached screenshots">{attachments.map(attachment => <figure key={attachment.id}>
-      <img src={attachment.dataUrl} alt={attachment.name} /><figcaption title={attachment.name}>{attachment.name}</figcaption>
-      {wasResized(attachment.dimensions) && <small className="screenshot-previews__resized" title={resizedDescription(attachment.dimensions)}>
-        <span aria-hidden="true">Resized to {attachment.dimensions.sent.width} x {attachment.dimensions.sent.height}</span><span className="tt-visually-hidden">{resizedDescription(attachment.dimensions)}</span></small>}
-      <button type="button" title={`Remove ${attachment.name}`} aria-label={`Remove ${attachment.name}`} disabled={disabled || busy} onClick={() => onChange(current.current.filter(item => item.id !== attachment.id))}><X size={12} /></button>
-    </figure>)}</div>}
+    {attachments.length > 0 && <div className="screenshot-previews" aria-label="Attached screenshots">{attachments.map(attachment =>
+      <Chip key={attachment.id} target={target} attachment={attachment} disabled={disabled || busy}
+        onRemove={() => onChange(current.current.filter(item => item.id !== attachment.id))} />)}</div>}
     <div className="screenshot-input__tools"><input ref={picker} type="file" accept={AGENT_IMAGE_MIME_TYPES.join(',')} multiple aria-label="Screenshot files" hidden onChange={event => { const files = [...(event.target.files ?? [])]; event.target.value = ''; void add(files) }} />
       <Button type="button" variant="ghost" iconOnly aria-label="Attach screenshots" disabled={disabled || busy || !supported} onClick={() => picker.current?.click()}><Paperclip size={16} /></Button>
       {busy && <small role="status">Adding screenshots...</small>}

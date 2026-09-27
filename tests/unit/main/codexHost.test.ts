@@ -7,6 +7,8 @@ import { AgentControl } from '../../../src/main/agents/control'
 import { AgentCredentials } from '../../../src/main/agents/credentials'
 import { codexFixture, rolloutLine } from '../../fixtures/codexFixture'
 import { immediatePublishScheduler } from '../../fixtures/publishScheduler'
+import { promptImageOf } from '../../fixtures/stagedImages'
+
 
 const fixtures: Awaited<ReturnType<typeof codexFixture>>[] = []
 const controls: AgentControl[] = []
@@ -37,7 +39,7 @@ describe('Codex App Server provider adapter', () => {
     const f = await fixture(); const { threadId } = await create(f)
     const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aH1sAAAAASUVORK5CYII='
     await expect(f.host.execute({ type: 'send', commandId: 'screenshot', threadId, messageId: 'screenshot-message', text: 'Inspect this screenshot',
-      attachments: [{ id: 'shot', name: 'shot.png', mimeType: 'image/png', dataUrl }] })).resolves.toEqual({ accepted: true })
+      attachments: [promptImageOf(Buffer.from(dataUrl.slice(dataUrl.indexOf(',') + 1), 'base64'), 'shot', 'shot.png')] })).resolves.toEqual({ accepted: true })
     expect((await f.driver.requests()).findLast(request => request.method === 'turn/start')?.params?.input).toContainEqual({ type: 'image', url: dataUrl })
   })
   it('routes manual compaction through the public control, rejecting concurrent requests and preserving uncertain restart state', async () => {
@@ -211,7 +213,7 @@ describe('Codex App Server provider adapter', () => {
     const { threadId } = await create(f)
     await expect(f.host.execute({ type: 'configure-thread', commandId: 'bad', threadId, reasoningEffort: 'invented' })).rejects.toThrow(/reasoning/)
     await expect(f.host.execute({ type: 'send', commandId: 'image', threadId, messageId: 'image-message', text: 'Do not drop this image',
-      attachments: [{ id: 'shot', name: 'shot.png', mimeType: 'image/png', dataUrl: 'data:image/png;base64,YWJj' }] })).rejects.toThrow(/image support/)
+      attachments: [promptImageOf(Buffer.from('abc'), 'shot', 'shot.png')] })).rejects.toThrow(/image support/)
     expect((await f.driver.requests()).filter(request => request.method === 'turn/start')).toEqual([])
   })
   it('reports model listing failure without inventing an available model', async () => {

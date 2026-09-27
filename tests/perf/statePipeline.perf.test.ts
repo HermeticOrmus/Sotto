@@ -16,6 +16,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { agentShell, agentStateSchema, defaultAgentConfiguration, type AgentHostSnapshot, type AgentState, type AgentThreadDetail } from '../../src/shared/agents'
 import { applyAgentThreadDetailDelta, diffAgentThreadDetail } from '../../src/shared/agentThreadDetail'
 import { AttachmentPreviews } from '../../src/main/agents/attachmentPreviews'
+import { AttachmentStore } from '../../src/main/agents/attachmentStore'
 
 const ITERATIONS = 20
 const dataDirectory = process.env.SOTTO_PERF_DATA ?? (process.env.APPDATA ? join(process.env.APPDATA, 'sotto') : '')
@@ -69,7 +70,9 @@ describe('state pipeline cost', async () => {
   it.skipIf(!present)('reports the cost of one published state', async context => {
     const workspace = JSON.parse(await readFile(join(directory, 'workspace.json'), 'utf8')) as { snapshot: AgentHostSnapshot }
     await hydratePerfHistory(workspace.snapshot, directory)
-    const previews = new AttachmentPreviews(directory)
+    // The attachment store is read too: a version 1 preview file on disk is converted by staging its images.
+    const content = new AttachmentStore(directory); await content.load()
+    const previews = new AttachmentPreviews(directory, content)
     await previews.load()
     const state = stateAround(workspace.snapshot)
     const messages = state.host.threads.reduce((count, thread) => count + thread.messages.length, 0)

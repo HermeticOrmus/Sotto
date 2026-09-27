@@ -11,6 +11,10 @@ import { AtomicJsonStore } from '../../../src/main/storage/atomicJsonStore'
 import { agentCommandSchema } from '../../../src/shared/agents'
 import { FakeProviderHost } from '../../fixtures/fakeProviderHost'
 import { immediatePublishScheduler } from '../../fixtures/publishScheduler'
+import { handleOf, PIXEL_DATA_URL, PIXEL_PNG } from '../../fixtures/stagedImages'
+
+/** The recovered draft's inline image as the coordinator carries it once staged at start (ADR-0031). */
+const staged = handleOf(PIXEL_PNG, 'image', 'image.png')
 
 vi.mock('node:fs/promises', async () => { const actual = await vi.importActual<typeof fs>('node:fs/promises'); return { ...actual, link: vi.fn(actual.link) } })
 
@@ -36,7 +40,7 @@ async function fixture() {
     assignments: [{ threadId: 'old-id', mode: 'managed', instruction: 'Private task', followups: 2, paused: false, seenMessageIds: [], ownMessageIds: [], handledRequestIds: [], lastFailure: '', contextUpdatedAt: Date.now() }],
     queue: [{ id: 'permission', threadId: 'old-id', kind: 'permission', text: 'Private question', requestId: 'request', createdAt: new Date().toISOString(), deferred: false }],
     draft: 'Recovered answer', draftThreadId: 'old-id', draftRequestId: 'request',
-    draftAttachments: [{ id: 'image', name: 'image.png', mimeType: 'image/png', dataUrl: 'data:image/png;base64,YWJj' }],
+    draftAttachments: [{ id: 'image', name: 'image.png', mimeType: 'image/png', dataUrl: PIXEL_DATA_URL }],
     activeThreadId: 'old-id', activeProjectId: 'old-project', pendingRequest: 'Private utterance', contextSavedAt: Date.now(), composing: true,
     outbox: [{ id: 'unknown-command', type: 'answer', threadId: 'old-id', requestId: 'request' }] }
   return { root, path, state, credentials, decrypt, host, connect, execute, create,
@@ -52,11 +56,11 @@ describe('native provider retirement', () => {
     await control.command({ type: 'connect' })
     const created = await control.command({ type: 'create-thread', projectId: 'project', title: 'New native work', modelId: 'fake:model', managed: false })
     expect(created.error).toBeNull()
-    expect(created).toMatchObject({ draft: f.state.draft, draftAttachments: f.state.draftAttachments, draftThreadId: null, composing: false })
+    expect(created).toMatchObject({ draft: f.state.draft, draftAttachments: [staged], draftThreadId: null, composing: false })
     const threadId = created.activeThreadId!
     expect(agentCommandSchema.safeParse({ type: 'recover-draft', threadId }).success).toBe(true)
     const restored = await control.command({ type: 'recover-draft', threadId })
-    expect(restored).toMatchObject({ draft: f.state.draft, draftAttachments: f.state.draftAttachments, draftThreadId: threadId, draftRequestId: null, composing: true, assignments: [] })
+    expect(restored).toMatchObject({ draft: f.state.draft, draftAttachments: [staged], draftThreadId: threadId, draftRequestId: null, composing: true, assignments: [] })
     expect(f.host.commands.filter(command => command.type === 'send' || command.type === 'answer')).toEqual([])
   })
 
@@ -70,7 +74,7 @@ describe('native provider retirement', () => {
     await f.credentials.set('t3', 'old encrypted secret'); await f.credentials.set('reasoning', 'independent')
     await f.save(); const control = f.create(); await control.start()
     expect(control.get()).toMatchObject({ configuration: { provider: 'codex', enabled: false, defaultModelId: '' },
-      assignments: [], queue: [], draft: 'Recovered answer', draftAttachments: f.state.draftAttachments,
+      assignments: [], queue: [], draft: 'Recovered answer', draftAttachments: [staged],
       draftThreadId: null, draftRequestId: null, activeThreadId: null, activeProjectId: null, pendingRequest: '', composing: false,
       providerUpgrade: { recoveryPath: join(f.root, 'provider-retirement-v1.json') } })
     const recovery = await f.recovery()

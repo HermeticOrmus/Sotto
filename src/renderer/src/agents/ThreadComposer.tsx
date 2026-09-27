@@ -395,8 +395,8 @@ function ThreadComposerEditor({ row, state, command, store, composerId, editable
     <SkillPicker model={picker} listId={listId} provider={row.provider} selected={draft.skills} onSelect={skill => selectSkill(picker.options.indexOf(skill))} />
     <FilePicker model={files} listId={fileListId} selected={draft.files} onSelect={(entry: FileEntry) => selectFile(files.options.indexOf(entry))} />
     {children}
-    {/* Screenshots still being read when the user moves to another thread join this thread's draft as it is then. */}
-    <ScreenshotInput key={threadId} attachments={[...draft.attachments]} disabled={!editable} supported={supported}
+    {/* Screenshots still being staged when the user moves to another thread join this thread's draft as it is then. */}
+    <ScreenshotInput key={threadId} target={threadId} attachments={draft.attachments} disabled={!editable} supported={supported}
       pending={screenshotReads.pending > 0} notice={screenshotReads.problem} onRead={() => store.beginScreenshotRead(threadId)}
       onChange={attachments => edit({ attachments })} onAddAfterClose={images => store.addLateScreenshots(threadId, images)}>
       <textarea ref={textarea} id={composerId} rows={3} value={draft.text} disabled={!editable} spellCheck

@@ -8,6 +8,8 @@ import { AgentComposer, AgentLatestResponse, AgentQueue, AgentView } from '../..
 import { AgentRoom } from '../../../src/renderer/src/agents/AgentRoom'
 import { WidgetApp } from '../../../src/renderer/src/widget/WidgetApp'
 import { DEFAULT_WIDGET_PALETTE } from '../../../src/shared/themeBranding'
+import { handleOf } from '../../fixtures/stagedImages'
+import type { AgentAttachmentStageRequest } from '../../../src/shared/agents'
 
 vi.mock('../../../src/renderer/src/agents/AgentContext', () => ({ useAgents: vi.fn() }))
 vi.mock('../../../src/renderer/src/agents/orb/AgentOrb', () => ({ AgentOrb: () => null }))
@@ -156,9 +158,10 @@ describe('AgentView user workflows', () => {
     state.draft = 'Original text'; state.draftThreadId = 'thread'; state.composing = true
     state.host.models[0]!.supportsImages = true
     let finishRead: (() => void) | undefined
-    const read = vi.spyOn(FileReader.prototype, 'readAsDataURL').mockImplementation(function (this: FileReader) {
-      finishRead = () => { Object.defineProperty(this, 'result', { value: 'data:image/png;base64,iVBORw0KGgo=' }); this.dispatchEvent(new ProgressEvent('load')) }
-    })
+    // Staging answers only when the test says so, the way a slow main would (ADR-0031).
+    vi.stubGlobal('sotto', { agents: { stageAttachment: (request: AgentAttachmentStageRequest) => new Promise(done => {
+      finishRead = () => done(handleOf(request.bytes, 'slow', request.name))
+    }) } })
     const command = vi.fn(async (request: AgentCommand) => {
       if (request.type === 'compose') { state.draft = request.text; if (request.attachments) state.draftAttachments = request.attachments }
       return { ...state }
@@ -168,11 +171,12 @@ describe('AgentView user workflows', () => {
       fireEvent.change(screen.getByLabelText('Screenshot files'), { target: { files: [new File(['image'], 'slow.png', { type: 'image/png' })] } })
       fireEvent.change(screen.getByRole('textbox', { name: 'Prompt' }), { target: { value: 'Newer text while reading' } })
       await waitFor(() => expect(command).toHaveBeenCalledWith({ type: 'compose', text: 'Newer text while reading' }))
-      if (!finishRead) throw new Error('FileReader did not start')
+      await waitFor(() => expect(finishRead).toBeDefined())
+      if (!finishRead) throw new Error('Staging did not start')
       finishRead()
       await waitFor(() => expect(command).toHaveBeenLastCalledWith({ type: 'compose', text: 'Newer text while reading', attachments: [expect.objectContaining({ name: 'slow.png' })] }))
       expect(screen.getByRole('textbox', { name: 'Prompt' })).toHaveValue('Newer text while reading')
-    } finally { read.mockRestore() }
+    } finally { vi.unstubAllGlobals() }
   })
 
   it('lets an obsolete saved reasoning effort be cleared when the model stops advertising effort levels', async () => {

@@ -1,6 +1,6 @@
 import React from 'react'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 
 import { defaultAgentConfiguration, type AgentCommand, type AgentState } from '../../../src/shared/agents'
 import { designThreadsFixture, E2E_THREADS_NOW } from '../../../src/shared/e2e'
@@ -13,6 +13,8 @@ import { paneMenuItem } from './paneMenu'
 import { ThreadDraftStore } from '../../../src/renderer/src/agents/threadDraftStore'
 import { draftThreads } from '../../../src/renderer/src/agents/draftThreads'
 import { requestAnswerStore } from '../../../src/renderer/src/agents/requests/requestAnswers'
+import { handleOf } from '../../fixtures/stagedImages'
+import type { AgentAttachmentStageRequest } from '../../../src/shared/agents'
 
 vi.mock('../../../src/renderer/src/agents/AgentContext', () => ({ useAgents: vi.fn() }))
 
@@ -214,6 +216,10 @@ describe('ThreadsView workspace', () => {
       if (request.type === 'manual-send') draftId = request.draftId!
       return { ...state, error: 'Delivery not yet confirmed' }
     })
+    // The composer stages each screenshot with main; this stands in for main's answer (ADR-0031).
+    const bridge = window.sotto
+    vi.stubGlobal('sotto', { ...bridge, agents: { ...bridge?.agents, stageAttachment: async (request: AgentAttachmentStageRequest) => handleOf(request.bytes, crypto.randomUUID(), request.name) } })
+    onTestFinished(() => { vi.unstubAllGlobals() })
     const { rerender } = renderThreads(state, command)
     const imageFile = () => new File([new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])], 'same-name.png', { type: 'image/png' })
     fireEvent.change(screen.getByRole('textbox', { name: 'Prompt' }), { target: { value: 'Review this' } })
@@ -237,6 +243,10 @@ describe('ThreadsView workspace', () => {
   })
 
   it('keeps a screenshot pasted just before moving to another thread in the draft it was pasted into', async () => {
+    // The composer stages each screenshot with main; this stands in for main's answer (ADR-0031).
+    const bridge = window.sotto
+    vi.stubGlobal('sotto', { ...bridge, agents: { ...bridge?.agents, stageAttachment: async (request: AgentAttachmentStageRequest) => handleOf(request.bytes, crypto.randomUUID(), request.name) } })
+    onTestFinished(() => { vi.unstubAllGlobals() })
     const state = stateFixture(); state.assignments = []; state.activeThreadId = 'grok-previews'
     state.host.models.forEach(model => { model.supportsImages = true })
     const { command, rerender } = renderThreads(state)
@@ -250,12 +260,16 @@ describe('ThreadsView workspace', () => {
     expect(screen.queryByRole('img', { name: 'moving.png' })).not.toBeInTheDocument()
     state.activeThreadId = 'grok-previews'
     rerender(<ThreadsView onOpenAgents={vi.fn()} now={NOW} />)
-    expect(await screen.findByRole('img', { name: 'moving.png' })).toBeVisible()
+    // The chip names the image while its thumbnail is drawn, then shows the thumbnail under the same name.
+    await waitFor(() => expect(screen.getByRole('img', { name: 'moving.png' })).toBeVisible())
   })
 
   it('holds Send on a thread left and returned to until the screenshot pasted before leaving has landed', async () => {
     // The decode waits until the test lets it finish, so the read outlasts the move away and back.
     let decoded: () => void = () => undefined
+    const bridge = window.sotto
+    vi.stubGlobal('sotto', { ...bridge, agents: { ...bridge?.agents, stageAttachment: async (request: AgentAttachmentStageRequest) => handleOf(request.bytes, crypto.randomUUID(), request.name) } })
+    onTestFinished(() => { vi.unstubAllGlobals() })
     vi.stubGlobal('createImageBitmap', async () => { await new Promise<void>(resolve => { decoded = resolve }); return { width: 3840, height: 2160, close: () => undefined } })
     vi.stubGlobal('OffscreenCanvas', class {
       constructor(readonly width: number, readonly height: number) {}

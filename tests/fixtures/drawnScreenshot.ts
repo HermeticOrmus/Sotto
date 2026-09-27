@@ -1,5 +1,5 @@
 import { expect, type Locator, type Page } from '@playwright/test'
-import type { AgentAttachment } from '../../src/shared/agents'
+import type { AgentAttachmentHandle } from '../../src/shared/agents'
 import { openThreads } from '../e2e/support/sottoLaunch'
 
 export interface DrawnScreenshot {
@@ -77,9 +77,9 @@ export async function openWorkshopComposer(page: Page): Promise<Locator> {
   return page.getByRole('textbox', { name: 'Prompt', exact: true })
 }
 
-/** The attachment named `name` on any saved thread draft, once the draft carrying it has been saved. */
-export async function savedAttachment(page: Page, name: string): Promise<AgentAttachment> {
-  let found: AgentAttachment | undefined
+/** The staged image named `name` on any saved thread draft, once the draft carrying it has been saved (ADR-0031). */
+export async function savedAttachment(page: Page, name: string): Promise<AgentAttachmentHandle> {
+  let found: AgentAttachmentHandle | undefined
   await expect.poll(async () => {
     const state = await page.evaluate(async () => window.sotto!.agents!.get())
     found = state.threadDrafts?.flatMap(draft => draft.attachments).find(attachment => attachment.name === name)
@@ -88,12 +88,14 @@ export async function savedAttachment(page: Page, name: string): Promise<AgentAt
   return found!
 }
 
-/** The pixel size of the image a data URL holds, as the window decodes it. Sizes only. */
-export async function decodedSize(page: Page, dataUrl: string): Promise<{ width: number, height: number }> {
-  return page.evaluate(async source => {
-    const image = new Image()
-    image.src = source
-    await image.decode()
-    return { width: image.naturalWidth, height: image.naturalHeight }
-  }, dataUrl)
+/** The pixel size of the bytes main staged for a handle, read back and decoded in the window. Sizes only. */
+export async function decodedSize(page: Page, handle: Pick<AgentAttachmentHandle, 'digest'>): Promise<{ width: number, height: number }> {
+  return page.evaluate(async digest => {
+    const content = await window.sotto!.agents!.attachmentContent!({ threadId: null, digest })
+    if (!content) throw new Error('The staged image is no longer kept.')
+    const bitmap = await createImageBitmap(new Blob([new Uint8Array(content.bytes)], { type: content.mimeType }))
+    const size = { width: bitmap.width, height: bitmap.height }
+    bitmap.close()
+    return size
+  }, handle.digest)
 }

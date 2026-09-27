@@ -2,7 +2,7 @@ import { hostForThread } from '../../../shared/agents'
 import React, { useEffect, useRef, useState, type ReactNode } from 'react'
 import { ArrowRight, ChevronDown, FolderPlus, List, Mic, MicOff, Plus, RefreshCw, Settings2, VolumeX, Workflow } from 'lucide-react'
 
-import { defaultThreadModelId, PROVIDER_LABELS, capabilitiesForThread, isThreadBusy, isThreadProviderConnected, threadSummaryOf, supportsAgentSupervision, isSubscriptionReasoning, type SubscriptionProvider, type AgentAttachment, type AgentConfiguration, type AgentProject, type AgentState, type AgentThread } from '../../../shared/agents'
+import { defaultThreadModelId, PROVIDER_LABELS, capabilitiesForThread, isThreadBusy, isThreadProviderConnected, threadSummaryOf, supportsAgentSupervision, isSubscriptionReasoning, type SubscriptionProvider, type AgentAttachmentHandle, type AgentConfiguration, type AgentProject, type AgentState, type AgentThread } from '../../../shared/agents'
 import { catalogEntry, chosenModelId, resolveModel } from '../../../shared/modelCatalog'
 import { Button } from '../components/Button'
 import { useAgents, type AgentConnection } from './AgentContext'
@@ -38,7 +38,7 @@ export function AgentComposer({ state, command, compact = false, footerControls,
   const sourceDraft = pausedDraft?.text ?? state.draft
   const sourceAttachments = pausedDraft?.attachments ?? state.draftAttachments
   const [draft, setDraft] = useState(sourceDraft)
-  const [attachments, setAttachments] = useState<AgentAttachment[]>(sourceAttachments ?? [])
+  const [attachments, setAttachments] = useState<AgentAttachmentHandle[]>(sourceAttachments ?? [])
   const [screenshotReads, setScreenshotReads] = useState(0)
   const readingImages = screenshotReads > 0
   const writes = useRef(0)
@@ -67,7 +67,7 @@ export function AgentComposer({ state, command, compact = false, footerControls,
       if (writeVersion === version.current && result !== null && result.error === null) { setDraft(result.draft); setAttachments(result.draftAttachments ?? []) }
     })
   }
-  const updateImages = (value: AgentAttachment[]): void => {
+  const updateImages = (value: AgentAttachmentHandle[]): void => {
     if (pausedDraft) return
     setAttachments(value)
     ++writes.current
@@ -92,7 +92,7 @@ export function AgentComposer({ state, command, compact = false, footerControls,
       <span>{target === undefined ? 'Select a thread' : `${project?.title ?? 'Project'} / ${target.title}`}</span></div>
     {target !== undefined && target.id !== state.activeThreadId ? <div className="agent-draft-target"><span>This draft stays with {target.title}.</span><Button variant="ghost" onClick={() => void command({ type: 'select-thread', threadId: target.id })}>Return to draft thread</Button></div> : null}
     {!assigned && !pausedDraft ? <p className="agent-muted">This saved draft is paused. {target === undefined ? 'Its thread is unavailable.' : <Button variant="secondary" disabled={state.globalLaneBusy || !isThreadProviderConnected(state.host, target) || !supportsAgentSupervision(capabilitiesForThread(state.host, target))} onClick={() => void command({ type: 'assign', threadId: target.id })}>Manage draft thread</Button>}</p> : null}
-    <ScreenshotInput key={target?.id ?? 'no-thread'} attachments={attachments} onChange={updateImages} onRead={() => { setScreenshotReads(count => count + 1); return () => setScreenshotReads(count => count - 1) }}
+    <ScreenshotInput key={target?.id ?? 'no-thread'} target={target?.id ?? null} attachments={attachments} onChange={updateImages} onRead={() => { setScreenshotReads(count => count + 1); return () => setScreenshotReads(count => count - 1) }}
       disabled={Boolean(pausedDraft) || state.globalLaneBusy || target === undefined || !assigned} supported={!answering && Boolean(target && resolveModel(hostForThread(state.host, target).models, target.modelId)?.supportsImages === true)}>
     <textarea id={compact ? 'widget-agent-prompt' : 'agent-prompt'} value={draft} onChange={(event) => update(event.target.value)}
       rows={compact ? 3 : 5} placeholder={target === undefined ? 'Select a thread to start a prompt.' : answering ? 'Dictate or type your answer. It stays saved until you send or clear it.' : 'Dictate or type your prompt. Pauses won’t send it.'}

@@ -10,7 +10,7 @@ import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { z } from 'zod'
-import { agentAttachmentReferenceSchema, agentProjectSchema, agentRuntimeModeSchema, attachmentSizeBytes, type AgentHostSnapshot, type AgentMessage, type AgentRuntimeMode, type AgentThread } from '../../shared/agents'
+import { agentAttachmentReferenceSchema, agentProjectSchema, agentRuntimeModeSchema, type AgentHostSnapshot, type AgentMessage, type AgentRuntimeMode, type AgentThread } from '../../shared/agents'
 import { AtomicJsonStore } from '../storage/atomicJsonStore'
 import type { AgentHost, AgentHostCommand, AgentHostResult, AgentSkillScope, RestoredThreadHistory, ShortTextPrompt, ThreadHistorySource, ThreadHostEvent } from './host'
 import { SIDE_WRITING_TIMEOUT_MS, sideWritingEffort } from './sideWriting'
@@ -539,14 +539,17 @@ export class ClaudeStreamJsonHost implements AgentHost {
         }
         const runtime = await this.start(id)
         verifyFileMentions(command.text, command.files)
+        // The provider's own form of each staged image, read from the store at the protocol boundary (ADR-0031).
+        const images = await Promise.all((command.attachments ?? []).map(async image => ({ type: 'image', source: { type: 'base64', media_type: image.mimeType,
+          data: Buffer.from(await image.read()).toString('base64') } })))
         const nativePrompt = command.skills?.length ? claudeSkillPrompt(command.text, command.skills, await this.listThreadSkills(id, true)) : command.text
         const nativeText = typeof nativePrompt === 'string' ? nativePrompt : claudeText(nativePrompt)
         const origin = { messageId: command.messageId, commandId: command.commandId, uuid: randomUUID(), digest: claudeDigest(nativeText), createdAt: new Date().toISOString(),
-          ...(command.attachments?.length ? { attachments: command.attachments.map(attachment => ({ id: attachment.id, name: attachment.name, mimeType: attachment.mimeType, sizeBytes: attachmentSizeBytes(attachment.dataUrl) })) } : {}) }
+          ...(command.attachments?.length ? { attachments: command.attachments.map(attachment => ({ id: attachment.id, name: attachment.name, mimeType: attachment.mimeType, sizeBytes: attachment.sizeBytes })) } : {}) }
         alias.origins.push(origin)
         try { await this.persist() } catch (error) { alias.origins = alias.origins.filter(candidate => candidate.uuid !== origin.uuid); throw error }
-        const content: unknown = command.attachments?.length ? [
-          ...command.attachments.map(image => ({ type: 'image', source: { type: 'base64', media_type: image.mimeType, data: image.dataUrl.slice(image.dataUrl.indexOf(',') + 1) } })),
+        const content: unknown = images.length ? [
+          ...images,
           ...(typeof nativePrompt === 'string' ? (nativePrompt ? [{ type: 'text', text: nativePrompt }] : []) : nativePrompt),
         ] : nativePrompt
         // Resume and durable origin writes can yield while the user takes over.

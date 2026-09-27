@@ -31,6 +31,9 @@ export const AGENT_GROK_VOICES = 'sotto:agents:grok-voices'
 export const AGENT_VOICE_MODEL = 'sotto:agents:voice-model'
 export const AGENT_WAKE = 'sotto:agents:wake'
 export const AGENT_ATTACHMENT_PREVIEW = 'sotto:agents:attachment-preview'
+/** The window stages an image's bytes once and gets its handle back, or reads a staged image back for a chip (ADR-0031). */
+export const AGENT_ATTACHMENT_STAGE = 'sotto:agents:stage-attachment'
+export const AGENT_ATTACHMENT_CONTENT = 'sotto:agents:attachment-content'
 /** Pushed per thread: the messages of a thread the window is actually looking at. */
 export const AGENT_THREAD_DETAIL = 'sotto:agents:thread-detail'
 /** Asked for by the window when it opens a thread whose detail it has not been sent. */
@@ -86,16 +89,56 @@ export const agentAttachmentsSchema = z.array(agentAttachmentSchema).max(AGENT_M
   .refine(items => new Set(items.map(item => item.id)).size === items.length, 'Attachment IDs must be unique.')
   .refine(items => items.reduce((size, item) => size + attachmentSizeBytes(item.dataUrl), 0) <= AGENT_MAX_ATTACHMENT_BYTES, 'Images must total no more than 20 MiB.')
 export type AgentAttachment = z.infer<typeof agentAttachmentSchema>
-/** Signature check shared by native submission and preview validation; never accepts SVG/HTML. */
+/** Whether a header (bytes as Latin-1 characters) opens the raster format its MIME type names; never SVG or HTML. */
+function rasterHeaderMatches(mimeType: string, header: string): boolean {
+  return mimeType === 'image/png' ? header.startsWith('\x89PNG\r\n\x1a\n')
+    : mimeType === 'image/jpeg' ? header.startsWith('\xff\xd8\xff')
+      : mimeType === 'image/gif' ? /^(GIF87a|GIF89a)/u.test(header)
+        : mimeType === 'image/webp' && header.startsWith('RIFF') && header.slice(8, 12) === 'WEBP'
+}
+/** Signature check shared by preview validation and older inline images; never accepts SVG/HTML. */
 export function hasRasterImageSignature(attachment: Pick<AgentAttachment, 'mimeType' | 'dataUrl'>): boolean {
   let header: string
   try { header = atob(attachment.dataUrl.slice(attachment.dataUrl.indexOf(',') + 1, attachment.dataUrl.indexOf(',') + 25)) }
   catch { return false }
-  return attachment.mimeType === 'image/png' ? header.startsWith('\x89PNG\r\n\x1a\n')
-    : attachment.mimeType === 'image/jpeg' ? header.startsWith('\xff\xd8\xff')
-      : attachment.mimeType === 'image/gif' ? /^(GIF87a|GIF89a)/u.test(header)
-        : attachment.mimeType === 'image/webp' && header.startsWith('RIFF') && header.slice(8, 12) === 'WEBP'
+  return rasterHeaderMatches(attachment.mimeType, header)
 }
+/** The same check on the bytes themselves, which is what staging an image runs. */
+export function bytesHaveRasterSignature(mimeType: string, bytes: Uint8Array): boolean {
+  return rasterHeaderMatches(mimeType, String.fromCharCode(...bytes.subarray(0, 16)))
+}
+/** The SHA-256 of a staged image's bytes, as lowercase hex: the content a handle names. */
+export const attachmentDigestSchema = z.string().regex(/^[a-f0-9]{64}$/u)
+/**
+ * A staged image (ADR-0031): what drafts, follow-ups, commands, state and broadcasts carry in place of its bytes.
+ * `id` is this attachment's own, `digest` the content's; the same image attached twice is two handles on one content.
+ */
+export const agentAttachmentHandleSchema = z.object({
+  id: z.string().min(1).max(128).regex(/^[a-z0-9_-]+$/iu), name: z.string().trim().min(1).max(255),
+  mimeType: z.enum(AGENT_IMAGE_MIME_TYPES), sizeBytes: z.number().int().min(1).max(AGENT_MAX_IMAGE_BYTES), digest: attachmentDigestSchema,
+  /** The sizes the composer attached and staged it at, when it knew them (issue #321). */
+  dimensions: agentAttachmentDimensionsSchema.optional(),
+}).strict()
+export type AgentAttachmentHandle = z.infer<typeof agentAttachmentHandleSchema>
+export const agentAttachmentHandlesSchema = z.array(agentAttachmentHandleSchema).max(AGENT_MAX_ATTACHMENTS)
+  .refine(items => new Set(items.map(item => item.id)).size === items.length, 'Attachment IDs must be unique.')
+  .refine(items => items.reduce((size, item) => size + item.sizeBytes, 0) <= AGENT_MAX_ATTACHMENT_BYTES, 'Images must total no more than 20 MiB.')
+const imageBytes = (limit: number) => z.custom<Uint8Array>(value => value instanceof Uint8Array && value.byteLength > 0 && value.byteLength <= limit,
+  'Choose a PNG, JPEG, GIF or WebP image no larger than 10 MiB.')
+/** The window hands an image's bytes to main once; the handle comes back. `threadId` picks the host that runs it. */
+export const agentAttachmentStageRequestSchema = z.object({
+  threadId: id.nullable(), name: z.string().trim().min(1).max(255), mimeType: z.enum(AGENT_IMAGE_MIME_TYPES), bytes: imageBytes(AGENT_MAX_IMAGE_BYTES),
+  dimensions: agentAttachmentDimensionsSchema.optional(),
+}).strict()
+export type AgentAttachmentStageRequest = z.infer<typeof agentAttachmentStageRequestSchema>
+/** What a host is handed to stage: the image without the thread the window routed it by. */
+export type AgentAttachmentUpload = Omit<AgentAttachmentStageRequest, 'threadId'>
+/** A staged image's bytes, for a composer restoring a chip it holds no copy of. */
+export const agentAttachmentContentRequestSchema = z.object({ threadId: id.nullable(), digest: attachmentDigestSchema }).strict()
+export type AgentAttachmentContentRequest = z.infer<typeof agentAttachmentContentRequestSchema>
+export const agentAttachmentContentSchema = z.object({ mimeType: z.enum(AGENT_IMAGE_MIME_TYPES), bytes: imageBytes(AGENT_MAX_IMAGE_BYTES) }).strict()
+export type AgentAttachmentContent = z.infer<typeof agentAttachmentContentSchema>
+export const agentAttachmentContentResultSchema = agentAttachmentContentSchema.nullable()
 /** Preview bytes themselves: an unsent draft's own image, or one main hands back on request. */
 export const agentAttachmentPreviewDataSchema = z.object({ dataUrl: z.string().max(14_000_000) }).strict().refine(preview => {
   const parsed = agentAttachmentSchema.safeParse({ id: 'preview', name: 'preview',
@@ -412,14 +455,14 @@ export const agentQueueItemSchema = z.object({
 export type AgentQueueItem = z.infer<typeof agentQueueItemSchema>
 export const MAX_DELIVERED_DRAFTS = 128
 export const agentThreadDraftSchema = z.object({
-  threadId: id, draftId: z.uuid(), text, attachments: agentAttachmentsSchema, skills: agentSkillReferencesSchema.optional(),
+  threadId: id, draftId: z.uuid(), text, attachments: agentAttachmentHandlesSchema, skills: agentSkillReferencesSchema.optional(),
   files: agentFileReferencesSchema.optional(),
   requestId: id.nullable(), updatedAt: z.string().datetime(),
 })
 export type AgentThreadDraft = z.infer<typeof agentThreadDraftSchema>
 /** User-authored follow-ups; independent of attention and dispatched outbox intent. */
 export const agentFollowupSchema = z.object({
-  id: z.uuid(), threadId: id, draftId: z.uuid(), text, attachments: agentAttachmentsSchema, skills: agentSkillReferencesSchema.optional(),
+  id: z.uuid(), threadId: id, draftId: z.uuid(), text, attachments: agentAttachmentHandlesSchema, skills: agentSkillReferencesSchema.optional(),
   files: agentFileReferencesSchema.optional(),
   createdAt: z.string().datetime(), updatedAt: z.string().datetime(),
   status: z.enum(['queued', 'dispatching', 'uncertain', 'failed', 'paused']),
@@ -473,7 +516,7 @@ export const agentStateSchema = z.object({
   assignments: z.array(agentAssignmentSchema), queue: z.array(agentQueueItemSchema),
   activeThreadId: z.string().nullable(), activeProjectId: z.string().nullable(),
   draft: text, draftThreadId: z.string().nullable(), composing: z.boolean(),
-  draftAttachments: agentAttachmentsSchema.optional(),
+  draftAttachments: agentAttachmentHandlesSchema.optional(),
   deliveredDrafts: agentDeliveryReceiptsSchema.optional(),
   threadDrafts: z.array(agentThreadDraftSchema).optional(),
   /** Main-only, ephemeral evidence for these exact revisions, including empty draft clears.
@@ -681,19 +724,19 @@ export const agentCommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('utterance'), text, voiceTiming: agentVoiceTimingSchema.optional() }).strict(),
   z.object({ type: z.literal('voice'), action: z.enum(['mute', 'unmute', 'stop-speaking', 'sleep']) }).strict(),
   z.object({ type: z.literal('voice-state'), status: z.string().max(32), error: z.string().max(2000).nullable() }).strict(),
-  z.object({ type: z.literal('compose'), text, attachments: agentAttachmentsSchema.optional() }).strict(),
+  z.object({ type: z.literal('compose'), text, attachments: agentAttachmentHandlesSchema.optional() }).strict(),
   z.object({ type: z.literal('save-thread-draft'), threadId: id, draftId: z.uuid(), text,
-    attachments: agentAttachmentsSchema.optional(), skills: agentSkillReferencesSchema.optional(), files: agentFileReferencesSchema.optional(), requestId: id.nullable().optional(), composer: z.literal('manual').optional() }).strict(),
+    attachments: agentAttachmentHandlesSchema.optional(), skills: agentSkillReferencesSchema.optional(), files: agentFileReferencesSchema.optional(), requestId: id.nullable().optional(), composer: z.literal('manual').optional() }).strict(),
   z.object({ type: z.literal('recover-draft'), threadId: id }).strict(),
   z.object({ type: z.literal('send') }).strict(),
-  z.object({ type: z.literal('manual-send'), threadId: id, text, attachments: agentAttachmentsSchema.optional(), skills: agentSkillReferencesSchema.optional(), files: agentFileReferencesSchema.optional(), draftId: z.uuid().optional() }).strict(),
-  z.object({ type: z.literal('queue-followup'), threadId: id, draftId: z.uuid(), text, attachments: agentAttachmentsSchema.optional(), skills: agentSkillReferencesSchema.optional(), files: agentFileReferencesSchema.optional() }).strict(),
-  z.object({ type: z.literal('edit-followup'), threadId: id, itemId: z.uuid(), text, attachments: agentAttachmentsSchema.optional(), skills: agentSkillReferencesSchema.optional(), files: agentFileReferencesSchema.optional() }).strict(),
+  z.object({ type: z.literal('manual-send'), threadId: id, text, attachments: agentAttachmentHandlesSchema.optional(), skills: agentSkillReferencesSchema.optional(), files: agentFileReferencesSchema.optional(), draftId: z.uuid().optional() }).strict(),
+  z.object({ type: z.literal('queue-followup'), threadId: id, draftId: z.uuid(), text, attachments: agentAttachmentHandlesSchema.optional(), skills: agentSkillReferencesSchema.optional(), files: agentFileReferencesSchema.optional() }).strict(),
+  z.object({ type: z.literal('edit-followup'), threadId: id, itemId: z.uuid(), text, attachments: agentAttachmentHandlesSchema.optional(), skills: agentSkillReferencesSchema.optional(), files: agentFileReferencesSchema.optional() }).strict(),
   z.object({ type: z.literal('steer-followup'), threadId: id, itemId: z.uuid() }).strict(),
   z.object({ type: z.literal('remove-followup'), threadId: id, itemId: z.uuid() }).strict(),
   z.object({ type: z.literal('reorder-followups'), threadId: id, itemIds: z.array(z.uuid()).max(100) }).strict(),
   z.object({ type: z.literal('resume-followups'), threadId: id }).strict(),
-  z.object({ type: z.literal('steer'), threadId: id, draftId: z.uuid(), text, attachments: agentAttachmentsSchema.optional(), skills: agentSkillReferencesSchema.optional(), files: agentFileReferencesSchema.optional() }).strict(),
+  z.object({ type: z.literal('steer'), threadId: id, draftId: z.uuid(), text, attachments: agentAttachmentHandlesSchema.optional(), skills: agentSkillReferencesSchema.optional(), files: agentFileReferencesSchema.optional() }).strict(),
   z.object({ type: z.literal('cancel-draft') }).strict(),
   z.object({ type: z.literal('pause-draft') }).strict(),
   z.object({ type: z.literal('resume-draft'), threadId: id }).strict(),
@@ -787,6 +830,10 @@ export interface AgentBridge {
   get(): Promise<AgentState>
   /** The bytes behind one published `preview: { available: true }` marker, or null when nothing is eligible. */
   attachmentPreview?(request: AgentAttachmentPreviewRequest): Promise<AgentAttachmentPreviewResult>
+  /** Stages an image once on the host that runs `threadId` (the selected host when null) and answers with its handle (ADR-0031). */
+  stageAttachment?(request: AgentAttachmentStageRequest): Promise<AgentAttachmentHandle>
+  /** A staged image's bytes, for a chip this window holds no copy of; null once its host no longer keeps it. */
+  attachmentContent?(request: AgentAttachmentContentRequest): Promise<AgentAttachmentContent | null>
   command(command: AgentCommand): Promise<AgentState>
   onState(listener: (state: AgentState) => void): () => void
   /** One viewed thread's messages, for a thread the window opened before main pushed them. */

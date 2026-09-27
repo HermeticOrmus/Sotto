@@ -628,6 +628,7 @@ async function createRuntime(): Promise<NativeRuntimeController> {
   if (startupSettings.localHostEnabled) hostRouter.add({
     hostId: agentControl.get().hostId!, name: 'This computer', kind: 'local', service: hostService,
     detail: id => agentControl.threadDetail(id), preview: request => agentControl.attachmentPreview(request),
+    stage: image => agentControl.stageAttachment(image), content: digest => agentControl.attachmentContent(digest),
     gitRefs: request => agentControl.gitRefs(request), gitChangedFiles: request => agentControl.gitChangedFiles(request), gitPullRequest: request => agentControl.gitPullRequest(request),
     subscribeDetail: listener => agentControl.subscribeThreadDetail(listener),
   })

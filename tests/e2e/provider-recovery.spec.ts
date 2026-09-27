@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -10,6 +11,9 @@ import { closeSotto, launchSotto, openThreads, userMessageTexts } from './suppor
 const draft = 'Review this synthetic recovered drawing before deciding what to send.'
 const attachment = { id: 'synthetic-image', name: 'recovered-drawing.png', mimeType: 'image/png',
   dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a5FoAAAAASUVORK5CYII=' }
+/** The recovered image as the coordinator carries it once it has staged the inline bytes an older version saved (ADR-0031). */
+const staged = { id: attachment.id, name: attachment.name, mimeType: attachment.mimeType, sizeBytes: Buffer.from(attachment.dataUrl.split(',')[1]!, 'base64').length,
+  digest: createHash('sha256').update(Buffer.from(attachment.dataUrl.split(',')[1]!, 'base64')).digest('hex') }
 
 async function seed(): Promise<string> {
   const profile = await mkdtemp(join(tmpdir(), 'sotto-e2e-recovery-'))
@@ -59,7 +63,7 @@ for (const localDraft of [false, true]) test(`recovered provider draft stays unb
     await expect(notice.getByRole('textbox', { name: 'Recovered draft' })).toHaveValue(draft)
     await expect(notice).toContainText(attachment.name)
     let state = await page.evaluate(async () => window.sotto!.agents!.get())
-    expect(state).toMatchObject({ configuration: { provider: 'codex', enabled: false }, draft, draftAttachments: [attachment],
+    expect(state).toMatchObject({ configuration: { provider: 'codex', enabled: false }, draft, draftAttachments: [staged],
       draftThreadId: null, draftRequestId: null, assignments: [], queue: [], composing: false })
     await capture(page, 'unbound')
     await page.getByRole('button', { name: 'Connect providers', exact: true }).click()
@@ -73,7 +77,7 @@ for (const localDraft of [false, true]) test(`recovered provider draft stays unb
     // Main learns the selection a beat after the popup closes; wait for it before reading the thread by id.
     await expect.poll(() => page.evaluate(async () => (await window.sotto!.agents!.get()).activeThreadId)).toEqual(expect.any(String))
     state = await page.evaluate(async () => window.sotto!.agents!.get())
-    expect(state).toMatchObject({ draft, draftAttachments: [attachment], draftThreadId: null, assignments: [], composing: false })
+    expect(state).toMatchObject({ draft, draftAttachments: [staged], draftThreadId: null, assignments: [], composing: false })
     const threadId = state.activeThreadId!
     expect(await userMessageTexts(page, threadId)).toHaveLength(0)
     await expect(page.getByRole('textbox', { name: 'Prompt', exact: true })).toHaveValue('')
@@ -86,7 +90,7 @@ for (const localDraft of [false, true]) test(`recovered provider draft stays unb
       await expect(notice.getByRole('button', { name: 'Use saved draft here' })).toBeDisabled()
       await expect(composer).toHaveValue('Keep this current unsent native prompt too.')
       await expect(notice.getByRole('textbox', { name: 'Recovered draft' })).toHaveValue(draft)
-      expect(await page.evaluate(async () => window.sotto!.agents!.get())).toMatchObject({ draft, draftAttachments: [attachment], draftThreadId: null })
+      expect(await page.evaluate(async () => window.sotto!.agents!.get())).toMatchObject({ draft, draftAttachments: [staged], draftThreadId: null })
       await capture(page, 'local-draft-kept')
       await composer.fill('')
       await expect(notice.getByRole('button', { name: 'Use saved draft here' })).toBeDisabled()
@@ -98,7 +102,7 @@ for (const localDraft of [false, true]) test(`recovered provider draft stays unb
     await expect(page.getByRole('img', { name: attachment.name })).toBeVisible()
     await expect(notice.getByRole('button', { name: 'Use saved draft here' })).toHaveCount(0)
     state = await page.evaluate(async () => window.sotto!.agents!.get())
-    expect(state).toMatchObject({ draft, draftAttachments: [attachment], draftThreadId: threadId, draftRequestId: null, assignments: [], composing: true })
+    expect(state).toMatchObject({ draft, draftAttachments: [staged], draftThreadId: threadId, draftRequestId: null, assignments: [], composing: true })
     expect(await userMessageTexts(page, threadId)).toHaveLength(0)
     expect(state.host.threads.find(thread => thread.id === threadId)?.requests).toHaveLength(0)
     await capture(page, localDraft ? 'bound-after-local-clear' : 'bound-for-review')

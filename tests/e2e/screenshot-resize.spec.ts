@@ -19,9 +19,8 @@ test('a screenshot past the bound is scaled down in its own format, and its chip
     await expect(previews.getByAltText('4K capture.png')).toBeVisible()
     const large = await savedAttachment(page, '4K capture.png')
     expect(large.mimeType).toBe('image/png')
-    expect(large.dataUrl.startsWith('data:image/png;base64,iVBORw0KGgo')).toBe(true)
     expect(large.dimensions).toEqual({ original: { width: 3840, height: 2160 }, sent: { width: 2576, height: 1449 } })
-    expect(await decodedSize(page, large.dataUrl)).toEqual({ width: 2576, height: 1449 })
+    expect(await decodedSize(page, large)).toEqual({ width: 2576, height: 1449 })
     await expect(previews.getByText('Resized to 2576 x 1449', { exact: true })).toBeVisible()
     await expect(previews.getByText('Resized from 3840 by 2160 to 2576 by 1449 pixels')).toBeAttached()
 
@@ -29,22 +28,21 @@ test('a screenshot past the bound is scaled down in its own format, and its chip
     await expect(previews.getByAltText('Small capture.png')).toBeVisible()
     const small = await savedAttachment(page, 'Small capture.png')
     expect(small.dimensions).toEqual({ original: { width: 1200, height: 800 }, sent: { width: 1200, height: 800 } })
-    expect(await decodedSize(page, small.dataUrl)).toEqual({ width: 1200, height: 800 })
+    expect(await decodedSize(page, small)).toEqual({ width: 1200, height: 800 })
 
     await pasteDrawnScreenshot(prompt, { name: 'Photo.jpg', type: 'image/jpeg', width: 4032, height: 3024, photo: 0.5 })
     await expect(previews.getByAltText('Photo.jpg')).toBeVisible()
     const photo = await savedAttachment(page, 'Photo.jpg')
     expect(photo.mimeType).toBe('image/jpeg')
-    expect(photo.dataUrl.startsWith('data:image/jpeg;base64,/9j/')).toBe(true)
     expect(photo.dimensions?.sent).toEqual({ width: 2576, height: 1932 })
-    expect(await decodedSize(page, photo.dataUrl)).toEqual({ width: 2576, height: 1932 })
+    expect(await decodedSize(page, photo)).toEqual({ width: 2576, height: 1932 })
 
     // A capture of flat panels and text alone scales down to a larger PNG, so it goes as the user attached it.
     await pasteDrawnScreenshot(prompt, { name: 'Flat capture.png', type: 'image/png', width: 3840, height: 2160, photo: 0 })
     await expect(previews.getByAltText('Flat capture.png')).toBeVisible()
     const flat = await savedAttachment(page, 'Flat capture.png')
     expect(flat.dimensions).toEqual({ original: { width: 3840, height: 2160 }, sent: { width: 3840, height: 2160 } })
-    expect(await decodedSize(page, flat.dataUrl)).toEqual({ width: 3840, height: 2160 })
+    expect(await decodedSize(page, flat)).toEqual({ width: 3840, height: 2160 })
 
     // Exactly the two scaled-down images carry the note.
     await expect(previews.getByText(/^Resized to /u)).toHaveCount(2)

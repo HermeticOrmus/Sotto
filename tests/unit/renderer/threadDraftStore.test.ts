@@ -34,6 +34,18 @@ beforeEach(() => { vi.useFakeTimers() })
 afterEach(() => { vi.useRealTimers() })
 
 describe('ThreadDraftStore revisions and saves', () => {
+  it('saves a text edit beside an 8 MiB screenshot with the handle alone, no image bytes (ADR-0031)', () => {
+    const held = heldCommand()
+    const store = new ThreadDraftStore(held.command, 250, uuids())
+    const screenshot = { id: 'shot', name: 'Screenshot.png', mimeType: 'image/png' as const, sizeBytes: 8 * 1024 * 1024, digest: 'e'.repeat(64) }
+    store.edit('thread', { text: 'Look', attachments: [screenshot] })
+    store.edit('thread', { text: 'Look at this' })
+    vi.advanceTimersByTime(250)
+    const [save] = held.saves()
+    expect(save).toMatchObject({ text: 'Look at this', attachments: [screenshot] })
+    // What crosses IPC is the command as it stands: a few hundred bytes, whatever the image weighs.
+    expect(JSON.stringify(save).length).toBeLessThan(1024)
+  })
   it('allows reload only after the latest revisions have durability evidence', async () => {
     const held = heldCommand()
     const store = new ThreadDraftStore(held.command, 250, uuids())
@@ -369,7 +381,7 @@ describe('ThreadDraftStore skills and follow-up queue ownership', () => {
 })
 
 describe('screenshots read for a draft', () => {
-  const image = (id: string, bytes = 3) => ({ id, name: `${id}.png`, mimeType: 'image/png' as const, dataUrl: `data:image/png;base64,${'A'.repeat(bytes / 3 * 4)}` })
+  const image = (id: string, bytes = 3) => ({ id, name: `${id}.png`, mimeType: 'image/png' as const, sizeBytes: bytes, digest: 'a'.repeat(64) })
   it('counts reads until each one says its screenshots were handed on, once', () => {
     const store = new ThreadDraftStore(vi.fn(async () => null))
     const first = store.beginScreenshotRead('thread')

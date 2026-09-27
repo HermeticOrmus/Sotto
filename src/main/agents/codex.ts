@@ -10,14 +10,14 @@ import { stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { z } from 'zod'
-import { agentAttachmentReferenceSchema, attachmentSizeBytes, agentProjectSchema, agentRuntimeModeSchema, type AgentAttachment, type AgentRuntimeMode, type AgentHostSnapshot, type AgentMessage, type AgentThread } from '../../shared/agents'
+import { agentAttachmentReferenceSchema, agentProjectSchema, agentRuntimeModeSchema, type AgentRuntimeMode, type AgentHostSnapshot, type AgentMessage, type AgentThread } from '../../shared/agents'
 import { orderReasoningEfforts } from '../../shared/reasoningEfforts'
 import { AtomicJsonStore } from '../storage/atomicJsonStore'
 import type { AgentSkillCatalog, AgentSkillReference } from '../../shared/agentSkills'
 import { codexSkillInput, parseCodexSkillCatalog } from './codexSkills'
 import type { AgentFileReference } from '../../shared/agentFiles'
 import { verifyFileMentions } from './promptFiles'
-import type { AgentHost, AgentHostCommand, AgentHostResult, AgentSkillScope, ShortTextPrompt, ThreadHistorySource, ThreadHostEvent, ThreadRead } from './host'
+import type { AgentHost, AgentHostCommand, AgentHostResult, AgentSkillScope, PromptImage, ShortTextPrompt, ThreadHistorySource, ThreadHostEvent, ThreadRead } from './host'
 import { SIDE_WRITING_TIMEOUT_MS, sideWritingEffort } from './sideWriting'
 import { ThreadMessageLog } from './threadMessageLog'
 import { cloneHostSnapshot } from './cloneHostSnapshot'
@@ -356,10 +356,13 @@ export class CodexAppServerHost implements AgentHost {
     }
   }
   /** Send and steer share native reference validation and input mapping. */
-  async prepareSkillInput(threadId: string, text: string, skills: readonly AgentSkillReference[] = [], files: readonly AgentFileReference[] = [], attachments: readonly AgentAttachment[] = []) {
+  async prepareSkillInput(threadId: string, text: string, skills: readonly AgentSkillReference[] = [], files: readonly AgentFileReference[] = [], attachments: readonly PromptImage[] = []) {
     verifyFileMentions(text, files)
     const input = skills.length ? codexSkillInput(text, skills, await this.listThreadSkills(threadId, true)) : [{ type: 'text' as const, text }]
-    return [...input, ...attachments.map(image => ({ type: 'image' as const, url: image.dataUrl }))]
+    // A data URL, as before: Codex's `localImage` scales an image to its own limits, which is #321's decision (ADR-0031).
+    const images = await Promise.all(attachments.map(async image => ({ type: 'image' as const,
+      url: `data:${image.mimeType};base64,${Buffer.from(await image.read()).toString('base64')}` })))
+    return [...input, ...images]
   }
   private ensureThread(id: string): NativeConversation {
     const alias = this.aliases[id]!
@@ -985,7 +988,7 @@ export class CodexAppServerHost implements AgentHost {
             validate()
           } catch (error) { this.dispatching.delete(id); throw error }
           const origin: Origin = { messageId: command.messageId, commandId: command.commandId, digest: promptDigest(command.text), createdAt: new Date().toISOString(), turnId: expectedTurnId!, clientIdentity: true,
-            ...(command.attachments?.length ? { attachments: command.attachments.map(image => ({ id: image.id, name: image.name, mimeType: image.mimeType, sizeBytes: attachmentSizeBytes(image.dataUrl) })) } : {}) }
+            ...(command.attachments?.length ? { attachments: command.attachments.map(image => ({ id: image.id, name: image.name, mimeType: image.mimeType, sizeBytes: image.sizeBytes })) } : {}) }
           alias.origins.push(origin)
           try {
             try { await this.persist(); await this.watcher?.pollThread(alias.codexThreadId); validate() }
@@ -1034,7 +1037,7 @@ export class CodexAppServerHost implements AgentHost {
           catch (error) { this.dispatching.delete(id); throw error }
           const skillsRevision = this.skillsRevision
           const origin: Origin = { messageId: command.messageId, commandId: command.commandId, digest: promptDigest(command.text), createdAt: new Date().toISOString(), clientIdentity: true,
-            ...(command.attachments?.length ? { attachments: command.attachments.map(image => ({ id: image.id, name: image.name, mimeType: image.mimeType, sizeBytes: attachmentSizeBytes(image.dataUrl) })) } : {}) }
+            ...(command.attachments?.length ? { attachments: command.attachments.map(image => ({ id: image.id, name: image.name, mimeType: image.mimeType, sizeBytes: image.sizeBytes })) } : {}) }
           alias.origins.push(origin)
           try {
             await this.persist()

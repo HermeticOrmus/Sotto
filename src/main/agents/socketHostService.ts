@@ -3,13 +3,13 @@ import { request as httpRequest } from 'node:http'
 import { request as httpsRequest } from 'node:https'
 import type { z } from 'zod'
 import { SocketFrames } from '../../host/socketFrames'
-import { agentStateSchema, agentThreadDetailResultSchema, agentAttachmentPreviewResultSchema, type AgentCommand, type AgentState, type AgentThreadDetail, type AgentThreadDetailDelta, type AgentThreadDetailUpdate, type AgentAttachmentPreviewRequest, type AgentAttachmentPreviewResult } from '../../shared/agents'
+import { agentAttachmentHandleSchema, agentStateSchema, agentThreadDetailResultSchema, agentAttachmentPreviewResultSchema, type AgentAttachmentContent, type AgentAttachmentHandle, type AgentAttachmentUpload, type AgentCommand, type AgentState, type AgentThreadDetail, type AgentThreadDetailDelta, type AgentThreadDetailUpdate, type AgentAttachmentPreviewRequest, type AgentAttachmentPreviewResult } from '../../shared/agents'
 import { applyAgentThreadDetailDelta } from '../../shared/agentThreadDetail'
 import type { StoredThreadEvent } from '../../shared/threadEvents'
 import { gitRefsPageSchema, type GitRefsPage, type GitRefsRequest } from '../../shared/gitRefs'
 import { gitChangedFilesSchema, type GitChangedFiles, type GitChangedFilesRequest } from '../../shared/gitChangedFiles'
 import { gitPullRequestResultSchema, type GitPullRequestDetail, type GitPullRequestRequest } from '../../shared/gitPullRequests'
-import { HOST_BUSY, hostIsNewer, hostVersionMismatch, hostHealthFeatures, hostPairingSchema, hostSessionSchema, hostHelloSchema, hostEventPageSchema, hostResponseSchema, hostPushSchema, hostReceiptSchema } from '../../shared/hostProtocol'
+import { HOST_BUSY, hostAttachmentContentSchema, hostIsNewer, hostVersionMismatch, hostHealthFeatures, hostPairingSchema, hostSessionSchema, hostHelloSchema, hostEventPageSchema, hostResponseSchema, hostPushSchema, hostReceiptSchema } from '../../shared/hostProtocol'
 import type { HostHello, HostOperation, HostPairing, HostSession, HostResponse, HostPush, HostEventPage, HostReceipt, HostErrorCode } from '../../shared/hostProtocol'
 import type { HostService, ClientIdentity } from './hostService'
 import { version as clientVersion } from '../../../package.json'
@@ -307,6 +307,26 @@ export class SocketHostService implements HostService {
   async receipt(commandId: string): Promise<HostReceipt> { return this.read(hostReceiptSchema, await this.call({ op: 'receipt', commandId })) }
   attachmentPreview(request: AgentAttachmentPreviewRequest): Promise<AgentAttachmentPreviewResult> {
     const result = this.previewTail.then(async () => this.read(agentAttachmentPreviewResultSchema, await this.call({ op: 'preview', request })))
+    this.previewTail = result.catch(() => undefined); return result
+  }
+  /**
+   * Stages an image on the host, which is where the provider reads it (ADR-0031). A host that does not list
+   * `attachment-staging` is from before staged images; the version sentence says which side to update, and nothing is sent.
+   */
+  async stageAttachment(image: AgentAttachmentUpload): Promise<AgentAttachmentHandle> {
+    if (!this.features.includes('attachment-staging')) throw new HostConnectionError(this.mismatch(), 'version_mismatch')
+    const data = Buffer.from(image.bytes.buffer, image.bytes.byteOffset, image.bytes.byteLength).toString('base64')
+    return this.read(agentAttachmentHandleSchema, await this.call({ op: 'stage-attachment', image: { name: image.name, mimeType: image.mimeType, data,
+      ...(image.dimensions ? { dimensions: image.dimensions } : {}) } }))
+  }
+  /** A staged image's bytes, queued behind previews: the host answers one of these large frames at a time. */
+  attachmentContent(digest: string): Promise<AgentAttachmentContent | null> {
+    if (!this.features.includes('attachment-staging')) return Promise.resolve(null)
+    const result = this.previewTail.then(async () => {
+      const content = this.read(hostAttachmentContentSchema, await this.call({ op: 'attachment-content', digest }))
+      // A copy of exactly these bytes, never a view on a buffer another value may share.
+      return content ? { mimeType: content.mimeType, bytes: new Uint8Array(Buffer.from(content.data, 'base64')) } : null
+    })
     this.previewTail = result.catch(() => undefined); return result
   }
   /** A host that does not list `git-refs` is from before the branch picker; the version sentence says which side to bring up to date, and nothing is sent. */

@@ -2,13 +2,13 @@
 import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
-import { AGENT_MAX_IMAGE_BYTES, attachmentSizeBytes, type AgentAttachment } from '../../../src/shared/agents'
+import { AGENT_MAX_IMAGE_BYTES, type AgentAttachmentHandle } from '../../../src/shared/agents'
+import { PIXEL_PNG, promptImageOf } from '../../fixtures/stagedImages'
 import { claudeFixture } from '../../fixtures/claudeFixture'
 
 const fixtures: Awaited<ReturnType<typeof claudeFixture>>[] = []
-const image: AgentAttachment = { id: 'shot', name: 'Screenshot.png', mimeType: 'image/png',
-  dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aH1sAAAAASUVORK5CYII=' }
-const reference = (attachment: AgentAttachment) => ({ id: attachment.id, name: attachment.name, mimeType: attachment.mimeType, sizeBytes: attachmentSizeBytes(attachment.dataUrl) })
+const image = promptImageOf(PIXEL_PNG, 'shot', 'Screenshot.png')
+const reference = (attachment: AgentAttachmentHandle) => ({ id: attachment.id, name: attachment.name, mimeType: attachment.mimeType, sizeBytes: attachment.sizeBytes })
 
 afterEach(async () => { for (const f of fixtures.splice(0)) await f.cleanup() })
 async function fixture(models?: unknown[], requestTimeoutMs = 2000) {
@@ -47,7 +47,7 @@ it('enables images for every Claude catalog entry and sends image-only prompts w
   const sends = (await f.driver.requests()).filter(record => record.method === 'user')
   expect(sends).toHaveLength(models.length)
   for (const send of sends) expect(send.params?.frame).toMatchObject({ message: { content: [
-    { type: 'image', source: { type: 'base64', media_type: image.mimeType, data: image.dataUrl.split(',')[1] } },
+    { type: 'image', source: { type: 'base64', media_type: image.mimeType, data: PIXEL_PNG.toString('base64') } },
   ] } })
 })
 
@@ -62,7 +62,7 @@ it('keeps image-only and captioned receipts after reconnect without replaying im
   expect(await f.host.execute(second)).toEqual({ accepted: true })
   const sends = (await f.driver.requests()).filter(record => record.method === 'user')
   expect(sends[1]?.params?.frame).toMatchObject({ message: { content: [
-    { type: 'image', source: { type: 'base64', media_type: image.mimeType, data: image.dataUrl.split(',')[1] } },
+    { type: 'image', source: { type: 'base64', media_type: image.mimeType, data: PIXEL_PNG.toString('base64') } },
     { type: 'text', text: second.text },
   ] } })
   const restarted = await restart(f)
@@ -74,7 +74,7 @@ it('keeps image-only and captioned receipts after reconnect without replaying im
   expect(await restarted.host.execute(first)).toEqual({ accepted: true })
   expect((await restarted.driver.requests()).filter(record => record.method === 'user')).toHaveLength(2)
   const aliases = await readFile(join(f.root, 'claude-threads.json'), 'utf8')
-  expect(aliases).not.toContain(image.dataUrl.split(',')[1])
+  expect(aliases).not.toContain(PIXEL_PNG.toString('base64'))
   expect(aliases).not.toContain(second.text)
 })
 
@@ -82,8 +82,8 @@ it('accepts the full 20 MiB image batch through native stdout and transcript cat
   const f = await fixture(undefined, 15_000)
   await createThread(f, 'thread')
   const bytes = Buffer.alloc(AGENT_MAX_IMAGE_BYTES)
-  Buffer.from(image.dataUrl.split(',')[1]!, 'base64').copy(bytes)
-  const large = { ...image, dataUrl: 'data:image/png;base64,' + bytes.toString('base64') }
+  PIXEL_PNG.copy(bytes)
+  const large = promptImageOf(bytes, 'shot', 'Screenshot.png')
   const attachments = [large, { ...large, id: 'shot-2' }]
   expect(await f.host.execute({ type: 'send', commandId: 'large', messageId: 'large-message', threadId: 'thread', text: 'Large screenshots', attachments })).toEqual({ accepted: true })
   const restarted = await restart(f, 15_000)

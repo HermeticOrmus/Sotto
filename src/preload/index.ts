@@ -19,7 +19,7 @@ import { AGENT_GIT_PULL_REQUEST, gitPullRequestRequestSchema, gitPullRequestResu
 import { z } from 'zod'
 import { externalLinkSchema } from '../shared/externalLinks'
 import { MEMORY_GET, MEMORY_COMMAND, MEMORY_CHANGED, memorySnapshotSchema, memoryCommandSchema, type MemoryBridge } from '../shared/memory'
-import { AGENT_ATTACHMENT_PREVIEW, agentAttachmentPreviewRequestSchema, agentAttachmentPreviewResultSchema, AGENT_GET, AGENT_COMMAND, AGENT_STATE, AGENT_E2E, AGENT_SPEECH, AGENT_SPEECH_CANCEL, AGENT_GROK_VOICES, AGENT_VOICE_MODEL, AGENT_WAKE, AGENT_THREAD_DETAIL, AGENT_THREAD_DETAIL_GET, agentThreadDetailRequestSchema, agentThreadDetailResultSchema, agentSpeechVoicesSchema, agentVoiceModelStatusSchema, agentWakeDetectionSchema, agentSpeechSchema, agentStateSchema, agentCommandSchema, agentCommandReceiptSchema } from '../shared/agents'
+import { AGENT_ATTACHMENT_CONTENT, AGENT_ATTACHMENT_PREVIEW, AGENT_ATTACHMENT_STAGE, agentAttachmentContentRequestSchema, agentAttachmentContentResultSchema, agentAttachmentHandleSchema, agentAttachmentStageRequestSchema, agentAttachmentPreviewRequestSchema, agentAttachmentPreviewResultSchema, AGENT_GET, AGENT_COMMAND, AGENT_STATE, AGENT_E2E, AGENT_SPEECH, AGENT_SPEECH_CANCEL, AGENT_GROK_VOICES, AGENT_VOICE_MODEL, AGENT_WAKE, AGENT_THREAD_DETAIL, AGENT_THREAD_DETAIL_GET, agentThreadDetailRequestSchema, agentThreadDetailResultSchema, agentSpeechVoicesSchema, agentVoiceModelStatusSchema, agentWakeDetectionSchema, agentSpeechSchema, agentStateSchema, agentCommandSchema, agentCommandReceiptSchema } from '../shared/agents'
 
 import {
   APP_HIDE,
@@ -250,6 +250,11 @@ function createAgentBridge(renderer: IpcRendererAdapter, role: 'main' | 'widget'
     get: () => invokeParsed(renderer, AGENT_GET, agentStateSchema),
     attachmentPreview: (request: import('../shared/agents').AgentAttachmentPreviewRequest) =>
       invokeParsed(renderer, AGENT_ATTACHMENT_PREVIEW, agentAttachmentPreviewResultSchema, agentAttachmentPreviewRequestSchema.parse(request)),
+    // Each window's composer stages a screenshot once and carries its handle; a chip reads its image back (ADR-0031).
+    stageAttachment: (request: import('../shared/agents').AgentAttachmentStageRequest) =>
+      invokeParsed(renderer, AGENT_ATTACHMENT_STAGE, agentAttachmentHandleSchema, agentAttachmentStageRequestSchema.parse(request)),
+    attachmentContent: (request: import('../shared/agents').AgentAttachmentContentRequest) =>
+      invokeParsed(renderer, AGENT_ATTACHMENT_CONTENT, agentAttachmentContentResultSchema, agentAttachmentContentRequestSchema.parse(request)),
     ...(role === 'main' ? {
     chooseProjectDirectory: () => invokeParsed(renderer, AGENT_CHOOSE_PROJECT_DIRECTORY, z.string().min(1).max(4_096).nullable()),
     workingCopyOptions: (projectId: string) => invokeParsed(renderer, AGENT_WORKING_COPY_OPTIONS, agentWorkingCopyOptionsSchema, agentWorkingCopyOptionsRequestSchema.parse(projectId)),

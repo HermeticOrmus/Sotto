@@ -31,6 +31,25 @@ describe('desktop host routing', () => {
     expect(local.command).not.toHaveBeenCalled()
     expect((await router.threadDetail(hostEntityKey(REMOTE, 'thread')))?.threadId).toBe(hostEntityKey(REMOTE, 'thread'))
   })
+  it('stages an image on the host that runs its thread, or the selected host for the coordinator, and reads it back there (ADR-0031)', async () => {
+    const router = new DesktopHostRouter(emptyDesktopState), local = fixture(LOCAL, 'local'), remote = fixture(REMOTE, 'remote')
+    const handle = { id: 'image', name: 'Shot.png', mimeType: 'image/png' as const, sizeBytes: 8, digest: 'a'.repeat(64) }
+    const stages = { local: vi.fn(async () => handle), remote: vi.fn(async () => handle) }
+    const contents = { local: vi.fn(async () => null), remote: vi.fn(async () => ({ mimeType: 'image/png' as const, bytes: new Uint8Array([1]) })) }
+    router.add({ ...local.connection, stage: stages.local, content: contents.local })
+    router.add({ ...remote.connection, stage: stages.remote, content: contents.remote })
+    const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])
+    await expect(router.stageAttachment({ threadId: hostEntityKey(REMOTE, 'thread'), name: 'Shot.png', mimeType: 'image/png', bytes })).resolves.toEqual(handle)
+    expect(stages.remote).toHaveBeenCalledWith({ name: 'Shot.png', mimeType: 'image/png', bytes }); expect(stages.local).not.toHaveBeenCalled()
+    await router.stageAttachment({ threadId: null, name: 'Shot.png', mimeType: 'image/png', bytes })
+    expect(stages.local).toHaveBeenCalledOnce()
+    expect(await router.attachmentContent({ threadId: hostEntityKey(REMOTE, 'thread'), digest: handle.digest })).toEqual({ mimeType: 'image/png', bytes: new Uint8Array([1]) })
+    expect(contents.remote).toHaveBeenCalledWith(handle.digest); expect(contents.local).not.toHaveBeenCalled()
+    router.remove(REMOTE)
+    router.add({ ...remote.connection, stage: stages.remote, content: contents.remote, available: () => false })
+    await expect(router.stageAttachment({ threadId: hostEntityKey(REMOTE, 'thread'), name: 'Shot.png', mimeType: 'image/png', bytes })).rejects.toThrow('Nothing was attached.')
+    expect(await router.attachmentContent({ threadId: hostEntityKey(REMOTE, 'thread'), digest: handle.digest })).toBeNull()
+  })
   it("names each host's unconfirmed settings changes by the thread's client key", () => {
     const router = new DesktopHostRouter(emptyDesktopState), local = fixture(LOCAL, 'local'), remote = fixture(REMOTE, 'remote')
     router.add(local.connection); router.add(remote.connection)

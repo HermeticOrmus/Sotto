@@ -3,7 +3,8 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { agentAttachmentsSchema, agentCommandSchema, type AgentAttachment, type AgentHostSnapshot } from '../../../src/shared/agents'
+import { agentAttachmentHandlesSchema, agentCommandSchema, type AgentHostSnapshot } from '../../../src/shared/agents'
+import { AttachmentStore } from '../../../src/main/agents/attachmentStore'
 import { AgentControl } from '../../../src/main/agents/control'
 import { AgentCredentials } from '../../../src/main/agents/credentials'
 import { E2EAgentHost, e2eAgentReasoner } from '../../../src/main/e2e/agentEffects'
@@ -12,9 +13,9 @@ import type { AgentHostCommand, AgentHostResult } from '../../../src/main/agents
 import { SottoThreadHost, ThreadRegistry } from '../../../src/main/agents/threads'
 import { ConfiguredProviderHost } from '../../../src/main/agents/providerSwitch'
 import { immediatePublishScheduler } from '../../fixtures/publishScheduler'
+import { handleOf, PIXEL_PNG, promptImageOf, stageInto } from '../../fixtures/stagedImages'
 
-const image: AgentAttachment = { id: 'shot-1', name: 'Screenshot.png', mimeType: 'image/png',
-  dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWZ0AAAAASUVORK5CYII=' }
+const image = handleOf(PIXEL_PNG, 'shot-1', 'Screenshot.png')
 const roots: string[] = []
 const disposers: (() => void | Promise<void>)[] = []
 afterEach(async () => {
@@ -56,23 +57,28 @@ async function controlFixture() {
   const create = () => new AgentControl({ schedule: immediatePublishScheduler, directory: root, host, credentials, reasoner: e2eAgentReasoner,
     membership: { status: async () => ({ status: 'beta', label: 'Test', expiresAt: null }), action: async () => ({ status: 'beta', label: 'Test', expiresAt: null }) } })
   let control = create(); disposers.push(async () => { control.dispose(); await control.privacyChanged() })
-  await control.start(); await control.command({ type: 'connect' })
+  await control.start(); await stageInto(control, PIXEL_PNG); await control.command({ type: 'connect' })
   return { root, host, get control() { return control }, async restart() { control.dispose(); control = create(); await control.start() } }
 }
 
 describe('bounded image contract', () => {
   it('accepts image-only manual prompts and rejects invalid encodings, duplicate IDs and excessive counts/sizes', () => {
     expect(agentCommandSchema.parse({ type: 'manual-send', threadId: 'thread', text: '', attachments: [image] })).toMatchObject({ attachments: [image] })
-    for (const attachments of [[{ ...image, dataUrl: 'https://example.com/image.png' }], [{ ...image, mimeType: 'image/svg+xml' }],
-      [{ ...image, dataUrl: image.dataUrl.replace('image/png', 'image/jpeg') }], [image, image], Array.from({ length: 9 }, (_, i) => ({ ...image, id: String(i) })),
-      [{ ...image, dataUrl: 'data:image/png;base64,' + Buffer.alloc(10 * 1024 * 1024 + 1).toString('base64') }],
-      Array.from({ length: 3 }, (_, i) => ({ ...image, id: String(i), dataUrl: 'data:image/png;base64,' + Buffer.alloc(8 * 1024 * 1024).toString('base64') }))]) {
-      expect(agentAttachmentsSchema.safeParse(attachments).success).toBe(false)
+    for (const attachments of [[{ ...image, digest: 'https://example.com/image.png' }], [{ ...image, mimeType: 'image/svg+xml' }],
+      [{ ...image, dataUrl: 'data:image/png;base64,AAAA' }], [image, image], Array.from({ length: 9 }, (_, i) => ({ ...image, id: String(i) })),
+      [{ ...image, sizeBytes: 10 * 1024 * 1024 + 1 }],
+      Array.from({ length: 3 }, (_, i) => ({ ...image, id: String(i), sizeBytes: 8 * 1024 * 1024 }))]) {
+      expect(agentAttachmentHandlesSchema.safeParse(attachments).success).toBe(false)
     }
   })
-  it('rejects a disguised non-image before sending', async () => {
+  it('rejects a disguised non-image when it is staged, before any draft can name it', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sotto-options-')); roots.push(root)
+    const store = new AttachmentStore(root); await store.load()
+    await expect(store.stage({ name: 'Screenshot.png', mimeType: 'image/png', bytes: Buffer.from('abc') })).rejects.toThrow(/content/)
+    await expect(store.stage({ name: 'Drawing.svg', mimeType: 'image/svg+xml', bytes: Buffer.from('<svg/>') })).rejects.toThrow(/PNG, JPEG/)
+    // A handle alone is checked for its count and size and for the model taking images; its content was checked above.
     const snapshot = await new E2EAgentHost().snapshot()
-    expect(() => validatePromptAttachments(snapshot, 'claude:test', [{ ...image, dataUrl: 'data:image/png;base64,YWJj' }])).toThrow(/content/)
+    expect(validatePromptAttachments(snapshot, 'claude:test', [image])).toEqual([image])
   })
 })
 
@@ -87,7 +93,7 @@ describe('coordinator images, authority and durable settings', () => {
     const threadId = initial.threads[0]!.id
     expect(threadId).not.toBe('workshop')
     await host.execute({ type: 'configure-thread', commandId: 'configure', threadId, reasoningEffort: 'high' })
-    await host.execute({ type: 'send', commandId: 'send', threadId, messageId: 'message', text: '', attachments: [image] })
+    await host.execute({ type: 'send', commandId: 'send', threadId, messageId: 'message', text: '', attachments: [promptImageOf(PIXEL_PNG, 'shot-1', 'Screenshot.png')] })
     expect(provider.attempts[0]).toMatchObject({ type: 'configure-thread', threadId: 'workshop', reasoningEffort: 'high' })
     expect(provider.attempts[1]).toMatchObject({ type: 'send', threadId: 'workshop', attachments: [image] })
     expect((await host.snapshot()).threads[0]).toMatchObject({ id: threadId, messages: [{ attachments: [{ id: image.id }] }] })
@@ -169,7 +175,7 @@ describe('coordinator images, authority and durable settings', () => {
     expect(moved).toMatchObject({ draftThreadId: 'workshop', draft: '', draftAttachments: [image] })
     f.host.event({ type: 'permission', threadId: 'workshop', text: 'Publish?', status: 'idle' })
     expect((await f.control.command({ type: 'send' })).error).toMatch(/permission/)
-    expect(f.host.attempts).toEqual([expect.objectContaining({ type: 'send', threadId: 'docs', attachments: [image] })])
+    expect(f.host.attempts).toEqual([expect.objectContaining({ type: 'send', threadId: 'docs', attachments: [expect.objectContaining(image)] })])
     expect((await f.control.command({ type: 'cancel-draft' })).draftAttachments).toEqual([])
   })
   it('validates a combined save before dispatch and persists uncertain settings until actual readback', async () => {

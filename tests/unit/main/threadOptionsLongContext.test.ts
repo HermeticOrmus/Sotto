@@ -1,11 +1,11 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
-import { EMPTY_AGENT_HOST, publicProviderEntityId, type AgentAttachment, type AgentHostSnapshot, type AgentModel } from '../../../src/shared/agents'
+import { EMPTY_AGENT_HOST, publicProviderEntityId, type AgentHostSnapshot, type AgentModel } from '../../../src/shared/agents'
+import { handleOf, PIXEL_PNG } from '../../fixtures/stagedImages'
 import { effortAfterChange, validatePromptAttachments, validateThreadOptions } from '../../../src/main/agents/threadOptions'
 import { sideWritingEffort } from '../../../src/main/agents/sideWriting'
 
-const image: AgentAttachment = { id: 'shot-1', name: 'Screenshot.png', mimeType: 'image/png',
-  dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWZ0AAAAASUVORK5CYII=' }
+const image = handleOf(PIXEL_PNG, 'shot-1', 'Screenshot.png')
 const opus: Omit<AgentModel, 'id'> = { name: 'Opus 5.5', provider: 'Claude Code', providerId: 'claude', ready: true, supportsImages: true,
   reasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultReasoningEffort: 'xhigh', runtimeModes: ['approval-required', 'auto'] }
 const haiku: Omit<AgentModel, 'id'> = { name: 'Haiku 4.5', provider: 'Claude Code', providerId: 'claude', ready: true, reasoningEfforts: [] }

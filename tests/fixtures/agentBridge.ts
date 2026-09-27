@@ -13,6 +13,8 @@ export function agentBridgeFor(control: AgentControl, overrides: Partial<AgentBr
     onState: listener => control.subscribe(listener),
     onThreadDetail: listener => control.subscribeThreadDetail(listener),
     threadDetail: async threadId => control.threadDetail(threadId),
+    stageAttachment: ({ name, mimeType, bytes }) => control.stageAttachment({ name, mimeType, bytes }),
+    attachmentContent: request => control.attachmentContent(request.digest),
     ...overrides,
   }
 }

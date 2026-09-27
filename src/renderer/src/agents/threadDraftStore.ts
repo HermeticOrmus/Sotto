@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react'
 import type { AgentSkillReference } from '../../../shared/agentSkills'
 import type { AgentFileReference } from '../../../shared/agentFiles'
-import { MAX_DELIVERED_DRAFTS, agentAttachmentsSchema, type AgentAttachment, type AgentCommand, type AgentDelivery, type AgentState } from '../../../shared/agents'
+import { MAX_DELIVERED_DRAFTS, agentAttachmentHandlesSchema, type AgentAttachmentHandle, type AgentCommand, type AgentDelivery, type AgentState } from '../../../shared/agents'
 import { gateOnCreation } from './draftThreads'
 
 type Command = (command: AgentCommand) => Promise<AgentState | null>
@@ -10,7 +10,7 @@ type Command = (command: AgentCommand) => Promise<AgentState | null>
 export interface ComposerDraft {
   readonly draftId: string
   readonly text: string
-  readonly attachments: readonly AgentAttachment[]
+  readonly attachments: readonly AgentAttachmentHandle[]
   /** Skills the user picked whose `$name` is still in the text. */
   readonly skills: readonly AgentSkillReference[]
   /** Files the user mentioned whose `@path` is still in the text. */
@@ -52,14 +52,15 @@ export const UNCONFIRMED_SUBMISSION: Record<SubmissionMode, string> = {
 
 /**
  * A revision the user sent from this window. The composer empties on the press, so this is the only
- * copy of what was sent: it holds the images' own bytes so a refused prompt can be sent or written again.
+ * copy of what was sent: it holds the images' handles, whose content main keeps for an hour after nothing else
+ * owns it (ADR-0031), so a refused prompt can be sent or written again.
  */
 export interface Submission {
   readonly threadId: string
   readonly draftId: string
   readonly mode: SubmissionMode
   readonly text: string
-  readonly attachments: readonly AgentAttachment[]
+  readonly attachments: readonly AgentAttachmentHandle[]
   readonly skills: readonly AgentSkillReference[]
   /** Files this revision mentioned, when it mentioned any. */
   readonly files?: readonly AgentFileReference[]
@@ -224,12 +225,12 @@ export class ThreadDraftStore {
    * moves to another thread. As many as fit join the draft as it is now, and the thread's screenshot problem
    * names the rest, so none is lost without a word.
    */
-  addLateScreenshots(threadId: string, images: readonly AgentAttachment[]): void {
+  addLateScreenshots(threadId: string, images: readonly AgentAttachmentHandle[]): void {
     const before = this.draft(threadId).attachments
     let attachments = before
     let leftOut = 0
     for (const image of images) {
-      const next = agentAttachmentsSchema.safeParse([...attachments, image])
+      const next = agentAttachmentHandlesSchema.safeParse([...attachments, image])
       if (next.success) attachments = next.data
       else leftOut += 1
     }
@@ -311,7 +312,7 @@ export class ThreadDraftStore {
   }
 
   /** A new revision of the thread's composer. */
-  edit(threadId: string, patch: { readonly text?: string; readonly attachments?: readonly AgentAttachment[]; readonly skills?: readonly AgentSkillReference[]; readonly files?: readonly AgentFileReference[]; readonly requestId?: string | null }): void {
+  edit(threadId: string, patch: { readonly text?: string; readonly attachments?: readonly AgentAttachmentHandle[]; readonly skills?: readonly AgentSkillReference[]; readonly files?: readonly AgentFileReference[]; readonly requestId?: string | null }): void {
     this.revise(threadId, patch)
     this.emit(new Set([threadId]))
   }
@@ -321,7 +322,7 @@ export class ThreadDraftStore {
    * Sending uses it too: the composer starts a fresh empty revision on the press, so an older
    * published state can never put the sent text back (the new revision has not been observed).
    */
-  private revise(threadId: string, patch: { readonly text?: string; readonly attachments?: readonly AgentAttachment[]; readonly skills?: readonly AgentSkillReference[]; readonly files?: readonly AgentFileReference[]; readonly requestId?: string | null }): string {
+  private revise(threadId: string, patch: { readonly text?: string; readonly attachments?: readonly AgentAttachmentHandle[]; readonly skills?: readonly AgentSkillReference[]; readonly files?: readonly AgentFileReference[]; readonly requestId?: string | null }): string {
     const entry = this.entries.get(threadId) ?? { draft: EMPTY, observed: true, saved: true, saving: null, error: null, superseded: [] }
     this.entries.set(threadId, entry)
     if (entry.draft.draftId) entry.superseded = [...entry.superseded.slice(-15), entry.draft.draftId]

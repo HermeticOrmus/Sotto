@@ -11,17 +11,18 @@ import { useAgentConnection } from '../../../src/renderer/src/agents/AgentContex
 import type { AgentBridge, AgentState } from '../../../src/shared/agents'
 import { immediatePublishScheduler } from '../../fixtures/publishScheduler'
 import { agentBridgeFor } from '../../fixtures/agentBridge'
+import { handleOf, PIXEL_PNG, stageInto } from '../../fixtures/stagedImages'
 
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
-const image = { id: 'retained-image', name: 'pixel.png', mimeType: 'image/png' as const, dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWZ0AAAAASUVORK5CYII=' }
+const image = handleOf(PIXEL_PNG, 'retained-image', 'pixel.png')
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'sotto-reload-drafts-'))
   const credentials = new AgentCredentials(root, { isEncryptionAvailable: () => false, encryptString: value => Buffer.from(value), decryptString: value => value.toString() })
   const control = new AgentControl({ schedule: immediatePublishScheduler, directory: root, host: new E2EAgentHost(), credentials, reasoner: e2eAgentReasoner,
     membership: { status: async () => ({ status: 'beta', label: 'Test', expiresAt: null }), action: async () => ({ status: 'beta', label: 'Test', expiresAt: null }) } })
-  await credentials.load(); await control.start(); await control.command({ type: 'connect' })
+  await credentials.load(); await control.start(); await stageInto(control, PIXEL_PNG); await control.command({ type: 'connect' })
   const bridge: AgentBridge = agentBridgeFor(control)
   return { control, bridge, disk: async () => JSON.parse(await readFile(join(root, 'agents.json'), 'utf8')),
     async close() {
