@@ -1,10 +1,45 @@
-import { mkdir, readdir, readFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { expect, test, type Page } from '@playwright/test'
 import { closeSotto, launchSotto, openThreads, resizeWindow } from './support/sottoLaunch'
 
 /** Every capture this spec takes; the verification note cites a few, copied to artifacts/staged-images/. */
 const RUN = 'artifacts/staged-images-run'
+
+test('repairs a missing staged screenshot when the user attaches the same image again', async () => {
+  const run = 'artifacts/review-385'
+  await mkdir(run, { recursive: true })
+  const icon = await readFile('build/icon.png')
+  const image = icon.toString('base64')
+  const launched = await launchSotto()
+  try {
+    const { page } = launched
+    await page.evaluate(async () => {
+      await window.sotto!.updateSettings({ onboardingComplete: true })
+      await window.sotto!.agents!.command({ type: 'configure', patch: { enabled: true, speak: false } })
+      await window.sotto!.agents!.command({ type: 'connect' })
+    })
+    await page.reload(); await openThreads(page)
+    await page.getByRole('button', { name: 'Workshop', exact: true }).click()
+    await paste(page, image, 'Repair.png')
+    await thumbnail(page, 'Repair.png')
+    await expect.poll(async () => (await page.evaluate(async () => window.sotto!.agents!.get())).threadDrafts?.[0]?.attachments[0]?.name).toBe('Repair.png')
+    const handle = (await page.evaluate(async () => window.sotto!.agents!.get())).threadDrafts![0]!.attachments[0]!
+    const file = join(launched.userData, 'attachments', `${handle.digest}.png`)
+    await rm(file)
+    await page.getByRole('button', { name: 'Send prompt', exact: true }).click()
+    await expect(page.getByText('An image in this message is no longer kept on this computer. Remove it and attach it again. Nothing else was changed.', { exact: true }).first()).toBeVisible()
+    await page.screenshot({ path: `${run}/missing.png`, animations: 'disabled' })
+    await page.getByRole('button', { name: 'Remove Repair.png', exact: true }).click()
+    await paste(page, image, 'Repair.png')
+    await thumbnail(page, 'Repair.png')
+    await expect.poll(async () => readFile(file).catch(() => null)).toEqual(icon)
+    await page.getByRole('button', { name: 'Send prompt', exact: true }).click()
+    await expect(page.getByLabel('Thread transcript', { exact: true }).getByAltText('Repair.png')).toBeVisible()
+    await expect(page.getByLabel('Attached screenshots')).toHaveCount(0)
+    await page.screenshot({ path: `${run}/repaired.png`, animations: 'disabled' })
+  } finally { await closeSotto(launched) }
+})
 
 async function paste(page: Page, image: string, name: string): Promise<void> {
   await page.getByRole('textbox', { name: 'Prompt', exact: true }).evaluate((element, data) => {
