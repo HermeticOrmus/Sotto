@@ -100,7 +100,7 @@ describe('the attachment store (ADR-0031)', () => {
     if (condition === 'missing') await rm(file)
     else await writeFile(file, Buffer.from('damaged'))
     // One read observed the bad file but finishes after another read invalidates it and staging repairs it.
-    const stale = Promise.withResolvers<Buffer>()
+    const stale = Promise.withResolvers<Buffer<ArrayBuffer>>()
     vi.mocked(readFile).mockReturnValueOnce(stale.promise)
     const reading = store.read(handle.digest)
     try {
