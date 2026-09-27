@@ -13,7 +13,6 @@ import { join } from 'node:path'
 import { openHostCredentials } from './credentials'
 import { PairedClients } from '../main/agents/pairing'
 import { startSocketServer } from './socketServer'
-import { remoteAnswerScope } from '../main/agents/authority'
 import { githubPullRequestMerged } from '../main/agents/worktreeCleanup'
 import { acquireHostLock, HostLockError, readBootId, releaseHostLock, type HostLease } from './lock'
 
@@ -98,10 +97,7 @@ async function startHostRuntime(options: HeadlessHostOptions) {
           mayAnswer: client => policy?.mayGrant(client).allowed ?? false,
           setAnswers: (clientId, allowed) => {
             if (!policy) throw new Error('Permission policies are unavailable on this host.')
-            for (const record of policy.list({ scope: remoteAnswerScope(clientId) })) {
-              if (record.action === 'remote-answer' && record.resource === clientId) policy.revoke(record.id)
-            }
-            if (allowed) policy.grantRemoteAnswers(clientId, 'The user allowed this paired device to answer permission requests on the host.')
+            policy.setRemoteAnswers(clientId, allowed, 'The user allowed this paired device to answer permission requests on the host.')
           },
         })
         const { peers } = listener

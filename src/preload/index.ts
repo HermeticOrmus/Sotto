@@ -1,4 +1,5 @@
 import { HOSTS_GET, HOSTS_COMMAND, HOSTS_CHANGED, HOSTS_SSH_SUGGESTIONS, hostsCommandSchema, type HostsState, type SshHostSuggestion } from '../shared/hosts'
+import { PHONES_GET, PHONES_COMMAND, PHONES_CHANGED, phonesCommandSchema, type PhonesState } from '../shared/phones'
 import { mapHostReferences, parseHostEntityKey } from '../shared/clientIdentity'
 
 import { hostClientBridge } from './hostClientBridge'
@@ -318,6 +319,7 @@ export function createSottoBridge(
   )
   const bridge: SottoBridge = {
     hosts: Object.freeze<import('../shared/hosts').HostsBridge>({ get: () => renderer.invoke(HOSTS_GET) as Promise<HostsState>, command: command => renderer.invoke(HOSTS_COMMAND, hostsCommandSchema.parse(command)) as Promise<HostsState>, onChanged: listener => subscribe(renderer, HOSTS_CHANGED, trustedState<HostsState>('hosts'), listener), sshSuggestions: () => renderer.invoke(HOSTS_SSH_SUGGESTIONS) as Promise<SshHostSuggestion[]> }),
+    phones: Object.freeze<import('../shared/phones').PhonesBridge>({ get: () => renderer.invoke(PHONES_GET) as Promise<PhonesState>, command: command => renderer.invoke(PHONES_COMMAND, phonesCommandSchema.parse(command)) as Promise<PhonesState>, onChanged: listener => subscribe(renderer, PHONES_CHANGED, trustedState<PhonesState>('phones'), listener) }),
     ...createToolsBridges(renderer),
     terminals: createTerminalWorkspaceBridge(renderer),
     themes: createThemesBridge(renderer),

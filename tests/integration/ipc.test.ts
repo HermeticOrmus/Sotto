@@ -392,6 +392,7 @@ describe('typed preload bridge', () => {
         'onWindowMaximized',
         'openExternalLink',
         'personalChats',
+        'phones',
         'platform',
         'polishTranscript',
         'publishWidgetState',
@@ -1201,6 +1202,14 @@ describe('IPC validation and lifecycle', () => {
     const { ipc, settings } = createIpcHarness()
     await expect(ipc.invoke(SETTINGS_UPDATE, { browserWithoutAsking: false })).resolves.toMatchObject({ browserWithoutAsking: false })
     expect(settings.update).toHaveBeenCalledExactlyOnceWith({ browserWithoutAsking: false })
+  })
+
+  it('persists phone access and the name phones show through the settings allow-list (ADR-0033)', async () => {
+    const { ipc, settings } = createIpcHarness()
+    await expect(ipc.invoke(SETTINGS_UPDATE, { phoneAccess: true })).resolves.toMatchObject({ phoneAccess: true })
+    expect(settings.update).toHaveBeenLastCalledWith({ phoneAccess: true })
+    await expect(ipc.invoke(SETTINGS_UPDATE, { phoneAccessName: 'Studio' })).resolves.toMatchObject({ phoneAccessName: 'Studio' })
+    expect(settings.update).toHaveBeenLastCalledWith({ phoneAccessName: 'Studio' })
   })
 
   it('persists and clears working-copy defaults through the settings allow-list', async () => {
