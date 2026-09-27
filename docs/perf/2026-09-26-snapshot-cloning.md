@@ -158,7 +158,8 @@ Code's. The in-app split was last measured by `tests/e2e/multi-thread-cpu.spec.t
 the legacy snapshot contract, not the native adapters, so it cannot show this change, and it was not run again
 here. How much of main's working set in a real session is held histories depends on how many threads are held
 and how long they are; the heap figures above are the benchmark's share of it. The per-process split with the
-native adapters is not measured; #369 asks for an e2e that runs them over the fake CLIs.
+native adapters was not measured here; `2026-09-27-native-process-memory.md` (#369) measures it over the fake
+CLIs, before and after this change.
 
 ## What was not changed
 
