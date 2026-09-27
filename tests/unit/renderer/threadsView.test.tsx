@@ -444,6 +444,18 @@ describe('ThreadsView workspace', () => {
     expect(screen.getByRole('region', { name: 'Projects', exact: true })).toHaveTextContent('No open threads.')
   })
 
+  it('opens a thread in the active project at once from the empty workspace’s own button', async () => {
+    const state = stateFixture(); state.host.threads = []; state.queue = []
+    const { command } = renderThreads(state)
+    const emptyPageButton = screen.getAllByRole('button', { name: 'New thread' }).find(button => button.closest('.thread-workspace__empty'))!
+    fireEvent.click(emptyPageButton)
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'New thread', exact: true })).toBeVisible())
+    expect(screen.queryByRole('dialog', { name: 'New thread' })).not.toBeInTheDocument()
+    expect(command).toHaveBeenCalledWith(expect.objectContaining({ type: 'create-thread', projectId: 'workshop' }))
+    // The fixture's command never carries the draft into main's own state, so it is forgotten by hand here.
+    draftThreads.reset()
+  })
+
   it('searches settled history while preserving live attention in the sidebar', () => {
     renderThreads(stateFixture())
     fireEvent.change(screen.getByRole('searchbox', { name: 'Search threads' }), { target: { value: 'codex' } })
@@ -492,14 +504,12 @@ describe('ThreadsView workspace', () => {
 describe('a thread created without a round trip', () => {
   afterEach(() => draftThreads.reset())
 
-  /** Create a thread in the workshop project from the sidebar, without waiting for anything. */
-  function createThread(title: string): void {
+  /** Press the pen on the workshop project row: no dialog, the thread opens on defaults at once (issue #347). */
+  function createThread(): void {
     fireEvent.click(screen.getByRole('button', { name: 'New thread in workshop' }))
-    fireEvent.change(screen.getByLabelText('Thread name'), { target: { value: title } })
-    fireEvent.click(screen.getByRole('button', { name: 'Create thread' }))
   }
-  const createRequest = (command: { mock: { calls: unknown[][] } }): AgentCommand & { threadId?: string } =>
-    command.mock.calls.map(([request]) => request as AgentCommand).find(request => request.type === 'create-thread')! as AgentCommand & { threadId?: string }
+  const createRequest = (command: { mock: { calls: unknown[][] } }): (AgentCommand & { threadId?: string }) | undefined =>
+    command.mock.calls.map(([request]) => request as AgentCommand).find(request => request.type === 'create-thread') as (AgentCommand & { threadId?: string }) | undefined
 
   it('shows the pane and its composer before main answers, and keeps a draft typed meanwhile', async () => {
     const state = stateFixture()
@@ -513,16 +523,16 @@ describe('a thread created without a round trip', () => {
     const view = (): React.ReactElement => <ThreadsView onOpenAgents={vi.fn()} now={NOW} onPaneThreadsChange={ids => observed.push([...ids])} />
     vi.mocked(useAgents).mockReturnValue(connection(state, command))
     const { rerender } = render(view())
-    createThread('Fast start')
-    // Nothing is awaited here: the dialog is gone and the thread is on screen already.
+    createThread()
+    // Nothing is typed and no dialog opens: the thread is on screen, named and focused, before main answers.
     expect(screen.queryByRole('dialog', { name: 'New thread' })).not.toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: 'Fast start', exact: true })).toBeVisible()
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'New thread', exact: true })).toBeVisible())
     expect(screen.getByRole('textbox', { name: 'Prompt', exact: true })).toBeEnabled()
-    const request = createRequest(command)
-    expect(request).toMatchObject({ type: 'create-thread', projectId: 'workshop', title: 'Fast start', threadId: expect.any(String) })
+    const request = await waitFor(() => { const found = createRequest(command); expect(found).toBeDefined(); return found! })
+    expect(request).toMatchObject({ type: 'create-thread', projectId: 'workshop', title: 'New thread', titleSource: 'default', managed: false, threadId: expect.any(String) })
     const threadId = request.threadId!
     fireEvent.change(screen.getByRole('textbox', { name: 'Prompt', exact: true }), { target: { value: 'Start on the failing test.' } })
-    const arrived: AgentState['host']['threads'][number] = { id: threadId, projectId: 'workshop', title: 'Fast start', modelId: 'claude:sonnet',
+    const arrived: AgentState['host']['threads'][number] = { id: threadId, projectId: 'workshop', title: 'New thread', modelId: 'claude:sonnet',
       status: 'idle', messages: [], requests: [], nativeSessionStarted: false, worktree: { mode: 'independent', status: 'ready', path: 'C:/workshop-1' } }
     const published: AgentState = { ...state, activeThreadId: threadId, host: { ...state.host, threads: [...state.host.threads, arrived] } }
     // Until main has the thread, naming it to main would say nothing, so the panes reported exclude it.
@@ -534,30 +544,83 @@ describe('a thread created without a round trip', () => {
     await waitFor(() => expect(draftThreads.get()).toEqual([]))
     rerender(view())
     expect(observed.at(-1)).toEqual([threadId])
-    expect(screen.getAllByRole('button', { name: 'Fast start', exact: true })).toHaveLength(1)
-    expect(screen.getByRole('heading', { name: 'Fast start', exact: true })).toBeVisible()
+    expect(within(screen.getByRole('region', { name: 'Projects' })).getAllByRole('button', { name: 'New thread', exact: true })).toHaveLength(1)
+    expect(screen.getByRole('heading', { name: 'New thread', exact: true })).toBeVisible()
     expect(screen.getByRole('textbox', { name: 'Prompt', exact: true })).toHaveValue('Start on the failing test.')
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 
-  it('takes the thread away again and reopens the dialog with the choices and the reason when main refuses', async () => {
+  it('shows the refusal in the sidebar and takes the thread away again without repeating the creation', async () => {
     const state = stateFixture()
     const command = vi.fn(async (...args: unknown[]) => {
       const request = args[0] as AgentCommand
       return request.type === 'create-thread' ? { ...state, error: 'Send or clear your draft before creating another thread.' } : state
     })
     renderThreads(state, command)
-    createThread('Refused thread')
-    expect(screen.getByRole('heading', { name: 'Refused thread', exact: true })).toBeVisible()
-    await screen.findByRole('dialog', { name: 'New thread' })
-    expect(screen.getByRole('alert')).toHaveTextContent('Send or clear your draft before creating another thread.')
-    expect(screen.getByLabelText('Thread name')).toHaveValue('Refused thread')
-    expect(screen.getByText('Starts in the project folder. Change it under the composer.')).toBeInTheDocument()
-    expect(screen.queryByRole('heading', { name: 'Refused thread', exact: true })).not.toBeInTheDocument()
+    createThread()
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'New thread', exact: true })).toBeVisible())
+    expect(screen.queryByRole('dialog', { name: 'New thread' })).not.toBeInTheDocument()
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Send or clear your draft before creating another thread.'))
+    expect(screen.queryByRole('heading', { name: 'New thread', exact: true })).not.toBeInTheDocument()
     expect(draftThreads.get()).toEqual([])
     // The selection returns to the thread that had it, and creation is never repeated on its own.
     expect(screen.getByRole('heading', { name: 'Visual gate flake', exact: true })).toBeVisible()
     expect(command.mock.calls.filter(([request]) => (request as AgentCommand).type === 'create-thread')).toHaveLength(1)
+  })
+
+  it('carries text typed before a refusal to the next new thread opened in the same project', async () => {
+    const state = stateFixture()
+    let settle: (value: AgentState) => void = () => undefined
+    const refusing = new Promise<AgentState>(resolve => { settle = resolve })
+    let creations = 0
+    const command = vi.fn(async (...args: unknown[]) => {
+      const request = args[0] as AgentCommand
+      if (request.type !== 'create-thread') return state
+      creations += 1
+      return creations === 1 ? refusing : state
+    })
+    renderThreads(state, command)
+    createThread()
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'New thread', exact: true })).toBeVisible())
+    expect(screen.getByRole('textbox', { name: 'Prompt', exact: true })).toBeEnabled()
+    fireEvent.change(screen.getByRole('textbox', { name: 'Prompt', exact: true }), { target: { value: 'Do not lose this.' } })
+    await act(async () => { settle({ ...state, error: 'Send or clear your draft before creating another thread.' }) })
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Send or clear your draft before creating another thread.'))
+    expect(screen.queryByRole('heading', { name: 'New thread', exact: true })).not.toBeInTheDocument()
+    // The refused draft's own pane is gone, but its text opens with the project's next new thread.
+    createThread()
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'New thread', exact: true })).toBeVisible())
+    expect(screen.getByRole('textbox', { name: 'Prompt', exact: true })).toHaveValue('Do not lose this.')
+  })
+})
+
+describe('Ctrl+Shift+N opens a new thread (issue #347)', () => {
+  afterEach(() => draftThreads.reset())
+
+  it('opens a thread in the focused thread’s project, with no dialog', async () => {
+    const state = stateFixture()
+    const { command } = renderThreads(state)
+    fireEvent.keyDown(window, { key: 'n', ctrlKey: true, shiftKey: true })
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'New thread', exact: true })).toBeVisible())
+    expect(screen.queryByRole('dialog', { name: 'New thread' })).not.toBeInTheDocument()
+    expect(command).toHaveBeenCalledWith(expect.objectContaining({ type: 'create-thread', projectId: 'workshop' }))
+  })
+
+  it('opens the project chooser when no thread is focused', () => {
+    const state = { ...stateFixture(), activeThreadId: null }
+    renderThreads(state)
+    fireEvent.keyDown(window, { key: 'n', ctrlKey: true, shiftKey: true })
+    expect(screen.getByRole('dialog', { name: 'New thread' })).toBeInTheDocument()
+  })
+
+  it('leaves an already-open dialog its own keys', () => {
+    const state = { ...stateFixture(), activeThreadId: null }
+    renderThreads(state)
+    fireEvent.click(within(screen.getByRole('complementary')).getByRole('button', { name: 'New thread' }))
+    const dialog = screen.getByRole('dialog', { name: 'New thread' })
+    fireEvent.keyDown(window, { key: 'n', ctrlKey: true, shiftKey: true })
+    // Still exactly one dialog: the shortcut did nothing while one was already open.
+    expect(screen.getAllByRole('dialog', { name: 'New thread' })).toEqual([dialog])
   })
 })
 

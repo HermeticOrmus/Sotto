@@ -388,12 +388,12 @@ describe('Threads project folders', () => {
     await waitFor(() => expect(live.command).toHaveBeenCalledWith({ type: 'select-project', projectId: 'workshop' }))
   })
 
-  it('starts a new thread in a chosen project', () => {
-    mount(threadsStateFixture())
+  it('starts a new thread in a chosen project at once, with no dialog to fill in', async () => {
+    const { live } = mount(threadsStateFixture())
     fireEvent.click(screen.getByRole('button', { name: 'New thread in sotto-site' }))
-    const dialog = screen.getByRole('dialog', { name: 'New thread' })
-    expect(within(dialog).getByText('C:/sotto-site')).toBeVisible()
-    expect(within(dialog).getByRole('button', { name: /Create thread/ })).toBeVisible()
+    expect(screen.queryByRole('dialog', { name: 'New thread' })).not.toBeInTheDocument()
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'New thread', exact: true })).toBeVisible())
+    expect(live.command).toHaveBeenCalledWith(expect.objectContaining({ type: 'create-thread', projectId: 'sotto-site', title: 'New thread', managed: false }))
   })
 })
 

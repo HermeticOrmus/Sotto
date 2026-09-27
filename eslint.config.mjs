@@ -6,6 +6,7 @@ export default tseslint.config(
     ignores: [
       'artifacts/phase-three-themes/**',
       'artifacts/thread-browser-player/**',
+      'artifacts/new-thread-defaults/**',
       'artifacts/codex-questions-thread-agents/**',
       'artifacts/agent-browser/**',
       'artifacts/browser-grant/**',
@@ -42,6 +43,7 @@ export default tseslint.config(
       'artifacts/effort-slider/**',
       'artifacts/pending-settings-run/**',
       'artifacts/staged-images-run/**',
+      'artifacts/workflow-agent-rows-run/**',
       'artifacts/natural-voice-qa/**',
       'artifacts/tts-bench/**',
       'artifacts/voice-perf/**',

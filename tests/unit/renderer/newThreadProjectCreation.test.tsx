@@ -12,7 +12,7 @@ function fixture(projects: AgentState['host']['projects'] = [unrelated], activeP
     configuration: defaultAgentConfiguration(), connection: 'connected',
     host: { connected: true, name: 'Codex', version: 'test',
       capabilities: { projects: true, threads: true, submit: true, observe: true, questions: true, permissions: true, interrupt: true, messageOrigin: true, reconcile: true },
-      projects, threads: [], models: [{ id: 'codex:model', name: 'Model', provider: 'Codex', ready: true, reasoningEfforts: ['low', 'high'], runtimeModes: ['approval-required', 'full-access'] }] },
+      projects, threads: [], models: [{ id: 'codex:model', name: 'Model', provider: 'Codex', providerId: 'codex', ready: true, reasoningEfforts: ['low', 'high'], runtimeModes: ['approval-required', 'full-access'] }] },
     activeProjectId, activeThreadId: null, assignments: [], queue: [], draft: '', draftThreadId: null, draftRequestId: null, composing: false,
     pendingRequest: '', globalLaneBusy: false, notice: '', error: null, speech: { id: 0, text: '' },
     voice: { status: 'off', error: null, action: 'none', revision: 0 }, credentials: { reasoning: false, grokSpeech: false, secure: true },
@@ -26,15 +26,9 @@ function setup(command: (command: AgentCommand) => Promise<AgentState | null>, s
   const view = render(<NewThreadDialog {...props} />)
   return { ...view, onCreated, update: (next: AgentState) => view.rerender(<NewThreadDialog {...props} state={next} />) }
 }
+/** Choose the Local folder source, the only step left before the thread opens on its own (issue #347). */
 async function browse() {
   fireEvent.click(screen.getByRole('button', { name: /Local folder/ }))
-  fireEvent.click(await screen.findByText('Thread options'))
-  await screen.findByLabelText('Thread name')
-  fireEvent.change(screen.getByLabelText('Thread name'), { target: { value: 'My work' } })
-}
-async function submit() {
-  fireEvent.click(screen.getByRole('button', { name: 'Create thread' }))
-  await waitFor(() => expect(screen.getByRole('button', { name: 'Create thread' })).not.toBeDisabled())
 }
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
@@ -44,12 +38,9 @@ describe('native folder project resolution', () => {
     const command = vi.fn<(request: AgentCommand) => Promise<AgentState>>(async () => acknowledged)
     const view = setup(command)
     await browse()
-    fireEvent.change(screen.getByLabelText('Thread reasoning'), { target: { value: 'high' } })
-    fireEvent.change(screen.getByLabelText('Thread permissions'), { target: { value: 'full-access' } })
-    await submit()
+    await waitFor(() => expect(view.onCreated).toHaveBeenCalledOnce())
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
-    expect(command).toHaveBeenLastCalledWith({ type: 'create-thread', projectId: actual.id, title: 'My work', modelId: 'codex:model', managed: false, workingCopy: 'shared', titleSource: 'user', reasoningEffort: 'high', runtimeMode: 'full-access' })
-    expect(view.onCreated).toHaveBeenCalledOnce()
+    expect(command).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'create-thread', projectId: actual.id, title: 'New thread', modelId: 'codex:model', managed: false, workingCopy: 'shared', titleSource: 'default' }))
   })
 
   it('uses the Agents model even when an older saved thread default and model order prefer Grok', async () => {
@@ -61,29 +52,27 @@ describe('native folder project resolution', () => {
       { id: 'native:claude:model:opus%5B1m%5D', name: 'Opus', provider: 'Claude', providerId: 'claude', ready: true }]
     const command = vi.fn<(request: AgentCommand) => Promise<AgentState>>(async () => state)
     setup(command, state)
-    await browse(); await submit()
+    await browse()
+    await waitFor(() => expect(command).toHaveBeenCalled())
     expect(command).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'create-thread', modelId: 'native:claude:model:opus%5B1m%5D' }))
   })
 
-  it('follows the Agents account default when its resolved model changes before a thread choice', async () => {
+  it('follows the Agents account default at the moment the thread opens', async () => {
     const state = fixture([actual])
     state.configuration = { ...state.configuration, reasoning: 'claude', reasoningModel: '' }
     state.host.models = [
       { id: 'native:claude:model:sonnet', name: 'Sonnet', provider: 'Claude', providerId: 'claude', ready: true },
       { id: 'native:claude:model:opus', name: 'Opus', provider: 'Claude', providerId: 'claude', ready: true },
     ]
-    const account = { provider: 'claude' as const, label: 'Claude', installed: true, ready: true, detail: '', models: [{ id: 'sonnet', name: 'Sonnet' }, { id: 'opus', name: 'Opus' }], defaultModelId: 'sonnet' }
+    const account = { provider: 'claude' as const, label: 'Claude', installed: true, ready: true, detail: '', models: [{ id: 'sonnet', name: 'Sonnet' }, { id: 'opus', name: 'Opus' }], defaultModelId: 'opus' }
     state.reasoningAccounts = [account]
     const command = vi.fn<(request: AgentCommand) => Promise<AgentState>>(async () => state)
-    const view = setup(command, state)
+    setup(command, state)
     await browse()
-    expect(screen.getByRole('combobox', { name: 'Thread model' })).toHaveTextContent('Sonnet')
-    view.update({ ...state, reasoningAccounts: [{ ...account, defaultModelId: 'opus' }] })
-    expect(screen.getByRole('combobox', { name: 'Thread model' })).toHaveTextContent('Opus')
-    await submit()
+    await waitFor(() => expect(command).toHaveBeenCalled())
     expect(command).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'create-thread', modelId: 'native:claude:model:opus' }))
   })
-  it('creates on a long-context Agents model the catalog lists only by its base model, and keeps it when that entry is pressed', async () => {
+  it('creates on a long-context Agents model the catalog lists only by its base model', async () => {
     // Claude Code 2.1.283 lists `opus` and no `opus[1m]`; Settings still names the variant (#344).
     const state = fixture([actual])
     state.configuration = { ...state.configuration, reasoning: 'claude', reasoningModel: 'opus[1m]' }
@@ -95,143 +84,53 @@ describe('native folder project resolution', () => {
     const command = vi.fn<(request: AgentCommand) => Promise<AgentState>>(async () => state)
     setup(command, state)
     await browse()
-    expect(screen.queryByText(/is not ready with this model/u)).toBeNull()
-    expect(screen.getByRole('button', { name: 'Create thread' })).toBeEnabled()
-    expect(screen.getByText('Thread options').parentElement).toHaveTextContent('Opus 5.5 · High')
-    const model = screen.getByRole('combobox', { name: 'Thread model' })
-    expect(model).toHaveTextContent('Opus 5.5')
-    expect(model).not.toHaveTextContent(/1M|%5B/iu)
-    expect(screen.getByRole('combobox', { name: 'Thread reasoning' })).toHaveValue('high')
-    fireEvent.click(model)
-    expect(screen.getAllByRole('option', { name: 'Opus 5.5' })).toHaveLength(1)
-    expect(screen.getByRole('option', { name: 'Opus 5.5' })).toHaveAttribute('aria-selected', 'true')
-    fireEvent.click(screen.getByRole('option', { name: 'Opus 5.5' }))
-    // Away and back again lands on the Agents model's own ID, not the base model's.
-    fireEvent.click(model)
-    fireEvent.click(screen.getByRole('option', { name: 'Sonnet 4.6' }))
-    fireEvent.click(model)
-    fireEvent.click(screen.getByRole('option', { name: 'Opus 5.5' }))
-    await submit()
+    await waitFor(() => expect(command).toHaveBeenCalled())
     expect(command).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'create-thread', modelId: 'native:claude:model:opus%5B1m%5D' }))
-  })
-  it.each(['missing', 'unavailable'] as const)('waits for the Agents model when it is %s instead of creating with ready Grok', async availability => {
-    const grok = { id: 'native:grok:model:grok-4.6', name: 'Grok 4.6', provider: 'Grok', providerId: 'grok' as const, ready: true }
-    const claude = { id: 'native:claude:model:opus', name: 'Opus', provider: 'Claude', providerId: 'claude' as const, ready: false }
-    const state = fixture([actual])
-    state.configuration = { ...state.configuration, reasoning: 'claude', reasoningModel: 'opus', defaultModelId: grok.id }
-    state.host.models = [grok, ...(availability === 'unavailable' ? [claude] : [])]
-    const command = vi.fn<(request: AgentCommand) => Promise<AgentState>>(async () => state)
-    const view = setup(command, state)
-    await browse()
-    expect(screen.getByRole('button', { name: 'Create thread' })).toBeDisabled()
-    fireEvent.click(screen.getByRole('button', { name: 'Create thread' }))
-    expect(command).not.toHaveBeenCalled()
-    view.update({ ...state, host: { ...state.host, models: [grok, { ...claude, ready: true }] } })
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Create thread' })).toBeEnabled())
-    await submit()
-    expect(command).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'create-thread', modelId: claude.id }))
-  })
-
-  it('keeps a model deliberately chosen for this thread when Agents settings change', async () => {
-    const grok = { id: 'native:grok:model:grok-4.6', name: 'Grok 4.6', provider: 'Grok', providerId: 'grok' as const, ready: true }
-    const claude = { id: 'native:claude:model:opus', name: 'Opus', provider: 'Claude', providerId: 'claude' as const, ready: true }
-    const state = fixture([actual])
-    state.configuration = { ...state.configuration, reasoning: 'claude', reasoningModel: 'opus' }
-    state.host.models = [grok, claude, ...state.host.models]
-    const command = vi.fn<(request: AgentCommand) => Promise<AgentState>>(async () => state)
-    const view = setup(command, state)
-    await browse()
-    fireEvent.click(screen.getByRole('combobox', { name: 'Thread model' }))
-    fireEvent.click(screen.getByRole('tab', { name: 'Grok', exact: true }))
-    fireEvent.click(screen.getByRole('option', { name: 'Grok 4.6', exact: true }))
-    view.update({ ...state, configuration: { ...state.configuration, reasoning: 'codex', reasoningModel: 'model' } })
-    expect(screen.getByRole('combobox', { name: 'Thread model' })).toHaveTextContent('Grok 4.6')
-    await submit()
-    expect(command).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'create-thread', modelId: grok.id }))
   })
   it('reuses an existing Windows path without creating a duplicate project', async () => {
     const state = fixture([{ ...actual, path: actual.path.toUpperCase() + '\\' }])
     const command = vi.fn<(request: AgentCommand) => Promise<AgentState>>(async () => state)
     setup(command, state)
-    await browse(); await submit()
-    expect(command.mock.calls.map(([request]) => request.type)).toEqual(['create-thread'])
+    await browse()
+    await waitFor(() => expect(command.mock.calls.map(([request]) => request.type)).toEqual(['create-thread']))
     expect(command).toHaveBeenCalledWith(expect.objectContaining({ projectId: actual.id }))
   })
 
-  it('refreshes a delayed acknowledgement without submitting project creation again on retry or late state', async () => {
+  it('refreshes a delayed acknowledgement without submitting project creation again on retry', async () => {
     const pending = fixture([unrelated], 'requested-id')
-    let snapshot = pending
+    const snapshot = pending
     const command = vi.fn<(request: AgentCommand) => Promise<AgentState>>(async () => snapshot)
     const view = setup(command)
-    await browse(); await submit()
-    expect(command.mock.calls.map(([request]) => request.type)).toEqual(['create-project', 'refresh'])
+    await browse()
+    await waitFor(() => expect(command.mock.calls.map(([request]) => request.type)).toEqual(['create-project', 'refresh']))
     expect(view.onCreated).not.toHaveBeenCalled()
-    await submit()
-    expect(command.mock.calls.filter(([request]) => request.type === 'create-project')).toHaveLength(1)
+    // A missing acknowledgement is not permission to submit again: choosing the same source only checks.
+    await browse()
+    await waitFor(() => expect(command.mock.calls.filter(([request]) => request.type === 'create-project')).toHaveLength(1))
     expect(command.mock.calls.filter(([request]) => request.type === 'create-thread')).toHaveLength(0)
-    snapshot = fixture([unrelated, actual], unrelated.id)
-    view.update(snapshot)
-    await submit()
-    view.update(snapshot)
-    expect(command.mock.calls.filter(([request]) => request.type === 'create-project')).toHaveLength(1)
-    expect(command.mock.calls.filter(([request]) => request.type === 'create-thread')).toEqual([[expect.objectContaining({ projectId: actual.id, title: 'My work' })]])
-    expect(view.onCreated).toHaveBeenCalledOnce()
   })
 
   it('continues the original submission when refresh delivers the project', async () => {
     const command = vi.fn(async (request: AgentCommand) => request.type === 'create-project' ? fixture([], 'requested-id') : fixture([actual]))
     const view = setup(command)
-    await browse(); await submit()
-    expect(command.mock.calls.map(([request]) => request.type)).toEqual(['create-project', 'refresh', 'create-thread'])
-    expect(command).toHaveBeenLastCalledWith(expect.objectContaining({ projectId: actual.id, title: 'My work' }))
-    expect(view.onCreated).toHaveBeenCalledOnce()
-  })
-
-  it.each([null, { ...fixture(), error: 'The creation result is unknown.' }])('retains an unconfirmed attempt across back/reselection (%j)', async response => {
-    let snapshot = fixture()
-    const command = vi.fn(async (request: AgentCommand) => request.type === 'create-project' ? response : snapshot)
-    const view = setup(command)
-    await browse(); await submit()
-    fireEvent.click(screen.getByRole('button', { name: 'Back to projects' }))
-    await browse(); await submit()
-    expect(command.mock.calls.filter(([request]) => request.type === 'create-project')).toHaveLength(1)
-    expect(command.mock.calls.filter(([request]) => request.type === 'create-thread')).toHaveLength(0)
-    snapshot = fixture([actual])
-    await submit()
-    expect(view.onCreated).toHaveBeenCalledOnce()
-  })
-
-  it('uses a project arriving after folder selection before submitting', async () => {
-    const command = vi.fn<(request: AgentCommand) => Promise<AgentState>>(async () => fixture([actual]))
-    const view = setup(command)
     await browse()
-    view.update(fixture([actual]))
-    await submit()
-    expect(command.mock.calls.map(([request]) => request.type)).toEqual(['create-thread'])
+    await waitFor(() => expect(command.mock.calls.map(([request]) => request.type)).toEqual(['create-project', 'refresh', 'create-thread']))
+    expect(command).toHaveBeenLastCalledWith(expect.objectContaining({ projectId: actual.id, title: 'New thread' }))
+    await waitFor(() => expect(view.onCreated).toHaveBeenCalledOnce())
   })
 
-  it('retains the resolved project and options when the controller rejects thread creation', async () => {
+  it('retains the project and says why when the controller rejects thread creation', async () => {
     let rejectThread = true
     const command = vi.fn(async (request: AgentCommand) => ({ ...fixture([actual]), error: request.type === 'create-thread' && rejectThread ? 'Send or clear your draft before creating another thread.' : null }))
     const view = setup(command)
-    await browse(); await submit()
-    expect(screen.getByRole('alert')).toHaveTextContent('Send or clear your draft')
+    await browse()
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Send or clear your draft'))
     expect(view.onCreated).not.toHaveBeenCalled()
     rejectThread = false
-    await submit()
-    expect(command.mock.calls.filter(([request]) => request.type === 'create-project')).toHaveLength(1)
-    expect(command).toHaveBeenLastCalledWith(expect.objectContaining({ projectId: actual.id, title: 'My work' }))
-    expect(view.onCreated).toHaveBeenCalledOnce()
-  })
-
-  it('does not repeat creation when the response or a late state rerender arrives after success', async () => {
-    const command = vi.fn<(request: AgentCommand) => Promise<AgentState>>(async () => fixture([actual]))
-    const view = setup(command)
-    await browse(); await submit()
-    view.update(fixture([actual]))
-    await submit()
-    expect(command.mock.calls.map(([request]) => request.type)).toEqual(['create-project', 'create-thread'])
-    expect(view.onCreated).toHaveBeenCalledOnce()
+    // The chooser is still open after a refusal, so nothing is lost: choosing the same source retries.
+    await browse()
+    await waitFor(() => expect(command).toHaveBeenLastCalledWith(expect.objectContaining({ projectId: actual.id, title: 'New thread' })))
+    await waitFor(() => expect(view.onCreated).toHaveBeenCalledOnce())
   })
 })
 
@@ -249,14 +148,12 @@ describe('a client-minted thread id', () => {
     const command = vi.fn(() => new Promise<AgentState>(resolve => { settle = () => resolve(fixture([actual])) }))
     const view = startCreation(command)
     await browse()
-    fireEvent.click(screen.getByRole('button', { name: 'Create thread' }))
-    expect(view.onCreating).toHaveBeenCalledOnce()
+    await waitFor(() => expect(view.onCreating).toHaveBeenCalledOnce())
     expect(view.onCreated).not.toHaveBeenCalled()
     const start = view.start()
-    expect(command).toHaveBeenCalledWith(expect.objectContaining({ type: 'create-thread', projectId: actual.id, title: 'My work', threadId: start.thread.id }))
-    expect(start.thread).toMatchObject({ id: expect.any(String), projectId: actual.id, title: 'My work', modelId: 'codex:model',
+    expect(command).toHaveBeenCalledWith(expect.objectContaining({ type: 'create-thread', projectId: actual.id, title: 'New thread', threadId: start.thread.id }))
+    expect(start.thread).toMatchObject({ id: expect.any(String), projectId: actual.id, title: 'New thread', modelId: 'codex:model',
       status: 'idle', messages: [], requests: [], nativeSessionStarted: false, historyStatus: 'ready', worktree: { mode: 'shared', status: 'pending' } })
-    expect(start.choices).toEqual({ projectId: actual.id, title: 'My work', modelId: 'codex:model', workingCopy: 'shared' })
     settle()
     await expect(start.created).resolves.toBeNull()
   })
@@ -265,135 +162,111 @@ describe('a client-minted thread id', () => {
     const command = vi.fn(async () => ({ ...fixture([actual]), error: 'That model or account is unavailable.' }))
     const view = startCreation(command)
     await browse()
-    fireEvent.click(screen.getByRole('button', { name: 'Create thread' }))
+    await waitFor(() => expect(view.onCreating).toHaveBeenCalledOnce())
     await expect(view.start().created).resolves.toBe('That model or account is unavailable.')
     expect(view.onCreated).not.toHaveBeenCalled()
-  })
-
-  it('reopens with the choices already made and says why the last attempt was refused', async () => {
-    const command = vi.fn<(request: AgentCommand) => Promise<AgentState>>(async () => fixture([actual]))
-    vi.stubGlobal('sotto', { agents: { chooseProjectDirectory: vi.fn(async () => path) } })
-    const onCreating = vi.fn<(start: ThreadCreationStart) => void>()
-    const state = fixture([actual])
-    state.configuration = { ...state.configuration, reasoning: 'claude', reasoningModel: 'opus' }
-    state.host.models.push({ id: 'native:claude:model:opus', name: 'Opus', provider: 'Claude', providerId: 'claude', ready: true })
-    render(<NewThreadDialog state={state} command={command} onCreated={vi.fn()} onClose={vi.fn()} onCreating={onCreating}
-      initialChoices={{ projectId: actual.id, title: 'Second attempt', modelId: 'codex:model', workingCopy: 'shared', reasoningEffort: 'high' }}
-      initialError="Send or clear your draft before creating another thread." />)
-    expect(screen.getByRole('alert')).toHaveTextContent('Send or clear your draft')
-    expect(screen.getByLabelText('Thread name')).toHaveValue('Second attempt')
-    expect(screen.getByText('Starts in the project folder. Change it under the composer.')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Create thread' }))
-    await waitFor(() => expect(onCreating).toHaveBeenCalledOnce())
-    expect(command).toHaveBeenCalledWith(expect.objectContaining({ type: 'create-thread', title: 'Second attempt', modelId: 'codex:model', workingCopy: 'shared', reasoningEffort: 'high' }))
   })
 })
 
 describe('working copy default', () => {
-  it('does not guess defaults after a settings read fails and allows a retry', async () => {
-    const state = fixture([actual])
-    const command = vi.fn(async () => state)
-    const getSettings = vi.fn().mockRejectedValueOnce(new Error('read failed')).mockResolvedValue({ threadWorkingCopyDefault: 'independent', projectThreadWorkingCopyDefaults: {} })
-    vi.stubGlobal('sotto', { getSettings })
-    render(<NewThreadDialog state={state} command={command} onClose={vi.fn()} onCreated={vi.fn()} initialProjectId={actual.id} />)
-    expect(await screen.findByRole('alert')).toHaveTextContent('Could not read your working-copy defaults.')
-    expect(screen.getByRole('button', { name: 'Create thread' })).toBeDisabled()
-    expect(command).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByRole('button', { name: 'Retry defaults' }))
-    await waitFor(() => expect(screen.getByText('Starts in a new worktree, made on first send. Change it under the composer.')).toBeInTheDocument())
-    expect(screen.getByRole('button', { name: 'Create thread' })).not.toBeDisabled()
+  it('uses the project folder by default and sends it with the creation', async () => {
+    const command = vi.fn<(request: AgentCommand) => Promise<AgentState>>(async () => fixture([actual]))
+    const view = setup(command, fixture([actual]))
+    await browse()
+    await waitFor(() => expect(view.onCreated).toHaveBeenCalledOnce())
+    expect(command).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'create-thread', workingCopy: 'shared' }))
   })
 
   it('honors a project override ahead of the global default and sends the worktree with its origin start', async () => {
     const state = fixture([actual])
     const command = vi.fn(async () => state)
-    vi.stubGlobal('sotto', { getSettings: vi.fn(async () => ({ threadWorkingCopyDefault: 'shared', projectThreadWorkingCopyDefaults: { [actual.id]: 'independent' } })) })
-    render(<NewThreadDialog state={state} command={command} onClose={vi.fn()} onCreated={vi.fn()} initialProjectId={actual.id} />)
-    await waitFor(() => expect(screen.getByText('Starts in a new worktree, made on first send. Change it under the composer.')).toBeInTheDocument())
-    // No branch field here: the base is chosen in the composer's branch picker once the thread exists.
-    expect(screen.queryByLabelText('Start from')).toBeNull()
-    expect(screen.queryByRole('radio')).toBeNull()
-    await submit()
+    vi.stubGlobal('sotto', {
+      agents: { chooseProjectDirectory: vi.fn(async () => path) },
+      getSettings: vi.fn(async () => ({ threadWorkingCopyDefault: 'shared', projectThreadWorkingCopyDefaults: { [actual.id]: 'independent' } })),
+    })
+    const onCreated = vi.fn()
+    render(<NewThreadDialog state={state} command={command} onClose={vi.fn()} onCreated={onCreated} />)
+    await browse()
+    await waitFor(() => expect(onCreated).toHaveBeenCalledOnce())
     expect(command).toHaveBeenCalledWith(expect.objectContaining({ type: 'create-thread', workingCopy: 'independent', startFromOrigin: true }))
     expect(command.mock.calls[0]![0]).not.toHaveProperty('baseBranch')
   })
 
-  it('carries the worktree choices of a refused creation back through the next attempt', async () => {
+  it('refuses to create in an unread working copy default rather than guessing shared', async () => {
     const state = fixture([actual])
     const command = vi.fn(async () => state)
-    render(<NewThreadDialog state={state} command={command} onClose={vi.fn()} onCreated={vi.fn()}
-      initialChoices={{ projectId: actual.id, title: 'Again', modelId: 'codex:model', workingCopy: 'independent', baseBranch: 'develop', startFromOrigin: false }} initialError="Provider unavailable." />)
-    expect(screen.getByText('Starts in a new worktree, made on first send. Change it under the composer.')).toBeInTheDocument()
-    await submit()
-    expect(command).toHaveBeenCalledWith(expect.objectContaining({ type: 'create-thread', workingCopy: 'independent', baseBranch: 'develop', startFromOrigin: false }))
-  })
-
-  it('keeps project defaults out of the creation flow and starts with collapsed options', () => {
-    const state = fixture([actual])
-    render(<NewThreadDialog state={state} command={vi.fn()} onClose={vi.fn()} onCreated={vi.fn()} initialProjectId={actual.id} />)
-    expect(screen.queryByLabelText('Default for this project')).toBeNull()
-    expect(screen.getByText('Thread options').closest('details')).not.toHaveAttribute('open')
-    expect(screen.getByRole('button', { name: 'Create thread' })).toBeVisible()
-    fireEvent.click(screen.getByText('Thread options'))
-    fireEvent.keyDown(screen.getByLabelText('Thread name'), { key: 'Escape' })
-    expect(screen.getByText('Thread options')).toHaveFocus()
-  })
-
-  it('uses the project folder by default and says where to change it', async () => {
-    const command = vi.fn<(request: AgentCommand) => Promise<AgentState>>(async () => fixture([actual]))
-    setup(command, fixture([actual]))
+    const onCreated = vi.fn()
+    vi.stubGlobal('sotto', { agents: { chooseProjectDirectory: vi.fn(async () => path) }, getSettings: vi.fn().mockRejectedValue(new Error('read failed')) })
+    render(<NewThreadDialog state={state} command={command} onClose={vi.fn()} onCreated={onCreated} />)
     await browse()
-    expect(screen.getByText('Starts in the project folder. Change it under the composer.')).toBeInTheDocument()
-    expect(screen.queryByRole('group', { name: 'Working copy' })).toBeNull()
-    await submit()
-    expect(command).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'create-thread', workingCopy: 'shared' }))
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Could not read your working-copy default'))
+    expect(onCreated).not.toHaveBeenCalled()
+    expect(command).not.toHaveBeenCalled()
   })
 
-  it('keeps the same default after a rejected create', async () => {
-    let reject = true
-    const command = vi.fn(async (request: AgentCommand) => ({ ...fixture([actual]), error: request.type === 'create-thread' && reject ? 'Provider unavailable.' : null }))
-    const view = setup(command, fixture([actual]))
-    await browse()
-    await submit()
-    expect(screen.getByRole('alert')).toHaveTextContent('Provider unavailable.')
-    reject = false
-    await submit()
-    expect(command.mock.calls.filter(([request]) => request.type === 'create-thread').map(([request]) => request))
-      .toEqual([expect.objectContaining({ workingCopy: 'shared' }), expect.objectContaining({ workingCopy: 'shared' })])
-    expect(view.onCreated).toHaveBeenCalledOnce()
-  })
-
-  it('starts keyboard creation at Thread options once a folder is chosen', async () => {
-    const command = vi.fn<(request: AgentCommand) => Promise<AgentState>>(async () => fixture([actual]))
-    setup(command, fixture([actual]))
-    fireEvent.keyDown(screen.getByRole('searchbox', { name: 'Search projects' }), { key: 'ArrowDown' })
-    fireEvent.keyDown(screen.getByRole('searchbox', { name: 'Search projects' }), { key: 'Enter' })
-    await waitFor(() => expect(screen.getByText('Thread options')).toHaveFocus())
-  })
-
-  it('keeps the name focused when working-copy defaults finish loading', async () => {
-    let finish!: (settings: object) => void
-    vi.stubGlobal('sotto', { getSettings: vi.fn(() => new Promise(resolve => { finish = resolve })) })
-    const state = fixture([actual])
-    render(<NewThreadDialog state={state} command={vi.fn()} onClose={vi.fn()} onCreated={vi.fn()} initialProjectId={actual.id} />)
-    fireEvent.click(screen.getByText('Thread options'))
-    const name = screen.getByLabelText('Thread name')
-    name.focus()
-    fireEvent.change(name, { target: { value: 'Keep typing' } })
-    finish({ threadWorkingCopyDefault: 'independent', projectThreadWorkingCopyDefaults: {} })
-    await waitFor(() => expect(screen.getByText('Starts in a new worktree, made on first send. Change it under the composer.')).toBeInTheDocument())
-    expect(name).toHaveFocus()
-    expect(name).toHaveValue('Keep typing')
-  })
-
-  it('locks creation while it is in flight', async () => {
+  it('locks the chooser while creation is in flight', async () => {
     let finish: (state: AgentState) => void = () => undefined
     const command = vi.fn(() => new Promise<AgentState>(resolve => { finish = resolve }))
     setup(command, fixture([actual]))
     await browse()
-    fireEvent.click(screen.getByRole('button', { name: 'Create thread' }))
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Creating...' })).toBeDisabled())
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Opening the thread…'))
+    expect(screen.getByRole('button', { name: 'Close new thread dialog' })).toBeDisabled()
     finish(fixture([actual]))
     await waitFor(() => expect(command).toHaveBeenCalledOnce())
+  })
+})
+
+// The Agents room's managed flow keeps its name, model, reasoning and permission form, unchanged from before
+// issue #347: only the Threads page's own flow (above) opens a thread at once on Settings defaults.
+describe('the managed flow’s own form', () => {
+  function setupManaged(command: (command: AgentCommand) => Promise<AgentState | null>, state = fixture([actual])) {
+    vi.stubGlobal('sotto', { agents: { chooseProjectDirectory: vi.fn(async () => path) } })
+    const onCreated = vi.fn()
+    const view = render(<NewThreadDialog state={state} command={command} onCreated={onCreated} onClose={vi.fn()} managed />)
+    return { ...view, onCreated }
+  }
+
+  it('keeps the form after choosing a project, instead of opening the thread at once', async () => {
+    const state = fixture([actual])
+    const command = vi.fn<(request: AgentCommand) => Promise<AgentState>>(async () => state)
+    setupManaged(command, state)
+    fireEvent.click(screen.getByRole('button', { name: /Codex/ }))
+    expect(await screen.findByRole('textbox', { name: 'Thread name' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Create thread' })).toBeInTheDocument()
+    expect(command).not.toHaveBeenCalled()
+  })
+
+  it('submits the typed name and chosen options, and sends managed: true', async () => {
+    const state = fixture([actual])
+    const command = vi.fn<(request: AgentCommand) => Promise<AgentState>>(async () => state)
+    const view = setupManaged(command, state)
+    fireEvent.click(screen.getByRole('button', { name: /Codex/ }))
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Thread name' }), { target: { value: 'Spike the flake' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create thread' }))
+    await waitFor(() => expect(view.onCreated).toHaveBeenCalledOnce())
+    expect(command).toHaveBeenCalledWith(expect.objectContaining({ type: 'create-thread', projectId: actual.id, title: 'Spike the flake', titleSource: 'user', modelId: 'codex:model', managed: true }))
+  })
+
+  it('names it "New thread" and says so when no name is typed', async () => {
+    const state = fixture([actual])
+    const command = vi.fn<(request: AgentCommand) => Promise<AgentState>>(async () => state)
+    const view = setupManaged(command, state)
+    fireEvent.click(screen.getByRole('button', { name: /Codex/ }))
+    await screen.findByRole('textbox', { name: 'Thread name' })
+    fireEvent.click(screen.getByRole('button', { name: 'Create thread' }))
+    await waitFor(() => expect(view.onCreated).toHaveBeenCalledOnce())
+    expect(command).toHaveBeenCalledWith(expect.objectContaining({ title: 'New thread', titleSource: 'default' }))
+  })
+
+  it('keeps the choices and shows the refusal when the provider rejects creation', async () => {
+    const state = fixture([actual])
+    const command = vi.fn<(request: AgentCommand) => Promise<AgentState>>(async () => ({ ...state, error: 'Send or clear your draft before creating another thread.' }))
+    const view = setupManaged(command, state)
+    fireEvent.click(screen.getByRole('button', { name: /Codex/ }))
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Thread name' }), { target: { value: 'Keep me' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create thread' }))
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Send or clear your draft before creating another thread.'))
+    expect(view.onCreated).not.toHaveBeenCalled()
+    expect(screen.getByRole('textbox', { name: 'Thread name' })).toHaveValue('Keep me')
   })
 })

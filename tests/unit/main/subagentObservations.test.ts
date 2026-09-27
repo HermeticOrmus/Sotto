@@ -5,6 +5,8 @@ import { CodexActivityProjection, codexItemSchema } from '../../../src/main/agen
 import { grokActivities } from '../../../src/main/agents/grokActivity'
 import { devinActivities } from '../../../src/main/agents/devinActivity'
 import { agentActivitySchema, mergeAgentActivities, type AgentActivity } from '../../../src/shared/agentActivity'
+import { distinctModels } from '../../../src/shared/subagents'
+import { subagentActivityClassification } from '../../../src/main/agents/subagentStore'
 
 const timestamp = '2026-09-20T12:00:00.000Z'
 const claudeTool = (id: string, input: Record<string, unknown>, parent?: string) => ({ type: 'assistant', timestamp,
@@ -80,26 +82,110 @@ describe('observational subagent roster metadata', () => {
     rows.forEach(row => agentActivitySchema.parse(row))
   })
 
-  it('patches a workflow\'s model from its run\'s transcripts onto the rows that already show it', () => {
-    const projection = new ClaudeActivity()
-    let rows = projection.apply([], { type: 'assistant', timestamp, message: { content: [{ type: 'tool_use', id: 'flow', name: 'Workflow', input: { script: 'run()' } }] } }, 'turn', 'message', '/p')
-    rows = projection.apply(rows, { type: 'system', subtype: 'task_started', task_id: 'wtask', tool_use_id: 'flow', task_type: 'local_workflow', workflow_name: 'spec', description: 'Write the spec', timestamp }, 'turn', 'message', '/p')
-    expect(projection.modelTargets()).toEqual([])
-    rows = projection.apply(rows, { type: 'user', timestamp, tool_use_result: { status: 'async_launched', taskId: 'wtask', taskType: 'local_workflow', runId: 'wf_79f40664-5f1' }, message: { content: [{ type: 'tool_result', tool_use_id: 'flow', content: 'Launched' }] } }, 'turn', 'message', '/p')
-    const agent = rows.find(row => row.id === 'claude-task-wtask')!.agents![0]!
-    expect(agent.model).toBeUndefined()
-    expect(projection.modelTargets()).toEqual([{ id: agent.id, transcript: { runId: 'wf_79f40664-5f1' }, settled: false }])
-    const ids = rows.map(row => row.id)
-    rows = projection.applyModel(rows, agent.id, 'claude-opus-5-5')
-    expect(rows.map(row => row.id)).toEqual(ids)
-    expect(rows.filter(row => row.agents?.some(child => child.id === agent.id)).map(row => row.agents![0]!.model)).toEqual(['claude-opus-5-5', 'claude-opus-5-5'])
-    expect(rows.find(row => row.id === 'claude-task-wtask')!.agents![0]).toMatchObject({ status: 'running', title: 'Write the spec' })
-    expect(projection.modelTargets()).toEqual([])
-    // A second read of the same run changes nothing; later progress adds the models its other agents ran on.
-    expect(projection.applyModel(rows, agent.id, 'claude-other')).toBe(rows)
-    rows = projection.apply(rows, { type: 'system', subtype: 'task_progress', task_id: 'wtask', tool_use_id: 'flow', workflow_progress: [{ type: 'workflow_agent', agentId: 'a1', model: 'claude-opus-5-5' }, { type: 'workflow_agent', agentId: 'a2', model: 'claude-haiku-4-5' }], timestamp }, 'turn', 'message', '/p')
-    expect(rows.find(row => row.id === 'claude-task-wtask')!.agents![0]!.model).toBe('claude-opus-5-5, claude-haiku-4-5')
-    rows.forEach(row => agentActivitySchema.parse(row))
+  describe('a Claude workflow\'s agents', () => {
+    const launch = { type: 'assistant', timestamp, message: { content: [{ type: 'tool_use', id: 'flow', name: 'Workflow', input: { script: 'run()' } }] } }
+    const started = { type: 'system', subtype: 'task_started', task_id: 'wtask', tool_use_id: 'flow', task_type: 'local_workflow', workflow_name: 'phase-1-perf', description: 'Implement the phase 1 perf issues', timestamp }
+    const launched = { type: 'user', timestamp, tool_use_result: { status: 'async_launched', taskId: 'wtask', taskType: 'local_workflow', runId: 'wf_81b798e8-536' }, message: { content: [{ type: 'tool_result', tool_use_id: 'flow', content: 'Launched' }] } }
+    const t0 = Date.parse(timestamp)
+    const agent = (index: number, state: string, extra: Record<string, unknown> = {}) => ({ type: 'workflow_agent', index, label: `#31${index} 31${index}-lane`, phaseTitle: 'Implement', state, queuedAt: t0, promptPreview: `Implement #31${index}.`, ...extra })
+    // Claude Code describes a workflow's progress by whichever agent reported last.
+    const progress = (description: string, entries?: unknown[], extra: Record<string, unknown> = {}) => ({ type: 'system', subtype: 'task_progress', task_id: 'wtask', tool_use_id: 'flow', description, last_tool_name: description, ...(entries ? { workflow_progress: entries } : {}), timestamp, ...extra })
+    const three = [
+      agent(1, 'progress', { agentId: 'a1', model: 'claude-opus-5-5[1m]', startedAt: t0 }),
+      agent(2, 'done', { agentId: 'a2', model: 'claude-sonnet-5', startedAt: t0, durationMs: 90_000, resultPreview: 'Opened #350.' }),
+      agent(3, 'start', { model: 'opus' }),
+    ]
+    const run = (projection: ClaudeActivity, frames: Record<string, unknown>[], start: AgentActivity[] = []) => frames.reduce((rows, frame) => projection.apply(rows, frame, 'turn', 'message', '/p'), start)
+    const task = (rows: AgentActivity[]) => rows.find(row => row.id === 'claude-task-wtask')!
+    const frames = [launch, started, launched, progress('Implement: #311 311-lane', three), progress('Implement: #313 313-lane', [three[0], three[1], agent(3, 'progress', { agentId: 'a3', model: 'claude-opus-5-5[1m]', startedAt: t0 + 4_000 })])]
+
+    it('gives the workflow one row named for the workflow, and each agent its own row under it', () => {
+      // An agent still waiting for a place to start is counted, not shown, until it starts.
+      const early = run(new ClaudeActivity(), frames.slice(0, 4))
+      expect(task(early).agents!.map(agent => agent.title)).toEqual(['Implement the phase 1 perf issues', '#311 311-lane', '#312 312-lane'])
+      expect(task(early).agents![0]!.progress).toEqual({ total: 3, working: 1, completed: 1, failed: 0, interrupted: 0, queued: 1 })
+      const rows = run(new ClaudeActivity(), frames)
+      const [workflow, ...agents] = task(rows).agents!
+      expect(workflow).toMatchObject({ kind: 'workflow', title: 'Implement the phase 1 perf issues', description: 'phase-1-perf', prompt: 'Implement the phase 1 perf issues', status: 'running',
+        progress: { total: 3, working: 2, completed: 1, failed: 0, interrupted: 0 } })
+      expect(workflow!.model).toBeUndefined()
+      expect(task(rows).title).toBe('Implement the phase 1 perf issues')
+      expect(agents.map(child => [child.title, child.status, child.model, child.parentId])).toEqual([
+        ['#311 311-lane', 'running', 'claude-opus-5-5[1m]', workflow!.id],
+        ['#312 312-lane', 'completed', 'claude-sonnet-5', workflow!.id],
+        ['#313 313-lane', 'running', 'claude-opus-5-5[1m]', workflow!.id],
+      ])
+      expect(agents[1]).toMatchObject({ prompt: 'Implement #312.', message: 'Opened #350.', startedAt: timestamp, durationMs: 90_000, completedAt: new Date(t0 + 90_000).toISOString() })
+      // The launch alias is gone once the resolved name arrives: one model, named once.
+      expect(agents[2]!.model).toBe('claude-opus-5-5[1m]')
+      expect(distinctModels(agents.map(child => child.model))).toEqual(['claude-opus-5-5[1m]', 'claude-sonnet-5'])
+      expect(distinctModels(['opus', 'claude-opus-5-5[1m]', 'haiku'])).toEqual(['claude-opus-5-5[1m]', 'haiku'])
+      rows.forEach(row => agentActivitySchema.parse(row))
+    })
+
+    // Claude Code writes no task frames to a session transcript, so a workflow's agents come back after a restart from
+    // the saved roster and the text-free classification, never from replaying the transcript.
+    it('gives the same rows when the same frames are projected again, and keeps them across a cursor resume', () => {
+      const live = run(new ClaudeActivity(), frames)
+      expect(task(run(new ClaudeActivity(), frames)).agents).toEqual(task(live).agents)
+      // A frame without the list, as Claude Code throttles them, keeps every agent already known.
+      const quiet = run(new ClaudeActivity(), [progress('Implement: #312 312-lane')], live)
+      expect(task(quiet).agents!.map(child => child.id)).toEqual(task(live).agents!.map(child => child.id))
+      // A projector resumed from the saved classification alone keeps the children and their identities.
+      const saved = new Map(live.map(row => [row.id, subagentActivityClassification(row)]))
+      const resumed = new ClaudeActivity(id => saved.get(id))
+      const next = run(resumed, [progress('Implement: #313 313-lane', [agent(1, 'done', { agentId: 'a1', model: 'claude-opus-5-5[1m]', startedAt: t0, durationMs: 60_000 })])])
+      const [workflow, ...agents] = task(next).agents!
+      expect(workflow).toMatchObject({ id: task(live).agents![0]!.id, kind: 'workflow', progress: { total: 3, completed: 2, working: 1 } })
+      expect(agents.map(child => [child.id, child.status])).toEqual(task(live).agents!.slice(1).map((child, index) => [child.id, ['completed', 'completed', 'running'][index]!]))
+    })
+
+    it('stays working while one agent finishes, and its notification settles it and any agent still working', () => {
+      const projection = new ClaudeActivity()
+      let rows = run(projection, frames)
+      rows = run(projection, [progress('Implement: #311 311-lane', [agent(1, 'error', { agentId: 'a1', startedAt: t0, durationMs: 30_000, error: 'Tests failed twice.' }), three[1], agent(3, 'progress', { agentId: 'a3', startedAt: t0 })])], rows)
+      expect(task(rows).agents![0]).toMatchObject({ status: 'running', progress: { total: 3, working: 1, completed: 1, failed: 1 } })
+      expect(task(rows).agents![1]).toMatchObject({ status: 'failed', message: 'Tests failed twice.' })
+      rows = run(projection, [{ type: 'system', subtype: 'task_notification', task_id: 'wtask', tool_use_id: 'flow', status: 'completed', summary: 'Two of three opened.', timestamp }], rows)
+      const [workflow, ...agents] = task(rows).agents!
+      expect(workflow).toMatchObject({ status: 'completed', message: 'Two of three opened.', progress: { total: 3, working: 0, completed: 2, failed: 1 } })
+      expect(agents.map(child => child.status)).toEqual(['failed', 'completed', 'completed'])
+      expect(agents[2]!.completedAt).toBe(timestamp)
+      // A run that fails does not count agents it never heard from as failed: they read as interrupted.
+      const failing = new ClaudeActivity()
+      const stopped = run(failing, [...frames, { type: 'system', subtype: 'task_notification', task_id: 'wtask', tool_use_id: 'flow', status: 'failed', timestamp }])
+      expect(task(stopped).agents!.map(child => child.status)).toEqual(['failed', 'interrupted', 'completed', 'interrupted'])
+      // A later progress frame cannot reopen the settled run.
+      const after = run(projection, [progress('Implement: #313 313-lane', [agent(3, 'progress', { agentId: 'a3' })])], rows)
+      expect(task(after).agents!.map(child => child.status)).toEqual(['completed', 'failed', 'completed', 'completed'])
+    })
+
+    it('shows a retried agent working again as a new assignment, without the failed attempt\'s result', () => {
+      const projection = new ClaudeActivity()
+      let rows = run(projection, [launch, started, launched, progress('Implement: #311 311-lane', [agent(1, 'error', { agentId: 'a1', startedAt: t0, durationMs: 30_000, error: { message: 'Stalled.' } })])])
+      const failed = task(rows).agents![1]!
+      expect(failed).toMatchObject({ status: 'failed', message: 'Stalled.', durationMs: 30_000 })
+      rows = run(projection, [progress('Implement: #311 311-lane', [agent(1, 'start', { agentId: 'a1b', attempt: 2, startedAt: t0 + 60_000 })])], rows)
+      const retried = task(rows).agents![1]!
+      expect(retried).toMatchObject({ id: failed.id, status: 'running', title: '#311 311-lane', startedAt: new Date(t0 + 60_000).toISOString() })
+      expect(retried.assignmentId).not.toBe(failed.assignmentId)
+      expect(retried.message).toBeUndefined()
+      expect(retried.completedAt).toBeUndefined()
+      expect(retried.durationMs).toBeUndefined()
+      expect(task(rows).agents![0]!.progress).toMatchObject({ working: 1, failed: 0 })
+    })
+
+    it('watches an agent\'s own transcript when progress names no model, and patches only that agent', () => {
+      const projection = new ClaudeActivity()
+      let rows = run(projection, [launch, started, launched, progress('Implement: #311 311-lane', [agent(1, 'progress', { agentId: 'a1f2', startedAt: t0 })])])
+      const child = task(rows).agents![1]!
+      expect(child.model).toBeUndefined()
+      expect(projection.modelTargets()).toEqual([{ id: child.id, transcript: { runId: 'wf_81b798e8-536', agentId: 'a1f2' }, settled: false }])
+      rows = projection.applyModel(rows, child.id, 'claude-opus-5-5')
+      expect(task(rows).agents!.map(agent => agent.model)).toEqual([undefined, 'claude-opus-5-5'])
+      expect(projection.modelTargets()).toEqual([])
+      rows.forEach(row => agentActivitySchema.parse(row))
+    })
   })
 
   it('names a background agent\'s model from its launch result or its own transcript, whichever comes first', () => {

@@ -986,10 +986,9 @@ test.describe('authoritative design-review captures', () => {
       await tools.getByRole('button', { name: 'Close tools panel' }).click()
       await page.getByRole('button', { name: 'New thread', exact: true }).first().click()
       const dialog = page.getByRole('dialog', { name: 'New thread', exact: true })
-      await dialog.getByRole('button', { name: 'sotto-site C:/sotto-site', exact: true }).click()
-      // The working copy is chosen under the composer now (ADR-0027); the dialog says where it starts and where to change it.
-      await expect(dialog.getByText('Starts in the project folder. Change it under the composer.', { exact: true })).toBeVisible()
-      await capturePage(page, `threads-working-copy-choice-${appearance}.png`, { theme: appearance, category: 'threads', state: 'working-copy-choice' })
+      // The top New thread button asks only which project; choosing one opens the thread on the Settings defaults (#347).
+      await expect(dialog.getByRole('button', { name: 'sotto-site C:/sotto-site', exact: true })).toBeVisible()
+      await capturePage(page, `threads-new-thread-chooser-${appearance}.png`, { theme: appearance, category: 'threads', state: 'new-thread-chooser' })
     })
   })
 
