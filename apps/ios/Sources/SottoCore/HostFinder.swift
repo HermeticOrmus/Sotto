@@ -61,24 +61,23 @@ public enum HostFinder {
         }
     }
 
-    /// Checks each address in order and keeps the first where Sotto answers. When none does, the
-    /// error that says the most wins: a Sotto that refused, then something that answered but isn't
-    /// Sotto, then nothing answering at all.
+    /// Checks each address in order and keeps the first where Sotto answers. Only nothing answering,
+    /// or something that isn't Sotto, moves on to the next port. Any other answer proves Sotto is
+    /// there (still starting, another protocol version, another host), so it stops and says why.
+    /// When no port has Sotto, something that answered says more than nothing answering.
     public static func probe<Found>(_ candidates: [HostEndpoint], check: (HostEndpoint) async throws -> Found) async throws -> (endpoint: HostEndpoint, found: Found) {
-        var telling: Error?
+        var missed: Error?
         for endpoint in candidates {
             do { return (endpoint, try await check(endpoint)) }
-            catch is CancellationError { throw CancellationError() }
-            catch { if weight(error) > (telling.map(weight) ?? -1) { telling = error } }
+            catch {
+                switch error as? ClientError {
+                case .hostUnreachable?: if missed == nil { missed = error }
+                case .notASottoHost?: missed = error
+                default: throw error
+                }
+            }
         }
-        throw telling ?? ClientError.invalidHost
-    }
-    static func weight(_ error: Error) -> Int {
-        switch error as? ClientError {
-        case .hostUnreachable?: return 0
-        case .notASottoHost?: return 1
-        default: return 2
-        }
+        throw missed ?? ClientError.invalidHost
     }
 
     static func isMachineName(_ text: String) -> Bool {

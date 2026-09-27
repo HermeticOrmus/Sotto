@@ -59,10 +59,26 @@ final class PhoneTests: XCTestCase {
         } catch { XCTAssertEqual(error as? ClientError, .notASottoHost("forge")) }
         do {
             _ = try await HostFinder.probe(candidates) { endpoint -> Int in
-                throw endpoint.port == 8443 ? ClientError.invalidProtocol : ClientError.notASottoHost("forge")
+                throw endpoint.port == 8443 ? ClientError.notASottoHost("forge") : ClientError.hostUnreachable("forge")
             }
             XCTFail("Nothing answered")
-        } catch { XCTAssertEqual(error as? ClientError, .invalidProtocol) }
+        } catch { XCTAssertEqual(error as? ClientError, .notASottoHost("forge")) }
+    }
+    func testASottoThatAnswersOn8443StopsTheSearch() async {
+        let candidates = HostFinder.endpoints(fullName: "forge.tail5c2e.ts.net")
+        let starting = ClientError.rejected("Sotto on that computer is still starting. Try again in a moment.")
+        for refusal in [ClientError.invalidProtocol, .invalidIdentity, starting] {
+            var asked: [Int] = []
+            do {
+                _ = try await HostFinder.probe(candidates) { endpoint -> Int in
+                    asked.append(endpoint.port)
+                    if endpoint.port == 8443 { throw refusal }
+                    return endpoint.port
+                }
+                XCTFail("Sotto answered on 8443, so 443 must not be used")
+            } catch { XCTAssertEqual(error as? ClientError, refusal) }
+            XCTAssertEqual(asked, [8443])
+        }
     }
     func testOnlyTailscaleAddressesAreTrusted() {
         XCTAssertTrue(HostFinder.isTailnetAddress([100, 101, 102, 103]))
