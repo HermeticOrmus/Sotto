@@ -165,6 +165,8 @@ export class ThreadMessageLog {
     return last === undefined ? undefined : { ...last }
   }
   lastTextMessageId(threadId: string): string | undefined { return this.track(threadId).lastTextId }
+  /** Whether any message is known for the thread, seeded or reported. Asking starts no track, so a later seed still lands. */
+  hasMessages(threadId: string): boolean { return (this.tracks.get(threadId)?.order.length ?? 0) > 0 }
 
   /**
    * What the host's event store already holds for this thread, before the adapter reads its provider.
