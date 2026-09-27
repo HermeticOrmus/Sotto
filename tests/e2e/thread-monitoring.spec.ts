@@ -392,10 +392,15 @@ test('a command left running after the turn waits with the hourglass, yields to 
     await expect(indicator(page)).toHaveAttribute('role', 'status')
     await expect(indicator(page).locator('.thread-monitor__label')).toHaveText('Run all CI gates')
     await expect(indicator(page).locator('.thread-monitor__status')).toHaveText(/^Waiting · 4m \d\ds$/u)
+    // The turn has ended but the thread has not reported back, so its sidebar row does not say Done.
+    const row = page.getByRole('button', { name: 'Workshop', exact: true }).first().locator('.thread-nav__status')
+    await expect(row).toHaveAttribute('title', 'Waiting')
+    await expect(row).toHaveAttribute('data-state', 'working')
     // Agents outrank a command: the dispatcher takes the track and counts the command beside them.
     await background(page, [...agents.slice(0, 2), command])
     await expect(indicator(page)).toHaveAttribute('data-ornament', 'working')
     await expect(indicator(page).locator('.thread-monitor__status')).toHaveText('Working · 2 agents · 1 command')
+    await expect(row).toHaveAttribute('title', 'Working')
     await expect(indicator(page).locator('.thread-monitor__mini')).toHaveCount(2)
     await background(page, [command])
     await expect(indicator(page)).toHaveAttribute('data-ornament', 'held')
