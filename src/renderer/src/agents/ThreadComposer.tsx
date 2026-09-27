@@ -13,7 +13,7 @@ import { requestMode } from './requests/requestAnswers'
 import { composeReviewMessage, reviewCommentStore, reviewLabel, useReviewComments, type ReviewComment, type ReviewCommentStore } from './reviewComments'
 import { ScreenshotInput } from './ScreenshotInput'
 import { SkillPicker, skillOptionId, useSkillPicker } from './SkillPicker'
-import { deliveryFor, deliveryPending, hasDraftContent, queueAdmissionOpen, queuedRevision, submissionStatus, UNCONFIRMED_SUBMISSION, useScreenshotReads, useSubmissions, useThreadComposer, type ComposerDraft, type ThreadComposerSnapshot, type SubmissionMode, type SubmissionStatus, type ThreadDraftStore } from './threadDraftStore'
+import { deliveryFor, deliveryPending, hasDraftContent, queueAdmissionOpen, queuedRevision, submissionStatus, UNCONFIRMED_SUBMISSION, useScreenshotReadPort, useScreenshotReads, useSubmissions, useThreadComposer, type ComposerDraft, type ThreadComposerSnapshot, type SubmissionMode, type SubmissionStatus, type ThreadDraftStore } from './threadDraftStore'
 import type { ThreadRow } from './threadFacts'
 import { followupsFor, ThreadFollowups } from './ThreadFollowups'
 import { ThreadOptions } from './ThreadOptions'
@@ -336,7 +336,7 @@ function ThreadComposerEditor({ row, state, command, store, composerId, editable
 }): ReactNode {
   const threadId = row.thread.id
   const { draft } = useThreadComposer(store, threadId)
-  const screenshotReads = useScreenshotReads(store, threadId)
+  const screenshotReads = useScreenshotReadPort(store, threadId, row.model?.supportsImages === true)
   const capabilities = capabilitiesForThread(state.host, row.thread)
   const picker = useSkillPicker({ threadId, state, command, enabled: editable && !answering && capabilities.skills === true, text: draft.text })
   const sigils = skillSigils(picker.catalog?.providerId ?? row.providerId)
@@ -397,8 +397,7 @@ function ThreadComposerEditor({ row, state, command, store, composerId, editable
     {children}
     {/* Screenshots still being staged when the user moves to another thread join this thread's draft as it is then. */}
     <ScreenshotInput key={threadId} target={threadId} attachments={draft.attachments} disabled={!editable} supported={supported}
-      pending={screenshotReads.pending > 0} notice={screenshotReads.problem} onRead={() => store.beginScreenshotRead(threadId)}
-      onChange={attachments => edit({ attachments })} onAddAfterClose={images => store.addLateScreenshots(threadId, images)}>
+      reads={screenshotReads} onChange={attachments => edit({ attachments })}>
       <textarea ref={textarea} id={composerId} rows={3} value={draft.text} disabled={!editable} spellCheck
         aria-describedby={statusId}
         aria-autocomplete={menus ? 'list' : undefined}
