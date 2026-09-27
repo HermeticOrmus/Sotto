@@ -25,7 +25,7 @@ struct ComputersView: View {
                     .font(.footnote).foregroundStyle(Palette.muted)
             }.padding(.horizontal, 16).padding(.bottom, 24)
         }
-        .refreshable { await model.reconnectAll() }
+        .refreshable { await model.refresh() }
         .page("Computers")
         .navigationDestination(for: ComputerRoute.self) { ComputerDetailView(hostID: $0.hostID) }
     }

@@ -156,6 +156,15 @@ struct Live {
             for hostID in ids { group.addTask { await self.connect(hostID) } }
         }
     }
+    /// Pull to refresh: reconnects every computer, but returns once the ones that were reachable are
+    /// back, rather than waiting out one that can't be reached. With none reachable, it waits for all.
+    func refresh() async {
+        let started = computers.map { computer in
+            (reachable: online(computer.hostID), task: Task { await connect(computer.hostID) })
+        }
+        let awaited = started.contains { $0.reachable } ? started.filter { $0.reachable } : started
+        for item in awaited { await item.task.value }
+    }
     /// A fresh session, shell and open-thread detail from one computer. Only that computer's state changes.
     func connect(_ hostID: String) async {
         guard storageReady, active, !connecting.contains(hostID), let saved = computer(hostID) else { return }
@@ -304,8 +313,11 @@ struct Live {
         if let previous, previous.hostID != ref?.hostID, online(previous.hostID), let before = connections[previous.hostID] {
             _ = try? await before.call(["op": .string("observe"), "threadIds": .array([])])
         }
-        guard let ref, online(ref.hostID) else { return }
-        do { try await observeAndRead(ref.hostID) } catch { feedback = error.localizedDescription }
+        // Another thread may have been opened, or its computer reconnected, while the last one was let go.
+        guard let ref, selected == ref, online(ref.hostID) else { return }
+        let current = generations[ref.hostID]
+        do { try await observeAndRead(ref.hostID) }
+        catch { if generations[ref.hostID] == current, selected == ref { feedback = error.localizedDescription } }
     }
     /// Tells one computer which of its threads is open here, and reads that thread.
     private func observeAndRead(_ hostID: String) async throws {
@@ -418,7 +430,10 @@ struct Live {
         let thread = shell?.host.threads.first { $0.id == item.threadID }
         let uncertainRequest = thread?.requests.contains { $0.id == item.requestID && $0.delivery == "uncertain" } == true
         if delivery?.status == "failed" {
-            try rejectOperation(item); feedback = "Reply was not sent. Your text is available below."
+            try rejectOperation(item)
+            // Named, because the thread open now may be another one, on another computer.
+            let title = thread.map { "“\($0.title)”" } ?? "a thread"
+            feedback = "Your reply to \(title) on \(name(item.hostID)) wasn’t sent. Its text is back in that thread."
         } else if accepted || (shell?.error == nil && !uncertainRequest && item.reconciled(receipt: receipt, deliveries: shell?.deliveries ?? [])) {
             try forgetMarker(item.id)
             feedback = item.kind == "answer" ? "Answer sent." : nil

@@ -26,7 +26,7 @@ struct NeedsYouView: View {
                 }
             }.padding(.horizontal, 16).padding(.bottom, 24)
         }
-        .refreshable { await model.reconnectAll() }
+        .refreshable { await model.refresh() }
         .page("Needs you")
     }
     private var lists: [ComputerThreads] { model.lists }
@@ -234,7 +234,7 @@ struct ThreadsView: View {
                 }
             }.padding(.horizontal, 16).padding(.bottom, 24)
         }
-        .refreshable { await model.reconnectAll() }
+        .refreshable { await model.refresh() }
         .page("Threads")
     }
     private var rows: [HostedThread] { ThreadGroups.merged(model.lists, show: model.show, filter: filter) }
