@@ -484,10 +484,7 @@ export class CodexAppServerHost implements AgentHost {
             // A late read must not overwrite streamed text, a completion, or a permission.
             if (!current || generation !== this.generation || revision !== this.revisions.get(id)) return
             this.applyThread(id, threadResponse.parse(value).thread, z.object({ thread: z.object({ turns: z.array(z.unknown()) }) }).safeParse(value).success); await this.persist(); applied = true
-            this.histories.add(id)
-            this.flushLogMessages(id); this.orderMessages(id)
-            const read = this.ensureThread(id)
-            if (!alias.pendingSettings) { delete read.historyStatus; delete read.historyError }
+            this.settleRead(id)
           }
           try { await this.rpc('thread/read', { threadId: alias.codexThreadId, includeTurns: true }, apply) }
           catch (error) {
@@ -512,6 +509,13 @@ export class CodexAppServerHost implements AgentHost {
       throw error
     }
     finally { if (this.threadReads.get(id) === work) this.threadReads.delete(id) }
+  }
+  /** What a read that applied the thread does last, whether it read the whole transcript or the newest turn alone. */
+  private settleRead(id: string): void {
+    this.histories.add(id)
+    this.flushLogMessages(id); this.orderMessages(id)
+    const read = this.ensureThread(id)
+    if (!this.aliases[id]!.pendingSettings) { delete read.historyStatus; delete read.historyError }
   }
   /**
    * The newest-turn check (#324): the read before a send, without reading the whole transcript. It asks Codex for
@@ -544,7 +548,7 @@ export class CodexAppServerHost implements AgentHost {
         this.reconcileTurn(id, [...alias.messageIdentities.slice(0, -1), trial], structuredClone(alias.origins), turn)
         if (!trial.ordered || !trial.messages.every(message => message.complete && held.includes(message.id))) return
         this.applyTurn(id, turn)
-        this.flushLogMessages(id); this.orderMessages(id)
+        this.settleRead(id)
         await this.persist()
         confirmed = true
       })
