@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
-import { MAX_ACTIVITY_TEXT, compactAgentIdentity, mergeAgentActivities, isTerminalActivity, planSteps, type AgentActivity, type ObservedAgent } from '../../shared/agentActivity'
+import { MAX_ACTIVITY_TEXT, MAX_AGENT_ACTIVITIES, compactAgentIdentity, mergeAgentActivities, isTerminalActivity, planSteps, type AgentActivity, type ObservedAgent } from '../../shared/agentActivity'
 import type { AgentThread } from '../../shared/agents'
 type ActivityConversation = Pick<AgentThread, 'id' | 'messages' | 'activities'> & { runtimeMode?: AgentThread['runtimeMode'] }
 
@@ -86,13 +86,17 @@ export class CodexActivityProjection {
   private readonly terminalTurns = new WeakMap<ActivityConversation, Set<string>>()
   private readonly seen = new WeakMap<ActivityConversation, Set<string>>()
   private readonly turnAnchors = new WeakMap<ActivityConversation, Map<string, string>>()
+  /** The array `put` last installed on each thread. While the thread still holds it, it is in sequence order with one record per ID. */
+  private readonly installed = new WeakMap<ActivityConversation, readonly AgentActivity[]>()
   constructor(private readonly now: () => number = Date.now) {}
 
   anchor(thread: ActivityConversation, turnId: string, messageId: string): void {
     const anchors = this.turnAnchors.get(thread) ?? new Map<string, string>()
     if (anchors.has(turnId)) return
     anchors.set(turnId, messageId); this.turnAnchors.set(thread, anchors)
-    const record = thread.activities?.find(activity => activity.id === codexActivityId(turnId, '$turn'))
+    // Hash the turn's activity ID once, not once for every record the search passes (#352).
+    const turnActivityId = codexActivityId(turnId, '$turn')
+    const record = thread.activities?.find(activity => activity.id === turnActivityId)
     if (record) this.put(thread, { ...record, afterMessageId: messageId })
   }
 
@@ -133,7 +137,31 @@ export class CodexActivityProjection {
       activity.changes = activity.changes.slice(0, 200).map(change => ({ path: bounded(change.path), kind: bounded(change.kind), ...(change.diff !== undefined ? { diff: bounded(change.diff) } : {}) }))
     }
 
-    thread.activities = mergeAgentActivities(thread.activities, [activity])
+    thread.activities = this.merged(thread, activity)
+    this.installed.set(thread, thread.activities)
+  }
+
+  /**
+   * `mergeAgentActivities(thread.activities, [activity])`. When the thread still holds the array `put` last
+   * installed, that array is already the merge's output, so one record is placed without rebuilding and
+   * re-sorting all of it: a whole read puts every item of every turn, and rebuilding it each time made applying
+   * a long thread's activity grow with the square of the thread (#352). An array anything else installed takes
+   * the full merge.
+   */
+  private merged(thread: ActivityConversation, activity: AgentActivity): AgentActivity[] {
+    const current = thread.activities
+    if (!current || this.installed.get(thread) !== current) return mergeAgentActivities(current, [activity])
+    const index = current.findIndex(record => record.id === activity.id)
+    if (index >= 0) {
+      // The full merge's rule for a record it already holds, which keeps the record's place in the sequence.
+      const next = current.slice(); next[index] = mergeAgentActivities([current[index]!], [activity])[0]!
+      return next
+    }
+    const next = [...current, { ...activity, sequence: (current.at(-1)?.sequence ?? -1) + 1 }]
+    if (next.length <= MAX_AGENT_ACTIVITIES) return next
+    const bounded = next.slice(-MAX_AGENT_ACTIVITIES)
+    bounded[0] = { ...bounded[0]!, truncated: true }
+    return bounded
   }
 
   item(thread: ActivityConversation, item: Item, context: Context): void {
