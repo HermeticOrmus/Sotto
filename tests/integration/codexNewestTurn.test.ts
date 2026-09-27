@@ -9,7 +9,7 @@
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AgentControl } from '../../src/main/agents/control'
-import { codexFixture, type RecordedRpc } from '../fixtures/codexFixture'
+import { aroundTurnStart, codexFixture, historyReads } from '../fixtures/codexFixture'
 import { manualSendCoordinator } from '../fixtures/manualSendCoordinator'
 
 type Fixture = Awaited<ReturnType<typeof codexFixture>>
@@ -41,10 +41,7 @@ async function elsewhere(f: Fixture, id: string, action: Record<string, unknown>
   await expect.poll(() => f.acted(acted)).toBe(true)
 }
 /** The history requests made since `from`, as `turns` (the newest-turn check) and `read` (the whole transcript). */
-async function historyRequests(f: Fixture, from: number): Promise<('turns' | 'read')[]> {
-  return (await f.driver.requests()).slice(from).flatMap((request: RecordedRpc) => request.method === 'thread/turns/list' ? ['turns' as const]
-    : request.method === 'thread/read' && request.params?.includeTurns === true ? ['read' as const] : [])
-}
+const historyRequests = async (f: Fixture, from: number): Promise<('turns' | 'read')[]> => historyReads((await f.driver.requests()).slice(from))
 
 describe('Codex send checks the newest turn before reading the whole transcript', () => {
   it('sends after a finished turn on the newest turn alone', async () => {
@@ -248,7 +245,7 @@ describe('A send from the Threads page uses the newest-turn check', () => {
     return { f, id, control }
   }
   async function manual(f: Fixture, control: AgentControl, id: string, text: string): Promise<void> {
-    await control.command({ type: 'manual-send', threadId: id, text })
+    expect((await control.command({ type: 'manual-send', threadId: id, text })).error).toBeNull()
     await f.driver.completeTurn(id, `Reply to ${text}`)
     await expect.poll(async () => { await control.command({ type: 'refresh' }); return control.get().host.threads.find(thread => thread.id === id)?.status }).toBe('idle')
   }
@@ -256,18 +253,12 @@ describe('A send from the Threads page uses the newest-turn check', () => {
   afterEach(async () => { for (const control of controls.splice(0)) { control.dispose(); await control.privacyChanged() } })
 
   /** The history requests made since `from` and before the send's `turn/start`. */
-  async function beforeStart(f: Fixture, from: number): Promise<('turns' | 'read')[]> {
-    const sent = (await f.driver.requests()).slice(from)
-    const start = sent.findIndex(request => request.method === 'turn/start')
-    expect(start).toBeGreaterThan(-1)
-    return sent.slice(0, start).flatMap(request => request.method === 'thread/turns/list' ? ['turns' as const]
-      : request.method === 'thread/read' && request.params?.includeTurns === true ? ['read' as const] : [])
-  }
+  const beforeStart = async (f: Fixture, from: number): Promise<('turns' | 'read')[]> => historyReads(aroundTurnStart((await f.driver.requests()).slice(from)).before)
 
   it('checks the newest turn, not the whole transcript, before turn/start', async () => {
     const { f, id, control } = await coordinated()
     const from = (await f.driver.requests()).length
-    await control.command({ type: 'manual-send', threadId: id, text: 'Second prompt' })
+    expect((await control.command({ type: 'manual-send', threadId: id, text: 'Second prompt' })).error).toBeNull()
     // The coordinator's read before the send and the adapter's own, each the newest turn alone.
     expect(await beforeStart(f, from)).toEqual(['turns', 'turns'])
     expect(control.get().host.threads.find(thread => thread.id === id)!.messages.filter(message => message.role === 'user').map(message => message.text)).toEqual(['First prompt', 'Second prompt'])
@@ -278,7 +269,7 @@ describe('A send from the Threads page uses the newest-turn check', () => {
     await elsewhere(f, id, { type: 'native-turn', text: 'Typed in another Codex' })
     const from = (await f.driver.requests()).length
     // A manual send is written against what the coordinator's read shows, so after reading the other turn it goes.
-    await control.command({ type: 'manual-send', threadId: id, text: 'After the other turn' })
+    expect((await control.command({ type: 'manual-send', threadId: id, text: 'After the other turn' })).error).toBeNull()
     expect(await beforeStart(f, from)).toEqual(['turns', 'read', 'turns'])
     expect(control.get().host.threads.find(thread => thread.id === id)!.messages.filter(message => message.role === 'user').map(message => message.text))
       .toEqual(['First prompt', 'Typed in another Codex', 'After the other turn'])

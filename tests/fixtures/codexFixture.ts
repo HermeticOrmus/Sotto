@@ -16,6 +16,17 @@ async function oneShots(root: string): Promise<Record<string, unknown>[]> {
 }
 const flag = (args: unknown, name: string): string | undefined => { const list = args as string[]; return list.includes(name) ? list[list.indexOf(name) + 1] : undefined }
 export interface RecordedRpc { id?: string | number; method?: string; params?: Record<string, unknown>; result?: Record<string, unknown> }
+/** The thread history requests among `requests`, in order: `turns` for the newest-turn check, `read` for a whole-transcript read. */
+export function historyReads(requests: readonly RecordedRpc[]): ('turns' | 'read')[] {
+  return requests.flatMap(request => request.method === 'thread/turns/list' ? ['turns' as const]
+    : request.method === 'thread/read' && request.params?.includeTurns === true ? ['read' as const] : [])
+}
+/** `requests` split at the first `turn/start`, which must be there: what came before the send went out, and what came from it on. */
+export function aroundTurnStart(requests: readonly RecordedRpc[]): { before: RecordedRpc[]; after: RecordedRpc[] } {
+  const start = requests.findIndex(request => request.method === 'turn/start')
+  if (start === -1) throw new Error('No turn/start was sent.')
+  return { before: requests.slice(0, start), after: requests.slice(start) }
+}
 // The deadline also covers the fake app server's process start; see the note on claudeFixture.
 export async function codexFixture(root?: string, wrapped = false, requestTimeoutMs = 2000, session: AdapterSessionOptions = {}) {
   root ??= await mkdtemp(join(tmpdir(), 'sotto-codex-'))
