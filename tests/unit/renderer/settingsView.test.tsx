@@ -555,6 +555,40 @@ describe('SettingsView', () => {
     expect(await screen.findByText(/microphone ready/i)).toBeVisible()
   })
 
+  it('tests the selected input and discards its late result after the selection changes', async () => {
+    const outcome = deferred<'ready'>()
+    const stop = vi.fn(async () => undefined)
+    let publishLevel!: (level: number) => void
+    const start = vi.fn((onLevel: (level: number) => void) => { publishLevel = onLevel; return outcome.promise })
+    const props = baseProps({ settings: { ...DEFAULT_SETTINGS, microphoneId: 'headset', microphoneSkipped: true },
+      createMicrophoneTest: () => ({ start, stop }) })
+    const rendered = render(<SettingsView {...props} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Test microphone' }))
+    expect(start).toHaveBeenCalledWith(expect.any(Function), 'headset')
+    rendered.rerender(<SettingsView {...props} settings={{ ...props.settings, microphoneId: 'desk' }} />)
+    await waitFor(() => expect(stop).toHaveBeenCalledOnce())
+    await act(async () => { publishLevel(0.8); outcome.resolve('ready') })
+    expect(screen.queryByText(/microphone ready/i)).not.toBeInTheDocument()
+    expect(props.onUpdateSettings).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'Test microphone' })).toBeEnabled()
+  })
+
+  it('clears a ready meter when the selected input changes and tests the new input', async () => {
+    const stop = vi.fn(async () => undefined)
+    const start = vi.fn(async (onLevel: (level: number) => void) => { onLevel(0.7); return 'ready' as const })
+    const props = baseProps({ createMicrophoneTest: () => ({ start, stop }) })
+    const rendered = render(<SettingsView {...props} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Test microphone' }))
+    expect(await screen.findByText(/microphone ready/i)).toBeVisible()
+    rendered.rerender(<SettingsView {...props} settings={{ ...props.settings, microphoneId: 'desk' }} />)
+    await waitFor(() => expect(stop).toHaveBeenCalledOnce())
+    expect(screen.queryByText(/microphone ready/i)).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Test microphone' }))
+    expect(start).toHaveBeenLastCalledWith(expect.any(Function), 'desk')
+    rendered.unmount()
+    expect(stop).toHaveBeenCalledTimes(2)
+  })
+
   it('keeps the skip when the Settings test cannot reach a microphone', async () => {
     const user = userEvent.setup()
     const onUpdateSettings = vi.fn(async () => true)
