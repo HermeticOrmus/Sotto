@@ -1732,6 +1732,8 @@ export class WorkspaceHost implements AgentHost {
     return existingWorkingDirectory(resolveThreadWorkingDirectory(current, this.state.snapshot.projects.find(project => project.id === current.projectId)))
   }
   execute(command: AgentHostCommand): Promise<AgentHostResult> {
+    // Cancellation must reach a running provider even while its prompt acknowledgement holds the lane.
+    if (command.type === 'interrupt') return this.executeOne(command)
     const key = 'threadId' in command ? command.threadId : command.projectId
     // Creation changes older threads' settlement too. Keep that transaction apart from
     // settlement edits in the same project so failed writes cannot cross their rollbacks.
