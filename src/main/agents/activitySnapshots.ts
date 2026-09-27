@@ -51,6 +51,8 @@ export function subscribeActivitySnapshots(host: AgentHost, listener: (snapshot:
 export class ActivitySubscribers {
   private readonly listeners = new Map<(snapshot: AgentHostSnapshot) => void, boolean>()
   get size(): number { return this.listeners.size }
+  /** True when there is a subscriber and every one keeps history from events. */
+  everyAsked(): boolean { return this.listeners.size > 0 && [...this.listeners.values()].every(Boolean) }
   add(listener: (snapshot: AgentHostSnapshot) => void, options?: ActivitySubscriptionOptions): () => void {
     this.listeners.set(listener, options?.historyFromEvents === true)
     return () => this.listeners.delete(listener)

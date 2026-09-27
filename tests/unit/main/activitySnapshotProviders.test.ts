@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import { cloneActivitySnapshot, immutableActivities, isImmutableActivities } from '../../../src/main/agents/activitySnapshots'
-import type { ActivitySubscriptionOptions } from '../../../src/main/agents/host'
+import type { ActivitySubscriptionOptions, ThreadHostEvent } from '../../../src/main/agents/host'
 import { ConfiguredProviderHost } from '../../../src/main/agents/providerSwitch'
 import { SottoThreadHost, ThreadRegistry } from '../../../src/main/agents/threads'
 import type { AgentHostSnapshot } from '../../../src/shared/agents'
@@ -108,30 +108,67 @@ it('copies mutable legacy activity on each arrival, including edits within one a
   expect(snapshots.at(-1)!.threads[0]!.activities).not.toBe(first)
 })
 
-/** Records what each activity subscription asked of it, through the Sotto identity wrapper. */
+/** Publishes events, and records what each activity subscription asked of it through the Sotto identity wrapper. */
 class AskedProvider extends FakeProviderHost {
   readonly asked: Array<ActivitySubscriptionOptions | undefined> = []
-  subscribeActivitySnapshots(_listener: (snapshot: AgentHostSnapshot) => void, options?: ActivitySubscriptionOptions): () => void {
-    this.asked.push(options); return () => undefined
+  private readonly activityListeners = new Map<(snapshot: AgentHostSnapshot) => void, boolean>()
+  readonly subscribeEvents?: (listener: (event: ThreadHostEvent) => void) => () => void
+  constructor(events = true) { super(); if (events) this.subscribeEvents = () => () => undefined }
+  subscribeActivitySnapshots(listener: (snapshot: AgentHostSnapshot) => void, options?: ActivitySubscriptionOptions): () => void {
+    this.asked.push(options); this.activityListeners.set(listener, options?.historyFromEvents === true)
+    return () => this.activityListeners.delete(listener)
+  }
+  /** Hands each subscriber what it asked for: no messages to one that keeps history from events. */
+  emitActivity(): void {
+    for (const [listener, historyFromEvents] of this.activityListeners) listener(cloneActivitySnapshot({ ...this.state,
+      threads: this.state.threads.map(thread => historyFromEvents ? { ...thread, messages: [] } : thread) }))
   }
 }
-
-it.each([
-  ['every subscriber keeps history from events', [true, true], false, true],
-  ['one subscriber reads messages from its snapshots', [true, false], false, false],
-  ['an ordinary subscriber reads whole snapshots', [true], true, false],
-  ['nothing has subscribed yet', [], false, false],
-] as const)('asks a provider to leave messages out only when %s (#322)', async (_case, subscribers, ordinary, expected) => {
+async function askedSwitch(claude: AskedProvider) {
   const root = await mkdtemp(join(tmpdir(), 'sotto-activity-asked-'))
   const registry = new ThreadRegistry(root)
-  const claude = new AskedProvider()
   const host = new ConfiguredProviderHost({
     hosts: { codex: new FakeProviderHost(), claude: new SottoThreadHost('claude', claude, registry), grok: new FakeProviderHost(), devin: new FakeProviderHost() },
     provider: () => 'claude', enabledProviders: () => ['claude'],
   })
   cleanup.push(async () => { host.disconnect(); await registry.flush(); await rm(root, { recursive: true, force: true }) })
+  return host
+}
+
+it.each([
+  ['every subscriber keeps history from events', [true, true], false, true, true],
+  ['one subscriber reads messages from its snapshots', [true, false], false, true, false],
+  ['an ordinary subscriber reads whole snapshots', [true], true, true, false],
+  ['nothing has subscribed yet', [], false, true, false],
+  ['the provider publishes no events', [true], false, false, false],
+] as const)('asks a provider to leave messages out only when %s (#322)', async (_case, subscribers, ordinary, events, expected) => {
+  const claude = new AskedProvider(events)
+  const host = await askedSwitch(claude)
   for (const historyFromEvents of subscribers) host.subscribeActivitySnapshots(() => undefined, historyFromEvents ? { historyFromEvents } : undefined)
   if (ordinary) host.subscribe(() => undefined)
   await host.connect()
   expect(claude.asked).toEqual([{ historyFromEvents: expected }])
+})
+
+it('asks again when a subscriber that reads messages arrives after connect, and hands it the messages (#322)', async () => {
+  const claude = new AskedProvider()
+  claude.state.threads[0]!.messages = [{ id: 'ask', role: 'user', text: 'Ask', createdAt: '2026-09-26T10:00:00Z' }]
+  const host = await askedSwitch(claude)
+  const activity: AgentHostSnapshot[] = []
+  host.subscribeActivitySnapshots(snapshot => activity.push(snapshot), { historyFromEvents: true })
+  await host.connect()
+  expect(claude.asked).toEqual([{ historyFromEvents: true }])
+  claude.emitActivity()
+  expect(activity.at(-1)!.threads.find(thread => thread.title === 'Workshop')!.messages).toEqual([])
+
+  const plain: AgentHostSnapshot[] = []
+  const off = host.subscribe(snapshot => plain.push(snapshot))
+  expect(claude.asked).toEqual([{ historyFromEvents: true }, { historyFromEvents: false }])
+  // What the provider last published carried no messages, so the switch reads it afresh for the newcomer.
+  await expect.poll(() => plain.at(-1)?.threads.find(thread => thread.title === 'Workshop')?.messages.map(message => message.id)).toEqual(['ask'])
+  claude.emitActivity()
+  expect(plain.at(-1)!.threads.find(thread => thread.title === 'Workshop')!.messages.map(message => message.id)).toEqual(['ask'])
+
+  off()
+  expect(claude.asked.at(-1)).toEqual({ historyFromEvents: true })
 })

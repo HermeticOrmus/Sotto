@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises'
 import { z } from 'zod'
 import { AtomicJsonStore } from '../storage/atomicJsonStore'
 import { cloneHostSnapshot } from './cloneHostSnapshot'
-import { cloneActivitySnapshot, subscribeActivitySnapshots } from './activitySnapshots'
+import { ActivitySubscribers, cloneActivitySnapshot, subscribeActivitySnapshots } from './activitySnapshots'
 import { join, resolve } from 'node:path'
 import { EMPTY_AGENT_HOST, PROVIDER_LABELS, parsePublicProviderEntityId, providerIdSchema, publicProviderEntityId, type AgentCapabilities, type AgentHostSnapshot, type AgentProviderStatus, type ProviderId } from '../../shared/agents'
 import { resolveModel } from '../../shared/modelCatalog'
@@ -21,7 +21,9 @@ function nativeEntityId(provider: ProviderId, kind: 'model' | 'project', value: 
 }
 function folderKey(path: string): string { const key = resolve(path); return process.platform === 'win32' ? key.toLowerCase() : key }
 type Slot = { snapshot: AgentHostSnapshot; status: AgentProviderStatus; wanted: boolean; epoch: number; connecting?: Promise<void> | undefined;
-  unsubscribeSnapshot?: (() => void) | undefined; unsubscribeEvents?: (() => void) | undefined }
+  unsubscribeSnapshot?: (() => void) | undefined; unsubscribeEvents?: (() => void) | undefined
+  /** What this connection's activity subscription asked the provider: to leave its messages out, or not. */
+  historyFromEvents?: boolean | undefined }
 
 /** Independent native connections; durable Sotto thread identity selects the transport, never reasoning settings. */
 export class ConfiguredProviderHost implements AgentHost {
@@ -36,7 +38,7 @@ export class ConfiguredProviderHost implements AgentHost {
   private readonly slots = new Map<ProviderId, Slot>()
   private readonly listeners = new Set<(snapshot: AgentHostSnapshot) => void>()
   /** Each activity subscriber, and whether it keeps history from the providers' events. */
-  private readonly activityListeners = new Map<(snapshot: AgentHostSnapshot) => void, boolean>()
+  private readonly activityListeners = new ActivitySubscribers()
   private readonly eventListeners = new Set<(event: ThreadHostEvent) => void>()
   /** Thread events from whichever provider owns the thread. Absent when no provider publishes any. */
   readonly subscribeEvents?: (listener: (event: ThreadHostEvent) => void) => () => void
@@ -127,7 +129,7 @@ export class ConfiguredProviderHost implements AgentHost {
     if (!this.listeners.size && !this.activityListeners.size) return
     const snapshot = this.aggregate()
     for (const listener of this.listeners) listener(cloneHostSnapshot(snapshot))
-    for (const listener of this.activityListeners.keys()) listener(cloneActivitySnapshot(snapshot))
+    this.activityListeners.publish(() => snapshot)
   }
   async connect(provider?: ProviderId): Promise<AgentHostSnapshot> {
     const requested = (provider ? [provider] : this.options.enabledProviders?.() ?? [this.options.provider()]).map(id => ({ id, epoch: this.slots.get(id)!.epoch }))
@@ -142,11 +144,7 @@ export class ConfiguredProviderHost implements AgentHost {
     slot.wanted = true; const epoch = ++slot.epoch
     slot.unsubscribeSnapshot?.(); slot.unsubscribeEvents?.()
     slot.status = { ...slot.status, connection: 'connecting' }; delete slot.status.error
-    slot.unsubscribeSnapshot = subscribeActivitySnapshots(this.options.hosts[id], snapshot => {
-      if (!slot.wanted || slot.epoch !== epoch) return
-      this.accept(id, snapshot)
-      this.publish()
-    }, { historyFromEvents: this.historyFromEvents() })
+    this.watchActivity(id, slot, epoch)
     // A thread belongs to one provider. Its events keep that provider's connection epoch.
     slot.unsubscribeEvents = this.options.hosts[id].subscribeEvents?.(event => {
       if (!slot.wanted || slot.epoch !== epoch) return
@@ -165,6 +163,33 @@ export class ConfiguredProviderHost implements AgentHost {
     })()
     slot.connecting = pending
     return pending
+  }
+  /** One provider's activity for this connection, asking it to leave its messages out only when nothing here reads them. */
+  private watchActivity(id: ProviderId, slot: Slot, epoch: number): void {
+    const historyFromEvents = this.historyFromEvents(id)
+    slot.unsubscribeSnapshot?.()
+    slot.historyFromEvents = historyFromEvents
+    slot.unsubscribeSnapshot = subscribeActivitySnapshots(this.options.hosts[id], snapshot => {
+      if (!slot.wanted || slot.epoch !== epoch) return
+      this.accept(id, snapshot)
+      this.publish()
+    }, { historyFromEvents })
+  }
+  /**
+   * A subscriber came or went, so whether anything here reads a provider's messages may have changed. Each
+   * connected provider whose subscription asked otherwise is subscribed again. When messages are wanted
+   * again, what those providers last published carries none, so each is read afresh.
+   */
+  private reconsider(): void {
+    let reread = false
+    for (const [id, slot] of this.slots) {
+      if (!slot.wanted || !slot.unsubscribeSnapshot) continue
+      const historyFromEvents = this.historyFromEvents(id)
+      if (slot.historyFromEvents === historyFromEvents) continue
+      this.watchActivity(id, slot, slot.epoch)
+      if (!historyFromEvents) reread = true
+    }
+    if (reread) void this.snapshot().catch(() => undefined)
   }
   async snapshot(provider?: ProviderId): Promise<AgentHostSnapshot> {
     await Promise.all((provider ? [provider] : providerIdSchema.options).map(async id => {
@@ -326,15 +351,16 @@ export class ConfiguredProviderHost implements AgentHost {
     this.publish()
   }
   subscribe(listener: (snapshot: AgentHostSnapshot) => void): () => void {
-    this.listeners.add(listener); return () => this.listeners.delete(listener)
+    this.listeners.add(listener); this.reconsider()
+    return () => { this.listeners.delete(listener); this.reconsider() }
   }
-  /** What a subscriber asks is read when a provider connects. The workspace subscribes as it is made, before any does. */
   subscribeActivitySnapshots(listener: (snapshot: AgentHostSnapshot) => void, options?: ActivitySubscriptionOptions): () => void {
-    this.activityListeners.set(listener, options?.historyFromEvents === true); return () => this.activityListeners.delete(listener)
+    const off = this.activityListeners.add(listener, options); this.reconsider()
+    return () => { off(); this.reconsider() }
   }
-  /** A provider's own messages are left out of what it publishes here only when every subscriber keeps
-   * history from the events this switch forwards, and none reads them from the ordinary subscription. */
-  private historyFromEvents(): boolean {
-    return this.listeners.size === 0 && this.activityListeners.size > 0 && [...this.activityListeners.values()].every(Boolean)
+  /** A provider's own messages are left out of what it publishes here only when it publishes events, every
+   * subscriber keeps history from the events this switch forwards, and none reads the ordinary subscription. */
+  private historyFromEvents(id: ProviderId): boolean {
+    return this.listeners.size === 0 && this.activityListeners.everyAsked() && typeof this.options.hosts[id].subscribeEvents === 'function'
   }
 }
