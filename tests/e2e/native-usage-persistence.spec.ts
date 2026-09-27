@@ -5,7 +5,11 @@ import { join, resolve } from 'node:path'
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test'
 import { requireOwnedE2EProfile } from '../../scripts/e2e-profile-policy.mjs'
 import type { ThreadUsage } from '../../src/shared/threadUsage'
+import { nativeUsageBoundary } from '../fixtures/nativeUsageBoundary'
 import { firstSottoWindow, openThreads } from './support/sottoLaunch'
+
+const NATIVE_MODEL = 'claude-sonnet-4-6'
+const PUBLIC_MODEL = 'native:claude:model:claude-sonnet-4-6'
 
 test('native Claude usage survives replay and a graceful quit with its latest archive write held', async () => {
   test.setTimeout(120_000)
@@ -19,6 +23,13 @@ test('native Claude usage survives replay and a graceful quit with its latest ar
   const writes = async () => (await events()).filter(row => row.event === 'usage-write').length
   const archive = async () => JSON.parse(await readFile(join(profile, 'claude-usage.json'), 'utf8')) as Record<string, { view: ThreadUsage; entries: Record<string, unknown> }>
   const bridgeUsage = (id: string) => page.evaluate(async threadId => (await window.sotto!.agents!.get()).host.threads.find(thread => thread.id === threadId)?.usage, id)
+  const archiveUsage = async () => {
+    const ledgers = Object.values(await archive())
+    expect(ledgers).toHaveLength(1)
+    return ledgers[0]!.view
+  }
+  const bridgeSnapshot = async (id: string) => nativeUsageBoundary(await bridgeUsage(id), PUBLIC_MODEL)
+  const archiveSnapshot = async () => nativeUsageBoundary(await archiveUsage(), NATIVE_MODEL)
   const action = async (nativeId: string, value: Record<string, unknown>) => {
     const path = join(client, `control-${nativeId}.json`)
     await expect.poll(() => readFile(path).then(() => false, () => true)).toBe(true)
@@ -91,14 +102,19 @@ test('native Claude usage survives replay and a graceful quit with its latest ar
     await action(nativeId, { type: 'raw', frame: result(nativeId, 111) })
     await expect.poll(() => bridgeUsage(id)).toMatchObject({ total: { input: 6000, output: 300, cached: 4000 }, elapsedMs: 111 })
     const before = (await bridgeUsage(id))!
+    const beforeSnapshot = nativeUsageBoundary(before, PUBLIC_MODEL)
     expect(before.estimatedUsd).toBeCloseTo(0.0117, 8)
     await expect.poll(async () => Object.values(await archive())[0]?.view.elapsedMs).toBe(111)
+    expect(await archiveSnapshot()).toEqual(beforeSnapshot)
     const beforeWrites = await writes()
     // The final result is a receipt for the batch: its changed duration must reach the bridge and disk.
     await action(nativeId, { type: 'raw-burst', frames: [...Array.from({ length: 100 }, () => first), result(nativeId, 222)] })
     await expect.poll(() => bridgeUsage(id)).toMatchObject({ total: before.total, estimatedUsd: before.estimatedUsd, elapsedMs: 222 })
     await expect.poll(async () => Object.values(await archive())[0]?.view.elapsedMs).toBe(222)
     await expect.poll(writes).toBe(beforeWrites + 1)
+    const afterReplay = (await bridgeUsage(id))!
+    expect(nativeUsageBoundary(afterReplay, PUBLIC_MODEL)).toEqual({ ...beforeSnapshot, elapsedMs: 222 })
+    expect(await archiveSnapshot()).toEqual({ ...beforeSnapshot, elapsedMs: 222 })
     await expect(page!.getByLabel('Thread transcript')).toContainText('Synthetic usage reply 1')
     await expect(composer()).toBeEditable()
     await composer().fill('An unsent draft stays editable after replay.')
@@ -109,6 +125,8 @@ test('native Claude usage survives replay and a graceful quit with its latest ar
     await action(nativeId, { type: 'raw', persist: true, frame: usageFrame(nativeId, 1, 250) })
     await expect.poll(() => bridgeUsage(id)).toMatchObject({ total: { output: 350 }, latest: { output: 250 } })
     const latest = (await bridgeUsage(id))!
+    const latestSnapshot = nativeUsageBoundary(latest, PUBLIC_MODEL)
+    expect(latest.estimatedUsd).toBeCloseTo(0.01245, 8)
     expect(latest.persistenceError).toBeUndefined()
     await expect.poll(() => readFile(join(root, 'usage-write-waiting')).then(() => true, () => false)).toBe(true)
     expect(Object.values(await archive())[0]!.view.total!.output).toBe(300)
@@ -120,19 +138,23 @@ test('native Claude usage survives replay and a graceful quit with its latest ar
     expect(Object.values(await archive())[0]!.view.total!.output).toBe(300)
     await rm(join(root, 'hold-usage-write'))
     await closing; closing = undefined; app = undefined
-    expect(Object.values(await archive())[0]!.view).toEqual(latest)
+    const drained = await archiveUsage()
+    expect(nativeUsageBoundary(drained, NATIVE_MODEL)).toEqual(latestSnapshot)
     await launch()
     await page!.evaluate(async threadId => {
       await window.sotto!.agents!.command({ type: 'select-thread', threadId })
       await window.sotto!.agents!.command({ type: 'observe-threads', threadIds: [threadId] })
     }, id)
-    await expect.poll(() => bridgeUsage(id)).toEqual(latest)
+    await expect.poll(() => bridgeSnapshot(id)).toEqual(latestSnapshot)
+    const restored = (await bridgeUsage(id))!
     // A second replay goes through the restarted native process, using the persisted request identity.
     const restartWrites = await writes()
     await action(nativeId, { type: 'raw-burst', frames: [...Array.from({ length: 100 }, () => first), result(nativeId, 333)] })
     await expect.poll(() => bridgeUsage(id)).toMatchObject({ total: latest.total, estimatedUsd: latest.estimatedUsd, elapsedMs: 333 })
     await expect.poll(async () => Object.values(await archive())[0]?.view.elapsedMs).toBe(333)
     await expect.poll(writes).toBe(restartWrites + 1)
+    expect(await bridgeSnapshot(id)).toEqual({ ...latestSnapshot, elapsedMs: 333 })
+    expect(await archiveSnapshot()).toEqual({ ...latestSnapshot, elapsedMs: 333 })
     await openThreads(page!)
     await expect(page!.getByRole('heading', { name: 'Native usage verification', exact: true })).toBeVisible()
     await expect(composer()).toBeEditable()
@@ -143,7 +165,7 @@ test('native Claude usage survives replay and a graceful quit with its latest ar
     expect(await readFile(join(client, 'violations.jsonl'), 'utf8').catch(() => '')).toBe('')
     expect((await events()).some(row => row.event === 'scripted-claude-launch')).toBe(true)
     await writeFile(join(artifacts, 'native-usage-evidence.json'), JSON.stringify({ syntheticOnly: true, provider: 'claude', before,
-      afterReplay: { ...before, elapsedMs: 222 }, afterDrain: latest, afterRestartReplay: await bridgeUsage(id),
+      afterReplay, afterDrain: drained, afterRestart: restored, afterRestartReplay: await bridgeUsage(id),
       replayWrites: 1, shutdownHeldUntilRelease: true, productTestBridgeAbsent: true }, null, 2))
   } finally {
     await rm(join(root, 'hold-usage-write'), { force: true })
