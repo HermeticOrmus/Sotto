@@ -137,7 +137,7 @@ A client that cannot pair itself over SSH enters a code shown on the host instea
 node host/index.js --data /path/to/sotto-data --pairing-code
 ```
 
-The code expires after five minutes. Pairing admits this device; permission answers need a separate policy grant from the host's user. Use the client ID the client shows, or the one **Edit connection** shows for a desktop connection, to grant, deny or revoke access explicitly:
+The code expires after five minutes. Pairing admits this device; permission answers need a separate policy grant from the host's user. Creating or changing a thread to allow actions without asking needs that same grant, including when a new thread inherits the host's permission default or a provider profile. Choosing a mode that asks about everything needs no grant. Use the client ID the client shows, or the one **Edit connection** shows for a desktop connection, to grant, deny or revoke access explicitly:
 
 ```sh
 node host/index.js --data /path/to/sotto-data --allow-answers CLIENT_UUID

@@ -51,3 +51,21 @@ Native Electron coverage is Claude. Codex/Grok accounting is covered by unit/int
 Root confirmed from the authoritative spawn calls that Standards reviewer `/root/fix_378` and Spec reviewer `/root/fix_377` each used `gpt-6-astra`, high reasoning, `fork_turns: none` and the worker role. Both independently reviewed baseline `7b5fdb84` through production/E2E revision `f3a80bb1`, then the final documentation/evidence delta through `0cc23d5d59acff35a62a84eece853a17fdce2f9b`. Each reported zero substantiated findings; no source changes were needed.
 
 Cross-model review was unavailable because automatic approval review rejected the external review destinations; those calls were not retried. The user specified Astra builders, not an Astra-only reviewer restriction. Two independent native axes were completed, not four cross-model reviews. All implementation used GPT-6 Astra at high reasoning.
+
+## Main integration
+
+The branch integrates fetched `origin/main` at `2a3bcbb691fccf789da6ae79f440811c75dc14c9`, including #376, #399, #400 and #398. The only textual conflicts were `.gitignore` and `eslint.config.mjs`; both retain the artifact exclusions for review-377 and review-389. The shared Claude fixture merged automatically: main's persisted burst support and action-consumption handshake remain, along with this journey's isolated Claude-home override. Both additions to `docs/ci.md` remain.
+
+Every production file matches main except `nativeUsage.ts`, which still matches `5e1cb954` exactly. No new production decision or fix was introduced. The native usage E2E spec, launcher and retained screenshots/numeric evidence are unchanged. Inspection against #400 confirms that its result handling still accepts the journey's ordinary result frames, which have no background origin, and still feeds usage metadata to the ledger before resolving turn state. The scripted client's initialization and prompt echo retain their original roles; the test waits for the persisted alias and client receipt before sending usage frames.
+
+The earlier gates, reviews and native screenshots remain historical evidence for their stated revisions. The runner must rebuild and run the native journey against the integrated source before a new runtime pass can be claimed. No build, Electron run, full suite or timing benchmark was performed during integration.
+
+Focused post-integration checks passed: nine Vitest files, 124 tests, with one worker, including #400's query/report/held-prompt cases, native transcript catch-up, usage persistence and #398's inherited permissions. Focused ESLint passed for the resolved configuration, shared Claude fixture and native usage Electron seam.
+
+```powershell
+npx vitest run tests/unit/main/nativeUsage.test.ts tests/unit/main/nativeUsagePersistence.test.ts tests/unit/main/nativeUsageBenchTotals.test.ts tests/unit/main/nativeUsageBoundary.test.ts tests/integration/claudeAdapterSafety.test.ts tests/integration/claudeMonitoring.test.ts tests/integration/claudeTranscriptCatchUp.test.ts tests/integration/nativeCompaction.test.ts tests/integration/remoteThreadPermissions.test.ts --maxWorkers=1
+npx eslint eslint.config.mjs tests/fixtures/fakeClaudeThread.mjs tests/fixtures/claudeFixture.ts tests/e2e/native-usage-persistence.spec.ts tests/fixtures/nativeUsageElectronMain.cjs
+```
+
+- [ ] Runner's post-integration broad gates and build.
+- [ ] Runner's post-integration native usage journey and screenshot inspection.

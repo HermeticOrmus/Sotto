@@ -2,7 +2,7 @@
 
 Unchanged observations now request no archive writes. Changed observations share one pending snapshot while a write is in flight. Accounting remains synchronous, and graceful shutdown drains the latest totals. All nine isolated benchmark cases passed, and the synthetic Claude Electron journey passed through replay, held-write shutdown, restart and visible restored history.
 
-Baseline: `7b5fdb843c46ca9fbd21d0ea6acc6656d7f72def`, which matched fetched `origin/main` before implementation. Production implementation: `5e1cb9544d6dcfabf22457a0586b24542c7abafe`. Benchmark candidate: `4313677c43f1ad09430bd43abc24662c1fafc4b0`. Subsequent commits changed harnesses and documentation, not production behavior. #302 still owns the visible persistence-error surface decision; this change adds none.
+Baseline: `7b5fdb843c46ca9fbd21d0ea6acc6656d7f72def`, which matched fetched `origin/main` before implementation. Usage implementation: `5e1cb9544d6dcfabf22457a0586b24542c7abafe`. Benchmark candidate: `4313677c43f1ad09430bd43abc24662c1fafc4b0`. Follow-up commits changed harnesses and documentation; the later integration of main retains the same usage implementation and imports main's other production changes. #302 still owns the visible persistence-error surface decision; this change adds none.
 
 ## Implementation and invariants
 
@@ -69,7 +69,7 @@ The [native Electron verification note](../verification/2026-09-27-native-usage-
 - [x] Nine isolated benchmark cases with restart equivalence.
 - [x] `npm run typecheck`, full `npm run lint`, and `npm run notices:verify` (174 components), reported by the runner at `ba1fbd05`.
 - [x] `npm test -- --maxWorkers=2`: 440 files passed, 35 skipped; 5,775 tests passed, 135 skipped; 614.58 seconds, reported by the runner. Source, unit/integration tests and shared fixtures stayed frozen during the run.
-- [x] Runtime preparation and `npm run build`, completed by the runner. Production source is unchanged since `5e1cb954`.
+- [x] Runtime preparation and `npm run build`, completed by the runner before main integration. The usage implementation is unchanged since `5e1cb954`.
 - [x] Focused E2E lint/typecheck and the native Electron journey passed for the final `f3a80bb1` test content; original screenshots inspected. Only the excluded E2E spec and documentation changed after the broad-gate revision.
 - [x] Independent native GPT-6 Astra/high Standards review: zero substantiated findings.
 - [x] Independent native GPT-6 Astra/high Spec review: zero substantiated findings.
@@ -77,3 +77,5 @@ The [native Electron verification note](../verification/2026-09-27-native-usage-
 Root confirmed both reviewers' GPT-6 Astra/high configuration from the authoritative spawn calls. Standards reviewer `/root/fix_378` and Spec reviewer `/root/fix_377` independently reviewed baseline `7b5fdb84` through production/E2E revision `f3a80bb1`, then the final documentation/evidence delta through `0cc23d5d59acff35a62a84eece853a17fdce2f9b`. Both reported zero substantiated findings; no source changes were needed.
 
 Implementation used GPT-6 Astra at high reasoning. Cross-model review was unavailable because automatic approval review rejected the external review destinations; those calls were not retried. The user specified Astra builders, not an Astra-only reviewer restriction. Completed coverage is two independent native review axes, not four cross-model reviews.
+
+These results and reviews describe the revisions named above. Integration of `origin/main` at `2a3bcbb691fccf789da6ae79f440811c75dc14c9` preserves the benchmark/accounting implementation and retained evidence. No timing rerun was needed: the benchmark's only incoming dependency change is a comment in `perfBench.ts`. Post-integration checks and pending runner verification are recorded in the [verification note](../verification/2026-09-27-native-usage-writes.md#main-integration).
