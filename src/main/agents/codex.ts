@@ -17,7 +17,7 @@ import type { AgentSkillCatalog, AgentSkillReference } from '../../shared/agentS
 import { codexSkillInput, parseCodexSkillCatalog } from './codexSkills'
 import type { AgentFileReference } from '../../shared/agentFiles'
 import { verifyFileMentions } from './promptFiles'
-import type { AgentHost, AgentHostCommand, AgentHostResult, AgentSkillScope, PromptImage, ShortTextPrompt, ThreadHistorySource, ThreadHostEvent, ThreadRead } from './host'
+import type { AgentHost, AgentHostCommand, AgentHostResult, AgentSkillScope, PromptImage, ShortTextPrompt, ThreadHistorySource, ThreadHostEvent, ThreadReadPurpose } from './host'
 import { SIDE_WRITING_TIMEOUT_MS, sideWritingEffort } from './sideWriting'
 import { ThreadMessageLog } from './threadMessageLog'
 import { cloneHostSnapshot } from './cloneHostSnapshot'
@@ -464,7 +464,7 @@ export class CodexAppServerHost implements AgentHost {
    * Read the thread back from Codex. The read before a send first asks only for the newest turn
    * (`confirmNewestTurn`) and reads the whole transcript when that cannot show nothing changed.
    */
-  async refreshThread(id: string, purpose: ThreadRead = {}): Promise<AgentHostSnapshot> {
+  async refreshThread(id: string, purpose: ThreadReadPurpose = {}): Promise<AgentHostSnapshot> {
     if (!this.aliases[id]) throw new Error('That Codex thread is unavailable.')
     const generation = this.generation
     const work = (this.threadReads.get(id) ?? Promise.resolve()).catch(() => undefined).then(async () => {

@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { z } from 'zod'
 import type { AgentHostSnapshot } from '../../shared/agents'
 import { AtomicJsonStore } from '../storage/atomicJsonStore'
-import type { AgentHost, AgentHostCommand, AgentHostResult, AgentSkillScope, RestoredThreadHistory, ShortTextPrompt, ThreadHistorySource, ThreadHostEvent, ThreadRead } from './host'
+import type { AgentHost, AgentHostCommand, AgentHostResult, AgentSkillScope, RestoredThreadHistory, ShortTextPrompt, ThreadHistorySource, ThreadHostEvent, ThreadReadPurpose } from './host'
 import { subscribeActivitySnapshots } from './activitySnapshots'
 
 const bindingSchema = z.object({
@@ -172,7 +172,7 @@ export class SottoThreadHost implements AgentHost {
     })
     if (mine.length) await this.inner.restoreThreadHistory(mine)
   }
-  async refreshThread(threadId: string, purpose?: ThreadRead): Promise<AgentHostSnapshot> {
+  async refreshThread(threadId: string, purpose?: ThreadReadPurpose): Promise<AgentHostSnapshot> {
     await this.registry.load()
     const binding = this.registry.byThread(threadId)
     if (!binding || binding.provider !== this.provider) throw new Error('This thread is not known to Sotto. Refresh and select it again.')
