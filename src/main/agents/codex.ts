@@ -522,10 +522,11 @@ export class CodexAppServerHost implements AgentHost {
    * its newest turn alone with `thread/turns/list`, which reads the same session file `thread/read` does, so it
    * sees a turn another Codex process added. It answers true only when that turn is the newest one Sotto already
    * holds, has ended, and reconciles onto exactly the messages Sotto already has; then a whole read would change
-   * nothing a send checks. Anything else answers false and the caller reads the whole transcript. ADR-0005's
-   * follow-up lists every such case; the condition and the refusal handling below are that list in code. The match
-   * is decided on copies with the same reconciliation `applyTurn` runs, and only a turn that matches is applied, so
-   * a turn that does not match leaves the thread as it was for the whole read, or a failed one, to find.
+   * nothing a send checks. Anything else answers false and the caller reads the whole transcript, a refusal or a
+   * lost reply included. ADR-0005's follow-up lists every such case; the condition and the error handling below
+   * are that list in code. The match is decided on copies with the same reconciliation `applyTurn` runs, and only
+   * a turn that matches is applied, so a turn that does not match leaves the thread as it was for the whole read,
+   * or a failed one, to find. A reply that comes after the check gave up is dropped, as a late whole read is.
    */
   private async confirmNewestTurn(id: string, generation: number): Promise<boolean> {
     const alias = this.aliases[id]!, thread = this.ensureThread(id)
@@ -535,10 +536,10 @@ export class CodexAppServerHost implements AgentHost {
       || this.pendingLogMessages.has(id) || this.runningTurns.has(id) || thread.status !== 'idle' || thread.requests.length || thread.historyStatus) return false
     const revision = this.revisions.get(id)
     const held = newest.messages.map(message => message.id)
-    let confirmed = false
+    let confirmed = false, current = true
     try {
       await this.rpc('thread/turns/list', { threadId: alias.codexThreadId, limit: 1, sortDirection: 'desc', itemsView: 'full' }, async value => {
-        if (generation !== this.generation || revision !== this.revisions.get(id)) return
+        if (!current || generation !== this.generation || revision !== this.revisions.get(id)) return
         // Only a reply that says it carries the full items counts; turnSchema would take a missing itemsView as full.
         const page = z.object({ data: z.array(turnSchema.extend({ itemsView: z.literal('full') })) }).safeParse(value)
         const turn = page.success && page.data.data.length === 1 ? page.data.data[0]! : undefined
@@ -553,10 +554,10 @@ export class CodexAppServerHost implements AgentHost {
         confirmed = true
       })
     } catch (error) {
-      if (!(error instanceof Rejected)) throw error
-      if (error.methodNotFound || error.unknownVariant === 'thread/turns/list') this.turnsListSupported = false
+      // Any refusal, and a reply that never came, reads the whole transcript.
+      if (error instanceof Rejected && (error.methodNotFound || error.unknownVariant === 'thread/turns/list')) this.turnsListSupported = false
       return false
-    }
+    } finally { current = false }
     return confirmed
   }
   private touch(id: string): void { this.revisions.set(id, (this.revisions.get(id) ?? 0) + 1) }

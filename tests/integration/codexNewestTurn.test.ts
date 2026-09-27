@@ -146,6 +146,20 @@ describe('Codex send checks the newest turn before reading the whole transcript'
     expect(await historyRequests(f, from)).toEqual(['turns', 'read', 'turns'])
   })
 
+  it('reads the whole transcript and sends when the check gets no reply, and the late reply changes nothing', async () => {
+    const { f, id } = await answeredThread()
+    await f.script({ holdReply: 'thread/turns/list' })
+    const from = (await f.driver.requests()).length
+    await expect(send(f, id, 'own-2', 'own-1')).resolves.toEqual({ accepted: true })
+    expect(await historyRequests(f, from)).toEqual(['turns', 'read'])
+    const released = await f.action(id, { type: 'release-reply', method: 'thread/turns/list' })
+    await expect.poll(() => f.acted(released)).toBe(true)
+    await f.driver.completeTurn(id, 'Reply to own-2')
+    await expect.poll(async () => (await f.host.snapshot()).threads.find(thread => thread.id === id)?.status).toBe('idle')
+    const messages = (await f.host.snapshot()).threads.find(thread => thread.id === id)!.messages
+    expect(messages.map(message => [message.role, message.text])).toEqual(['own-1', 'own-2'].flatMap(own => [['user', `Prompt ${own}`], ['assistant', `Reply to ${own}`]]))
+  })
+
   it('asks again on the next send when Codex names an unknown value rather than the request', async () => {
     const { f, id } = await answeredThread()
     // How Codex 0.157.1 answers a params value it does not know, here an itemsView it has no such view for.

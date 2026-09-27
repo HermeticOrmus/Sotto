@@ -93,7 +93,7 @@ Anything else reads the whole transcript, as it always did. This is the full lis
 - a newest turn Sotto does not hold, one still running, or one Sotto rewound;
 - a reply that does not say it carries the full items, or a message Sotto cannot match;
 - a reply that arrived after the thread moved on;
-- any refusal.
+- any refusal, or no reply in time. A reply that comes later is dropped, as a late whole read is.
 
 Only a refusal that says Codex does not have the request at all stops Sotto asking on that connection: JSON-RPC's "method not found", or the invalid request naming `thread/turns/list` as an unknown variant that 0.157.1 sends. Codex names an unknown value inside the params the same way, and that refusal is asked again on the next send.
 

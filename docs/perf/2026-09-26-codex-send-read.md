@@ -126,8 +126,8 @@ Threads page, use the check alone, including when Codex names history items diff
 another process added or is still running, and a message in the newest turn Sotto cannot match, are read in full and
 the stale reply refused before `turn/start`. Input typed into the session log is refused on the check alone. A turn
 another process took back is read in full and the send goes, as it did before. A turn that does not match leaves the
-thread as it was when the whole read after it fails. A reply without `itemsView` is read in full. Any refusal is read
-in full; only a Codex without `thread/turns/list` is not asked again on that connection.
+thread as it was when the whole read after it fails. A reply without `itemsView` is read in full. Any refusal, and a
+check that gets no reply in time, is read in full, and the send goes when that read allows it; only a Codex without `thread/turns/list` is not asked again on that connection.
 `tests/unit/main/threadReadPurpose.test.ts` shows that the workspace, provider and Sotto thread hosts hand the read's
 purpose on, that the coordinator marks its reads before a manual send, a draft send and a supervision follow-up, and
 that its assign, select and retry reads stay whole.
