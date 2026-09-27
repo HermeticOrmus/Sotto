@@ -1,0 +1,680 @@
+<!doctype html>
+<!-- Throwaway prototype, branch prototype/host-folder-browser. Three variants of choosing a computer and a folder on it for a
+     new project, switchable with ?variant=A|B|C: A Steps, B Places, C Path bar. All state is in memory; nothing is sent anywhere. -->
+<html lang="en" data-theme="dark"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sotto · Host folder browser prototype</title>
+<link rel="stylesheet" href="/src/renderer/src/styles/tokens.css">
+<style>
+@font-face{font-family:Figtree;src:url('/src/renderer/src/assets/fonts/figtree-latin.woff2') format('woff2');font-weight:300 900;font-display:swap}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--tt-canvas);color:var(--tt-text);font:14px/1.45 Figtree,system-ui,sans-serif;overflow:hidden}
+button,input,select{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--tt-focus-ring);outline-offset:2px}
+svg{flex:none}
+
+/* The app around the dialog, drawn after the Threads page. */
+.app{height:100vh;display:grid;grid-template-columns:320px 1fr;min-width:0}
+.side{background:var(--tt-sidebar);border-right:1px solid var(--tt-sidebar-border);display:flex;flex-direction:column;min-height:0;color:var(--tt-sidebar-text)}
+.side-top{display:flex;align-items:center;gap:6px;padding:10px 12px 8px}
+.brand{display:flex;align-items:center;gap:8px;font-weight:600;font-size:15px;flex:1}
+.brand i{width:20px;height:20px;border-radius:5px;background:var(--tt-accent);display:inline-block}
+.icon-btn{display:grid;place-items:center;width:30px;height:30px;border:0;border-radius:7px;background:transparent;color:var(--tt-sidebar-text-muted)}
+.icon-btn:hover{background:var(--tt-sidebar-row-hover);color:var(--tt-sidebar-text)}
+.side-search{margin:4px 8px 8px;display:flex;align-items:center;gap:8px;padding:7px 10px;border:1px solid var(--tt-sidebar-border);border-radius:8px;color:var(--tt-sidebar-text-muted);font-size:13px}
+.side-list{flex:1;overflow:auto;padding:4px 6px}
+.group{margin-bottom:6px}
+.group-head{display:flex;align-items:center;gap:7px;padding:7px 8px;font-size:13.5px;font-weight:600;color:var(--tt-sidebar-text)}
+.group-head .count{margin-left:auto;color:var(--tt-sidebar-text-muted);font-weight:400;font-size:12px}
+.group[data-fresh] .group-head{background:var(--tt-sidebar-row-selected);border-radius:8px}
+.thread{padding:7px 10px 7px 28px;border-radius:8px;font-size:13.5px;color:var(--tt-sidebar-text)}
+.thread small{display:block;color:var(--tt-sidebar-text-muted);font-size:12px}
+.host-badge{display:inline-flex;align-items:center;gap:4px;padding:1px 6px;border:1px solid var(--tt-border-faint);border-radius:999px;font-size:11px;font-weight:400;color:var(--tt-sidebar-text-muted)}
+.side-foot{display:flex;gap:6px;padding:8px;border-top:1px solid var(--tt-sidebar-border)}
+.side-foot span{flex:1;text-align:center;padding:7px;border-radius:8px;font-size:13px;color:var(--tt-sidebar-text-muted)}
+.side-foot span[aria-current]{background:var(--tt-sidebar-row-selected);color:var(--tt-sidebar-text)}
+.main{display:flex;flex-direction:column;min-width:0}
+.main-head{display:flex;align-items:center;gap:10px;padding:12px 18px;font-weight:600;font-size:15px}
+.main-head small{color:var(--tt-text-muted);font-weight:400}
+.bubble{margin:18px 24px 0 auto;max-width:620px;padding:14px 18px;border-radius:14px;background:var(--tt-bubble);color:var(--tt-bubble-text)}
+.reply{margin:18px 24px;max-width:700px;color:var(--tt-text-2)}
+.composer{margin:auto 24px 18px;border:1px solid var(--tt-field-border);border-radius:14px;padding:14px 16px 44px;color:var(--tt-text-muted)}
+
+/* Shared dialog chrome, after .new-thread-dialog. */
+.scrim{position:fixed;inset:0;background:var(--tt-backdrop);backdrop-filter:blur(5px);display:grid;place-items:center;z-index:5}
+.dlg{display:flex;flex-direction:column;max-height:calc(100vh - 70px);background:var(--tt-panel);border:1px solid var(--tt-panel-border);border-radius:20px;box-shadow:0 28px 90px var(--tt-shadow-color);overflow:hidden;animation:arrive .16s ease-out}
+@keyframes arrive{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){.dlg{animation:none}}
+:root[data-motion='reduce'] .dlg{animation:none}
+.dlg-head{display:flex;align-items:center;gap:10px;padding:14px 15px}
+.dlg-head h2{flex:1;margin:0;font-size:16px;font-weight:600;letter-spacing:-.2px}
+.dlg-head input{flex:1;min-width:0;padding:6px 0;border:0;outline:none;background:transparent;font-size:13.5px}
+.dlg-head input::placeholder{color:var(--tt-text-muted)}
+.dlg-head > svg{color:var(--tt-text-muted)}
+.lede{margin:-4px 20px 4px;color:var(--tt-text-muted);font-size:13px}
+#focus-list:focus,#focus-dlg:focus{outline:0}
+.choices{flex:1;min-height:0;overflow-y:auto;padding:0 9px 10px;scrollbar-width:thin;scrollbar-color:var(--tt-scrollbar) transparent}
+.choices h3{margin:14px 12px 6px;color:var(--tt-text-muted);font-size:11.5px;font-weight:400}
+.choice{display:flex;width:100%;align-items:center;gap:12px;padding:10px 12px;border:0;border-radius:8px;background:transparent;color:var(--tt-text-muted);text-align:left}
+.choice > span:not(.tag):not(.go){flex:1;min-width:0;display:grid;gap:3px}
+.choice strong{color:var(--tt-text-2);font-size:13.5px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.choice small{font-size:12px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.choice[data-hl],.choice:hover:not([aria-disabled]){background:var(--tt-hover-strong);outline:0}
+.choice > .go{opacity:0}
+.choice[data-hl] > .go,.choice:hover > .go{opacity:1}
+.choice[aria-disabled]{cursor:default}
+.choice.file{padding-block:6px}
+.choice.file strong{color:var(--tt-text-muted);font-weight:400}
+.choice.off strong{color:var(--tt-text-muted)}
+.tag{font-size:11px;padding:1px 7px;border-radius:999px;border:1px solid var(--tt-border-faint);color:var(--tt-text-muted);white-space:nowrap}
+.tag.project{border-color:var(--tt-accent-border);color:var(--tt-accent-text)}
+.tag.new{border-style:dashed}
+.note{margin:12px;color:var(--tt-text-muted);font-size:13px}
+.error{margin:8px 12px;padding:10px 12px;border-radius:8px;background:var(--tt-error-surface);border:1px solid var(--tt-error-border);color:var(--tt-error-text);font-size:13px}
+.crumbs{display:flex;align-items:center;flex-wrap:wrap;gap:2px;padding:0 15px 8px;min-width:0}
+.crumbs button{border:0;background:transparent;border-radius:6px;padding:3px 7px;font-size:12.5px;color:var(--tt-text-muted);display:inline-flex;align-items:center;gap:5px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.crumbs button:hover{background:var(--tt-hover-strong);color:var(--tt-text)}
+.crumbs button[aria-current]{color:var(--tt-text);font-weight:500}
+.crumbs .sep{color:var(--tt-text-faint)}
+.foot{display:flex;align-items:center;gap:12px;padding:12px 15px;border-top:1px solid var(--tt-hairline);background:var(--tt-surface)}
+.foot .target{flex:1;min-width:0;color:var(--tt-text-muted);font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;text-align:left}
+.foot .target bdi{direction:ltr}
+.btn{display:inline-flex;align-items:center;gap:7px;min-height:34px;padding:6px 14px;border-radius:8px;border:1px solid var(--tt-border);background:var(--tt-surface);font-size:13px;white-space:nowrap}
+.btn:hover{background:var(--tt-hover-strong)}
+.btn.ghost{border-color:transparent;background:transparent;color:var(--tt-text-2)}
+.btn.ghost:hover{background:var(--tt-hover-strong)}
+.btn.primary{background:var(--tt-primary);color:var(--tt-primary-contrast);border-color:transparent;font-weight:600}
+.btn.primary:hover{background:var(--tt-primary-hover)}
+.btn:disabled{opacity:.55;cursor:default}
+.keys{display:flex;flex-wrap:wrap;gap:14px;padding:9px 18px;border-top:1px solid var(--tt-hairline);background:var(--tt-surface);color:var(--tt-text-muted);font-size:11px}
+.keys span{display:flex;align-items:center;gap:5px}
+.keys kbd{min-width:20px;padding:2px 5px;text-align:center;font:inherit;color:var(--tt-text-2);border-radius:4px;background:var(--tt-kbd)}
+@media (max-height:650px){.keys{display:none}.lede{display:none}}
+.newfolder{display:flex;align-items:center;gap:10px;margin:4px 3px 6px;padding:8px 10px;border:1px solid var(--tt-field-border-focus);border-radius:8px;background:var(--tt-field)}
+.newfolder input{flex:1;min-width:0;border:0;outline:none;background:transparent;font-size:13.5px}
+.newfolder-error{margin:0 12px 6px;color:var(--tt-error-text);font-size:12px}
+.loading{margin:14px 12px;color:var(--tt-text-muted);font-size:13px;display:flex;align-items:center;gap:8px}
+.spin{width:14px;height:14px;border-radius:50%;border:2px solid var(--tt-border);border-top-color:var(--tt-accent);animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(1turn)}}
+@media (prefers-reduced-motion:reduce){.spin{animation:none}}
+.host-chip{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;background:var(--tt-surface-elevated);font-size:12.5px;color:var(--tt-text-2);white-space:nowrap}
+
+/* A: one palette, two steps. */
+.dlg-a{width:min(600px,calc(100vw - 48px));height:min(560px,calc(100vh - 70px))}
+
+/* B: a computers rail beside the folder pane. */
+.dlg-b{width:min(800px,calc(100vw - 48px));height:min(580px,calc(100vh - 70px))}
+.b-grid{flex:1;min-height:0;display:grid;grid-template-columns:210px 1fr;border-top:1px solid var(--tt-hairline)}
+.b-rail{border-right:1px solid var(--tt-hairline);padding:6px 8px;overflow:auto;background:var(--tt-surface)}
+.b-rail h3{margin:12px 8px 6px;color:var(--tt-text-muted);font-size:11.5px;font-weight:400}
+.rail-btn{display:flex;align-items:center;gap:9px;width:100%;padding:8px 10px;border:1px solid transparent;border-radius:8px;background:transparent;color:var(--tt-text-2);font-size:13.5px;text-align:left}
+.rail-btn:hover{background:var(--tt-hover-strong)}
+.rail-btn[aria-pressed='true']{background:var(--tt-selected);border-color:var(--tt-selected-border);color:var(--tt-text)}
+.rail-btn small{display:block;color:var(--tt-text-muted);font-size:11.5px}
+.rail-btn > span{min-width:0;flex:1}
+.rail-btn.sub{padding:6px 10px 6px 18px;font-size:13px;color:var(--tt-text-muted)}
+.rail-btn[aria-disabled]{opacity:.7;cursor:default}
+.b-pane{display:flex;flex-direction:column;min-width:0;min-height:0}
+.b-tools{display:flex;align-items:center;gap:6px;padding:10px 12px 6px}
+.b-tools .crumbs{flex:1;padding:0}
+.b-filter{display:flex;align-items:center;gap:6px;width:170px;padding:5px 9px;border:1px solid var(--tt-field-border);border-radius:8px;background:var(--tt-field);color:var(--tt-text-muted)}
+.b-filter input{flex:1;min-width:0;border:0;outline:none;background:transparent;font-size:13px;color:var(--tt-text)}
+.b-empty{flex:1;display:grid;place-content:center;justify-items:center;gap:10px;padding:30px;text-align:center;color:var(--tt-text-muted)}
+.b-empty strong{color:var(--tt-text-2);font-weight:500;font-size:14px}
+@media (max-width:900px){.b-grid{grid-template-columns:170px 1fr}.b-filter{width:120px}}
+
+/* C: a path you type, with the computer as chips above it. */
+.dlg-c{width:min(620px,calc(100vw - 48px));height:min(540px,calc(100vh - 70px))}
+.c-hosts{display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding:14px 15px 4px}
+.c-hosts > span{color:var(--tt-text-muted);font-size:12.5px;margin-right:4px}
+.c-hosts button{display:inline-flex;align-items:center;gap:6px;min-height:32px;padding:5px 12px;border:1px solid var(--tt-border);border-radius:8px;background:var(--tt-surface);font-size:13px}
+.c-hosts button:hover{background:var(--tt-hover)}
+.c-hosts button[aria-pressed='true']{border-color:var(--tt-accent-border);background:var(--tt-accent-surface);color:var(--tt-accent-surface-text)}
+.c-hosts button[aria-disabled]{opacity:.6;cursor:default}
+.c-path{display:flex;align-items:center;gap:10px;margin:8px 12px 4px;padding:9px 12px;border:1px solid var(--tt-field-border);border-radius:10px;background:var(--tt-field)}
+.c-path:focus-within{border-color:var(--tt-field-border-focus)}
+.c-path input{flex:1;min-width:0;border:0;outline:none;background:transparent;font-size:14px;font-variant-ligatures:none}
+.c-path input:disabled{color:var(--tt-text-muted)}
+.c-path > svg{color:var(--tt-text-muted)}
+
+/* Prototype controls: visibly not part of the design. */
+.proto{position:fixed;z-index:20;bottom:12px;right:12px;display:flex;align-items:center;gap:4px;padding:5px 6px;border-radius:999px;background:#f5f5f5;color:#111;box-shadow:0 6px 24px rgba(0,0,0,.45);font-size:13px}
+.proto button{border:0;background:transparent;color:#111;border-radius:999px;padding:5px 10px}
+.proto button:hover{background:#ddd}
+.proto .label{min-width:150px;text-align:center;font-weight:600}
+.proto-panel{position:fixed;z-index:20;bottom:58px;right:12px;width:min(560px,calc(100vw - 24px));max-height:calc(100vh - 80px);overflow:auto;padding:12px 14px;border-radius:12px;background:#f5f5f5;color:#111;box-shadow:0 6px 24px rgba(0,0,0,.45);font-size:12.5px;display:grid;grid-template-columns:1fr 1fr;gap:8px 14px}
+.proto-panel[hidden]{display:none}
+.proto-panel label{display:grid;gap:3px}
+.proto-panel select{padding:4px;border:1px solid #bbb;border-radius:6px;background:#fff;color:#111}
+.proto-panel pre{grid-column:1/-1;margin:4px 0 0;padding:8px;background:#e6e6e6;border-radius:6px;white-space:pre-wrap;font-size:11.5px;max-height:160px;overflow:auto}
+.proto-panel p{grid-column:1/-1;margin:0;color:#444}
+.toast{position:fixed;z-index:15;top:14px;left:50%;transform:translateX(-50%);padding:9px 16px;border-radius:10px;background:var(--tt-surface-overlay);border:1px solid var(--tt-border);font-size:13px;box-shadow:0 10px 30px var(--tt-shadow-color)}
+</style></head>
+<body>
+<div class="app">
+  <aside class="side" aria-label="Threads">
+    <div class="side-top">
+      <span class="brand"><i></i>Sotto</span>
+      <button class="icon-btn" type="button" aria-label="Add project" title="Add project" data-act="open-add"></button>
+      <button class="icon-btn" type="button" aria-label="New thread" title="New thread" data-act="open-thread"></button>
+    </div>
+    <div class="side-search" aria-hidden="true"></div>
+    <div class="side-list" id="side-list"></div>
+    <div class="side-foot" aria-hidden="true"><span>Dictate</span><span aria-current="true">Threads</span></div>
+  </aside>
+  <main class="main" aria-hidden="true">
+    <div class="main-head">Visual gate flake <small>/ workshop</small></div>
+    <div class="bubble">Find why the visual gate flakes on the widget listening capture and fix it.</div>
+    <div class="reply">Found the cause. The listening bars animate from a CSS loop, so the frame depended on where the screenshot landed.</div>
+    <div class="composer">Write a follow-up…</div>
+  </main>
+</div>
+<div id="overlay"></div>
+<div id="toast-slot"></div>
+<div class="proto-panel" id="proto-panel" hidden>
+  <label>Theme <select data-opt="theme"><option value="dark">Dark</option><option value="light">Light</option></select></label>
+  <label>Motion <select data-opt="motion"><option value="full">Full</option><option value="reduce">Reduced</option></select></label>
+  <label>Computers connected <select data-opt="hosts">
+    <option value="2">This computer + forge</option><option value="3">This computer + forge + studio (off)</option>
+    <option value="1">This computer only (list skipped)</option><option value="r">forge only, this computer's host off (list skipped)</option></select></label>
+  <label>Opened from <select data-opt="entry"><option value="add">Add project (sidebar folder icon)</option><option value="thread">New thread</option></select></label>
+  <label>Files in the list <select data-opt="files"><option value="hidden">Hidden, folders only</option><option value="greyed">Shown greyed</option></select></label>
+  <label>Above the home folder <select data-opt="above"><option value="no">Stay inside home</option><option value="yes">Can go up to the top</option></select></label>
+  <label>This computer's folders <select data-opt="localPicker"><option value="sotto">Sotto's browser, like a host</option><option value="windows">Windows' folder dialog, as today</option></select></label>
+  <label>What goes wrong <select data-opt="fault"><option value="none">Nothing</option><option value="slow">forge is slow to list folders</option><option value="drop">forge drops on Use this folder</option></select></label>
+  <p>Try: ~/datasets on forge can't be read. C:\workshop and ~/code/forge-ml are already projects. Press Backspace in an empty field to go up a folder.</p>
+  <pre id="readout"></pre>
+</div>
+<div class="proto" role="toolbar" aria-label="Prototype variants">
+  <button type="button" data-act="prev" aria-label="Previous variant">←</button>
+  <span class="label" id="variant-label"></span>
+  <button type="button" data-act="next" aria-label="Next variant">→</button>
+  <button type="button" data-act="panel" aria-expanded="false" aria-controls="proto-panel">Options</button>
+  <button type="button" data-act="reopen">Restart</button>
+</div>
+<script>
+const ICON = {
+  folder: '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
+  folderPlus: '<path d="M12 10v6"/><path d="M9 13h6"/><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
+  laptop: '<path d="M20 16V7a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v9m16 0H4m16 0 1.28 2.55a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45L4 16"/>',
+  server: '<rect width="20" height="8" x="2" y="2" rx="2" ry="2"/><rect width="20" height="8" x="2" y="14" rx="2" ry="2"/><line x1="6" x2="6.01" y1="6" y2="6"/><line x1="6" x2="6.01" y1="18" y2="18"/>',
+  right: '<path d="m9 18 6-6-6-6"/>', left: '<path d="m15 18-6-6 6-6"/>', up: '<path d="m5 12 7-7 7 7"/><path d="M12 19V5"/>',
+  search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>', x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  file: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>',
+  home: '<path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 1 1 3 3L7 19l-4 1 1-4Z"/>', chevronDown: '<path d="m6 9 6 6 6-6"/>',
+}
+const svg = (name, size = 16) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON[name]}</svg>`
+const esc = value => String(value).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
+document.querySelector('[data-act="open-add"]').innerHTML = svg('folderPlus')
+document.querySelector('[data-act="open-thread"]').innerHTML = svg('edit')
+document.querySelector('.side-search').innerHTML = `${svg('search', 14)}Search threads`
+
+// In-memory folders for each computer. Names starting with a dot are never listed.
+const d = (children = {}, extra = {}) => ({ kind: 'dir', children, ...extra })
+const f = () => ({ kind: 'file' })
+const TREES = {
+  local: { windows: true, home: ['C:', 'Users', 'zache'], root: d({ 'C:': d({
+    Users: d({ zache: d({ Desktop: d(), Documents: d({ Invoices: d(), 'resume.pdf': f() }), Downloads: d({ 'setup.exe': f() }),
+      source: d({ 'sotto-site': d({ src: d(), 'package.json': f() }, { git: true }), notes: d({}, { git: true }), 'old-experiments': d() }),
+      'todo.txt': f(), '.gitconfig': f() }), Public: d() }),
+    'Program Files': d(), Windows: d({}, { unreadable: true }), workshop: d({ src: d(), tests: d(), 'package.json': f() }, { git: true }) }),
+    'D:': d({ 'Talk to Text Application': d({ src: d(), docs: d() }, { git: true }), Games: d() }) }) },
+  forge: { windows: false, home: ['home', 'zach'], root: d({
+    home: d({ zach: d({ code: d({ sotto: d({ src: d(), 'package.json': f() }, { git: true }), 'forge-ml': d({ train: d(), 'README.md': f() }, { git: true }), 'blender-scenes': d({ 'city.blend': f() }) }),
+      models: d({ parakeet: d(), whisper: d() }), datasets: d({}, { unreadable: true }), 'sotto-host': d(), 'notes.md': f(), 'run.sh': f(), '.config': d() }) }),
+    opt: d(), srv: d(), usr: d(), var: d(), etc: d(), root: d({}, { unreadable: true }) }) },
+}
+const HOSTS = {
+  local: { name: 'This computer', kind: 'local', detail: 'Windows · this laptop' },
+  forge: { name: 'forge', kind: 'remote', detail: 'Linux · connected over SSH' },
+  studio: { name: 'studio', kind: 'remote', off: true, detail: 'Off. Switch it on in Settings → Hosts to use it.' },
+}
+const START_PROJECTS = [
+  { host: 'local', title: 'workshop', segs: ['C:', 'workshop'], threads: [['Visual gate flake', 'Claude'], ['Grok voice previews', 'Claude']] },
+  { host: 'local', title: 'sotto-site', segs: ['C:', 'Users', 'zache', 'source', 'sotto-site'], threads: [['Footer links', 'Codex']] },
+  { host: 'local', title: 'notes', segs: ['C:', 'Users', 'zache', 'source', 'notes'], threads: [['Weekly note', 'Grok']] },
+  { host: 'forge', title: 'forge-ml', segs: ['home', 'zach', 'code', 'forge-ml'], threads: [['Train the sampler', 'Codex']] },
+]
+
+let PROJECTS = [...START_PROJECTS]
+const VARIANTS = [['A', 'Steps'], ['B', 'Places'], ['C', 'Path bar']]
+const params = new URLSearchParams(location.search)
+const S = {
+  variant: VARIANTS.some(([key]) => key === params.get('variant')) ? params.get('variant') : 'A',
+  theme: 'dark', motion: 'full', hosts: '2', entry: 'add', files: 'hidden', above: 'no', localPicker: 'sotto', fault: 'none',
+  open: false, step: 'hosts', host: null, path: [], query: '', hl: 0, newFolder: null, newFolderError: '', error: '', loading: false,
+  fresh: null, lastCommand: null, toast: '', cRaw: null,
+}
+const hostList = () => ({ 1: ['local'], r: ['forge'], 2: ['local', 'forge'], 3: ['local', 'forge', 'studio'] })[S.hosts]
+const multi = () => hostList().length > 1
+const tree = host => TREES[host]
+const startsWith = (segs, prefix) => segs.length >= prefix.length && prefix.every((seg, i) => segs[i] === seg)
+function nodeAt(host, segs) { let node = tree(host).root; for (const seg of segs) { node = node?.children?.[seg]; if (!node || node.kind !== 'dir') return null } return node }
+function display(host, segs) {
+  const t = tree(host)
+  if (t.windows) return segs.length ? `${segs[0]}\\${segs.slice(1).join('\\')}` : 'This computer'
+  return `/${segs.join('/')}`
+}
+function short(host, segs) {
+  const t = tree(host)
+  if (!t.windows && startsWith(segs, t.home)) return `~${segs.length > t.home.length ? `/${segs.slice(t.home.length).join('/')}` : ''}`
+  return display(host, segs)
+}
+const sep = host => tree(host).windows ? '\\' : '/'
+const floor = host => S.above === 'yes' ? [] : tree(host).home
+const canGoUp = () => S.host && S.path.length > floor(S.host).length
+const projectAt = (host, segs) => PROJECTS.find(item => item.host === host && item.segs.join('/') === segs.join('/'))
+const hostName = host => HOSTS[host].name
+function entries() {
+  const node = nodeAt(S.host, S.path)
+  if (!node) return []
+  const all = Object.entries(node.children).filter(([name]) => !name.startsWith('.')).map(([name, item]) => ({ name, ...item }))
+  const q = S.query.toLowerCase()
+  const match = item => !q || item.name.toLowerCase().includes(q)
+  const dirs = all.filter(item => item.kind === 'dir' && match(item)).sort((a, b) => a.name.localeCompare(b.name))
+  const files = S.files === 'greyed' ? all.filter(item => item.kind === 'file' && match(item)).sort((a, b) => a.name.localeCompare(b.name)) : []
+  return [...dirs, ...files]
+}
+
+// Actions
+let slowTimer = null
+function listSlowly() {
+  if (S.fault !== 'slow' || S.host !== 'forge') return
+  S.loading = true; clearTimeout(slowTimer)
+  slowTimer = setTimeout(() => { S.loading = false; render() }, 1300)
+}
+function start(entry = S.entry) {
+  S.entry = entry; S.open = true; S.host = null; S.path = []; S.query = ''; S.hl = 0; S.newFolder = null; S.newFolderError = ''; S.error = ''; S.loading = false
+  S.step = 'hosts'; S.hl = -1
+  const list = hostList()
+  if (list.length === 1) chooseHost(list[0], true)
+  render()
+}
+function close() { S.open = false; dropPending(true); render(); document.querySelector('[data-act="open-add"]').focus() }
+function chooseHost(host, skipped = false) {
+  if (HOSTS[host].off) { S.error = `studio is off, so its folders can't be listed. Nothing was changed. Switch it on in Settings → Hosts, then choose it again.`; render(); return }
+  S.error = ''
+  if (host === 'local' && S.localPicker === 'windows') {
+    S.open = false; toast(skipped ? 'Windows’ own folder dialog opens here, as it does today.' : 'Windows’ own folder dialog opens over Sotto here.'); render(); return
+  }
+  dropPending(true)
+  S.cRaw = null; S.host = host; S.path = [...tree(host).home]; S.query = ''; S.hl = 0
+  S.step = S.entry === 'thread' && S.variant !== 'B' ? 'projects' : 'folders'
+  if (S.step === 'folders') listSlowly()
+  render()
+}
+function enter(name) {
+  const next = [...S.path, name]
+  const node = nodeAt(S.host, next)
+  if (!node) return
+  if (node.unreadable) { S.error = `Sotto can't read ${name} on ${hostName(S.host)}. It may belong to another account. Nothing was changed; choose another folder.`; render(); return }
+  S.cRaw = null; S.error = ''; S.path = next; S.query = ''; S.hl = 0; S.newFolder = null; S.newFolderError = ''
+  listSlowly(); dropPending(); render()
+}
+function goTo(segs) {
+  if (segs.length < floor(S.host).length) return
+  S.cRaw = null; S.error = ''; S.path = segs; S.query = ''; S.hl = 0; S.newFolder = null; dropPending(); listSlowly(); render()
+}
+function up() { if (canGoUp()) goTo(S.path.slice(0, -1)) }
+// A new folder is only a name until Use this folder: create-project makes it on the host, so a folder left behind never exists.
+let pending = null
+function dropPending(force = false) {
+  if (!pending) return
+  const stillInside = S.host === pending.host && startsWith(S.path, [...pending.parent, pending.name])
+  if (stillInside && S.open && !force) return
+  delete nodeAt(pending.host, pending.parent)?.children[pending.name]
+  pending = null
+}
+function folderNameProblem(name) {
+  if (!name.trim()) return 'Type a name for the folder.'
+  if (/[<>:"/\\|?*]/.test(name) || /^\.\.?$/.test(name) || /[. ]$/.test(name)) return 'Choose a name that can be used as a folder name.'
+  if (nodeAt(S.host, S.path)?.children[name]) return `A folder named ${name} is already here.`
+  return ''
+}
+function createFolder(name) {
+  const problem = folderNameProblem(name)
+  if (problem) { S.newFolderError = problem; render(); return }
+  dropPending()
+  nodeAt(S.host, S.path).children[name] = d({}, { pending: true })
+  pending = { host: S.host, parent: [...S.path], name }
+  S.newFolder = null; S.newFolderError = ''; S.path = [...S.path, name]; S.query = ''; S.hl = 0; S.error = ''
+  render()
+}
+function use() {
+  if (!S.host || S.loading) return
+  if (S.variant === 'C' && S.query) {
+    const typed = nodeAt(S.host, S.path)?.children[S.query]
+    if (typed?.kind === 'dir') { enter(S.query); if (S.error) return }
+    else if (!folderNameProblem(S.query)) { createFolder(S.query) }
+    else { S.error = folderNameProblem(S.query); render(); return }
+  }
+  const existing = projectAt(S.host, S.path)
+  const title = S.path.at(-1)?.replace(/:$/, '') || 'Project'
+  if (S.fault === 'drop' && S.host === 'forge' && !existing) {
+    S.error = 'forge stopped answering, so the project was not added. Nothing on forge changed. Sotto is reconnecting; try again in a moment.'; render(); return
+  }
+  S.lastCommand = existing ? { route: S.host, command: { type: 'select-project', projectId: `${S.host}:${existing.title}` } }
+    : { route: S.host, command: { type: 'create-project', title, path: display(S.host, S.path), useExisting: !pending } }
+  if (existing) { S.fresh = existing; finish(`Opened ${existing.title}${multi() ? ` on ${hostName(S.host)}` : ''}.`); return }
+  if (pending) { const node = nodeAt(S.host, S.path); if (node) delete node.pending; pending = null }
+  const project = { host: S.host, title, segs: [...S.path], threads: [] }
+  PROJECTS.push(project); S.fresh = project
+  finish(`Added ${title}${multi() || S.host !== 'local' ? ` on ${hostName(S.host)}` : ''}.`)
+}
+function openProject(project) {
+  S.lastCommand = { route: project.host, command: { type: 'select-project', projectId: `${project.host}:${project.title}` } }
+  S.fresh = project; finish(`Opened ${project.title}.`)
+}
+function finish(message) {
+  S.open = false
+  toast(S.entry === 'thread' ? `${message} Next: New thread’s settings for this project.` : message)
+  render()
+}
+let toastTimer = null
+function toast(message) { S.toast = message; clearTimeout(toastTimer); toastTimer = setTimeout(() => { S.toast = ''; render() }, 3800) }
+
+// Rendering
+function hostIcon(host, size = 16) { return svg(HOSTS[host].kind === 'local' ? 'laptop' : 'server', size) }
+function renderSide() {
+  const hosts = hostList()
+  const badges = hosts.some(host => HOSTS[host].kind === 'remote')
+  const shown = PROJECTS.filter(project => hosts.includes(project.host))
+  document.getElementById('side-list').innerHTML = shown.map(project => `<div class="group" ${S.fresh === project ? 'data-fresh' : ''}>
+    <div class="group-head">${svg('folder', 14)}${esc(project.title)}${badges ? `<span class="host-badge">${hostIcon(project.host, 11)}${esc(hostName(project.host))}</span>` : ''}<span class="count">${project.threads.length || ''}</span></div>
+    ${project.threads.map(([title, provider]) => `<div class="thread">${esc(title)}<small>${provider}</small></div>`).join('')}
+  </div>`).join('')
+}
+function hostRows(rows) {
+  return hostList().map(host => {
+    const index = rows.push({ act: 'host', host }) - 1
+    const h = HOSTS[host]
+    return `<button type="button" class="choice ${h.off ? 'off' : ''}" data-row="${index}" ${S.hl === index ? 'data-hl' : ''} data-act="host" data-host="${host}">
+      ${hostIcon(host, 19)}<span><strong>${esc(h.name)}</strong><small>${esc(h.detail)}</small></span>${h.off ? '' : `<span class="go">${svg('right', 15)}</span>`}</button>`
+  }).join('')
+}
+function crumbs() {
+  const t = tree(S.host)
+  const start = floor(S.host).length
+  const parts = []
+  for (let i = start; i <= S.path.length; i++) {
+    const segs = S.path.slice(0, i)
+    const atHome = segs.length === t.home.length && startsWith(segs, t.home)
+    const label = atHome ? `${svg('home', 13)}Home` : i === 0 ? (t.windows ? 'This computer' : '/') : esc(S.path[i - 1])
+    parts.push(`<button type="button" data-act="crumb" data-depth="${i}" ${i === S.path.length ? 'aria-current="location"' : ''}>${label}</button>`)
+  }
+  return `<nav class="crumbs" aria-label="Folder on ${esc(hostName(S.host))}">${parts.join(`<span class="sep" aria-hidden="true">${svg('right', 12)}</span>`)}</nav>`
+}
+function folderRows(rows) {
+  if (S.loading) return `<div class="loading" role="status"><span class="spin"></span>Reading folders on ${esc(hostName(S.host))}…</div>`
+  const list = entries()
+  let html = ''
+  if (S.newFolder !== null) {
+    html += `<div class="newfolder">${svg('folderPlus', 17)}<input id="newfolder" aria-label="New folder name" placeholder="Folder name" value="${esc(S.newFolder)}">
+      <button type="button" class="btn" data-act="create">Create</button><button type="button" class="btn ghost" data-act="cancel-new">Cancel</button></div>
+      ${S.newFolderError ? `<p class="newfolder-error" role="alert">${esc(S.newFolderError)}</p>` : ''}`
+  }
+  html += list.map(item => {
+    if (item.kind === 'file') return `<div class="choice file" aria-disabled="true">${svg('file', 16)}<span><strong>${esc(item.name)}</strong></span></div>`
+    const index = rows.push({ act: 'enter', name: item.name }) - 1
+    const project = projectAt(S.host, [...S.path, item.name])
+    const tags = [item.git ? '<span class="tag">Git</span>' : '', project ? '<span class="tag project">Project</span>' : '', item.pending ? '<span class="tag new">New</span>' : ''].join('')
+    return `<button type="button" class="choice" data-row="${index}" ${S.hl === index ? 'data-hl' : ''} data-act="enter" data-name="${esc(item.name)}">
+      ${svg('folder', 17)}<span><strong>${esc(item.name)}</strong></span>${tags}<span class="go">${svg('right', 15)}</span></button>`
+  }).join('')
+  if (!list.length) {
+    const node = nodeAt(S.host, S.path)
+    html += `<p class="note">${S.query ? 'No folders match.' : node?.pending ? 'This folder is new. Sotto makes it on ' + esc(hostName(S.host)) + ' when you press Use this folder.' : 'No folders in here.'}</p>`
+  }
+  return html
+}
+function cTarget() {
+  const typed = S.query && nodeAt(S.host, S.path)?.children[S.query]
+  if (S.query && !typed && !folderNameProblem(S.query)) return `<span class="target"><bdi>${esc(short(S.host, [...S.path, S.query]))} · new folder</bdi></span>`
+  if (typed?.kind === 'dir') return `<span class="target"><bdi>${esc(short(S.host, [...S.path, S.query]))}</bdi></span>`
+  return targetLine()
+}
+function useLabel() { return projectAt(S.host, S.path) ? 'Open project' : 'Use this folder' }
+function targetLine() {
+  const existing = projectAt(S.host, S.path)
+  if (existing) return `<span class="target"><bdi>Already the project ${esc(existing.title)}</bdi></span>`
+  return `<span class="target" title="${esc(display(S.host, S.path))}"><bdi>${esc(short(S.host, S.path))}</bdi></span>`
+}
+function foot() {
+  return `<div class="foot"><button type="button" class="btn ghost" data-act="new">${svg('folderPlus', 15)}New folder</button>${targetLine()}
+    <button type="button" class="btn primary" data-act="use" ${S.loading ? 'disabled' : ''}>${useLabel()}</button></div>`
+}
+const keys = items => `<div class="keys">${items.map(([k, label]) => `<span>${k.split(' ').map(key => `<kbd>${key}</kbd>`).join('')}${label}</span>`).join('')}</div>`
+const errorBox = () => S.error ? `<p class="error" role="alert">${esc(S.error)}</p>` : ''
+const title = () => S.entry === 'thread' ? 'Where should this thread run?' : 'Where should this project live?'
+function projectRows(rows) {
+  const index = rows.push({ act: 'browse' }) - 1
+  const projects = PROJECTS.filter(project => project.host === S.host && `${project.title}`.toLowerCase().includes(S.query.toLowerCase()))
+  return `<h3>Sources</h3><button type="button" class="choice" data-row="${index}" ${S.hl === index ? 'data-hl' : ''} data-act="browse">${svg('folderPlus', 19)}<span><strong>Folder on ${esc(hostName(S.host))}</strong><small>Browse folders on ${S.host === 'local' ? 'this computer' : esc(hostName(S.host))}</small></span><span class="go">${svg('right', 15)}</span></button>
+    <h3>Projects</h3>${projects.map(project => { const i = rows.push({ act: 'project', project }) - 1; return `<button type="button" class="choice" data-row="${i}" ${S.hl === i ? 'data-hl' : ''} data-act="project" data-title="${esc(project.title)}">${svg('folder', 18)}<span><strong>${esc(project.title)}</strong><small>${esc(short(project.host, project.segs))}</small></span><span class="go">${svg('right', 15)}</span></button>` }).join('') || `<p class="note">No projects on ${esc(hostName(S.host))} yet.</p>`}`
+}
+
+let ROWS = []
+function variantA() {
+  const rows = []
+  let html
+  if (S.step === 'hosts') {
+    html = `<div class="dlg dlg-a" role="dialog" aria-modal="true" aria-labelledby="dlg-title">
+      <div class="dlg-head"><h2 id="dlg-title">${title()}</h2><button type="button" class="icon-btn" aria-label="Close" data-act="close">${svg('x')}</button></div>
+      <p class="lede">Its threads and agents run on the computer you choose. You can follow them from any computer with Sotto.</p>
+      <div class="choices" tabindex="-1" id="focus-list"><h3>Computers</h3>${hostRows(rows)}${errorBox()}</div>
+      ${keys([['↑ ↓', 'Navigate'], ['Enter', 'Choose'], ['Esc', 'Close']])}</div>`
+  } else {
+    const back = multi() ? `<button type="button" class="icon-btn" aria-label="Back to computers" data-act="back">${svg('left')}</button>` : ''
+    const chip = `<span class="host-chip">${hostIcon(S.host, 14)}${esc(hostName(S.host))}</span>`
+    if (S.step === 'projects') {
+      html = `<div class="dlg dlg-a" role="dialog" aria-modal="true" aria-label="Choose a project on ${esc(hostName(S.host))}">
+        <div class="dlg-head">${back}${chip}${svg('search')}<input id="focus-input" aria-label="Search projects" placeholder="Search projects…" value="${esc(S.query)}"><button type="button" class="icon-btn" aria-label="Close" data-act="close">${svg('x')}</button></div>
+        <div class="choices">${projectRows(rows)}${errorBox()}</div>${keys([['↑ ↓', 'Navigate'], ['Enter', 'Select'], ['Esc', multi() ? 'Back' : 'Close']])}</div>`
+    } else {
+      const here = S.path.at(-1) && startsWith(S.path, tree(S.host).home) && S.path.length === tree(S.host).home.length ? 'Home' : S.path.at(-1) || 'this computer'
+      html = `<div class="dlg dlg-a" role="dialog" aria-modal="true" aria-label="Choose a folder on ${esc(hostName(S.host))}">
+        <div class="dlg-head">${back}${chip}${svg('search')}<input id="focus-input" aria-label="Search folders in ${esc(here)}" placeholder="Search in ${esc(here)}…" value="${esc(S.query)}"><button type="button" class="icon-btn" aria-label="Close" data-act="close">${svg('x')}</button></div>
+        ${crumbs()}<div class="choices">${errorBox()}${folderRows(rows)}</div>${foot()}
+        ${keys([['↑ ↓', 'Navigate'], ['Enter', 'Open folder'], ['⌫', 'Up a folder'], ['Ctrl Enter', useLabel()], ['Esc', multi() ? 'Back' : 'Close']])}</div>`
+    }
+  }
+  ROWS = rows
+  return html
+}
+function variantB() {
+  const rows = []
+  const rail = hostList().map(host => {
+    const h = HOSTS[host]
+    const pressed = S.host === host
+    let sub = ''
+    if (pressed) {
+      sub += `<button type="button" class="rail-btn sub" data-act="crumb" data-depth="${tree(host).home.length}">${svg('home', 14)}Home</button>`
+      sub += PROJECTS.filter(project => project.host === host).map(project => `<button type="button" class="rail-btn sub" data-act="jump" data-title="${esc(project.title)}">${svg('folder', 14)}<span>${esc(project.title)}</span></button>`).join('')
+    }
+    return `<button type="button" class="rail-btn" aria-pressed="${pressed}" ${h.off ? 'aria-disabled="true"' : ''} data-act="host" data-host="${host}">${hostIcon(host, 17)}<span>${esc(h.name)}<small>${esc(h.off ? 'Off' : h.detail.split(' · ')[0])}</small></span></button>${sub}`
+  }).join('')
+  const railBlock = multi() ? `<aside class="b-rail" aria-label="Computers"><h3>Computers</h3>${rail}</aside>` : ''
+  let pane
+  if (!S.host) {
+    pane = `<section class="b-pane"><div class="b-empty">${svg('server', 28)}<strong>Choose a computer</strong><span>The project and its threads run there.<br>Sotto on any of your computers can follow them.</span>${errorBox()}</div></section>`
+  } else {
+    const here = S.path.length === tree(S.host).home.length && startsWith(S.path, tree(S.host).home) ? 'Home' : S.path.at(-1) || 'this computer'
+    pane = `<section class="b-pane" aria-label="Folders on ${esc(hostName(S.host))}">
+      <div class="b-tools"><button type="button" class="icon-btn" aria-label="Up a folder" data-act="up" ${canGoUp() ? '' : 'disabled'}>${svg('up')}</button>${crumbs()}
+        <label class="b-filter">${svg('search', 13)}<input id="focus-input" aria-label="Filter folders in ${esc(here)}" placeholder="Filter" value="${esc(S.query)}"></label></div>
+      <div class="choices">${errorBox()}${folderRows(rows)}</div>${foot()}</section>`
+  }
+  ROWS = rows
+  return `<div class="dlg dlg-b" id="${S.host ? '' : 'focus-dlg'}" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="dlg-title">
+    <div class="dlg-head"><h2 id="dlg-title">${S.entry === 'thread' ? 'Choose a folder for the new thread' : 'Add a project'}</h2>${!multi() && S.host ? `<span class="host-chip">${hostIcon(S.host, 14)}${esc(hostName(S.host))}</span>` : ''}<button type="button" class="icon-btn" aria-label="Close" data-act="close">${svg('x')}</button></div>
+    <div class="b-grid" style="${multi() ? '' : 'grid-template-columns:1fr'}">${railBlock}${pane}</div>
+    ${S.host ? keys([['↑ ↓', 'Navigate'], ['Enter', 'Open folder'], ['⌫', 'Up a folder'], ['Ctrl Enter', useLabel()], ['Esc', 'Close']]) : ''}</div>`
+}
+function variantC() {
+  const rows = []
+  const chips = multi() ? `<div class="c-hosts" role="group" aria-label="Computer"><span>Run on</span>${hostList().map(host => `<button type="button" aria-pressed="${S.host === host}" ${HOSTS[host].off ? 'aria-disabled="true" title="Off. Switch it on in Settings → Hosts."' : ''} data-act="host" data-host="${host}">${hostIcon(host, 15)}${esc(HOSTS[host].name)}${HOSTS[host].off ? ' · off' : ''}</button>`).join('')}</div>`
+    : `<div class="c-hosts"><span>Runs on</span><span class="host-chip">${hostIcon(S.host ?? 'local', 14)}${esc(hostName(S.host ?? 'local'))}</span></div>`
+  let body = ''
+  let value = ''
+  if (!S.host) body = `<p class="note">Choose the computer this ${S.entry === 'thread' ? 'thread' : 'project'} runs on. Its folders appear here.</p>${errorBox()}`
+  else if (S.step === 'projects') body = projectRows(rows) + errorBox()
+  else {
+    value = S.cRaw ?? `${S.path.length ? short(S.host, S.path) + sep(S.host) : tree(S.host).windows ? '' : '/'}${S.query}`
+    let listHtml = folderRows(rows)
+    const exact = nodeAt(S.host, S.path)?.children[S.query]
+    if (S.query && !exact && !S.loading && !folderNameProblem(S.query)) {
+      const index = rows.push({ act: 'create-typed' }) - 1
+      listHtml += `<button type="button" class="choice" data-row="${index}" ${S.hl === index ? 'data-hl' : ''} data-act="create-typed">${svg('folderPlus', 17)}<span><strong>New folder “${esc(S.query)}”</strong><small>Made in ${esc(short(S.host, S.path))} when you press Use this folder</small></span></button>`
+    }
+    body = errorBox() + listHtml.replace('<p class="note">No folders match.</p>', rows.at(-1)?.act === 'create-typed' ? '' : '<p class="note">No folders match.</p>')
+  }
+  ROWS = rows
+  const inFolders = S.host && S.step === 'folders'
+  return `<div class="dlg dlg-c" id="${S.host ? '' : 'focus-dlg'}" tabindex="-1" role="dialog" aria-modal="true" aria-label="${title()}">
+    ${chips}
+    <div class="c-path">${svg(S.step === 'projects' ? 'search' : 'folder')}<input id="focus-input" ${S.host ? '' : 'disabled'} aria-label="${S.step === 'projects' ? 'Search projects' : 'Folder path'}" placeholder="${S.host ? (S.step === 'projects' ? 'Search projects…' : '') : 'Choose a computer first'}" value="${esc(S.step === 'projects' ? S.query : value)}" spellcheck="false" autocomplete="off"><button type="button" class="icon-btn" aria-label="Close" data-act="close">${svg('x')}</button></div>
+    <div class="choices">${body}</div>
+    ${inFolders ? `<div class="foot">${cTarget()}<button type="button" class="btn primary" data-act="use" ${S.loading ? 'disabled' : ''}>${useLabel()}</button></div>` : ''}
+    ${inFolders ? keys([['↑ ↓', 'Navigate'], ['Tab', 'Complete'], ['Enter', 'Open folder'], ['Ctrl Enter', useLabel()], ['Esc', 'Close']]) : keys([['Tab', 'Choose a computer'], ['Esc', 'Close']])}</div>`
+}
+
+function render() {
+  document.documentElement.dataset.theme = S.theme
+  document.documentElement.dataset.motion = S.motion
+  renderSide()
+  const overlay = document.getElementById('overlay')
+  overlay.innerHTML = S.open ? `<div class="scrim" data-act="scrim">${S.variant === 'A' ? variantA() : S.variant === 'B' ? variantB() : variantC()}</div>` : ''
+  document.getElementById('toast-slot').innerHTML = S.toast ? `<div class="toast" role="status">${esc(S.toast)}</div>` : ''
+  document.getElementById('variant-label').textContent = VARIANTS.map(([key, name]) => key === S.variant ? `${key} — ${name}` : '').join('')
+  for (const select of document.querySelectorAll('[data-opt]')) select.value = S[select.dataset.opt]
+  document.getElementById('readout').textContent = JSON.stringify({
+    open: S.open, step: S.open ? (S.host ? S.step : 'hosts') : null, host: S.host, folder: S.host ? display(S.host, S.path) : null, query: S.query,
+    newFolderPending: pending ? display(pending.host, [...pending.parent, pending.name]) : null, error: S.error || null, lastCommand: S.lastCommand,
+  }, null, 2)
+  if (S.open) {
+    // The field is the keyboard's home, as in New thread; with no field yet, the list or the computer chips are.
+    const input = document.getElementById('focus-input')
+    const target = document.getElementById('newfolder') ?? (input && !input.disabled ? input : null) ?? document.getElementById('focus-list') ?? document.getElementById('focus-dlg')
+    if (target) {
+      target.focus({ preventScroll: true })
+      if (target.setSelectionRange) { const end = target.value.length; target.setSelectionRange(end, end) }
+    }
+    document.querySelector('.dlg [data-hl]')?.scrollIntoView?.({ block: 'nearest' })
+  }
+}
+
+// Events
+function activate(row) {
+  if (!row) return
+  if (row.act === 'host') chooseHost(row.host)
+  else if (row.act === 'enter') enter(row.name)
+  else if (row.act === 'browse') { S.step = 'folders'; S.query = ''; S.hl = 0; listSlowly(); render() }
+  else if (row.act === 'project') openProject(row.project)
+  else if (row.act === 'create-typed') createFolder(S.query)
+}
+document.addEventListener('click', event => {
+  const el = event.target.closest('[data-act]')
+  if (!el) return
+  const act = el.dataset.act
+  if (act === 'scrim') { if (event.target === el) close(); return }
+  if (act === 'open-add') start('add')
+  else if (act === 'open-thread') start('thread')
+  else if (act === 'close') close()
+  else if (act === 'host') chooseHost(el.dataset.host)
+  else if (act === 'enter') enter(el.dataset.name)
+  else if (act === 'crumb') { S.step = 'folders'; goTo(S.path.length >= Number(el.dataset.depth) ? S.path.slice(0, Number(el.dataset.depth)) : [...tree(S.host).home]) }
+  else if (act === 'jump') { const project = PROJECTS.find(item => item.host === S.host && item.title === el.dataset.title); if (project) goTo([...project.segs]) }
+  else if (act === 'up') up()
+  else if (act === 'back') { dropPending(true); S.host = null; S.step = 'hosts'; S.query = ''; S.error = ''; S.hl = -1; render() }
+  else if (act === 'browse') activate({ act: 'browse' })
+  else if (act === 'project') openProject(PROJECTS.find(item => item.host === S.host && item.title === el.dataset.title))
+  else if (act === 'new') { S.newFolder = ''; S.newFolderError = ''; render() }
+  else if (act === 'create') createFolder(document.getElementById('newfolder').value)
+  else if (act === 'cancel-new') { S.newFolder = null; S.newFolderError = ''; render() }
+  else if (act === 'create-typed') createFolder(S.query)
+  else if (act === 'use') use()
+  else if (act === 'prev' || act === 'next') cycle(act === 'next' ? 1 : -1)
+  else if (act === 'panel') { const panel = document.getElementById('proto-panel'); panel.hidden = !panel.hidden; el.setAttribute('aria-expanded', String(!panel.hidden)) }
+  else if (act === 'reopen') { PROJECTS = [...START_PROJECTS]; S.fresh = null; S.lastCommand = null; start(S.entry) }
+})
+document.addEventListener('mousemove', event => {
+  const row = event.target.closest?.('[data-row]')
+  if (row && Number(row.dataset.row) !== S.hl) { S.hl = Number(row.dataset.row); for (const el of document.querySelectorAll('.dlg [data-row]')) el.toggleAttribute('data-hl', Number(el.dataset.row) === S.hl) }
+})
+document.addEventListener('input', event => {
+  const el = event.target
+  if (el.id === 'newfolder') { S.newFolder = el.value; S.newFolderError = ''; return }
+  if (el.id !== 'focus-input') return
+  if (S.variant === 'C' && S.step === 'folders') {
+    // The path field: everything up to the last separator is the folder, the rest filters it.
+    const value = el.value
+    const cut = Math.max(value.lastIndexOf('/'), value.lastIndexOf('\\'))
+    const prefix = cut >= 0 ? value.slice(0, cut) : ''
+    const rest = cut >= 0 ? value.slice(cut + 1) : value
+    const segs = resolve(prefix)
+    if (segs && nodeAt(S.host, segs) && !nodeAt(S.host, segs).unreadable && segs.length >= floor(S.host).length) {
+      if (segs.join('/') !== S.path.join('/')) dropPending()
+      S.path = segs; S.query = rest; S.error = ''; S.cRaw = null
+    } else { S.query = ''; S.cRaw = value; S.error = prefix ? `There is no folder ${prefix} on ${hostName(S.host)} that Sotto can list.` : '' }
+  } else S.query = el.value
+  S.hl = 0; render()
+})
+function resolve(text) {
+  const t = tree(S.host)
+  if (text === '' ) return t.windows ? [] : []
+  if (!t.windows) {
+    if (text === '~') return [...t.home]
+    if (text.startsWith('~/')) return [...t.home, ...text.slice(2).split('/').filter(Boolean)]
+    if (text.startsWith('/')) return text.split('/').filter(Boolean)
+    return null
+  }
+  const parts = text.split(/[\\/]/).filter(Boolean)
+  return /^[a-z]:$/i.test(parts[0] ?? '') ? [parts[0].toUpperCase(), ...parts.slice(1)] : null
+}
+document.addEventListener('keydown', event => {
+  const inField = event.target.matches?.('input, textarea, select, [contenteditable]')
+  if (!inField && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) { cycle(event.key === 'ArrowRight' ? 1 : -1); return }
+  if (!S.open) return
+  if (event.target.id === 'newfolder') {
+    if (event.key === 'Enter') { event.preventDefault(); createFolder(event.target.value) }
+    if (event.key === 'Escape') { event.preventDefault(); S.newFolder = null; render() }
+    return
+  }
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    if (S.variant === 'A' && S.host && multi()) { dropPending(true); S.host = null; S.step = 'hosts'; S.query = ''; S.error = ''; S.hl = -1; render() }
+    else close()
+    return
+  }
+  if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && ROWS.length) {
+    event.preventDefault()
+    S.hl = S.hl < 0 ? (event.key === 'ArrowDown' ? 0 : ROWS.length - 1) : (S.hl + (event.key === 'ArrowDown' ? 1 : ROWS.length - 1)) % ROWS.length
+    for (const el of document.querySelectorAll('.dlg [data-row]')) el.toggleAttribute('data-hl', Number(el.dataset.row) === S.hl)
+    document.querySelector('.dlg [data-hl]')?.scrollIntoView?.({ block: 'nearest' })
+    if (!inField) document.querySelector('.dlg [data-hl]')?.focus()
+    return
+  }
+  if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); if (S.step === 'folders') use(); return }
+  if (event.key === 'Enter' && (inField || event.target.id === 'focus-list')) { event.preventDefault(); activate(ROWS[S.hl]); return }
+  if (event.key === 'Tab' && S.variant === 'C' && event.target.id === 'focus-input' && S.step === 'folders' && S.query && ROWS[S.hl]?.act === 'enter') { event.preventDefault(); enter(ROWS[S.hl].name); return }
+  if (event.key === 'Backspace' && event.target.id === 'focus-input' && S.step === 'folders') {
+    if (S.variant === 'C' ? S.query === '' && event.target.selectionStart === event.target.value.length : event.target.value === '') { event.preventDefault(); up() }
+  }
+})
+document.addEventListener('change', event => {
+  const key = event.target.dataset?.opt
+  if (!key) return
+  S[key] = event.target.value
+  if (['hosts', 'entry', 'localPicker', 'above'].includes(key)) start(S.entry)
+  else render()
+})
+function cycle(step) {
+  const index = VARIANTS.findIndex(([key]) => key === S.variant)
+  S.variant = VARIANTS[(index + step + VARIANTS.length) % VARIANTS.length][0]
+  const url = new URL(location.href); url.searchParams.set('variant', S.variant); history.replaceState(null, '', url)
+  start(S.entry)
+}
+start('add')
+</script>
+</body></html>
