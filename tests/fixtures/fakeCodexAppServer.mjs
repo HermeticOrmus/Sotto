@@ -65,7 +65,8 @@ if (process.argv.includes('exec')) {
 const state = read('state.json', { threads: {} })
 const loadedThreads = new Set()
 // Windows refuses to rename over a file another process has open, and a test may be reading state.json right then.
-// Wait for the reader, as graceful-fs does, rather than let the refusal end this process.
+// Wait for the reader, as graceful-fs does, rather than let the refusal end this process. A test that only needs to
+// know an action has landed waits for its line in actions.jsonl instead of reading this file.
 const pause = new Int32Array(new SharedArrayBuffer(4))
 const save = () => {
   writeFileSync(file('state.tmp'), JSON.stringify(state))
@@ -277,8 +278,13 @@ setInterval(() => {
   if (!action || action.id === state.lastControl) return
   state.lastControl = action.id
   save()
-  const thread = state.threads[action.threadId]
   if (action.type === 'exit') process.exit(0)
+  try { control(action) }
+  // Each action is acknowledged once it has been carried out, so a test can wait for it without reading state.json.
+  finally { appendFileSync(file('actions.jsonl'), JSON.stringify({ id: action.id }) + '\n') }
+}, 10)
+function control(action) {
+  const thread = state.threads[action.threadId]
   if (action.type === 'release-reply') {
     const reply = heldReplies.get(action.method)
     if (reply) { heldReplies.delete(action.method); emit(reply) }
@@ -313,4 +319,4 @@ setInterval(() => {
     notify(action.method, { threadId: thread.id, ...action.params })
   }
   else raise(thread, action.type, action.text, action.method, action.params)
-}, 10)
+}

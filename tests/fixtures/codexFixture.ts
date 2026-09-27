@@ -39,9 +39,15 @@ export async function codexFixture(root?: string, wrapped = false, requestTimeou
     const aliases = JSON.parse(await readFile(join(root, 'codex-threads.json'), 'utf8'))
     return aliases[wrapped ? registry.byThread(sessionId)!.sessionId : sessionId].codexThreadId
   }
-  const action = async (sessionId: string, value: Record<string, unknown>) => {
-    await writeFile(join(root, 'control.json'), JSON.stringify({ id: randomUUID(), threadId: await realId(sessionId), ...value }))
+  /** Hand the fake an action and answer the ID it acknowledges it by. */
+  const action = async (sessionId: string, value: Record<string, unknown>): Promise<string> => {
+    const id = randomUUID()
+    await writeFile(join(root, 'control.json'), JSON.stringify({ id, threadId: await realId(sessionId), ...value }))
+    return id
   }
+  /** Whether the fake has carried out the action `action` answered with this ID. */
+  const acted = async (id: string): Promise<boolean> => (await readFile(join(root, 'actions.jsonl'), 'utf8').catch(() => ''))
+    .split('\n').some(line => line === JSON.stringify({ id }))
   const fixture = { root, adapter, registry, host, projectId: 'project', modelId: 'fixture-model', script, realId,
     // A settings change comes back with the snapshot Codex's confirmation produced; a delayed reply loses it (#318).
     settings: { snapshot: true, loseConfirmation: () => script({ delay: { method: 'thread/settings/update', ms: requestTimeoutMs + 1000 }, suppressNotifications: true }) },
@@ -58,9 +64,9 @@ export async function codexFixture(root?: string, wrapped = false, requestTimeou
         await appendFile(path, rolloutLine(Date.now(), { type: 'item_completed', item: { type: 'UserMessage', id: randomUUID(), content: [{ type: 'text', text }] } }))
         await adapter.pollSessionLogs()
       },
-      completeTurn: (id: string, text: string) => action(id, { type: 'complete', text }),
-      raiseQuestion: (id: string, text: string) => action(id, { type: 'question', text }),
-      raisePermission: (id: string, text: string) => action(id, { type: 'permission', text }),
+      completeTurn: async (id: string, text: string) => { await action(id, { type: 'complete', text }) },
+      raiseQuestion: async (id: string, text: string) => { await action(id, { type: 'question', text }) },
+      raisePermission: async (id: string, text: string) => { await action(id, { type: 'permission', text }) },
       delayNextAck: (method: string) => script({ delay: { method, ms: requestTimeoutMs + 1000 }, suppressNotifications: true }),
       requests,
       restart: async () => { host.disconnect(); await adapter.closed(); return codexFixture(root, wrapped, requestTimeoutMs, session) },
@@ -73,7 +79,7 @@ export async function codexFixture(root?: string, wrapped = false, requestTimeou
       },
       stopped: async (id: string) => !adapter.resumedThreads().includes(wrapped ? registry.byThread(id)!.sessionId : id),
     },
-    action,
+    action, acted,
     cleanup: async () => {
       host.disconnect(); await adapter.closed(); await registry.flush()
       if (dirname(resolve(root)) !== resolve(tmpdir()) || !root.includes('sotto-codex-')) throw new Error('Unexpected temporary test directory')

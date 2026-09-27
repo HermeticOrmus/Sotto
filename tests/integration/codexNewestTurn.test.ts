@@ -7,8 +7,6 @@
  * connection's stream. The takeover and stale-reply contract itself is `adapterContract.ts`'s, unchanged.
  */
 import { randomUUID } from 'node:crypto'
-import { readFile } from 'node:fs/promises'
-import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { AgentControl } from '../../src/main/agents/control'
 import { codexFixture, type RecordedRpc } from '../fixtures/codexFixture'
@@ -37,13 +35,10 @@ async function turn(f: Fixture, id: string, messageId: string, expectedLastUserM
 }
 const send = (f: Fixture, id: string, messageId: string, expectedLastUserMessageId?: string) =>
   f.host.execute({ type: 'send', threadId: id, commandId: randomUUID(), messageId, text: `Prompt ${messageId}`, ...(expectedLastUserMessageId ? { expectedLastUserMessageId } : {}) })
-/** Act as a second Codex process, and wait until the fake's shared history holds what it did. */
+/** Act as a second Codex process, and wait until the fake says the shared history holds what it did. */
 async function elsewhere(f: Fixture, id: string, action: Record<string, unknown>): Promise<void> {
-  const codexThreadId = await f.realId(id)
-  const turns = async () => JSON.stringify((JSON.parse(await readFile(join(f.root, 'state.json'), 'utf8')) as { threads: Record<string, { turns: unknown[] }> }).threads[codexThreadId]!.turns)
-  const before = await turns()
-  await f.action(id, action)
-  await expect.poll(turns).not.toBe(before)
+  const acted = await f.action(id, action)
+  await expect.poll(() => f.acted(acted)).toBe(true)
 }
 /** The history requests made since `from`, as `turns` (the newest-turn check) and `read` (the whole transcript). */
 async function historyRequests(f: Fixture, from: number): Promise<('turns' | 'read')[]> {
