@@ -68,7 +68,7 @@ SOTTO_CLAUDE_LIVE=1 npx vitest run tests/integration/claudeSettingsLive.test.ts 
 
 ## Codex newest-turn live check
 
-`tests/integration/codexNewestTurnLive.test.ts` is gated by `SOTTO_CODEX_TURNS_LIVE=1`. It starts the installed Codex app-server in a throwaway `CODEX_HOME`, so it needs no sign-in and never reads the user's own Codex threads, and it runs no model turn. On a legacy thread whose session file it fills with filler turns, it checks that `thread/turns/list` hands back the same newest turn `thread/read` does and that both see a turn written to the file from outside, which is what the newest-turn check before a Codex send rests on (ADR-0005). It then prints each request's round trip and reply size at 50, 500 and 2,000 turns. It was last run on Codex CLI 0.157.1 (`docs/perf/2026-09-26-codex-send-read.md`):
+`tests/integration/codexNewestTurnLive.test.ts` is gated by `SOTTO_CODEX_TURNS_LIVE=1`. It starts the installed Codex app-server in a throwaway `CODEX_HOME`, so it needs no sign-in and never reads the user's own Codex threads, and it runs no model turn. On a legacy thread whose session file it fills with filler turns, it checks that `thread/turns/list` hands back the same newest turn `thread/read` does and that both see a turn written to the file from outside, which is what the newest-turn check before a Codex send rests on (ADR-0005). It checks that Codex still words a request it does not have, and a value in one it does not know, the way the adapter reads a refusal, so a new Codex that words them differently shows up here. It then prints each request's round trip and reply size at 50, 500 and 2,000 turns. It was last run on Codex CLI 0.157.1 (`docs/perf/2026-09-26-codex-send-read.md`):
 
 ```powershell
 $env:SOTTO_CODEX_TURNS_LIVE = '1'

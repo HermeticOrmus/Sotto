@@ -18,7 +18,7 @@ import type { MemoryProfile } from '../memory/profile'
 import type { AgentCredentials } from './credentials'
 import { approvalWords, classifyRiskyAction, denialWords, mayGrantLocally, UNPAIRED_CLIENT_ERROR, type Authority } from './authority'
 import { desktopWindowClient, supervisionClient, type ClientIdentity } from './hostService'
-import type { AgentHost, AgentHostCommand, PromptImage, ThreadRead } from './host'
+import type { AgentHost, AgentHostCommand, PromptImage, ThreadReadPurpose } from './host'
 import type { AgentPreference, AgentReasoner } from './reasoning'
 import { addTurnContext, type ActiveTurn, type TurnRecorder } from './turns'
 import { isThreadArchived, isThreadClosed, isWorkspaceThreadSettled } from '../../shared/threadActivity'
@@ -2193,7 +2193,7 @@ export class AgentControl {
    * passes `{ beforeSend: true }`, which an adapter may make lighter than a whole read when it can show nothing
    * changed (Codex's newest-turn check, ADR-0005). What the send then checks is the same.
    */
-  private readThread(threadId?: string, provider?: ProviderId, purpose?: ThreadRead): Promise<AgentHostSnapshot> {
+  private readThread(threadId?: string, provider?: ProviderId, purpose?: ThreadReadPurpose): Promise<AgentHostSnapshot> {
     const host = this.dependencies.host
     return threadId && host.refreshThread ? host.refreshThread(threadId, purpose) : provider ? host.snapshot(provider) : host.snapshot()
   }
