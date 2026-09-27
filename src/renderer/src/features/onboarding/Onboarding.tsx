@@ -19,6 +19,8 @@ import { platformCopy } from '../../platformCopy'
 import type { MicrophoneTestState } from './microphoneTest'
 
 export interface OnboardingProps {
+  /** Throwaway variants for issue #386; never promoted as production code. */
+  readonly prototypeVariant?: 'A' | 'B' | 'C'
   readonly settings: AppSettings
   readonly onUpdateSettings: (patch: SettingsPatch) => Promise<boolean>
   readonly onCheckTranscriptionKey: () => Promise<TranscriptionKeyCheck>
@@ -41,6 +43,7 @@ function StepIcon({ step }: { readonly step: number }): ReactNode {
 }
 
 export function Onboarding({
+  prototypeVariant,
   settings,
   onUpdateSettings,
   onCheckTranscriptionKey,
@@ -78,7 +81,11 @@ export function Onboarding({
   // second attempt leaves the dictation surfaces in their working state.
   const microphoneSkipped = skipRequested && microphoneState !== 'ready'
 
-  const skipMicrophone = (): void => setSkipRequested(true)
+  useEffect(() => {
+    if (prototypeVariant === 'C' && step === 2 && microphoneState === 'ready') setStep(3)
+  }, [prototypeVariant, step, microphoneState])
+
+  const skipMicrophone = (): void => { setSkipRequested(true); if (prototypeVariant === 'C' && step === 2) setStep(3) }
 
   const finish = async (): Promise<void> => {
     if (finishing || (microphoneState !== 'ready' && !microphoneSkipped)) return
@@ -126,7 +133,7 @@ export function Onboarding({
           <section>
             <p className="onboarding-eyebrow">Microphone</p>
             <h1 id="onboarding-heading" ref={headingRef} tabIndex={-1}>Check your microphone</h1>
-            <p className="onboarding-lead">Sotto needs microphone access only while you record or run this test.</p>
+            <p className="onboarding-lead">Sotto needs microphone access only while you record or run this test.{prototypeVariant === 'A' ? ' Test your microphone or choose Skip for now to continue.' : null}</p>
             <div className="onboarding-microphone-test" data-state={microphoneState}>
               {/* The wave the widget and the Dictate room show; it listens for as long as the test's stream runs. */}
               <VoiceWave stage={microphoneState === 'requesting' || microphoneState === 'ready' ? 'listening' : 'idle'} value={microphoneLevel} label="Microphone level" size="deck" />
@@ -146,10 +153,10 @@ export function Onboarding({
                 <Mic2 aria-hidden="true" size={18} />
                 {microphoneState === 'denied' || microphoneState === 'missing' || microphoneState === 'error'
                   ? 'Try microphone again'
-                  : microphoneState === 'ready' ? 'Retest microphone' : 'Test microphone'}
+                  : microphoneState === 'ready' ? 'Retest microphone' : prototypeVariant === 'C' ? 'Test and continue' : 'Test microphone'}
               </Button>
               {microphoneState === 'ready' ? null : (
-                <Button variant="ghost" onClick={skipMicrophone}>Skip for now</Button>
+                <Button variant="ghost" onClick={skipMicrophone}>{prototypeVariant === 'C' ? 'Skip and continue' : 'Skip for now'}</Button>
               )}
             </div>
             {microphoneSkipped ? (
@@ -189,13 +196,19 @@ export function Onboarding({
               />
             </Field>
             {microphoneSkipped ? <p className="onboarding-aside">Microphone test skipped. Run it in Settings when you want to dictate.</p> : null}
+            {prototypeVariant === 'B' && microphoneState !== 'ready' && !microphoneSkipped ? <div className="prototype-mic-choice">
+              <p>Your microphone has not been checked. Test it here, or finish without dictation.</p>
+              <Button onClick={() => void onRequestMicrophone()} disabled={microphoneState === 'requesting'}>Test microphone</Button>
+              <Button variant="ghost" onClick={skipMicrophone}>Skip microphone</Button>
+              {microphoneState === 'denied' || microphoneState === 'missing' ? <p>{microphoneState === 'denied' ? 'Microphone access is blocked. Allow access and try again, or skip for now.' : 'No microphone was found. Connect one and try again, or skip for now.'}</p> : null}
+            </div> : null}
             {completionError ? <p className="onboarding-completion-error" role="alert">Setup could not be saved. Your choices are intact; please try again.</p> : null}
           </section>
         ) : null}
 
         <footer className="onboarding-actions">
           <Button variant="ghost" onClick={goBack} disabled={step === 1 || finishing}>Back</Button>
-          {step < STEP_COUNT ? <Button onClick={advance}>Continue</Button> : (
+          {step < STEP_COUNT ? prototypeVariant === 'C' && step === 2 ? null : <Button disabled={prototypeVariant === 'A' && step === 2 && microphoneState !== 'ready' && !microphoneSkipped} onClick={advance}>Continue</Button> : (
             <Button
               onClick={() => void finish()}
               disabled={(microphoneState !== 'ready' && !microphoneSkipped) || finishing}

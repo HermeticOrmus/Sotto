@@ -1,0 +1,42 @@
+.prototype-root { height: 100vh; overflow: hidden; }
+.prototype-root .app-shell { height: 100%; min-height: 0; }
+.prototype-root button, .prototype-root select { -webkit-app-region: no-drag; }
+.prototype-switcher { position: fixed; bottom: 10px; left: 50%; transform: translateX(-50%); z-index: 500; display: flex; align-items: center; gap: 8px; padding: 8px 12px; border: 1px solid var(--tt-focus-ring); border-radius: 12px; color: var(--tt-text); background: var(--tt-panel); box-shadow: 0 6px 30px var(--tt-shadow-color); max-width: calc(100vw - 20px); font-size: 12px; white-space: nowrap; }
+.prototype-label { font-size: 9px; letter-spacing: 1px; color: var(--tt-text-muted); }
+.prototype-switcher button, .prototype-switcher select, .prototype-scenario button, .prototype-scenario select { border: 1px solid var(--tt-hairline); border-radius: 5px; background: var(--tt-field); color: var(--tt-text); padding: 4px 7px; cursor: pointer; }
+.prototype-switcher strong { min-width: 170px; text-align: center; font-weight: 500; }
+.prototype-scenario { position: fixed; top: 48px; right: 12px; left: max(270px, 23vw); z-index: 200; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 7px; color: var(--tt-text-muted); font-size: 11px; }
+.prototype-scenario label { display: flex; align-items: center; gap: 5px; }
+.prototype-scenario span:last-child { flex-basis: 100%; text-align: right; }
+.prototype-sidebar { height: 100%; display: flex; flex-direction: column; }
+.prototype-project { flex: 1; padding: 20px 8px; }
+.prototype-project p { margin-top: 26px; font-size: 12px; color: var(--tt-text-muted); }
+.prototype-project button { display: block; width: 100%; padding: 8px; background: none; border: 0; text-align: left; font-size: 13px; }
+.prototype-dictation { height: 100%; overflow-y: auto; padding-bottom: 60px; }
+.prototype-dictation .dictate { min-height: 380px; height: auto; padding-bottom: 18px; }
+.prototype-inline-recovery { max-width: 680px; margin: -20px auto 24px; padding: 18px 0; width: calc(100% - 64px); border-top: 1px solid var(--tt-hairline); }
+.prototype-inline-recovery h2, .prototype-drawer h2 { margin: 0 0 4px; font-size: 20px; font-weight: 500; }
+.prototype-inline-recovery p, .prototype-focus-recovery > p, .prototype-drawer > p { margin: 8px 0; }
+.prototype-transcript { white-space: pre-wrap; user-select: text; line-height: 1.65; padding: 12px 0; font-size: 17px; }
+.prototype-small { color: var(--tt-text-muted); font-size: 12px; }
+.prototype-actions { display: flex; gap: 12px; margin-top: 16px; }
+.prototype-focus-recovery { max-width: 640px; margin: 19vh auto 40px; padding: 0 28px; }
+.prototype-focus-recovery h1 { font-size: 34px; font-weight: 500; letter-spacing: -1px; margin: 6px 0; }
+.prototype-recovery-strip { display: block; margin: 0 auto; max-width: 90%; padding: 14px 22px; border: 1px solid var(--tt-hairline); border-radius: 8px; color: var(--tt-text); background: var(--tt-field); cursor: pointer; }
+.prototype-drawer { position: absolute; top: 32px; right: 0; bottom: 0; width: min(440px, 88%); z-index: 150; background: var(--tt-panel); border-left: 1px solid var(--tt-hairline); padding: 90px 28px 65px; box-shadow: -12px 0 40px var(--tt-shadow-color); }
+.prototype-drawer > button { position: absolute; right: 12px; top: 22px; }
+.prototype-result { margin: 14px auto; padding: 0 28px; max-width: 680px; color: var(--tt-text); }
+.prototype-finished { max-width: 600px; margin: 22vh auto; padding: 24px; }
+.prototype-root .onboarding-shell { padding-bottom: 85px; padding-top: 50px; }
+.prototype-mic-choice { margin: 14px 0; padding: 14px 0; border-top: 1px solid var(--tt-hairline); }
+.prototype-mic-choice p { margin: 0 0 12px; }
+.prototype-mic-choice .tt-button + .tt-button { margin-left: 8px; }
+.prototype-settings { height: 100%; }
+.prototype-settings .settings-view { height: 100%; }
+.prototype-settings--A .settings-sidebar .thread-nav__seg { min-width: 0; width: 100%; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.prototype-settings--A .settings-sidebar .thread-nav__seg button { min-width: 0; padding-inline: 2px; font-size: 11px; }
+.prototype-settings--B .settings-sidebar .thread-nav__seg { display: grid; grid-template-columns: 1fr; min-width: 0; width: 100%; }
+.prototype-settings--B .settings-sidebar .thread-nav__seg button { text-align: left; padding: 5px 10px; }
+.prototype-settings--C .settings-view .settings-layout { grid-template-columns: minmax(214px, var(--app-sidebar-width)) minmax(0, 1fr); }
+@media(max-height: 650px) { .prototype-dictation .dictate { min-height: 285px; padding-top: 62px; } .prototype-dictation .dictate__hero { gap: 14px; } .prototype-inline-recovery { margin-top: 0; } .prototype-root .onboarding-shell { padding-top: 65px; } }
+@media(max-width:900px) { .prototype-switcher { gap: 4px; font-size: 11px; padding: 7px; } .prototype-switcher strong { min-width: 0; } .prototype-scenario { left: 225px; } .prototype-transcript { font-size: 15px; } }
