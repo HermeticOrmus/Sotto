@@ -9,6 +9,7 @@ import type { StoredThreadEvent } from '../../shared/threadEvents'
 import { gitRefsPageSchema, type GitRefsPage, type GitRefsRequest } from '../../shared/gitRefs'
 import { gitChangedFilesSchema, type GitChangedFiles, type GitChangedFilesRequest } from '../../shared/gitChangedFiles'
 import { gitPullRequestResultSchema, type GitPullRequestDetail, type GitPullRequestRequest } from '../../shared/gitPullRequests'
+import { hostFoldersResultSchema, type HostFoldersRequest, type HostFoldersResult } from '../../shared/hostFolders'
 import { HOST_BUSY, hostAttachmentContentSchema, hostIsNewer, hostVersionMismatch, hostHealthFeatures, hostPairingSchema, hostSessionSchema, hostHelloSchema, hostEventPageSchema, hostResponseSchema, hostPushSchema, hostReceiptSchema } from '../../shared/hostProtocol'
 import type { HostHello, HostOperation, HostPairing, HostSession, HostResponse, HostPush, HostEventPage, HostReceipt, HostErrorCode } from '../../shared/hostProtocol'
 import type { HostService, ClientIdentity } from './hostService'
@@ -345,6 +346,11 @@ export class SocketHostService implements HostService {
   async gitPullRequest(request: GitPullRequestRequest): Promise<GitPullRequestDetail | null> {
     if (!this.features.includes('git-pull-request')) throw new HostConnectionError(this.mismatch(), 'version_mismatch')
     return this.read(gitPullRequestResultSchema, await this.call({ op: 'git-pull-request', request }))
+  }
+  /** A host that does not list `host-folders` is from before the folder browser; the version sentence says which side to bring up to date, and nothing is sent. */
+  async hostFolders(request: HostFoldersRequest): Promise<HostFoldersResult> {
+    if (!this.features.includes('host-folders')) throw new HostConnectionError(this.mismatch(), 'version_mismatch')
+    return this.read(hostFoldersResultSchema, await this.call({ op: 'host-folders', request }))
   }
   async revokePairing(): Promise<void> {
     const response = await fetch(this.endpoint('/v1/revoke'), { method: 'POST', headers: { Authorization: 'Bearer ' + this.options.token }, signal: AbortSignal.timeout(15000), redirect: 'error' })

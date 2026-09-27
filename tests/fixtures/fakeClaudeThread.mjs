@@ -174,8 +174,10 @@ lines.on('line', line => {
       output({ type: 'control_response', response: { subtype: 'success', request_id: frame.request_id } })
     }
     else if (frame.request.subtype === 'interrupt') {
+      // interrupt-script.json `error`: close the stopped turn as Claude Code does, with an error result.
+      const error = existsSync(join(root, 'interrupt-script.json')) && JSON.parse(readFileSync(join(root, 'interrupt-script.json'), 'utf8')).error === true
       output({ type: 'control_response', response: { subtype: 'success', request_id: frame.request_id, response: {} } })
-      output({ type: 'result', subtype: 'success', session_id: session, is_error: false, result: '' })
+      output(error ? { type: 'result', subtype: 'error_during_execution', session_id: session, is_error: true, result: '' } : { type: 'result', subtype: 'success', session_id: session, is_error: false, result: '' })
     } else violation('Unknown control request')
   } else if (frame.type === 'user') {
     if (!initialized) violation('User prompt arrived before successful initialization')

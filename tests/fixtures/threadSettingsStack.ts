@@ -46,7 +46,7 @@ export async function threadSettingsStack(provider: ProviderId, native: AdapterF
   const counts = { reads: 0, coordinatorWrites: 0, aliasWrites: 0 }
   const order: string[] = []
   const refresh = native.adapter.refreshThread!.bind(native.adapter)
-  const reads = vi.spyOn(native.adapter, 'refreshThread').mockImplementation(async id => { counts.reads += 1; order.push('read'); return refresh(id) })
+  const reads = vi.spyOn(native.adapter, 'refreshThread').mockImplementation(async (id, purpose) => { counts.reads += 1; order.push('read'); return refresh(id, purpose) })
   const execute = native.adapter.execute.bind(native.adapter)
   const commands = vi.spyOn(native.adapter, 'execute').mockImplementation(async value => { order.push(value.type); return execute(value) })
   const write = AtomicJsonStore.prototype.write

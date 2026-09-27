@@ -152,7 +152,8 @@ that its assign, select and retry reads stay whole.
   on the fake in the first measurement, the same code on a busier machine, and 6.1-16.3 s across the Threads-page
   runs. That applying cost grows faster than the thread does. `applyTurn` sorts the whole message window once for
   every turn it applies, which is a likely cause; it was not measured separately and is left for its own issue,
-  [#352](https://github.com/millZach/Sotto/issues/352).
+  [#352](https://github.com/millZach/Sotto/issues/352). That issue has since measured it: the sort was about a fifth
+  of the cost and the thread activity most of the rest (`2026-09-27-codex-open-apply.md`).
 - Taken on the Windows development machine (Intel Core Ultra 9 275HX, Node v24.14.1) while other agents' test
   suites were running on it, which is why some ranges are wide. Read them as sizes, not budgets. Nothing asserts a
   time.

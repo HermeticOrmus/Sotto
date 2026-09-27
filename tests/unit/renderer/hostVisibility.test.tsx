@@ -103,7 +103,7 @@ describe('New thread chooses the host first', () => {
     return { command, select }
   }
 
-  it('lists only the chosen host\'s projects, and offers a folder on disk only for this computer', async () => {
+  it('lists only the chosen host\'s projects, and browses the chosen host\'s folders', async () => {
     const state = twoHosts()
     dialog(state)
     const hosts = screen.getByRole('group', { name: 'Host' })
@@ -112,7 +112,7 @@ describe('New thread chooses the host first', () => {
     expect(titles()).toEqual(['Local folder', 'sotto-site', 'notes'])
     fireEvent.click(within(hosts).getByRole('button', { name: 'forge' }))
     expect(within(hosts).getByRole('button', { name: 'forge' }).getAttribute('aria-pressed')).toBe('true')
-    expect(titles()).toEqual(['workshop'])
+    expect(titles()).toEqual(['Folder on forge', 'workshop'])
     // Arrow keys move among this host's projects only.
     const search = screen.getByRole('searchbox', { name: 'Search projects' })
     fireEvent.keyDown(search, { key: 'ArrowDown' })
@@ -129,6 +129,7 @@ describe('New thread chooses the host first', () => {
     await user.click(within(screen.getByRole('group', { name: 'Host' })).getByRole('button', { name: 'This computer' }))
     // Choosing a folder not yet a project creates it, and the thread it opens, with nothing further to submit.
     await user.click(screen.getByRole('button', { name: /Local folder/ }))
+    await user.click(await screen.findByRole('button', { name: 'Browse with File Explorer' }))
     await waitFor(() => expect(command).toHaveBeenCalledWith(expect.objectContaining({ type: 'create-project', path: 'C:/New folder' })))
     await waitFor(() => expect(command).toHaveBeenCalledWith(expect.objectContaining({ type: 'create-thread', projectId: 'new-folder' })))
     expect(select).toHaveBeenCalledWith({ type: 'select', hostId: LOCAL })
@@ -150,6 +151,7 @@ describe('New thread chooses the host first', () => {
     const user = userEvent.setup()
     await user.click(within(screen.getByRole('group', { name: 'Host' })).getByRole('button', { name: 'This computer' }))
     await user.click(screen.getByRole('button', { name: /Local folder/ }))
+    await user.click(await screen.findByRole('button', { name: 'Browse with File Explorer' }))
     await waitFor(() => expect(command).toHaveBeenCalledWith(expect.objectContaining({ type: 'create-thread', modelId: localModel.id })))
   })
 })

@@ -12,11 +12,11 @@ import { isAbsolute, join } from 'node:path'
 import { z } from 'zod'
 import { agentAttachmentReferenceSchema, agentProjectSchema, agentRuntimeModeSchema, type AgentHostSnapshot, type AgentMessage, type AgentRuntimeMode, type AgentThread } from '../../shared/agents'
 import { AtomicJsonStore } from '../storage/atomicJsonStore'
-import type { ActivitySubscriptionOptions, AgentHost, AgentHostCommand, AgentHostResult, AgentSkillScope, RestoredThreadHistory, ShortTextPrompt, ThreadHistorySource, ThreadHostEvent } from './host'
+import type { ActivitySubscriptionOptions, AgentHost, AgentHostCommand, AgentHostResult, AgentSkillScope, RestoredThreadHistory, ShortTextPrompt, ThreadHistorySource, ThreadHostEvent, ThreadReadPurpose } from './host'
 import { SIDE_WRITING_TIMEOUT_MS, sideWritingEffort } from './sideWriting'
 import { ThreadMessageLog } from './threadMessageLog'
 import { cloneHostSnapshot } from './cloneHostSnapshot'
-import { ActivitySubscribers, immutableActivities, isImmutableActivities } from './activitySnapshots'
+import { ActivitySubscribers, cloneActivitySnapshot, immutableActivities, isImmutableActivities } from './activitySnapshots'
 import type { AgentSkillCatalog } from '../../shared/agentSkills'
 import type { AgentBackgroundWork } from '../../shared/agentMonitoring'
 import { claudeSkillPrompt, discoverClaudeSkills } from './claudeSkills'
@@ -24,7 +24,7 @@ import { verifyFileMentions } from './promptFiles'
 import { ClaudeSubscriptionClient } from './subscriptionClaude'
 import { ClaudeProtocol, ClaudeRejected, object, type ClaudeFrame } from './claudeProtocol'
 import { claudeTurnFailure } from './claudeTurnFailure'
-import { authoredClaudeUser, claudeDigest, ClaudeSessionLog, claudeText } from './claudeSessionLog'
+import { authoredClaudeUser, claudeDigest, ClaudeSessionLog, claudeText, selfStartedClaudeTurn } from './claudeSessionLog'
 import { claudeAnswer, claudeDenial, claudePending, type ClaudePending } from './claudeRequests'
 import { unreadableRequest } from './nativeRequests'
 import { effortAfterChange, validatePromptAttachments, validateThreadOptions } from './threadOptions'
@@ -172,6 +172,8 @@ export class ClaudeStreamJsonHost implements AgentHost {
   })
   private readonly acknowledgements = new Map<string, (delivered?: boolean) => void>()
   private readonly dispatching = new Set<string>()
+  /** Threads whose stop has gone out: the error result that closes the turn may arrive before the stop is acknowledged. */
+  private readonly interrupting = new Set<string>()
   /** The threads whose settings change is being dispatched now: the part of `dispatching` a refusal names as such. */
   private readonly configuring = new Set<string>()
   /** The error each thread's failed turn put on the provider, so that thread's next finished turn can take it down again. */
@@ -182,6 +184,8 @@ export class ClaudeStreamJsonHost implements AgentHost {
   private readonly lastLogDigest = new Map<string, string>()
   private readonly staleContexts = new Set<string>()
   private readonly completedOrigins = new Set<string>()
+  /** The prompt each thread's running turn answers when Claude Code gave it to itself; its result need not name it. */
+  private readonly selfTurns = new Map<string, string>()
   private readonly assistantBlocks = new Map<string, Map<string, string>>()
   /** Watched set: the threads the coordinator asked for. Their CLIs are started eagerly and never reaped. */
   private readonly observed = new Set<string>()
@@ -281,7 +285,7 @@ export class ClaudeStreamJsonHost implements AgentHost {
       threadId: id, messages: this.messageLog.messages(id), activities: thread.activities ?? [], ...(thread.historyEpoch ? { historyEpoch: thread.historyEpoch } : {}),
     }]))
     this.messageLog.forgetAll()
-    this.threads.clear(); this.logs.clear(); this.activity.clear(); this.subagentModels.clear(); this.logOrigins.clear(); this.lastLogDigest.clear(); this.staleContexts.clear(); this.completedOrigins.clear(); this.assistantBlocks.clear()
+    this.threads.clear(); this.logs.clear(); this.activity.clear(); this.subagentModels.clear(); this.logOrigins.clear(); this.lastLogDigest.clear(); this.staleContexts.clear(); this.completedOrigins.clear(); this.selfTurns.clear(); this.interrupting.clear(); this.assistantBlocks.clear()
     for (const [id, stored] of Object.entries(aliases)) {
       let alias = stored
       if (alias.rollbackPending?.targetSessionId) {
@@ -337,7 +341,7 @@ export class ClaudeStreamJsonHost implements AgentHost {
     return this.client.write({ ...prompt, model: alias.modelId, ...(effort ? { effort } : {}), workingDirectory: await existingWorkingDirectory(alias.cwd),
       executable: this.executable, timeoutMs: SIDE_WRITING_TIMEOUT_MS, ...(signal ? { signal } : {}) })
   }
-  async refreshThread(id: string): Promise<AgentHostSnapshot> {
+  async refreshThread(id: string, purpose?: ThreadReadPurpose): Promise<AgentHostSnapshot> {
     if (!this.aliases[id]) throw new Error('That Claude thread is unavailable.')
     const generation = this.generation
     const alias = this.aliases[id]!, thread = this.threads.get(id)!
@@ -352,7 +356,7 @@ export class ClaudeStreamJsonHost implements AgentHost {
     await this.log(id).poll()
     if (alias.kind === 'personal') { thread.historyStatus = 'ready'; delete thread.historyError }
     if (generation !== this.generation || !this.state.connected) throw new Error('Claude connection changed while reading the thread.')
-    return this.view()
+    return this.view(purpose?.historyFromEvents)
   }
   subscribe(listener: (snapshot: AgentHostSnapshot) => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener) }
   subscribeActivitySnapshots(listener: (snapshot: AgentHostSnapshot) => void, options?: ActivitySubscriptionOptions): () => void {
@@ -599,8 +603,9 @@ export class ClaudeStreamJsonHost implements AgentHost {
     }
     if (command.type === 'interrupt') {
       await this.denyPending(id, runtime)
-      try { await runtime.protocol.control({ subtype: 'interrupt' }); this.clearMonitoring(id); thread.status = 'idle'; thread.lastTurn = { id: thread.lastTurn?.id ?? command.commandId, status: 'interrupted' }; this.markTurn(id, 'interrupted'); this.emit(); return { accepted: true } }
-      catch { return { accepted: false, uncertain: true } }
+      this.interrupting.add(id)
+      try { await runtime.protocol.control({ subtype: 'interrupt' }); this.interrupting.delete(id); this.clearMonitoring(id); thread.status = 'idle'; thread.lastTurn = { id: thread.lastTurn?.id ?? command.commandId, status: 'interrupted' }; this.markTurn(id, 'interrupted'); this.emit(); return { accepted: true } }
+      catch { this.interrupting.delete(id); return { accepted: false, uncertain: true } }
     }
     throw new Error('Unsupported Claude command.')
   }
@@ -669,7 +674,7 @@ export class ClaudeStreamJsonHost implements AgentHost {
     this.options.logEvent?.('claude-settings-applied-live')
     // The CLI runs these whether or not the write landed, and the next write carries them. An unsaved change
     // is not confirmed: the coordinator reconciles it from the thread, which shows what the CLI runs.
-    return saved ? { accepted: true, snapshot: this.view() } : { accepted: false, uncertain: true }
+    return saved ? { accepted: true, snapshot: this.view(command.historyFromEvents) } : { accepted: false, uncertain: true }
   }
   /**
    * The CLI may be running either set of settings, so it is stopped: nothing runs on settings the thread does
@@ -704,7 +709,7 @@ export class ClaudeStreamJsonHost implements AgentHost {
     await this.persist(); this.showSettings(id)
     await this.start(id); this.emit()
     this.options.logEvent?.('claude-settings-applied-restart')
-    return { accepted: true, snapshot: this.view() }
+    return { accepted: true, snapshot: this.view(command.historyFromEvents) }
   }
   async pollSessionLogs(): Promise<void> { for (const [id, log] of this.logs) { await log.poll(); await this.readSubagentModels(id, log) } }
   /**
@@ -778,7 +783,7 @@ export class ClaudeStreamJsonHost implements AgentHost {
         // Work still going in the background is lost with the session too, so the thread asks for attention.
         const cut = running || !!thread.monitoring?.length || !!thread.backgroundWork?.length
         this.clearMonitoring(id)
-        this.runtimes.delete(id); this.reaper.forget(id); this.messageLog.dropEmpty(id); this.messageLog.release(id); this.streaming.delete(id); this.flushCursors(); thread.requests = []
+        this.runtimes.delete(id); this.selfTurns.delete(id); this.interrupting.delete(id); this.reaper.forget(id); this.messageLog.dropEmpty(id); this.messageLog.release(id); this.streaming.delete(id); this.flushCursors(); thread.requests = []
         if (saved?.compaction?.status === 'running') {
           saved.compaction = { ...saved.compaction, status: 'uncertain', error: 'Native compaction was interrupted when Claude Code stopped. Its result is read from the native session; it will not be retried.' }
           thread.compaction = saved.compaction; this.closures.push(this.persist().catch(() => undefined))
@@ -854,6 +859,13 @@ export class ClaudeStreamJsonHost implements AgentHost {
         this.acknowledgements.get(uuid)?.()
       }
     }
+    // Claude Code answers some prompts it gives itself, such as a report once background work ends. Its result
+    // ends the turn the way it ends one Sotto sent, and a stop ends it without reading as a failure. A prompt of
+    // Sotto's waiting to go out sees the thread running and is refused rather than sent into the report.
+    else if (selfStartedClaudeTurn(frame) && thread.status !== 'running' && !compactionPending(alias.compaction)) {
+      thread.status = 'running'
+      if (typeof frame.uuid === 'string' && frame.uuid) { thread.lastTurn = { id: frame.uuid, status: 'running' }; this.selfTurns.set(id, frame.uuid) }
+    }
     if (frame.type === 'assistant') {
       if (typeof frame.error === 'string' && !frame.parent_tool_use_id) this.assistantErrors.set(id, frame.error)
       this.message(id, frame, false)
@@ -886,14 +898,17 @@ export class ClaudeStreamJsonHost implements AgentHost {
       this.usage.claudeResult(id, frame)
       thread.usage = this.usage.get(id)
       this.messageLog.dropEmpty(id); this.streaming.delete(id)
-      const origin = typeof frame.user_message_uuid === 'string' ? frame.user_message_uuid : alias.origins.at(-1)?.uuid
+      // Claude Code leaves its own prompt's identity off the result of a turn it gave itself.
+      const origin = typeof frame.user_message_uuid === 'string' ? frame.user_message_uuid : this.selfTurns.get(id) ?? alias.origins.at(-1)?.uuid
+      this.selfTurns.delete(id)
       // A turn the user stopped ends in an error result, which is no failure of Claude Code's.
-      const stopped = thread.lastTurn?.status === 'interrupted' && (!origin || thread.lastTurn.id === origin)
+      const stopped = this.interrupting.has(id) || thread.lastTurn?.status === 'interrupted' && (!origin || thread.lastTurn.id === origin)
+      this.interrupting.delete(id)
       if (origin) {
+        const status = stopped ? 'interrupted' : frame.is_error === true ? 'failed' : 'completed'
         this.completedOrigins.add(origin)
-        if (thread.lastTurn?.id !== origin || thread.lastTurn.status !== 'interrupted') thread.lastTurn = { id: origin, status: frame.is_error === true ? 'failed' : 'completed' }
-        this.markTurn(id, thread.lastTurn?.status === 'interrupted' ? 'interrupted' : frame.is_error === true ? 'failed' : 'completed',
-          alias.origins.find(value => value.uuid === origin)?.messageId, typeof frame.result === 'string' && frame.is_error === true ? frame.result : undefined)
+        thread.lastTurn = { id: origin, status }
+        this.markTurn(id, status, alias.origins.find(value => value.uuid === origin)?.messageId, typeof frame.result === 'string' && frame.is_error === true ? frame.result : undefined)
       }
       const failure = frame.is_error === true && !stopped ? claudeTurnFailure(frame, this.assistantErrors.get(id)) : null
       this.assistantErrors.delete(id)
@@ -1067,7 +1082,11 @@ export class ClaudeStreamJsonHost implements AgentHost {
     await Promise.all(pending.map(request => this.reply(runtime, request.id, request.resumeDialog ? { behavior: 'cancelled' } : claudeDenial())))
   }
   private persist(): Promise<void> { return this.aliasStore.write(structuredClone(this.aliases)) }
-  private view(): AgentHostSnapshot {
+  /** The public snapshot: a copy of everything, held threads' messages included. A caller that keeps history
+   * from this adapter's events is handed every thread with its summary and no messages, as an activity
+   * subscriber that asks for it is (#368). */
+  private view(historyFromEvents = false): AgentHostSnapshot {
+    if (historyFromEvents) return cloneActivitySnapshot(this.activityView(true))
     return cloneHostSnapshot({ ...this.state, threads: [...this.threads.values()]
       .filter((thread): thread is AgentThread => 'projectId' in thread).map(thread => this.messageLog.publishedThread(thread)) })
   }

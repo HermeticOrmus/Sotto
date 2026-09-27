@@ -21,7 +21,7 @@ import type { ActivitySubscriptionOptions, AgentHost, AgentHostCommand, AgentHos
 import { SIDE_WRITING_TIMEOUT_MS, sideWritingEffort } from './sideWriting'
 import { ThreadMessageLog } from './threadMessageLog'
 import { cloneHostSnapshot } from './cloneHostSnapshot'
-import { ActivitySubscribers, immutableActivities, isImmutableActivities } from './activitySnapshots'
+import { ActivitySubscribers, cloneActivitySnapshot, immutableActivities, isImmutableActivities } from './activitySnapshots'
 import { findExecutable, nativeEnvironment, writeWithCodexExec } from './subscriptionCodex'
 import { CodexSessionLogWatcher, promptDigest, textOf } from './codexSessionLog'
 import { answerRequest, declineRequest, pendingRequest, requestKey, type CodexPendingRequest } from './codexRequests'
@@ -374,7 +374,11 @@ export class CodexAppServerHost implements AgentHost {
   private sessionId(codexThreadId: string): string | undefined { return this.providerSessionIds.get(codexThreadId) }
   /** The threads whose native session this connection is holding. The app-server has no close to observe. */
   resumedThreads(): readonly string[] { return [...this.live] }
-  private current(): AgentHostSnapshot {
+  /** The public snapshot: a copy of everything, held threads' messages included. A caller that keeps history
+   * from this adapter's events is handed every thread with its summary and no messages, as an activity
+   * subscriber that asks for it is (#368). */
+  private current(historyFromEvents = false): AgentHostSnapshot {
+    if (historyFromEvents) return cloneActivitySnapshot(this.activitySnapshot(true))
     return cloneHostSnapshot({ ...this.state, threads: [...this.threads.values()]
       .filter((thread): thread is AgentThread => 'projectId' in thread).map(thread => this.log.publishedThread(thread)) })
   }
@@ -499,7 +503,7 @@ export class CodexAppServerHost implements AgentHost {
       if (generation !== this.generation || !this.state.connected) throw new Error('Codex connection changed while reading the thread.')
     })
     this.threadReads.set(id, work)
-    try { await work; return this.current() }
+    try { await work; return this.current(purpose.historyFromEvents) }
     catch (error) {
       // A failed read cannot hide native-authored input. Without corroboration,
       // buffered rows remain external and management must stop for review.
@@ -713,7 +717,12 @@ export class CodexAppServerHost implements AgentHost {
     reconcileMessageIdentities(identities, turn.id, turn.items.flatMap(item => { const message = this.identityItem(item); return message ? [message] : [] }),
       origins, turnCreatedAt(alias, turn), this.watcher?.identities(alias.codexThreadId, turn.id), turn.status !== 'inProgress')
   }
-  private applyTurn(id: string, turn: Turn, live = false): void {
+  /**
+   * Apply one turn and put the message window in order. `applyThread` passes false for `order` and orders once
+   * after its last turn: nothing while applying a turn reads the window's order, and ordering after every turn
+   * sorted the whole window once a turn, so a whole read grew with the square of the thread (#352).
+   */
+  private applyTurn(id: string, turn: Turn, live = false, order = true): void {
     if (this.aliases[id]!.rewoundTurnIds.includes(turn.id)) return
     const thread = this.ensureThread(id)
     const alias = this.aliases[id]!
@@ -739,7 +748,7 @@ export class CodexAppServerHost implements AgentHost {
       if (item.type === 'userMessage' || item.type === 'agentMessage') anchor = this.stableMessageId(id, turn.id, item.id)
     }
     this.activity.turn(thread, turn, live)
-    this.orderMessages(id)
+    if (order) this.orderMessages(id)
     if (!this.runningTurns.has(id) || this.runningTurns.get(id) === turn.id || turn.status === 'inProgress') {
       thread.lastTurn = { id: turn.id, status: turn.status === 'inProgress' ? 'running' : turn.status }
     }
@@ -769,7 +778,7 @@ export class CodexAppServerHost implements AgentHost {
       current.activities = current.activities?.filter(activity => !alias.rewoundTurnIds.includes(activity.turnId ?? ''))
       delete current.lastTurn
     }
-    for (const turn of thread.turns) this.applyTurn(id, turn)
+    for (const turn of thread.turns) this.applyTurn(id, turn, /* live */ false, /* order */ false)
     const order = new Map(thread.turns.map((turn, index) => [turn.id, index]))
     this.aliases[id]!.messageIdentities.sort((a, b) => (order.get(a.turnId) ?? Number.MAX_SAFE_INTEGER) - (order.get(b.turnId) ?? Number.MAX_SAFE_INTEGER))
     // Corroborate aliases before exposing legacy rollout rows to authority
@@ -971,7 +980,7 @@ export class CodexAppServerHost implements AgentHost {
           }
           // Codex's own notification confirmed the effective values and applySettings emitted them: that snapshot
           // is the reconciliation, so the coordinator does not read the whole transcript again.
-          return { accepted: true, snapshot: this.current() }
+          return { accepted: true, snapshot: this.current(command.historyFromEvents) }
         } else if (command.type === 'steer') {
           const thread = this.ensureThread(id)
           const expectedTurnId = this.runningTurns.get(id)

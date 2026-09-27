@@ -1,32 +1,58 @@
-import { useState } from 'react'
-import { defaultThreadModelId, isSubscriptionReasoning, type AgentState } from '../../../shared/agents'
+import React, { useRef, useState, type ReactNode } from 'react'
+import { defaultThreadModelId, hostForThread, isSubscriptionReasoning, type AgentState } from '../../../shared/agents'
 import { resolveModel } from '../../../shared/modelCatalog'
 import type { AgentConnection } from './AgentContext'
-import { folderKey, folderName } from './ProjectChooser'
+import { FolderBrowserDialog, type FolderChoice } from './FolderBrowserDialog'
+import { projectAtFolder } from './projectFolders'
 
-/** Open a folder from disk as a Sotto project, or open the project that already has it. */
-export function useAddProject(state: AgentState, command: AgentConnection['command']): { readonly add: () => Promise<void>; readonly adding: boolean; readonly error: string | null; readonly clearError: () => void } {
+/**
+ * Add project: choose the computer the project lives on when more than one is paired, then a folder there, and open
+ * it as a Sotto project on that host, or open the project that already has it. The folder is made on the host when
+ * it is new, by the same create-project that attaches an existing one.
+ */
+export function useAddProject(state: AgentState, command: AgentConnection['command']): {
+  readonly add: () => Promise<void>; readonly adding: boolean; readonly error: string | null; readonly clearError: () => void; readonly dialog: ReactNode
+} {
+  const [open, setOpen] = useState(false)
   const [adding, setAdding] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [dialogError, setDialogError] = useState<string | null>(null)
+  const latest = useRef(state)
+  latest.current = state
   const add = async (): Promise<void> => {
     if (adding) return
-    setError(null)
-    if (state.connections?.find(host => host.hostId === state.hostId)?.kind === 'remote') { setError('Project folders are on the host machine. Add the project there, then reconnect.'); return }
-    const picker = window.sotto?.agents?.chooseProjectDirectory
-    if (!picker) { setError('Folder browsing is unavailable. Reopen Sotto and try again.'); return }
-    setAdding(true)
+    setError(null); setDialogError(null); setOpen(true)
+  }
+  const use = async (choice: FolderChoice): Promise<void> => {
+    if (adding) return
+    setAdding(true); setDialogError(null)
     try {
-      const path = await picker()
-      if (!path) return
-      const existing = state.host.projects.find(project => folderKey(project.path) === folderKey(path))
-      if (existing) { await command({ type: 'select-project', projectId: existing.id }); return }
-      const defaultModelId = defaultThreadModelId(state.configuration, state.host.models, state.reasoningAccounts)
-      const provider = isSubscriptionReasoning(state.configuration.reasoning) ? state.configuration.reasoning
-        : resolveModel(state.host.models, defaultModelId)?.providerId
-      const result = await command({ type: 'create-project', title: folderName(path), path, useExisting: true, ...(provider ? { provider } : {}) })
-      if (result === null || result.error !== null) setError(result?.error ?? 'Could not confirm the new project. Choose the folder again to check; it will not be added twice.')
-    } catch { setError('Could not open the folder browser. Try again.') }
+      // Main adds a project to the host selected for new work, so the chosen host is selected first.
+      let current = latest.current
+      if (choice.hostId !== current.hostId && current.connections?.length) {
+        await window.sotto?.hosts?.command({ type: 'select', hostId: choice.hostId })
+        // The chosen host's own settings pick the provider, so read them now rather than wait for the next render.
+        current = await window.sotto?.agents?.get?.().catch(() => null) ?? latest.current
+      }
+      const existing = projectAtFolder(current.host.projects, choice.hostId, choice.path)
+      if (existing) {
+        const result = await command({ type: 'select-project', projectId: existing.id })
+        if (result === null || result.error !== null) { setDialogError(result?.error ?? 'Could not open the project. Nothing was changed. Try again.'); return }
+        setOpen(false); return
+      }
+      const host = hostForThread(current.host, { hostId: choice.hostId })
+      const defaultModelId = defaultThreadModelId(current.configuration, host.models, current.reasoningAccounts)
+      const provider = isSubscriptionReasoning(current.configuration.reasoning) ? current.configuration.reasoning
+        : resolveModel(host.models, defaultModelId)?.providerId
+      const result = await command({ type: 'create-project', title: choice.name, path: choice.path, useExisting: true, ...(provider ? { provider } : {}) })
+      if (result === null || result.error !== null) { setDialogError(result?.error ?? 'Could not confirm the new project. Choose the folder again to check; it will not be added twice.'); return }
+      setOpen(false)
+    } catch { setDialogError('Could not add the project. Nothing was changed. Try again.') }
     finally { setAdding(false) }
   }
-  return { add, adding, error, clearError: () => setError(null) }
+  const dialog = open ? React.createElement(FolderBrowserDialog, {
+    state, heading: 'Where should this project live?', busy: adding, error: dialogError,
+    onUse: choice => { void use(choice) }, onClose: () => { if (!adding) setOpen(false) },
+  }) : null
+  return { add, adding, error, clearError: () => setError(null), dialog }
 }

@@ -31,7 +31,9 @@ export function isImmutableActivities(activities: readonly AgentActivity[] | und
 }
 
 /** A private subscription snapshot: mutable metadata belongs to this consumer, while certified
- * activity trees may be shared. Public snapshots still use cloneHostSnapshot and remain writable. */
+ * activity trees may be shared. It is also what an adapter hands back for a thread refresh or settings
+ * result that asked for history from events (#368). Every other public snapshot still uses
+ * cloneHostSnapshot and remains writable. */
 export function cloneActivitySnapshot(snapshot: AgentHostSnapshot): AgentHostSnapshot {
   // Whole-history legacy hosts have nothing to share. Keep their established clone path
   // instead of checking ownership on every nested object in every retained record.

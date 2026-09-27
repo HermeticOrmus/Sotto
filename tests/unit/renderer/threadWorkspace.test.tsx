@@ -381,10 +381,12 @@ describe('Threads project folders', () => {
     ;(window as { sotto?: unknown }).sotto = { agents: { chooseProjectDirectory: choose } }
     const { live } = mount(threadsStateFixture())
     fireEvent.click(screen.getByRole('button', { name: 'Add project' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Browse with File Explorer' }))
     await waitFor(() => expect(live.command).toHaveBeenCalledWith({ type: 'create-project', title: 'new-app', path: 'D:\\Work\\new-app', useExisting: true }))
     choose.mockResolvedValueOnce('C:\\workshop\\')
     await waitFor(() => expect(screen.getByRole('button', { name: 'Add project' })).toBeEnabled())
     fireEvent.click(screen.getByRole('button', { name: 'Add project' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Browse with File Explorer' }))
     await waitFor(() => expect(live.command).toHaveBeenCalledWith({ type: 'select-project', projectId: 'workshop' }))
   })
 

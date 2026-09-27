@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import { cloneActivitySnapshot, immutableActivities, isImmutableActivities } from '../../../src/main/agents/activitySnapshots'
-import type { ActivitySubscriptionOptions, ThreadHostEvent } from '../../../src/main/agents/host'
+import type { ActivitySubscriptionOptions, ThreadHostEvent, ThreadReadPurpose } from '../../../src/main/agents/host'
 import { ConfiguredProviderHost } from '../../../src/main/agents/providerSwitch'
 import { SottoThreadHost, ThreadRegistry } from '../../../src/main/agents/threads'
 import type { AgentHostSnapshot } from '../../../src/shared/agents'
@@ -124,6 +124,14 @@ class AskedProvider extends FakeProviderHost {
       threads: this.state.threads.map(thread => historyFromEvents ? { ...thread, messages: [] } : thread) }))
   }
 }
+/** Answers a thread read only once `gate` settles, leaving the messages out when asked to. */
+class GatedProvider extends AskedProvider {
+  gate: Promise<void> = Promise.resolve()
+  async refreshThread(_threadId: string, purpose?: ThreadReadPurpose): Promise<AgentHostSnapshot> {
+    await this.gate
+    return structuredClone({ ...this.state, threads: this.state.threads.map(thread => purpose?.historyFromEvents ? { ...thread, messages: [] } : thread) })
+  }
+}
 async function askedSwitch(claude: AskedProvider) {
   const root = await mkdtemp(join(tmpdir(), 'sotto-activity-asked-'))
   const registry = new ThreadRegistry(root)
@@ -171,4 +179,23 @@ it('asks again when a subscriber that reads messages arrives after connect, and 
 
   off()
   expect(claude.asked.at(-1)).toEqual({ historyFromEvents: true })
+})
+it('reads a provider whole when a subscriber that reads messages arrives while a read without them is on the way (#368)', async () => {
+  const claude = new GatedProvider()
+  claude.state.threads[0]!.messages = [{ id: 'ask', role: 'user', text: 'Ask', createdAt: '2026-09-27T10:00:00Z' }]
+  const host = await askedSwitch(claude)
+  host.subscribeActivitySnapshots(() => undefined, { historyFromEvents: true })
+  await host.connect()
+  const threadId = (await host.snapshot()).threads.find(thread => thread.title === 'Workshop')!.id
+  let release!: () => void
+  claude.gate = new Promise(resolve => { release = resolve })
+  const reading = host.refreshThread(threadId, { historyFromEvents: true })
+  const plain: AgentHostSnapshot[] = []
+  host.subscribe(snapshot => plain.push(snapshot))
+  // The newcomer is handed the messages at once, since the switch reads the provider afresh for it.
+  await expect.poll(() => plain.at(-1)?.threads.find(thread => thread.title === 'Workshop')?.messages.map(message => message.id)).toEqual(['ask'])
+  release()
+  await reading
+  // The read that went out without messages does not take them away from it.
+  expect(plain.at(-1)!.threads.find(thread => thread.title === 'Workshop')!.messages.map(message => message.id)).toEqual(['ask'])
 })
