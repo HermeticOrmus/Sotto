@@ -236,6 +236,12 @@ function describe(state: AgentState, thread: AgentThread, now: number): ThreadRo
     if (lastAssistant !== undefined && (lastUser === undefined || parse(lastAssistant.createdAt) >= parse(lastUser.createdAt))) sentence = lastAssistant.text
     else if (lastUser !== undefined) { sentence = `Working on “${lastUser.text}”.`; sentenceFromUser = true }
     else sentence = 'Working on your prompt.'
+  } else if (thread.backgroundWork?.length) {
+    // The turn has ended but work it started is still running, so the thread has not reported back yet.
+    // Agents work; a command on its own is waited on, the word the composer's creature uses for it.
+    state_ = 'working'
+    stateLabel = thread.backgroundWork.some(task => task.type !== 'command') ? 'Working' : 'Waiting'
+    sentence = lastAssistant?.text ?? 'Working in the background.'
   } else {
     state_ = 'done'
     stateLabel = management === 'paused' ? 'Paused' : 'Done'
