@@ -67,7 +67,7 @@ open_url() {
   local url="$1"
   printf '  %s↗ opening%s %s\n' "$GREEN" "$RESET" "$url"
   { if   command -v wslview     >/dev/null 2>&1; then wslview "$url"
-    elif command -v explorer.exe >/dev/null 2>&1; then explorer.exe "$url"
+    elif command -v explorer.exe >/dev/null 2>&1; then explorer.exe "$url" || true  # exits 1 even when it opens
     elif command -v xdg-open    >/dev/null 2>&1; then xdg-open "$url"
     elif command -v open        >/dev/null 2>&1; then open "$url"
     else warn "couldn't open a browser — visit it manually: $url"; fi
@@ -205,6 +205,14 @@ if ! command -v gh >/dev/null 2>&1 || ! gh auth status >/dev/null 2>&1; then
   exit 1
 fi
 
+# pasted — what was pasted, keeping only letters, digits and hyphens. A copy from a web page can carry
+# invisible characters, and a terminal may wrap a paste in bracketed-paste markers; neither is part of an ID.
+pasted() {
+  local v="${1//$'\e'\[200~/}"
+  v="${v//$'\e'\[201~/}"
+  printf '%s' "$v" | LC_ALL=C tr -cd 'A-Za-z0-9-'
+}
+
 stage "Your Team ID"
 say "Your Apple Developer Team ID tells the build which account signs it."
 open_url "https://developer.apple.com/account#MembershipDetailsCard"
@@ -212,7 +220,7 @@ step "Sign in, then find Membership details on the account page."
 step "Copy the Team ID: ten letters and numbers, such as A1B2C3D4E5."
 while :; do
   ask APPLE_TEAM_ID "Paste your Team ID:"
-  APPLE_TEAM_ID=$(printf '%s' "$APPLE_TEAM_ID" | tr -d '[:space:]' | tr '[:lower:]' '[:upper:]')
+  APPLE_TEAM_ID=$(pasted "$APPLE_TEAM_ID" | tr '[:lower:]' '[:upper:]')
   [[ "$APPLE_TEAM_ID" =~ ^[A-Z0-9]{10}$ ]] && break
   warn "That doesn't look like a Team ID (ten letters and numbers). Try again."
 done
@@ -247,13 +255,13 @@ step "Press Download on the new key. Apple lets you download it only once."
 step "Copy the Key ID from the new row, and the Issuer ID shown above the table."
 while :; do
   ask KEY_ID "Paste the Key ID:"
-  KEY_ID=$(printf '%s' "$KEY_ID" | tr -d '[:space:]')
+  KEY_ID=$(pasted "$KEY_ID" | tr '[:lower:]' '[:upper:]')
   [[ "$KEY_ID" =~ ^[A-Z0-9]{10}$ ]] && break
   warn "A Key ID is ten capital letters and numbers. Try again."
 done
 while :; do
   ask ISSUER_ID "Paste the Issuer ID:"
-  ISSUER_ID=$(printf '%s' "$ISSUER_ID" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')
+  ISSUER_ID=$(pasted "$ISSUER_ID" | tr '[:upper:]' '[:lower:]')
   [[ "$ISSUER_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] && break
   warn "An Issuer ID looks like 12345678-abcd-1234-abcd-123456789abc. Try again."
 done
