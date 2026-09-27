@@ -714,9 +714,9 @@ export class CodexAppServerHost implements AgentHost {
       origins, turnCreatedAt(alias, turn), this.watcher?.identities(alias.codexThreadId, turn.id), turn.status !== 'inProgress')
   }
   /**
-   * Apply one turn and put the window in order. `applyThread` passes `order: false` and orders once after its
-   * last turn: nothing while applying a turn reads the window's order, and ordering after every turn sorted the
-   * whole window once a turn, so a whole read grew with the square of the thread (#352).
+   * Apply one turn and put the message window in order. `applyThread` passes false for `order` and orders once
+   * after its last turn: nothing while applying a turn reads the window's order, and ordering after every turn
+   * sorted the whole window once a turn, so a whole read grew with the square of the thread (#352).
    */
   private applyTurn(id: string, turn: Turn, live = false, order = true): void {
     if (this.aliases[id]!.rewoundTurnIds.includes(turn.id)) return
@@ -774,7 +774,7 @@ export class CodexAppServerHost implements AgentHost {
       current.activities = current.activities?.filter(activity => !alias.rewoundTurnIds.includes(activity.turnId ?? ''))
       delete current.lastTurn
     }
-    for (const turn of thread.turns) this.applyTurn(id, turn, false, false)
+    for (const turn of thread.turns) this.applyTurn(id, turn, /* live */ false, /* order */ false)
     const order = new Map(thread.turns.map((turn, index) => [turn.id, index]))
     this.aliases[id]!.messageIdentities.sort((a, b) => (order.get(a.turnId) ?? Number.MAX_SAFE_INTEGER) - (order.get(b.turnId) ?? Number.MAX_SAFE_INTEGER))
     // Corroborate aliases before exposing legacy rollout rows to authority

@@ -4,11 +4,11 @@ Issue #352. Opening a Codex thread Sotto holds no history for reads it whole wit
 `includeTurns: true` and applies every turn. #324 found that at 2,000 turns an open took 6-17 s on the fake
 app-server while the real Codex CLI 0.157.1 sent the same transcript in 117-150 ms, so nearly all of the wait was
 Sotto's own work, and it grew faster than the thread did (`2026-09-26-codex-send-read.md`). The likely cause it
-named was `applyTurn` in `src/main/agents/codex.ts` calling `orderMessages`, which sorts the whole window, once
+named was `applyTurn` in `src/main/agents/codex.ts` calling `orderMessages`, which sorts the whole message window, once
 for every turn. The issue asked for the open to be split into phases first.
 
 The decision: the numbers put about a fifth of the cost on that sort and most of the rest on the thread activity, so
-both changed; identity reconciliation and the rest stayed as they were. A whole read now orders the window once
+both changed; identity reconciliation and the rest stayed as they were. A whole read now orders the message window once
 rather than once a turn, and the Codex activity projection places each record instead of rebuilding its list.
 At 2,000 turns an open went from 6.6-8.7 s to 1.0-1.5 s, and the read now costs about the same per turn at every
 size.
@@ -76,8 +76,9 @@ The rest fell partly for the same reason and partly because it holds the thread 
 
 - **Ordering once per read.** `applyThread` applies every turn without ordering and then orders once, after it has
   put the turn identities in Codex's order, where it already did. Nothing done while applying a turn reads the
-  window's order: the anchors and the thread activity use the last message recorded, not the window. A live turn,
-  a turn the newest-turn check applies and a turn a send reads back still order the window as before. The two
+  message window's order: the anchors and the thread activity use the last message recorded, and the log's
+  lookups go by ID. A live turn, a turn the newest-turn check applies and a turn a send reads back still order
+  the message window as before. The two
   orderings a read now makes are that one and the settling one after it.
 - **Hashing a turn's activity ID once.** `anchor`, which runs for every user message applied, searched the
   thread activity for the turn's record with the SHA-256 of its ID computed inside the search, so once for every
@@ -93,7 +94,7 @@ The rest fell partly for the same reason and partly because it holds the thread 
 
 ## What a read shows
 
-- **Message order and identities.** The window's final order is the same: a rank that is unique for every message
+- **Message order and identities.** The message window's final order is the same: a rank that is unique for every message
   in Codex's turn identities, and a stable sort that keeps the rest in the order they were recorded. Identities
   are reconciled by the same code in the same order. Every adapter contract case and every Codex history,
   identity, rollback and newest-turn test passes unchanged.
@@ -114,7 +115,7 @@ left at 2,000 turns is spread thin. One inspector profile of an open there put t
 activity's searches of up to 2,000 records for each item, about 0.4 s; identity reconciliation's check that a new
 message ID is not used anywhere in the thread, about 0.25 s, which does grow with the square of the thread but is
 small at these sizes; a zod schema built afresh for every message's content, about 0.2 s; and the message log's
-search of the window for each message recorded, about 0.1 s. None is worth an issue of its own at these sizes;
+search of the message window for each message recorded, about 0.1 s. None is worth an issue of its own at these sizes;
 the identity check is the one that would show first on a much longer thread.
 
 ## What these numbers are not
