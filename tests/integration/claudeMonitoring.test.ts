@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { access } from 'node:fs/promises'
+import { access, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import { claudeFixture } from '../fixtures/claudeFixture'
@@ -117,6 +117,46 @@ it('keeps background work through the turn result and clears it on interrupt, an
   await f.host.connect()
   await f.adapter.refreshThread('thread')
   expect((await thread(f)).backgroundWork ?? []).toEqual([])
+})
+
+// Claude Code files a finished task as a prompt of its own, answers it unasked, and leaves its identity off the result.
+const report = { type: 'user', uuid: '4b7c1c1e-5f3a-4b8e-9d51-2f0c0f6f9a11', parent_tool_use_id: null, origin: { kind: 'task-notification' },
+  message: { role: 'user', content: '<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n</task-notification>' } }
+async function prompted(f: Awaited<ReturnType<typeof fixture>>) {
+  expect(await f.host.execute({ type: 'send', commandId: 'send', messageId: 'prompt', threadId: 'thread', text: 'Review the diff in the background.' })).toEqual({ accepted: true })
+  await f.driver.backgroundWork!.completeLeaving('thread', 'Left an agent running.', 'Review the diff')
+  await expect.poll(async () => (await thread(f)).status).toBe('idle')
+  expect((await thread(f)).backgroundWork).toHaveLength(1)
+  await f.driver.backgroundWork!.end('thread')
+  await expect.poll(async () => (await thread(f)).backgroundWork ?? []).toEqual([])
+  await raw(f, report)
+  await expect.poll(async () => (await thread(f)).status).toBe('running')
+}
+
+it('shows the turn Claude Code starts on its own to report finished work as running until its result', async () => {
+  const f = await fixture()
+  await prompted(f)
+  expect((await thread(f)).lastTurn).toEqual({ id: report.uuid, status: 'running' })
+  await f.action('thread', { type: 'raw-burst', frames: [
+    { type: 'stream_event', event: { type: 'message_start', message: { id: 'report', role: 'assistant' } } },
+    { type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'The review found nothing.' } } },
+    { type: 'result', subtype: 'success', is_error: false, result: 'The review found nothing.' }] })
+  await expect.poll(async () => (await thread(f)).status).toBe('idle')
+  expect((await thread(f)).lastTurn).toEqual({ id: report.uuid, status: 'completed' })
+  await expect.poll(async () => (await thread(f)).messages.at(-1)?.text).toBe('The review found nothing.')
+})
+
+it('stops a turn Claude Code started on its own without calling it a failure', async () => {
+  const f = await fixture()
+  await prompted(f)
+  await writeFile(join(f.root, 'interrupt-script.json'), JSON.stringify({ error: true }))
+  expect(await f.host.execute({ type: 'interrupt', commandId: 'stop', threadId: 'thread' })).toEqual({ accepted: true })
+  // The agent after the interrupt's error result shows only once that result has been read.
+  await raw(f, agent)
+  await expect.poll(async () => (await thread(f)).backgroundWork?.length).toBe(1)
+  expect((await thread(f)).status).toBe('idle')
+  expect((await thread(f)).lastTurn).toEqual({ id: report.uuid, status: 'interrupted' })
+  expect((await f.host.snapshot()).error).toBeUndefined()
 })
 
 // A shell left running in the background: stopping the CLI under it would stop the command too.

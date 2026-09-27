@@ -717,7 +717,12 @@ export class CodexAppServerHost implements AgentHost {
     reconcileMessageIdentities(identities, turn.id, turn.items.flatMap(item => { const message = this.identityItem(item); return message ? [message] : [] }),
       origins, turnCreatedAt(alias, turn), this.watcher?.identities(alias.codexThreadId, turn.id), turn.status !== 'inProgress')
   }
-  private applyTurn(id: string, turn: Turn, live = false): void {
+  /**
+   * Apply one turn and put the message window in order. `applyThread` passes false for `order` and orders once
+   * after its last turn: nothing while applying a turn reads the window's order, and ordering after every turn
+   * sorted the whole window once a turn, so a whole read grew with the square of the thread (#352).
+   */
+  private applyTurn(id: string, turn: Turn, live = false, order = true): void {
     if (this.aliases[id]!.rewoundTurnIds.includes(turn.id)) return
     const thread = this.ensureThread(id)
     const alias = this.aliases[id]!
@@ -743,7 +748,7 @@ export class CodexAppServerHost implements AgentHost {
       if (item.type === 'userMessage' || item.type === 'agentMessage') anchor = this.stableMessageId(id, turn.id, item.id)
     }
     this.activity.turn(thread, turn, live)
-    this.orderMessages(id)
+    if (order) this.orderMessages(id)
     if (!this.runningTurns.has(id) || this.runningTurns.get(id) === turn.id || turn.status === 'inProgress') {
       thread.lastTurn = { id: turn.id, status: turn.status === 'inProgress' ? 'running' : turn.status }
     }
@@ -773,7 +778,7 @@ export class CodexAppServerHost implements AgentHost {
       current.activities = current.activities?.filter(activity => !alias.rewoundTurnIds.includes(activity.turnId ?? ''))
       delete current.lastTurn
     }
-    for (const turn of thread.turns) this.applyTurn(id, turn)
+    for (const turn of thread.turns) this.applyTurn(id, turn, /* live */ false, /* order */ false)
     const order = new Map(thread.turns.map((turn, index) => [turn.id, index]))
     this.aliases[id]!.messageIdentities.sort((a, b) => (order.get(a.turnId) ?? Number.MAX_SAFE_INTEGER) - (order.get(b.turnId) ?? Number.MAX_SAFE_INTEGER))
     // Corroborate aliases before exposing legacy rollout rows to authority
