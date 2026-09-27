@@ -75,7 +75,13 @@ turn is the benchmark's own short one, 442 bytes, whose user message is 170 byte
 
 What remains of the read at 2,000 turns, 60-99 ms, is mostly the fake: it copies the whole thread to answer any
 history request, and its save of the thread on `turn/start` is inside the send figure too. Saving the thread record,
-which holds an identity for every turn, is 19-38 ms of it.
+which holds an identity for every turn, was 19-38 ms of it.
+
+After review the check saves the thread record only when applying the newest turn changed it, which a turn Sotto
+already holds usually does not. One run afterwards, with the fake's history naming items as the stream does, made
+no save inside any check. The adapter's read took 4.7, 11 and 45 ms at 50, 500 and 2,000 turns and its whole send
+23, 68 and 204 ms; sends from the Threads page took 57, 119 and 347 ms, with no whole read before or after
+`turn/start`.
 
 ## Against Codex CLI 0.157.1
 
