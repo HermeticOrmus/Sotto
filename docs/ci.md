@@ -1,6 +1,6 @@
 # Continuous integration
 
-`.github/workflows/ci.yml` runs the same gates a developer runs by hand, on a `windows-latest` runner, for every push to `main` and every pull request against `main`. It never builds desktop installers, never publishes, and uses no secrets. A separate Linux job builds and verifies the plain Node host archive.
+`.github/workflows/ci.yml` runs the same gates a developer runs by hand, on a `windows-latest` runner, for every push to `main` and every pull request against `main`. It never builds desktop installers, never publishes, and uses no secrets. A separate Linux job builds and verifies the plain Node host archive, and a macOS job tests and compiles the native iOS client.
 
 ## What the job runs
 
@@ -259,3 +259,12 @@ Build and run `npx playwright test tests/e2e/agent-browser.spec.ts tests/e2e/too
 ## Workflow assignment detail readiness
 
 The workflow journey in `tests/unit/renderer/subagents.test.tsx` holds the first assignment response until it has checked the pending view. The summary and fallback both show the workflow description during that interval; only the full task response removes the fallback. The test scopes pending assertions to each location, releases the response explicitly, and checks the loaded detail before requiring a unique description. It also retains the existing Escape and return-focus journey. Back-button focus is not proof that asynchronous assignment detail has loaded (#402).
+## iPhone app to TestFlight
+
+`.github/workflows/ios-testflight.yml` is the one workflow that signs and publishes (ADR-0032). It runs only when a tag named `ios-testflight-*` is pushed, or by hand, never for a pull request. On `macos-26` with Xcode 26.6 it runs the SottoCore tests, then `apps/ios/Scripts/testflight.sh` archives the app with automatic cloud-managed signing and uploads it to App Store Connect. Its four secrets (`APP_STORE_CONNECT_KEY`, `APP_STORE_CONNECT_KEY_ID`, `APP_STORE_CONNECT_ISSUER_ID`, `APPLE_TEAM_ID`) belong to the `testflight` environment, which only this job names and which accepts only `ios-testflight-*` tags; the key file exists only for the job. Setup is in `apps/ios/README.md`. It is not a gate: a failed upload blocks nothing.
+
+## Native iOS gate
+
+**Native iOS client (macOS)** runs `sh apps/ios/Scripts/verify.sh` on `macos-26`, selecting `/Applications/Xcode_26.6.app/Contents/Developer` explicitly: the same Xcode as the TestFlight workflow, because App Store Connect refuses a build made with an SDK older than iOS 26, and a gate on an older Xcode would pass code the upload cannot build. [The runner inventory](https://github.com/actions/runner-images/blob/main/images/macos/macos-26-arm64-Readme.md) lists that toolchain and its iOS 26 SDKs, which satisfy the package's Swift 5.9 tools and app's iOS 17 minimum. The job prints its actual Xcode/Swift versions, runs the native SottoCore package tests, and builds the unsigned iOS simulator app with the shared Xcode scheme. It needs no signing secrets, never uploads to TestFlight, and does not run npm or Electron.
+
+The workflow has no path filters, so changes under `apps/ios` and the host protocol both run this gate. Passing establishes native tests and compilation, not simulator interaction, VoiceOver/design inspection, real-device networking, signing or Forge availability. On a Windows-only development machine this job's result remains unverified until GitHub actually runs it; adding the job is not a green CI result. It is not a required check until it has been green once.
