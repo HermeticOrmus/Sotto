@@ -1,3 +1,5 @@
+import { microphoneConstraints, type MicrophoneConstraints } from '../../audio/microphoneConstraints'
+
 export type MicrophoneTestState =
   | 'idle'
   | 'requesting'
@@ -199,4 +201,3 @@ export class BrowserMicrophoneTest implements MicrophoneTestController {
     try { await context.close() } catch { /* test resources are best-effort */ }
   }
 }
-import { microphoneConstraints, type MicrophoneConstraints } from '../../audio/microphoneConstraints'

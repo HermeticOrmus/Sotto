@@ -681,6 +681,14 @@ describe('Sotto application onboarding integration', () => {
     expect(document.body).not.toHaveTextContent('private storage detail')
   })
 
+  it('uses the saved dictation input when testing during onboarding', async () => {
+    const microphone = { start: vi.fn(async () => 'ready' as const), stop: vi.fn(async () => undefined) }
+    renderApp(createBridge({ getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, microphoneId: 'saved-headset' })) }), () => microphone)
+    await userEvent.click(await screen.findByRole('button', { name: /continue/i }))
+    await userEvent.click(screen.getByRole('button', { name: /test microphone/i }))
+    await waitFor(() => expect(microphone.start).toHaveBeenCalledWith(expect.any(Function), 'saved-headset'))
+  })
+
   it('releases an active microphone test across StrictMode unmount cleanup', async () => {
     const user = userEvent.setup()
     const microphone = {
