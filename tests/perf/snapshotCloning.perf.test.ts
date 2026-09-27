@@ -5,8 +5,8 @@
  * public `view()` a command result carries and the coordinator's `shell()`. It runs the real Claude adapter
  * over the fake CLI with 1, 4 and 8 open threads, short and long histories, and a window showing one of them
  * or none, then publishes the same unchanged state repeatedly and times each stage. Then it times a thread
- * refresh and a settings result through the workspace, and counts what the switch hands it (issue #368). It counts objects rather
- * than reading them: nothing a thread said is printed. It asserts no time, so it runs only under
+ * refresh and a settings result through the workspace, and counts what the switch hands it (#368). It counts
+ * objects rather than reading them: nothing a thread said is printed. It asserts no time, so it runs only under
  * `SOTTO_PERF_BENCH=1` (`tests/fixtures/perfBench.ts`); the default suite runs only the check that the private
  * members it wraps still exist:
  *
@@ -152,14 +152,17 @@ async function measure(threads: number, history: keyof typeof HISTORIES, window:
       samples.view.push(viewMs); samples.viewWithoutMessages.push(withoutMs); samples.shell.push(shelled)
     }
     const shellObjects = objects(control.shell())
-    const reads = await measureReads(f, registry.byThread(ids[0]!)!.sessionId, ids[0]!, sotto, providers, workspace)
     collect(); collect()
     const heap = process.memoryUsage().heapUsed
+    const reads = await measureReads(f, registry.byThread(ids[0]!)!.sessionId, ids[0]!, sotto, providers, workspace)
+    // After the reads too: what the provider switch's slot keeps from the last refresh or settings result.
+    collect(); collect()
+    const heapAfterReads = process.memoryUsage().heapUsed
     const result = { threads, history, window, messagesPerThread: length + 1,
       activityObjects, activityMessageObjects, viewObjects, viewMessageObjects, shellObjects,
       ms: Object.fromEntries(Object.entries(samples).map(([stage, values]) => [stage, round(median(values), 3)])),
       reads,
-      heapMiB: round(heap / 1024 / 1024, 1) }
+      heapMiB: round(heap / 1024 / 1024, 1), heapAfterReadsMiB: round(heapAfterReads / 1024 / 1024, 1) }
     control.dispose()
     return result
   } finally {

@@ -11,7 +11,8 @@ import { FakeProviderHost } from '../fixtures/fakeProviderHost'
  * A thread refresh and a settings result through the stack the app composes: the real Claude adapter over the
  * fake CLI, Sotto's thread identities, the provider switch and the workspace (#368). The workspace keeps history
  * from the adapter's events, so what the switch hands it carries no held thread's messages, and what the pane is
- * given, the workspace's own window, is the same afterwards as before.
+ * given, the workspace's own window, is the same afterwards as before. The first half is what fails without
+ * #368; the second guards that leaving the messages out changed nothing the pane draws.
  */
 const cleanup: (() => Promise<void>)[] = []
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close() })
@@ -46,7 +47,8 @@ it('hands the workspace a thread refresh and a settings result without held hist
     await f.action(session, { type: 'complete', text: `Finished ${id}` })
   }
   await expect.poll(() => workspace.workspaceSnapshot().threads.filter(thread => ids.includes(thread.id)).map(thread => thread.status), { timeout: 30_000 }).toEqual(['idle', 'idle'])
-  const pane = () => workspace.workspaceSnapshot().threads.find(thread => thread.id === 'shown')!.messages.map(message => ({ id: message.id, role: message.role, text: message.text }))
+  const shape = (snapshot: AgentHostSnapshot) => snapshot.threads.find(thread => thread.id === 'shown')!.messages.map(message => ({ id: message.id, role: message.role, text: message.text }))
+  const pane = () => shape(workspace.workspaceSnapshot())
   await expect.poll(() => pane().at(-1)?.text).toBe('Finished shown')
   const drawn = pane()
   expect(drawn).toHaveLength(8)
@@ -75,7 +77,6 @@ it('hands the workspace a thread refresh and a settings result without held hist
   expect(handed[1]!.threads.find(thread => thread.id === 'shown')!.runtimeMode).toBe('full-access')
 
   // The pane draws the same history from what the workspace hands back, and from its snapshot afterwards.
-  const shape = (snapshot: AgentHostSnapshot) => snapshot.threads.find(thread => thread.id === 'shown')!.messages.map(message => ({ id: message.id, role: message.role, text: message.text }))
   expect(shape(refreshed)).toEqual(drawn)
   expect(shape(settings.snapshot!)).toEqual(drawn)
   expect(pane()).toEqual(drawn)
