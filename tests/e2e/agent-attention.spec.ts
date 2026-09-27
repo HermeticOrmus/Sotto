@@ -7,6 +7,7 @@ import { defaultAgentConfiguration } from '../../src/shared/agents'
 import { requireOwnedE2EProfile } from '../../scripts/e2e-profile-policy.mjs'
 import { closeSotto, enableVoiceCoordinator, launchSotto, launchSottoWithVoice } from './support/sottoLaunch'
 import { completeVoiceJourneySetup, openVoiceJourneyAgents } from './support/voiceJourney'
+import { hostKeys } from './support/hostKeys'
 
 test('saved attention does not cover the room while its provider is disconnected', async () => {
   const profile = await mkdtemp(join(tmpdir(), 'sotto-e2e-attention-'))
@@ -19,7 +20,8 @@ test('saved attention does not cover the room while its provider is disconnected
     await openVoiceJourneyAgents(launched.page)
     await expect(launched.page.getByRole('button', { name: 'Connect providers', exact: true })).toBeVisible()
     await expect(launched.page.getByRole('heading', { name: /Needs your attention/ })).toHaveCount(0)
-    expect(await launched.page.evaluate(async () => (await window.sotto!.agents!.get()).queue)).toEqual(savedQueue)
+    const key = await hostKeys(launched.page)
+    expect(await launched.page.evaluate(async () => (await window.sotto!.agents!.get()).queue)).toEqual(savedQueue.map(item => ({ ...item, id: key(item.id), threadId: key(item.threadId) })))
     await launched.page.screenshot({ path: 'artifacts/crossing/attention-disconnected.png' })
   } finally {
     await closeSotto(launched)
@@ -37,10 +39,12 @@ test('Later returns to the orb without answering a pending permission', async ()
     await page.getByRole('button', { name: 'Mute spoken replies', exact: true }).click()
     await page.evaluate(async () => { await window.sotto!.agents!.command({ type: 'assign', threadId: 'workshop' }); await window.sottoE2E!.agentEvent!({ type: 'permission', threadId: 'workshop', text: 'Allow this test change?' }) })
     await expect(page.getByRole('button', { name: 'Allow', exact: true })).toBeVisible()
-    const pending = await page.evaluate(async () => (await window.sotto!.agents!.get()).host.threads.find(thread => thread.id === 'workshop')!.requests)
+    const workshop = (await hostKeys(page))('workshop')
+    const workshopRequests = () => page.evaluate(async id => (await window.sotto!.agents!.get()).host.threads.find(thread => thread.id === id)!.requests, workshop)
+    const pending = await workshopRequests()
     await page.getByRole('button', { name: 'Later', exact: true }).click()
     await expect(page.getByRole('heading', { name: /Needs your attention/ })).toHaveCount(0)
-    expect(await page.evaluate(async () => (await window.sotto!.agents!.get()).host.threads.find(thread => thread.id === 'workshop')!.requests)).toEqual(pending)
+    expect(await workshopRequests()).toEqual(pending)
     // Repainting the room (the sphere follows the theme) must not resurface the deferred request.
     const orbColors = await page.locator('canvas.agent-orb').getAttribute('data-orb-colors')
     await page.evaluate(async () => { await window.sotto!.updateSettings({ lightTheme: 'citrine', darkTheme: 'citrine' }) })
@@ -48,9 +52,9 @@ test('Later returns to the orb without answering a pending permission', async ()
     await expect(page.locator('canvas.agent-orb')).not.toHaveAttribute('data-orb-colors', orbColors!)
     await expect(page.getByRole('heading', { name: /Needs your attention/ })).toHaveCount(0)
     await page.getByRole('link', { name: 'History', exact: true }).click()
-    await page.getByRole('tablist', { name: 'Mode' }).getByRole('tab', { name: 'Agents', exact: true }).click()
+    await page.getByRole('tablist', { name: /^(Mode|Page)$/ }).getByRole('tab', { name: 'Agents', exact: true }).click()
     await expect(page.getByRole('heading', { name: /Needs your attention/ })).toHaveCount(0)
-    expect(await page.evaluate(async () => (await window.sotto!.agents!.get()).host.threads.find(thread => thread.id === 'workshop')!.requests)).toEqual(pending)
+    expect(await workshopRequests()).toEqual(pending)
     await page.screenshot({ path: 'artifacts/crossing/attention-later.png' })
     await page.getByRole('button', { name: /Review attention/ }).click()
     await expect(page.getByRole('button', { name: 'Allow', exact: true })).toBeVisible()
