@@ -37,7 +37,7 @@ interface CatalogSnapshot {
 export class AgentStateBroadcaster {
   private readonly catalogs = new Map<string, CatalogSnapshot>()
   private readonly sent: Record<AgentStateBroadcastDestination, Map<string, number>> = { main: new Map(), widget: new Map() }
-  private lastComparison: { stored: readonly AgentModel[]; incoming: readonly AgentModel[]; equal: boolean } | null = null
+  private lastComparison: { stored: readonly AgentModel[]; incoming: readonly AgentModel[]; lengths: [number, number]; equal: boolean } | null = null
 
   /** Encodes `state` for `destination` and hands it to `deliver`; only a delivery `deliver` reports as
    * successful (its return value) is remembered, so a window that was not actually listening is sent the
@@ -100,13 +100,16 @@ export class AgentStateBroadcaster {
    * One content comparison serves every key that holds the same array and is handed the same array:
    * `host.models` and the selected host's `clientHosts[]` entry are one array in a shell, and one shell is
    * encoded for both windows. Without this, a publish compared the 608-model catalog four times and a
-   * receipt twice. The last pair compared is remembered by identity; a shell is rebuilt, never edited.
+   * receipt twice. The last pair compared is remembered by identity and by the length each had then. A
+   * shell is rebuilt, never edited, so identity is enough today; the lengths make a model added to or
+   * removed from either array in place compare afresh rather than reuse a stale answer for good.
    */
   private sameContent(stored: readonly AgentModel[], incoming: readonly AgentModel[]): boolean {
     const last = this.lastComparison
-    if (last !== null && last.stored === stored && last.incoming === incoming) return last.equal
+    if (last !== null && last.stored === stored && last.incoming === incoming
+      && last.lengths[0] === stored.length && last.lengths[1] === incoming.length) return last.equal
     const equal = stored === incoming || isDeepStrictEqual(stored, incoming)
-    this.lastComparison = { stored, incoming, equal }
+    this.lastComparison = { stored, incoming, lengths: [stored.length, incoming.length], equal }
     return equal
   }
 }
