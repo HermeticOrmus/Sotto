@@ -4,8 +4,9 @@
  * activity snapshot, the provider switch's two copies, the workspace's acceptance, and beside them the
  * public `view()` a command result carries and the coordinator's `shell()`. It runs the real Claude adapter
  * over the fake CLI with 1, 4 and 8 open threads, short and long histories, and a window showing one of them
- * or none, then publishes the same unchanged state repeatedly and times each stage. It counts objects rather
- * than reading them: nothing a thread said is printed. It asserts no time, so it runs only under
+ * or none, then publishes the same unchanged state repeatedly and times each stage. Then it times a thread
+ * refresh and a settings result through the workspace, and counts what the switch hands it (#368). It counts
+ * objects rather than reading them: nothing a thread said is printed. It asserts no time, so it runs only under
  * `SOTTO_PERF_BENCH=1` (`tests/fixtures/perfBench.ts`); the default suite runs only the check that the private
  * members it wraps still exist:
  *
@@ -30,6 +31,8 @@ import { manualSendCoordinator } from '../fixtures/manualSendCoordinator'
 import { median, PERF_BENCH, round } from '../fixtures/perfBench'
 
 const EMITS = 60
+/** Thread refreshes and settings results measured, each, after three to warm up. */
+const READS = 20
 const HISTORIES = { short: 20, long: 1000 } as const
 /** A window showing the first thread in one pane, or a window showing no thread at all. */
 const WINDOWS = { pane: 1, none: 0 } as const
@@ -55,14 +58,27 @@ function messageObjects(snapshot: AgentHostSnapshot): number {
 }
 
 type Stage = 'emit' | 'switchAccept' | 'switchPublish' | 'workspaceAccept'
+/** The copies a thread refresh or a settings result makes on its way to the workspace (#368). */
+type ReadStage = 'view' | 'switchAccept' | 'switchPublish' | 'workspaceAccept' | 'switchCall' | 'provider'
 /** Wraps an instance method so the time it spends is added to `stage` while `on` is set. */
-function timed(target: object, method: string, stage: Stage, totals: Record<Stage, number>, on: () => boolean): void {
+function timed<S extends string>(target: object, method: string, stage: S, totals: Record<S, number>, on: () => boolean): void {
   const record = target as Record<string, (...args: unknown[]) => unknown>
   const original = record[method]!.bind(target)
   record[method] = (...args: unknown[]) => {
     if (!on()) return original(...args)
     const started = performance.now()
     try { return original(...args) } finally { totals[stage] += performance.now() - started }
+  }
+}
+
+/** The same for an async method: the time until what it returns settles. */
+function timedAsync<S extends string>(target: object, method: string, stage: S, totals: Record<S, number>, on: () => boolean): void {
+  const record = target as Record<string, (...args: unknown[]) => Promise<unknown>>
+  const original = record[method]!.bind(target)
+  record[method] = async (...args: unknown[]) => {
+    if (!on()) return original(...args)
+    const started = performance.now()
+    try { return await original(...args) } finally { totals[stage] += performance.now() - started }
   }
 }
 
@@ -78,7 +94,8 @@ const PRIVATE_MEMBERS = {
 async function measure(threads: number, history: keyof typeof HISTORIES, window: keyof typeof WINDOWS) {
   const f = await claudeFixture(undefined, 10_000)
   const registry = new ThreadRegistry(f.root)
-  const providers = new ConfiguredProviderHost({ hosts: { codex: new FakeProviderHost(), claude: new SottoThreadHost('claude', f.host, registry),
+  const sotto = new SottoThreadHost('claude', f.host, registry)
+  const providers = new ConfiguredProviderHost({ hosts: { codex: new FakeProviderHost(), claude: sotto,
     grok: new FakeProviderHost(), devin: new FakeProviderHost() }, provider: () => 'claude' })
   const workspace = new WorkspaceHost(providers, f.root)
   try {
@@ -137,15 +154,71 @@ async function measure(threads: number, history: keyof typeof HISTORIES, window:
     const shellObjects = objects(control.shell())
     collect(); collect()
     const heap = process.memoryUsage().heapUsed
+    const reads = await measureReads(f, registry.byThread(ids[0]!)!.sessionId, ids[0]!, sotto, providers, workspace)
+    // After the reads too: what the provider switch's slot keeps from the last refresh or settings result.
+    collect(); collect()
+    const heapAfterReads = process.memoryUsage().heapUsed
     const result = { threads, history, window, messagesPerThread: length + 1,
       activityObjects, activityMessageObjects, viewObjects, viewMessageObjects, shellObjects,
       ms: Object.fromEntries(Object.entries(samples).map(([stage, values]) => [stage, round(median(values), 3)])),
-      heapMiB: round(heap / 1024 / 1024, 1) }
+      reads,
+      heapMiB: round(heap / 1024 / 1024, 1), heapAfterReadsMiB: round(heapAfterReads / 1024 / 1024, 1) }
     control.dispose()
     return result
   } finally {
     workspace.disconnect(); await f.adapter.closed(); await workspace.privacyChanged(); workspace.dispose(); await registry.flush(); await f.cleanup()
   }
+}
+
+/**
+ * A thread refresh and a settings result for the first thread, each through the workspace as the coordinator
+ * asks for them (#368): the objects in what the provider switch hands the workspace, the time of each copy on
+ * the way, and the whole call. The first thread's turn is finished first, since settings wait for an idle thread.
+ */
+async function measureReads(f: Awaited<ReturnType<typeof claudeFixture>>, sessionId: string, threadId: string, sotto: SottoThreadHost, providers: ConfiguredProviderHost, workspace: WorkspaceHost) {
+  await f.action(sessionId, { type: 'complete', text: 'Fixture reply' })
+  await expect.poll(() => workspace.workspaceSnapshot().threads.find(thread => thread.id === threadId)?.status, { timeout: 60_000 }).toBe('idle')
+  const totals: Record<ReadStage, number> = { view: 0, switchAccept: 0, switchPublish: 0, workspaceAccept: 0, switchCall: 0, provider: 0 }
+  let on = false
+  timed(f.adapter, 'view', 'view', totals, () => on)
+  timed(providers, 'accept', 'switchAccept', totals, () => on)
+  timed(providers, 'publish', 'switchPublish', totals, () => on)
+  timed(workspace, 'accept', 'workspaceAccept', totals, () => on)
+  // The switch's own share of a call is its whole call less the provider's: accepting, publishing and the copy it returns.
+  for (const method of ['refreshThread', 'execute']) {
+    timedAsync(sotto, method, 'provider', totals, () => on)
+    timedAsync(providers, method, 'switchCall', totals, () => on)
+  }
+  // What the switch hands the workspace: a refresh's snapshot, or a settings result's.
+  let handed: AgentHostSnapshot | undefined
+  const refresh = providers.refreshThread.bind(providers)
+  providers.refreshThread = async (...args) => (handed = await refresh(...args))
+  const execute = providers.execute.bind(providers)
+  providers.execute = async command => { const result = await execute(command); handed = result.snapshot; return result }
+  const measured = { refresh: { handed: [] as number[], messages: [] as number[], ms: [] as number[], stages: [] as Record<ReadStage, number>[] },
+    settings: { handed: [] as number[], messages: [] as number[], ms: [] as number[], stages: [] as Record<ReadStage, number>[] } }
+  for (let run = 0; run < READS + 3; run++) {
+    for (const kind of ['refresh', 'settings'] as const) {
+      for (const stage of Object.keys(totals) as ReadStage[]) totals[stage] = 0
+      handed = undefined
+      on = true
+      const started = performance.now()
+      if (kind === 'refresh') await workspace.refreshThread(threadId)
+      else {
+        const result = await workspace.execute({ type: 'configure-thread', commandId: `mode-${run}`, threadId, runtimeMode: run % 2 === 0 ? 'full-access' : 'auto-accept-edits' })
+        if (!result.accepted || !result.snapshot) throw new Error('The fixture did not confirm the settings change.')
+      }
+      const ms = performance.now() - started
+      on = false
+      if (run < 3) continue
+      measured[kind].handed.push(objects(handed)); measured[kind].messages.push(handed ? messageObjects(handed) : 0)
+      measured[kind].ms.push(ms); measured[kind].stages.push({ ...totals })
+    }
+  }
+  return Object.fromEntries(Object.entries(measured).map(([kind, values]) => [kind, {
+    handedObjects: median(values.handed), handedMessageObjects: median(values.messages), totalMs: round(median(values.ms), 3),
+    ms: { ...Object.fromEntries((['view', 'switchAccept', 'switchPublish', 'workspaceAccept'] as const).map(stage => [stage, round(median(values.stages.map(sample => sample[stage])), 3)])),
+      switchOwn: round(median(values.stages.map(sample => sample.switchCall - sample.provider)), 3) } }]))
 }
 
 it('still finds the private members the snapshot cloning benchmark times', () => {

@@ -12,11 +12,11 @@ import { isAbsolute, join } from 'node:path'
 import { z } from 'zod'
 import { agentAttachmentReferenceSchema, agentProjectSchema, agentRuntimeModeSchema, type AgentHostSnapshot, type AgentMessage, type AgentRuntimeMode, type AgentThread } from '../../shared/agents'
 import { AtomicJsonStore } from '../storage/atomicJsonStore'
-import type { ActivitySubscriptionOptions, AgentHost, AgentHostCommand, AgentHostResult, AgentSkillScope, RestoredThreadHistory, ShortTextPrompt, ThreadHistorySource, ThreadHostEvent } from './host'
+import type { ActivitySubscriptionOptions, AgentHost, AgentHostCommand, AgentHostResult, AgentSkillScope, RestoredThreadHistory, ShortTextPrompt, ThreadHistorySource, ThreadHostEvent, ThreadReadPurpose } from './host'
 import { SIDE_WRITING_TIMEOUT_MS, sideWritingEffort } from './sideWriting'
 import { ThreadMessageLog } from './threadMessageLog'
 import { cloneHostSnapshot } from './cloneHostSnapshot'
-import { ActivitySubscribers, immutableActivities, isImmutableActivities } from './activitySnapshots'
+import { ActivitySubscribers, cloneActivitySnapshot, immutableActivities, isImmutableActivities } from './activitySnapshots'
 import type { AgentSkillCatalog } from '../../shared/agentSkills'
 import type { AgentBackgroundWork } from '../../shared/agentMonitoring'
 import { claudeSkillPrompt, discoverClaudeSkills } from './claudeSkills'
@@ -341,7 +341,7 @@ export class ClaudeStreamJsonHost implements AgentHost {
     return this.client.write({ ...prompt, model: alias.modelId, ...(effort ? { effort } : {}), workingDirectory: await existingWorkingDirectory(alias.cwd),
       executable: this.executable, timeoutMs: SIDE_WRITING_TIMEOUT_MS, ...(signal ? { signal } : {}) })
   }
-  async refreshThread(id: string): Promise<AgentHostSnapshot> {
+  async refreshThread(id: string, purpose?: ThreadReadPurpose): Promise<AgentHostSnapshot> {
     if (!this.aliases[id]) throw new Error('That Claude thread is unavailable.')
     const generation = this.generation
     const alias = this.aliases[id]!, thread = this.threads.get(id)!
@@ -356,7 +356,7 @@ export class ClaudeStreamJsonHost implements AgentHost {
     await this.log(id).poll()
     if (alias.kind === 'personal') { thread.historyStatus = 'ready'; delete thread.historyError }
     if (generation !== this.generation || !this.state.connected) throw new Error('Claude connection changed while reading the thread.')
-    return this.view()
+    return this.view(purpose?.historyFromEvents)
   }
   subscribe(listener: (snapshot: AgentHostSnapshot) => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener) }
   subscribeActivitySnapshots(listener: (snapshot: AgentHostSnapshot) => void, options?: ActivitySubscriptionOptions): () => void {
@@ -674,7 +674,7 @@ export class ClaudeStreamJsonHost implements AgentHost {
     this.options.logEvent?.('claude-settings-applied-live')
     // The CLI runs these whether or not the write landed, and the next write carries them. An unsaved change
     // is not confirmed: the coordinator reconciles it from the thread, which shows what the CLI runs.
-    return saved ? { accepted: true, snapshot: this.view() } : { accepted: false, uncertain: true }
+    return saved ? { accepted: true, snapshot: this.view(command.historyFromEvents) } : { accepted: false, uncertain: true }
   }
   /**
    * The CLI may be running either set of settings, so it is stopped: nothing runs on settings the thread does
@@ -709,7 +709,7 @@ export class ClaudeStreamJsonHost implements AgentHost {
     await this.persist(); this.showSettings(id)
     await this.start(id); this.emit()
     this.options.logEvent?.('claude-settings-applied-restart')
-    return { accepted: true, snapshot: this.view() }
+    return { accepted: true, snapshot: this.view(command.historyFromEvents) }
   }
   async pollSessionLogs(): Promise<void> { for (const [id, log] of this.logs) { await log.poll(); await this.readSubagentModels(id, log) } }
   /**
@@ -1082,7 +1082,11 @@ export class ClaudeStreamJsonHost implements AgentHost {
     await Promise.all(pending.map(request => this.reply(runtime, request.id, request.resumeDialog ? { behavior: 'cancelled' } : claudeDenial())))
   }
   private persist(): Promise<void> { return this.aliasStore.write(structuredClone(this.aliases)) }
-  private view(): AgentHostSnapshot {
+  /** The public snapshot: a copy of everything, held threads' messages included. A caller that keeps history
+   * from this adapter's events is handed every thread with its summary and no messages, as an activity
+   * subscriber that asks for it is (#368). */
+  private view(historyFromEvents = false): AgentHostSnapshot {
+    if (historyFromEvents) return cloneActivitySnapshot(this.activityView(true))
     return cloneHostSnapshot({ ...this.state, threads: [...this.threads.values()]
       .filter((thread): thread is AgentThread => 'projectId' in thread).map(thread => this.messageLog.publishedThread(thread)) })
   }

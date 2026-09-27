@@ -21,7 +21,7 @@ import type { ActivitySubscriptionOptions, AgentHost, AgentHostCommand, AgentHos
 import { SIDE_WRITING_TIMEOUT_MS, sideWritingEffort } from './sideWriting'
 import { ThreadMessageLog } from './threadMessageLog'
 import { cloneHostSnapshot } from './cloneHostSnapshot'
-import { ActivitySubscribers, immutableActivities, isImmutableActivities } from './activitySnapshots'
+import { ActivitySubscribers, cloneActivitySnapshot, immutableActivities, isImmutableActivities } from './activitySnapshots'
 import { findExecutable, nativeEnvironment, writeWithCodexExec } from './subscriptionCodex'
 import { CodexSessionLogWatcher, promptDigest, textOf } from './codexSessionLog'
 import { answerRequest, declineRequest, pendingRequest, requestKey, type CodexPendingRequest } from './codexRequests'
@@ -374,7 +374,11 @@ export class CodexAppServerHost implements AgentHost {
   private sessionId(codexThreadId: string): string | undefined { return this.providerSessionIds.get(codexThreadId) }
   /** The threads whose native session this connection is holding. The app-server has no close to observe. */
   resumedThreads(): readonly string[] { return [...this.live] }
-  private current(): AgentHostSnapshot {
+  /** The public snapshot: a copy of everything, held threads' messages included. A caller that keeps history
+   * from this adapter's events is handed every thread with its summary and no messages, as an activity
+   * subscriber that asks for it is (#368). */
+  private current(historyFromEvents = false): AgentHostSnapshot {
+    if (historyFromEvents) return cloneActivitySnapshot(this.activitySnapshot(true))
     return cloneHostSnapshot({ ...this.state, threads: [...this.threads.values()]
       .filter((thread): thread is AgentThread => 'projectId' in thread).map(thread => this.log.publishedThread(thread)) })
   }
@@ -499,7 +503,7 @@ export class CodexAppServerHost implements AgentHost {
       if (generation !== this.generation || !this.state.connected) throw new Error('Codex connection changed while reading the thread.')
     })
     this.threadReads.set(id, work)
-    try { await work; return this.current() }
+    try { await work; return this.current(purpose.historyFromEvents) }
     catch (error) {
       // A failed read cannot hide native-authored input. Without corroboration,
       // buffered rows remain external and management must stop for review.
@@ -976,7 +980,7 @@ export class CodexAppServerHost implements AgentHost {
           }
           // Codex's own notification confirmed the effective values and applySettings emitted them: that snapshot
           // is the reconciliation, so the coordinator does not read the whole transcript again.
-          return { accepted: true, snapshot: this.current() }
+          return { accepted: true, snapshot: this.current(command.historyFromEvents) }
         } else if (command.type === 'steer') {
           const thread = this.ensureThread(id)
           const expectedTurnId = this.runningTurns.get(id)

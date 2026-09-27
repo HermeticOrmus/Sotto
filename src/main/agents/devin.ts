@@ -6,10 +6,10 @@ import { version as appVersion } from '../../../package.json'
 import { agentProjectSchema, type AgentHostSnapshot, type AgentMessage, type AgentProviderMode, type AgentRuntimeMode, type AgentThread } from '../../shared/agents'
 import { mergeAgentActivities } from '../../shared/agentActivity'
 import { AtomicJsonStore } from '../storage/atomicJsonStore'
-import type { ActivitySubscriptionOptions, AgentHost, AgentHostCommand, AgentHostResult, ThreadHistorySource, ThreadHostEvent } from './host'
+import type { ActivitySubscriptionOptions, AgentHost, AgentHostCommand, AgentHostResult, ThreadHistorySource, ThreadHostEvent, ThreadReadPurpose } from './host'
 import { ThreadMessageLog } from './threadMessageLog'
 import { cloneHostSnapshot } from './cloneHostSnapshot'
-import { ActivitySubscribers, immutableActivities, isImmutableActivities } from './activitySnapshots'
+import { ActivitySubscribers, cloneActivitySnapshot, immutableActivities, isImmutableActivities } from './activitySnapshots'
 import { ProviderSnapshotPublisher } from './providerSnapshotPublisher'
 import { SessionReaper } from './sessionReaper'
 import { existingWorkingDirectory } from './threadWorktrees'
@@ -200,7 +200,11 @@ export class DevinAcpHost implements AgentHost {
     }
     return thread
   }
-  private current(): AgentHostSnapshot {
+  /** The public snapshot: a copy of everything, held threads' messages included. A caller that keeps history
+   * from this adapter's events is handed every thread with its summary and no messages, as an activity
+   * subscriber that asks for it is (#368). */
+  private current(historyFromEvents = false): AgentHostSnapshot {
+    if (historyFromEvents) return cloneActivitySnapshot(this.activitySnapshot(true))
     return cloneHostSnapshot({ ...this.state, threads: [...this.threads.values()].map(thread => this.log.publishedThread(thread)) })
   }
   /** What activity subscribers are handed. One that keeps history from this adapter's events gets each
@@ -483,8 +487,8 @@ export class DevinAcpHost implements AgentHost {
     this.polling = polling
     return polling
   }
-  async refreshThread(id: string): Promise<AgentHostSnapshot> {
-    await this.open(id); await this.readHistory(id); return this.current()
+  async refreshThread(id: string, purpose?: ThreadReadPurpose): Promise<AgentHostSnapshot> {
+    await this.open(id); await this.readHistory(id); return this.current(purpose?.historyFromEvents)
   }
   private readHistory(id: string): Promise<void> {
     const previous = this.reading.get(id)
@@ -701,7 +705,7 @@ export class DevinAcpHost implements AgentHost {
         const mode = DEVIN_MODES.find(candidate => candidate.id === command.providerMode)
         if (!mode) throw new Error('Devin does not offer that permission setting.')
         // Already the recorded mode: the snapshot says so, and nothing is stopped or read.
-        if (modeOf(alias.providerMode).id === mode.id) return { accepted: true, snapshot: this.current() }
+        if (modeOf(alias.providerMode).id === mode.id) return { accepted: true, snapshot: this.current(command.historyFromEvents) }
         // A session being opened or sent to has already chosen its profile; changing the mode under it would
         // leave the two out of step, so the change waits until the thread is quiet.
         if (this.active.has(command.threadId) || this.loading.has(command.threadId) || this.dispatching.has(command.threadId)
@@ -722,7 +726,7 @@ export class DevinAcpHost implements AgentHost {
         this.emit()
         // The profile is confirmed and recorded, and the session resumes under it on the thread's next action
         // (ADR-0022). The snapshot says so; reading the thread now would start that session only to be read.
-        if (generation === this.generation) return { accepted: true, snapshot: this.current() }
+        if (generation === this.generation) return { accepted: true, snapshot: this.current(command.historyFromEvents) }
       } else if (command.type === 'steer' || command.type === 'compact-thread') {
         throw new Error('This Devin action is not supported. Start a new thread to choose a model, or queue a text follow-up.')
       } else {
