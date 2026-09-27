@@ -1109,7 +1109,7 @@
       "relativePath": "artifacts/design/app-review/baseline/settings-agents.png",
       "width": 1080,
       "height": 720,
-      "sha256": "255c05ffdd582d89217edb9646a614fb701f1af212e9154909c2178bd47fd33c"
+      "sha256": "b4e79c3cd3834d0b0e46d64b265ec1d2ceaf35e289e93d7664294d1ad4df2b63"
     },
     {
       "theme": "dark",
@@ -1565,6 +1565,34 @@
       "motion": "normal",
       "focusTarget": "none",
       "source": "app-review",
+      "id": "threads-new-thread-chooser-dark",
+      "category": "threads",
+      "state": "new-thread-chooser",
+      "relativePath": "artifacts/design/app-review/baseline/threads-new-thread-chooser-dark.png",
+      "width": 820,
+      "height": 800,
+      "sha256": "0612aef767f2b865fcb7a66db36bc206fa4f7829c2e37f7fb036bfa97e1280e7"
+    },
+    {
+      "theme": "light",
+      "scalePercent": 100,
+      "motion": "normal",
+      "focusTarget": "none",
+      "source": "app-review",
+      "id": "threads-new-thread-chooser-light",
+      "category": "threads",
+      "state": "new-thread-chooser",
+      "relativePath": "artifacts/design/app-review/baseline/threads-new-thread-chooser-light.png",
+      "width": 820,
+      "height": 800,
+      "sha256": "95774b5671374e82dd4fd79fa9c813a38d12ca067e5e8016e5a2677b7f6f2e69"
+    },
+    {
+      "theme": "dark",
+      "scalePercent": 100,
+      "motion": "normal",
+      "focusTarget": "none",
+      "source": "app-review",
       "id": "threads-open-running",
       "category": "threads",
       "state": "open-running",
@@ -1726,34 +1754,6 @@
       "width": 1080,
       "height": 720,
       "sha256": "153766220c0483ad14b044175b1cf0475dcdcab09cc974bf10b4bd6284ad58b6"
-    },
-    {
-      "theme": "dark",
-      "scalePercent": 100,
-      "motion": "normal",
-      "focusTarget": "none",
-      "source": "app-review",
-      "id": "threads-working-copy-choice-dark",
-      "category": "threads",
-      "state": "working-copy-choice",
-      "relativePath": "artifacts/design/app-review/baseline/threads-working-copy-choice-dark.png",
-      "width": 820,
-      "height": 800,
-      "sha256": "64ea3d6448915162dc8c8ad27a66164c1f2de095bdd7c0afd50dfa5a3c4e4fad"
-    },
-    {
-      "theme": "light",
-      "scalePercent": 100,
-      "motion": "normal",
-      "focusTarget": "none",
-      "source": "app-review",
-      "id": "threads-working-copy-choice-light",
-      "category": "threads",
-      "state": "working-copy-choice",
-      "relativePath": "artifacts/design/app-review/baseline/threads-working-copy-choice-light.png",
-      "width": 820,
-      "height": 800,
-      "sha256": "ebd0696cb7b2b7d3fa207fdb9bb7258cc259edef0d45d9ea2ec010bceb7ee619"
     },
     {
       "theme": "dark",

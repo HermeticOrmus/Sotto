@@ -1,8 +1,11 @@
 import { useSyncExternalStore } from 'react'
 import type { AgentCommand, AgentRuntimeMode, AgentState, AgentThread } from '../../../shared/agents'
 
-/** What a refused creation says when main answered nothing at all. */
-export const UNCONFIRMED_CREATION = 'Could not confirm thread creation. Your choices are retained.'
+/**
+ * What a refused creation says when main answered nothing at all: it is gone from here, so the sidebar carries
+ * whatever the user had typed into it over to the next new thread opened in the same project instead of losing it.
+ */
+export const UNCONFIRMED_CREATION = 'Sotto could not confirm this thread was created, so it is gone from here. Check the project before opening another; anything you had typed is kept for it.'
 
 type Command = (command: AgentCommand) => Promise<AgentState | null>
 

@@ -134,7 +134,7 @@ const ThreadNavRow = memo(function ThreadNavRow({ row, current, open, busy, unse
 const folderKey = (section: Section, folderId: string): string => `${section}:${folderId}`
 
 /** One project folder and its rows. Memoised for the same reason a row is: its folder is shared across updates. */
-const FolderView = memo(function FolderView({ folder, section, panes, activeProjectId, expanded, unseen, liveClock, onToggle, onOpen, onNewThread, command, globalLaneBusy, busyThreadIds, host }: {
+const FolderView = memo(function FolderView({ folder, section, panes, activeProjectId, expanded, unseen, liveClock, onToggle, onOpen, onNewThread, command, globalLaneBusy, busyThreadIds, host, newThreadShortcut }: {
   readonly folder: ProjectFolder; readonly section: Section; readonly panes: PaneActions; readonly activeProjectId: string | null
   /** The host the project is on, once a remote host is connected; its badge tells same-named projects apart. */
   readonly host?: ListedHost | undefined
@@ -145,10 +145,13 @@ const FolderView = memo(function FolderView({ folder, section, panes, activeProj
   readonly globalLaneBusy: boolean
   /** The threads whose own lane is running; each row reads only its own entry. */
   readonly busyThreadIds: readonly string[] | undefined
+  readonly newThreadShortcut?: { readonly suffix: string; readonly keys: string } | undefined
 }): ReactNode {
   const listId = `thread-folder-${section}-${folder.id}`
   const indicatorsId = `${listId}-indicators`
   const project = folder.project
+  // The chord opens a thread in the focused pane's project, so only this project's pen answers to it while one of its threads is focused.
+  const chordAppliesHere = panes.currentThreadId !== null && folder.rows.some(row => row.thread.id === panes.currentThreadId)
   return <div className="thread-folder" data-section={section} data-active={activeProjectId === folder.id || undefined}>
     <div className="thread-folder__head">
       {/* The toggle includes the visible count in its accessible name, with the project title first. */}
@@ -159,7 +162,10 @@ const FolderView = memo(function FolderView({ folder, section, panes, activeProj
         {!expanded ? <Indicators id={indicatorsId} working={folder.working} needs={folder.needs} /> : null}
       </button>
       {project !== undefined ? <span className="thread-folder__actions">
-        {section === 'open' ? <button type="button" className="thread-nav__action tt-focusable" aria-label={`New thread in ${folder.title}`} title="New thread here" onClick={() => onNewThread(folder.id)}><SquarePen size={16} aria-hidden="true" /></button> : null}
+        {section === 'open' ? <button type="button" className="thread-nav__action tt-focusable" aria-label={`New thread in ${folder.title}`}
+          title={newThreadShortcut ? `New thread here ${newThreadShortcut.suffix}` : 'New thread here'}
+          aria-keyshortcuts={chordAppliesHere ? newThreadShortcut?.keys : undefined}
+          onClick={() => onNewThread(folder.id)}><SquarePen size={16} aria-hidden="true" /></button> : null}
         {folder.settled || section === 'open' ? <ProjectSettleAction projectId={folder.id} title={folder.title} settled={folder.settled} disabled={globalLaneBusy} command={command} /> : null}
       </span> : null}
     </div>
@@ -173,7 +179,7 @@ const FolderView = memo(function FolderView({ folder, section, panes, activeProj
 
 /** The Threads sidebar: project folders of open work, then the Settled shelf. */
 export function ThreadSidebar({ state, command, organization, query, liveClock = true, mode = 'threads', onMode = () => {}, onQuery, onOpen, onNewThread,
-  currentThreadId, openThreadIds, onOpenBeside, onDragThread, title }: PaneActions & {
+  currentThreadId, openThreadIds, onOpenBeside, onDragThread, title, newThreadError, onDismissNewThreadError, newThreadShortcut }: PaneActions & {
   readonly state: AgentState
   readonly command: Command
   readonly organization: WorkspaceOrganization
@@ -188,6 +194,10 @@ export function ThreadSidebar({ state, command, organization, query, liveClock =
   readonly onQuery: (query: string) => void
   readonly onOpen: (threadId: string) => void
   readonly onNewThread: (projectId?: string) => void
+  /** A pen, the empty page's button or the chooser refused a creation; shown where Add project shows its own. */
+  readonly newThreadError?: string | null | undefined
+  readonly onDismissNewThreadError?: (() => void) | undefined
+  readonly newThreadShortcut?: { readonly suffix: string; readonly keys: string } | undefined
 }): ReactNode {
   const [settledOpen, setSettledOpen] = useState(false)
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set())
@@ -210,7 +220,7 @@ export function ThreadSidebar({ state, command, organization, query, liveClock =
     const key = folderKey(section, folder.id)
     const hostId = hosts.length ? hostIdOf(folder.project) ?? hostIdOf({ id: folder.id }) ?? folder.rows[0]?.thread.hostId : undefined
     return <FolderView key={key} folder={folder} section={section} panes={panes} activeProjectId={state.activeProjectId} unseen={unseen} liveClock={liveClock}
-      host={hosts.find(item => item.hostId === hostId)}
+      host={hosts.find(item => item.hostId === hostId)} newThreadShortcut={newThreadShortcut}
       expanded={searching || !collapsed.has(key)} onToggle={toggle} onOpen={onOpen} onNewThread={onNewThread} command={command} globalLaneBusy={state.globalLaneBusy} busyThreadIds={state.busyThreadIds} />
   }
   const { open, settled } = organization
@@ -218,8 +228,12 @@ export function ThreadSidebar({ state, command, organization, query, liveClock =
   const settledWorking = settled.reduce((count, folder) => count + folder.working, 0)
   const settledNeeds = settled.reduce((count, folder) => count + folder.needs, 0)
   const settledShown = settledOpen || searching
+  // The chord opens the chooser (what the top button does) only while no thread is focused; a focused thread
+  // answers it from its own project's pen instead, so the top button's aria-keyshortcuts stands down then.
+  const topShortcut = newThreadShortcut ? { title: `New thread ${newThreadShortcut.suffix}`, keys: currentThreadId === null ? newThreadShortcut.keys : undefined } : undefined
   return <SidebarFrame state={state} command={command} mode={mode} onMode={onMode} label="Thread sidebar" query={query} searchPlaceholder="Search threads" onQuery={onQuery}
-    onNew={() => onNewThread()} newLabel="New thread" NewIcon={SquarePen} title={title}
+    onNew={() => onNewThread()} newLabel="New thread" NewIcon={SquarePen} newShortcut={topShortcut} title={title}
+    extraError={newThreadError} onDismissExtraError={onDismissNewThreadError}
     collapsedContent={<nav aria-label="Threads">{[...open.flatMap(folder => folder.rows), ...settled.flatMap(folder => folder.rows).filter(row => row.thread.id === currentThreadId)].map(row => <button key={row.thread.id} type="button" className="thread-nav__rail-thread tt-focusable" aria-label={row.thread.title} title={`${row.thread.title} · ${row.stateLabel}`} aria-current={currentThreadId === row.thread.id ? 'page' : undefined} onClick={() => onOpen(row.thread.id)}>
       <span aria-hidden="true">{row.thread.title.slice(0, 1)}</span><span className="thread-nav__ring" data-state={row.state} data-waiting={row.waitingFor ?? undefined} data-disconnected={row.connected ? undefined : true} aria-hidden="true" />
     </button>)}</nav>}>

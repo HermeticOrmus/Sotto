@@ -1024,14 +1024,14 @@ describe('SettingsView', () => {
     const { container, rerender } = render(<SettingsView {...baseProps()} />)
     await selectCategory('Agents')
     const agents = container.querySelector('#settings-agents') as HTMLElement
-    expect(within(agents).getByText('Reasoning & projects')).toBeInTheDocument()
+    expect(within(agents).getByText('Reasoning, new threads & projects')).toBeInTheDocument()
     expect(within(agents).queryByText('Advanced wake settings')).toBeNull()
     expect(within(agents).queryByRole('button', { name: 'Stop speech' })).toBeNull()
     expect(within(agents).getByRole('combobox', { name: 'Reasoning account' })).toHaveValue('claude')
     // Nothing is deleted: turning the coordinator on brings the same controls back.
     vi.mocked(useVoiceCoordinatorEnabled).mockReturnValue(true)
     rerender(<SettingsView {...baseProps({ settings: { ...DEFAULT_SETTINGS, onboardingComplete: true, voiceCoordinatorEnabled: true } })} />)
-    expect(within(agents).getByText('Reasoning, voice & projects')).toBeInTheDocument()
+    expect(within(agents).getByText('Reasoning, voice, new threads & projects')).toBeInTheDocument()
     expect(within(agents).getByText('Advanced wake settings')).toBeInTheDocument()
   })
 })

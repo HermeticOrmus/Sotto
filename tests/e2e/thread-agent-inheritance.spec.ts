@@ -41,25 +41,33 @@ test('new threads inherit Agents despite a saved Grok override and wait if that 
     await mkdir('artifacts/new-thread-setup', { recursive: true })
     await page.screenshot({ path: 'artifacts/new-thread-setup/providers-inherit-agent.png', animations: 'disabled' })
     await openThreads(page)
+    const sidebar = page.getByRole('complementary', { name: 'Thread sidebar' })
+    // The pen opens the thread at once, on the inherited Agents model, with no dialog to confirm it in (issue #347).
     await page.getByRole('button', { name: 'New thread in Inheritance check', exact: true }).click()
-    const dialog = page.getByRole('dialog', { name: 'New thread', exact: true })
-    await expect(dialog.locator('summary')).toContainText(chosen.modelName)
-    await dialog.getByRole('button', { name: 'Create thread', exact: true }).click()
-    await expect(dialog).toHaveCount(0)
+    await expect(page.getByRole('dialog', { name: 'New thread', exact: true })).toHaveCount(0)
     await expect.poll(() => page.evaluate(async () => {
       const state = await window.sotto!.agents!.get()
       const thread = state.host.threads.find(thread => thread.id === state.activeThreadId)
       return { modelId: thread?.modelId, providerId: thread?.providerId }
     })).toEqual({ modelId: chosen.modelId, providerId: 'claude' })
+    // Named, it is no longer an unused new thread, so the next press creates rather than returning to it (#347).
+    await page.evaluate(async () => {
+      const state = await window.sotto!.agents!.get()
+      await window.sotto!.agents!.command({ type: 'rename-thread', threadId: state.activeThreadId!, title: 'Inherited model' })
+    })
     await page.evaluate(async () => window.sotto!.agents!.command({ type: 'disconnect', provider: 'claude' }))
+    // Disconnected, the inherited model is not ready: the pen's creation is refused and says so where the
+    // sidebar shows other such errors, losing nothing.
     await page.getByRole('button', { name: 'New thread in Inheritance check', exact: true }).click()
-    await expect(dialog.getByRole('button', { name: 'Create thread', exact: true })).toBeDisabled()
-    await expect(dialog.getByRole('status')).toContainText('Claude Code is not ready')
+    await expect(sidebar.getByRole('alert')).toContainText('That model or account is unavailable')
     await page.screenshot({ path: 'artifacts/new-thread-setup/inherited-agent-unavailable.png', animations: 'disabled' })
     await page.evaluate(async () => window.sotto!.agents!.command({ type: 'connect', provider: 'claude' }))
-    await expect(dialog.getByRole('button', { name: 'Create thread', exact: true })).toBeEnabled()
-    await expect(dialog.locator('summary')).toContainText(chosen.modelName)
-    await page.keyboard.press('Escape')
+    await page.getByRole('button', { name: 'New thread in Inheritance check', exact: true }).click()
+    await expect.poll(() => page.evaluate(async () => {
+      const state = await window.sotto!.agents!.get()
+      const thread = state.host.threads.find(thread => thread.id === state.activeThreadId)
+      return { modelId: thread?.modelId, providerId: thread?.providerId }
+    })).toEqual({ modelId: chosen.modelId, providerId: 'claude' })
   } finally {
     if (launched) await closeSotto(launched)
     if (previousRoot === undefined) delete process.env.SOTTO_E2E_DEVIN_ROOT; else process.env.SOTTO_E2E_DEVIN_ROOT = previousRoot

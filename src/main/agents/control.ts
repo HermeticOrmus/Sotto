@@ -9,9 +9,10 @@ import { isAbsolute, join, resolve } from 'node:path'
 import { z } from 'zod'
 import {
   agentAssignmentSchema, agentConfigurationSchema, agentQueueItemSchema, agentAttachmentsSchema, agentThreadOptionsSchema, agentThreadDraftSchema, agentDeliverySchema,
-  providerUpgradeSchema, defaultAgentConfiguration, PROVIDER_REJECTED_ACTION, PROVIDER_RESULT_UNCONFIRMED, THREAD_SETTINGS_UNRECONCILED, EMPTY_AGENT_HOST, PROVIDER_LABELS, supportsAgentSupervision, isSubscriptionReasoning, agentDeliveryReceiptsSchema, MAX_DELIVERED_DRAFTS, enabledThreadProviders, defaultThreadModelId, capabilitiesForThread, isThreadProviderConnected, providerIdSchema, threadSummaryOf,
-  type AgentMessage, type AgentThreadDetail, type AgentThreadDetailDelta, type AgentThreadDetailUpdate, type ProviderId, type AgentAttachment, type AgentAttachmentPreviewRequest, type AgentAttachmentPreviewResult, type AgentAssignment, type AgentCommand, type AgentConfiguration, type AgentDelivery, type AgentThreadDraft, type AgentHostSnapshot, type AgentProject, type AgentQueueItem, type AgentState, type AgentThread, type ProviderClientUpdate, type SubscriptionProvider,
+  providerUpgradeSchema, defaultAgentConfiguration, PROVIDER_REJECTED_ACTION, PROVIDER_RESULT_UNCONFIRMED, THREAD_SETTINGS_UNRECONCILED, EMPTY_AGENT_HOST, PROVIDER_LABELS, supportsAgentSupervision, isSubscriptionReasoning, agentDeliveryReceiptsSchema, MAX_DELIVERED_DRAFTS, enabledThreadProviders, defaultNewThreadModelId, capabilitiesForThread, isThreadProviderConnected, providerIdSchema, threadSummaryOf,
+  type AgentMessage, type AgentThreadDetail, type AgentThreadDetailDelta, type AgentThreadDetailUpdate, type ProviderId, type AgentAttachment, type AgentAttachmentPreviewRequest, type AgentAttachmentPreviewResult, type AgentAssignment, type AgentCommand, type AgentConfiguration, type AgentDelivery, type AgentThreadDraft, type AgentHostSnapshot, type AgentModel, type AgentProject, type AgentQueueItem, type AgentRuntimeMode, type AgentState, type AgentThread, type ProviderClientUpdate, type SubscriptionProvider,
 } from '../../shared/agents'
+import { nearestReasoningEffort, resolveNewThreadPermission } from '../../shared/newThreadDefaults'
 import { AtomicJsonStore } from '../storage/atomicJsonStore'
 import type { MemoryProfile } from '../memory/profile'
 import type { AgentCredentials } from './credentials'
@@ -905,6 +906,28 @@ export class AgentControl {
     if (this.outbox.some(item => (item.type === 'create-project' || item.type === 'create-thread') && (!provider || (item.provider ?? this.state.configuration.provider) === provider))) {
       throw new Error('An earlier creation has an unknown result. Reconnect and inspect the provider before creating anything else; select the existing project or thread if it appears.')
     }
+  }
+  /**
+   * The effort, runtime mode and provider mode a create-thread ends up on: the caller's own choice where it made
+   * one, Settings → Agents' new-thread defaults otherwise, each fit to what `model` actually offers (issue #347).
+   * An install with no new-thread defaults saved leaves every option the caller left unset alone, which is
+   * today's behaviour: the model's own default effort and the provider's own starting permission mode.
+   */
+  private newThreadOptionDefaults(command: Extract<AgentCommand, { type: 'create-thread' }>, model: AgentModel | undefined): { reasoningEffort?: string; runtimeMode?: AgentRuntimeMode; providerMode?: string } {
+    const configuration = this.state.configuration
+    let reasoningEffort = command.reasoningEffort
+    if (reasoningEffort === undefined && configuration.newThreadReasoningEffort) {
+      const reference = resolveModel(this.state.host.models, configuration.newThreadModelId)?.reasoningEfforts ?? model?.reasoningEfforts ?? []
+      reasoningEffort = nearestReasoningEffort(configuration.newThreadReasoningEffort, reference, model?.reasoningEfforts ?? [])
+    }
+    let runtimeMode = command.runtimeMode
+    let providerMode = command.providerMode
+    if (runtimeMode === undefined && providerMode === undefined) {
+      const resolved = resolveNewThreadPermission(model, configuration.newThreadRuntimeMode)
+      runtimeMode = resolved.runtimeMode
+      providerMode = resolved.providerMode
+    }
+    return { ...(reasoningEffort !== undefined ? { reasoningEffort } : {}), ...(runtimeMode !== undefined ? { runtimeMode } : {}), ...(providerMode !== undefined ? { providerMode } : {}) }
   }
   private putThreadDraft(draft: AgentThreadDraft): void {
     this.state.threadDrafts = (this.state.threadDrafts ?? []).filter(item => item.threadId !== draft.threadId)
@@ -1825,7 +1848,10 @@ export class AgentControl {
         if (!this.state.host.capabilities.threads) throw new Error('This provider cannot create threads.')
         if (!this.state.host.projects.some(p => p.id === command.projectId)) throw new Error('Choose an available project.')
         if (!model?.ready) throw new Error('That model or account is unavailable. Choose a ready model; Sotto will not switch your account.')
-        validateThreadOptions(this.state.host, command)
+        // A create-thread that leaves an option unset takes Settings → Agents' new-thread defaults instead,
+        // so the coordinator's and voice's own threads follow them too; a caller's explicit choice still wins.
+        const defaults = this.newThreadOptionDefaults(command, model)
+        validateThreadOptions(this.state.host, { modelId: command.modelId, ...defaults })
         // The window may already be showing this thread under an ID it minted; main adopts it so nothing has to move.
         if (command.threadId !== undefined && this.state.host.threads.some(thread => thread.id === command.threadId)) {
           throw new Error('This thread already exists. Select it instead of creating it again.')
@@ -1841,9 +1867,7 @@ export class AgentControl {
             ...(command.baseBranch ? { baseBranch: command.baseBranch } : {}),
             ...(command.startFromOrigin !== undefined ? { startFromOrigin: command.startFromOrigin } : {}),
             ...(command.existingWorktreePath ? { existingWorktreePath: command.existingWorktreePath } : {}),
-            ...(command.reasoningEffort !== undefined ? { reasoningEffort: command.reasoningEffort } : {}),
-            ...(command.runtimeMode !== undefined ? { runtimeMode: command.runtimeMode } : {}),
-            ...(command.providerMode !== undefined ? { providerMode: command.providerMode } : {}) }, turn)
+            ...defaults }, turn)
         } catch (error) { if (selectionRevision === this.selectionRevision) this.queueSelectionPinned = previousSelectionPinned; throw error }
         if (selectionRevision === this.selectionRevision) {
           this.presentedQueueId = null
@@ -2411,7 +2435,7 @@ export class AgentControl {
     const intentStarted = Date.now()
     let intent
     try {
-      intent = await this.dependencies.reasoner.intent(request, this.state.host, this.state.activeProjectId, defaultThreadModelId(this.state.configuration, this.state.host.models, this.state.reasoningAccounts), this.state.activeThreadId, preferences)
+      intent = await this.dependencies.reasoner.intent(request, this.state.host, this.state.activeProjectId, defaultNewThreadModelId(this.state.configuration, this.state.host.models, this.state.reasoningAccounts), this.state.activeThreadId, preferences)
       if (turn) turn.intentResolvedAtMs = Date.now()
     } finally {
       if (turn) turn.intentMs += Date.now() - intentStarted
