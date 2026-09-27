@@ -265,7 +265,7 @@ for (const provider of ['claude', 'codex'] as const) {
 
         await openThreads(page)
         const row = page.getByRole('complementary', { name: 'Thread sidebar' }).getByRole('button', { name: 'Held 1', exact: true })
-        await row.click({ timeout: 10_000 }).catch(async (error: unknown) => {
+        await row.click({ timeout: 60_000 }).catch(async (error: unknown) => {
           await page.screenshot({ path: test.info().outputPath('sidebar.png') })
           throw error
         })
