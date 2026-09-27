@@ -237,7 +237,9 @@ export class ConfiguredProviderHost implements AgentHost {
     const read = purpose?.historyFromEvents && !slot.historyFromEvents ? { ...purpose, historyFromEvents: false } : purpose
     const snapshot = await (host.refreshThread?.(threadId, read) ?? host.snapshot())
     if (slot.epoch !== epoch) throw new Error('This thread provider disconnected while reading the thread.')
-    this.accept(id, snapshot); this.publish(); return cloneHostSnapshot(this.aggregate())
+    const whole = await this.whole(id, read?.historyFromEvents === true)
+    if (slot.epoch !== epoch) throw new Error('This thread provider disconnected while reading the thread.')
+    this.accept(id, whole ?? snapshot); this.publish(); return cloneHostSnapshot(this.aggregate())
   }
   rollbackCapability(threadId: string) {
     const provider = this.providerForThread(threadId)
@@ -337,8 +339,21 @@ export class ConfiguredProviderHost implements AgentHost {
     // The provider's snapshot of a confirmed change becomes the whole view, as a read of the thread would.
     // One from a connection that has since changed is dropped.
     if (!snapshot || slot.epoch !== epoch) return result
-    this.accept(id, snapshot)
+    // The change is made, so a failed read here costs only the snapshot: the coordinator reads the thread instead.
+    const whole = await this.whole(id, settings.historyFromEvents === true).catch(() => null)
+    if (whole === null || slot.epoch !== epoch) return result
+    this.accept(id, whole ?? snapshot)
     return { ...result, snapshot: cloneHostSnapshot(this.aggregate()) }
+  }
+  /**
+   * A read or settings result that left its messages out, because this connection's subscription asked for none
+   * when it went out, is about to become the provider's slot. If a subscriber that reads messages came while it
+   * was on the way, the slot must not lose them, so the provider is read whole and that is taken in instead
+   * (#368). Undefined when the result can be taken in as it is.
+   */
+  private async whole(id: ProviderId, withoutMessages: boolean): Promise<AgentHostSnapshot | undefined> {
+    if (!withoutMessages || this.slots.get(id)!.historyFromEvents) return undefined
+    return this.options.hosts[id].snapshot()
   }
   observeThreads(ids: readonly string[]): void {
     this.observed = [...ids]
