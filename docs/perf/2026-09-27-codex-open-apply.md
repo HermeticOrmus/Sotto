@@ -70,9 +70,19 @@ At 500 turns applying items went from 554-1,020 ms to 130-221 ms, the thread act
 
 Before the change, sending and parsing were under 2% of the read at 2,000 turns. The rest was applying: the
 thread activity about 60%, ordering about 22%, identities, recording and the rest the remainder.
-Reconciling also fell after the change, though its code did not change; the busier machine during the "before" runs and
-the garbage the old sort and merge left behind are the likely reason, and its figures are the least certain here.
-The rest fell partly for the same reason and partly because it holds the thread activity's `turn` calls.
+
+Reconciling also fell between the two sets of runs, though its code did not change, so the "before" runs met a
+busier machine. After review, two more pairs were run back to back, each "before" run straight followed by an
+"after" run:
+
+| Pair | Open at 2,000 turns, before | Open, after | Reconciling, before | Reconciling, after | Open at 500, before | Open, after |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 6,248 ms | 1,456 ms | 226 ms | 211 ms | 1,621 ms | 197 ms |
+| 2 | 10,002 ms | 1,597 ms | 453 ms | 223 ms | 974 ms | 379 ms |
+
+In the first pair reconciling barely moved, which is what unchanged code should do. The open still fell four- to
+six-fold at 2,000 turns, so the load explains the noise in the smaller phases, not the result. The rest fell
+partly with the load and partly because it holds the thread activity's `turn` calls.
 
 ## What changed
 
@@ -96,8 +106,8 @@ The rest fell partly for the same reason and partly because it holds the thread 
 ## What a read shows
 
 - **Message order and identities.** The message window's final order is the same: a rank that is unique for every
-  message in Codex's turn identities, and a stable sort that keeps the rest in the order they were recorded. Identities
-  are reconciled by the same code in the same order. Every adapter contract case and every Codex history,
+  message in Codex's turn identities, and a stable sort that keeps the rest in the order they were recorded.
+  Identities are reconciled by the same code in the same order. Every adapter contract case and every Codex history,
   identity, rollback and newest-turn test passes unchanged.
 - **Takeover detection.** The Codex session log's entries are the one place where the old per-turn ordering could
   differ. Ordering also drops an entry that exactly one of Sotto's message identities has since claimed, with the
