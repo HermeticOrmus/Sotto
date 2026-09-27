@@ -195,7 +195,7 @@ createInterface({ input: process.stdin }).on('line', line => {
     // A Codex older than this request answers with JSON-RPC's "method not found" every time it is asked.
     if (script.withoutTurnsList) { setTimeout(() => emit({ id, error: { code: -32601, message: 'Method not found' } }), delay); return }
     const thread = state.threads[params.threadId]
-    if (!thread) { emit({ id, error: { code: -32000, message: 'Unknown thread' } }); return }
+    if (!thread) { setTimeout(() => emit({ id, error: { code: -32000, message: 'Unknown thread' } }), delay); return }
     const turns = historyTurns(thread, script)
     if (params.sortDirection !== 'asc') turns.reverse()
     const start = params.cursor ? Number(params.cursor) : 0
