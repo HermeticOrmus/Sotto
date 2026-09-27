@@ -60,4 +60,27 @@ Initial focused verification:
 
 Timing measurements, broad gates, independent reviews and Electron verification are pending, not claimed.
 
-The existing Electron specs have no native usage totals assertion after #301 removed composer figures. `phase-four-personal-providers.spec.ts` is the nearby Claude/Grok saved-chat, send, disconnect/reconnect and keyboard journey, but uses the app's fake host and does not itself exercise the native ledger. For a totals check, use a temporary profile and scripted native clients, inspect the existing thread usage in the bridge before/after replay and after graceful close/restart, and verify that the composer remains visually unchanged. Do not add a new visible error surface to perform this check. The existing native-usage unit tests exercise the actual archive and provider accounting; a fake-host UI pass alone must not be reported as native-ledger coverage.
+## Isolated Electron journey
+
+`tests/e2e/native-usage-persistence.spec.ts` closes the missing native-ledger test seam with production Electron main, its actual `ClaudeStreamJsonHost`, `NativeUsage`, workspace and renderer bridge. It does not enable `SOTTO_E2E`, replace the provider host, inject totals or invoke a test-only ledger flush. The spec checks that `window.sottoE2E` is absent.
+
+`nativeUsageElectronMain.cjs` follows the existing native launcher pattern, with a fresh owned `sotto-e2e-usage-*` temporary root. It sets the application profile and every provider home inside that root before loading production main. The only discoverable Claude executable is a placeholder; the launch seam routes it to `fakeClaudeThread.mjs` using Node. Other spawned programs are refused. Inherited provider credentials, homes, Sotto switches and Node injection flags are removed; Node fetch and Electron HTTP/WebSocket traffic are blocked. The fake client's optional `SOTTO_FAKE_CLAUDE_HOME` points its synthetic transcript at the real adapter's normal discovery directory. Existing adapter fixtures keep their original default directory.
+
+The journey sends a synthetic prompt through the normal composer, then sends two billed assistant frames through the fake client's stdout. It expects 6,000 input tokens, 300 output tokens, 4,000 cached tokens and $0.0117 from the normal renderer bridge. Replaying the old frame 100 times must keep those totals. A final result frame changes only elapsed time, serving as an observable receipt for the replay; that batch must perform exactly one archive replacement for the changed metadata.
+
+The next observation changes output to 350 total. The launcher holds only the usage archive's atomic rename, after its temporary file has been synced. The bridge must already show 350 while disk still shows 300. The test calls the real Electron close, observes `before-quit`, verifies the process is still alive with the old archive, then releases the rename. Close must finish with the latest totals on disk. A new Electron process must restore the same usage through the bridge and deduplicate another 100 historical frames. Composer editing and the Send control remain usable, and screenshots are captured after replay and after restart.
+
+Build and run in the orchestrator's allocated Electron window:
+
+```powershell
+npm run build
+npx playwright test tests/e2e/native-usage-persistence.spec.ts --workers=1 --retries=0
+```
+
+`npm run runtime:prepare` is a prerequisite on a fresh checkout; the orchestrator already completed it for this worktree. No live-provider switches or accounts are needed. The test always releases its disk gate, gracefully closes the app, then deletes only the canonical temporary root after `requireOwnedE2EProfile` validates it. A close failure deliberately prevents profile deletion while a process might still own it. Synthetic screenshots and a numeric evidence summary remain in ignored `artifacts/review-389/electron/`:
+
+- `native-usage-after-replay.png`
+- `native-usage-after-restart.png`
+- `native-usage-evidence.json`
+
+Inspect both images after a successful run; capture alone is not visual QA. The new journey has been collected (`playwright --list`), linted and typechecked in isolation with the browser declarations. The two affected existing Claude adapter/replay suites passed 35 tests with one worker. **The Electron journey has not yet been run, and no screenshot or Electron pass is claimed.** Its native coverage is Claude, the source of the reported redundant replay writes. Codex/Grok accounting remains covered by the native-usage regressions; this does not claim installed-client compatibility or Electron coverage of those two providers.

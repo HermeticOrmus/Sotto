@@ -37,7 +37,8 @@ if (!metadata && value('--permission-prompt-tool') !== 'stdio') throw new Error(
 // The native CLI refuses bypassPermissions unless bypassing was explicitly allowed at launch; never allow it for other modes.
 if (!metadata && (value('--permission-mode') === 'bypassPermissions') !== args.includes('--allow-dangerously-skip-permissions')) throw new Error('bypassPermissions requires --allow-dangerously-skip-permissions, and only that mode may carry it')
 record(args.includes('--resume') ? 'resume' : 'launch', { source: 'child-process-argv', args, cwd: process.cwd(), compactionEnvironment: Object.fromEntries(['DISABLE_AUTO_COMPACT', 'DISABLE_COMPACT', 'CLAUDE_AUTOCOMPACT_PCT_OVERRIDE', 'CLAUDE_CODE_AUTO_COMPACT_WINDOW'].filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]])) })
-const folder = join(root, 'home', 'projects', process.cwd().replace(/[^a-zA-Z0-9]/gu, '-'))
+// The isolated Electron journey uses the adapter's normal ~/.claude discovery path.
+const folder = join(process.env.SOTTO_FAKE_CLAUDE_HOME ?? join(root, 'home'), 'projects', process.cwd().replace(/[^a-zA-Z0-9]/gu, '-'))
 const log = join(folder, session + '.jsonl')
 let parentUuid = existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line)).findLast(frame => frame.uuid)?.uuid ?? null : null
 const persist = frame => { mkdirSync(folder, { recursive: true }); appendFileSync(log, JSON.stringify({ ...frame, parentUuid, isSidechain: false, cwd: process.cwd(), sessionId: session, timestamp: frame.timestamp ?? new Date().toISOString() }) + '\n'); parentUuid = frame.uuid ?? parentUuid }
