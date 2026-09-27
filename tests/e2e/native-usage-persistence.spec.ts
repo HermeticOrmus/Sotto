@@ -10,6 +10,7 @@ import { firstSottoWindow, openThreads } from './support/sottoLaunch'
 
 const NATIVE_MODEL = 'claude-sonnet-4-6'
 const PUBLIC_MODEL = 'native:claude:model:claude-sonnet-4-6'
+const persistenceWait = { timeout: 30_000 }
 
 test('native Claude usage survives replay and a graceful quit with its latest archive write held', async () => {
   test.setTimeout(120_000)
@@ -92,9 +93,26 @@ test('native Claude usage survives replay and a graceful quit with its latest ar
     await composer().fill('Exercise the synthetic usage ledger.')
     await page!.getByRole('button', { name: 'Send prompt', exact: true }).click()
     await expect(page!.getByLabel('Thread transcript')).toContainText('Exercise the synthetic usage ledger.')
-    const aliases = JSON.parse(await readFile(join(profile, 'claude-threads.json'), 'utf8')) as Record<string, { sessionId: string }>
-    expect(Object.values(aliases)).toHaveLength(1)
-    const nativeId = Object.values(aliases)[0]!.sessionId
+    // The workspace echoes the prompt before creating the native session. Wait for its durable
+    // alias and the scripted client's receipt of this prompt, not just the optimistic transcript.
+    let nativeId = ''
+    await expect(async () => {
+      const aliases = JSON.parse(await readFile(join(profile, 'claude-threads.json'), 'utf8')) as Record<string, {
+        sessionId: string; cwd: string; modelId: string; origins: { uuid: string }[]
+      }>
+      expect(Object.values(aliases)).toHaveLength(1)
+      const alias = Object.values(aliases)[0]!
+      expect(alias.sessionId).toMatch(/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/iu)
+      expect(alias.cwd).toBe(project)
+      expect(alias.modelId).toBe(NATIVE_MODEL)
+      expect(alias.origins).toHaveLength(1)
+      expect(alias.origins[0]!.uuid).toEqual(expect.any(String))
+      const requests = (await readFile(join(client, 'requests.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line))
+      expect(requests).toContainEqual(expect.objectContaining({ method: 'user', params: expect.objectContaining({
+        frame: expect.objectContaining({ type: 'user', session_id: alias.sessionId, uuid: alias.origins[0]!.uuid }),
+      }) }))
+      nativeId = alias.sessionId
+    }).toPass(persistenceWait)
     // Every accounting observation below crosses stdout from the scripted CLI into the real adapter.
     const first = usageFrame(nativeId, 0, 100), second = usageFrame(nativeId, 1, 200)
     await action(nativeId, { type: 'raw', persist: true, frame: first })
@@ -104,17 +122,17 @@ test('native Claude usage survives replay and a graceful quit with its latest ar
     const before = (await bridgeUsage(id))!
     const beforeSnapshot = nativeUsageBoundary(before, PUBLIC_MODEL)
     expect(before.estimatedUsd).toBeCloseTo(0.0117, 8)
-    await expect.poll(async () => Object.values(await archive())[0]?.view.elapsedMs).toBe(111)
-    expect(await archiveSnapshot()).toEqual(beforeSnapshot)
+    // A bridge update can precede even the archive's first creation. Retry reads and assertions
+    // together, retaining the full accounting comparison and the final error if it never settles.
+    await expect(async () => expect(await archiveSnapshot()).toEqual(beforeSnapshot)).toPass(persistenceWait)
     const beforeWrites = await writes()
     // The final result is a receipt for the batch: its changed duration must reach the bridge and disk.
     await action(nativeId, { type: 'raw-burst', frames: [...Array.from({ length: 100 }, () => first), result(nativeId, 222)] })
     await expect.poll(() => bridgeUsage(id)).toMatchObject({ total: before.total, estimatedUsd: before.estimatedUsd, elapsedMs: 222 })
-    await expect.poll(async () => Object.values(await archive())[0]?.view.elapsedMs).toBe(222)
+    await expect(async () => expect(await archiveSnapshot()).toEqual({ ...beforeSnapshot, elapsedMs: 222 })).toPass(persistenceWait)
     await expect.poll(writes).toBe(beforeWrites + 1)
     const afterReplay = (await bridgeUsage(id))!
     expect(nativeUsageBoundary(afterReplay, PUBLIC_MODEL)).toEqual({ ...beforeSnapshot, elapsedMs: 222 })
-    expect(await archiveSnapshot()).toEqual({ ...beforeSnapshot, elapsedMs: 222 })
     await expect(page!.getByLabel('Thread transcript')).toContainText('Synthetic usage reply 1')
     await expect(composer()).toBeEditable()
     await composer().fill('An unsent draft stays editable after replay.')
@@ -145,16 +163,15 @@ test('native Claude usage survives replay and a graceful quit with its latest ar
       await window.sotto!.agents!.command({ type: 'select-thread', threadId })
       await window.sotto!.agents!.command({ type: 'observe-threads', threadIds: [threadId] })
     }, id)
-    await expect.poll(() => bridgeSnapshot(id)).toEqual(latestSnapshot)
+    await expect(async () => expect(await bridgeSnapshot(id)).toEqual(latestSnapshot)).toPass(persistenceWait)
     const restored = (await bridgeUsage(id))!
     // A second replay goes through the restarted native process, using the persisted request identity.
     const restartWrites = await writes()
     await action(nativeId, { type: 'raw-burst', frames: [...Array.from({ length: 100 }, () => first), result(nativeId, 333)] })
     await expect.poll(() => bridgeUsage(id)).toMatchObject({ total: latest.total, estimatedUsd: latest.estimatedUsd, elapsedMs: 333 })
-    await expect.poll(async () => Object.values(await archive())[0]?.view.elapsedMs).toBe(333)
+    await expect(async () => expect(await archiveSnapshot()).toEqual({ ...latestSnapshot, elapsedMs: 333 })).toPass(persistenceWait)
     await expect.poll(writes).toBe(restartWrites + 1)
     expect(await bridgeSnapshot(id)).toEqual({ ...latestSnapshot, elapsedMs: 333 })
-    expect(await archiveSnapshot()).toEqual({ ...latestSnapshot, elapsedMs: 333 })
     await openThreads(page!)
     await expect(page!.getByRole('heading', { name: 'Native usage verification', exact: true })).toBeVisible()
     await expect(composer()).toBeEditable()
