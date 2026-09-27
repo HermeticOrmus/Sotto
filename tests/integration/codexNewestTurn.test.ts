@@ -7,7 +7,7 @@
  * connection's stream. The takeover and stale-reply contract itself is `adapterContract.ts`'s, unchanged.
  */
 import { randomUUID } from 'node:crypto'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AgentControl } from '../../src/main/agents/control'
 import { codexFixture, type RecordedRpc } from '../fixtures/codexFixture'
 import { manualSendCoordinator } from '../fixtures/manualSendCoordinator'
@@ -67,6 +67,20 @@ describe('Codex send checks the newest turn before reading the whole transcript'
     const messages = (await f.host.snapshot()).threads.find(thread => thread.id === id)!.messages
     expect(messages.map(message => [message.role, message.text])).toEqual(['own-1', 'own-2', 'own-3']
       .flatMap(own => [['user', `Prompt ${own}`], ['assistant', `Reply to ${own}`]]))
+  })
+
+  it('saves the thread record after the check only when the newest turn taught it something', async () => {
+    const saves = async (script: Record<string, unknown>): Promise<number> => {
+      const { f, id } = await answeredThread(script)
+      const persist = vi.spyOn(f.adapter as unknown as { persist(): Promise<void> }, 'persist')
+      const from = (await f.driver.requests()).length
+      await f.host.refreshThread!(id, { beforeSend: true })
+      expect(await historyRequests(f, from)).toEqual(['turns'])
+      return persist.mock.calls.length
+    }
+    expect(await saves({})).toBe(0)
+    // History that names items differently from the stream binds the history's names to the messages Sotto holds.
+    expect(await saves({ historyItemIds: true })).toBe(1)
   })
 
   it('reads the whole transcript and refuses a stale reply when another Codex process added a turn', async () => {

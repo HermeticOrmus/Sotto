@@ -547,9 +547,13 @@ export class CodexAppServerHost implements AgentHost {
         const trial = structuredClone(newest)
         this.reconcileTurn(id, [...alias.messageIdentities.slice(0, -1), trial], structuredClone(alias.origins), turn)
         if (!trial.ordered || !trial.messages.every(message => message.complete && held.includes(message.id))) return
+        // Applying the newest turn writes to the saved record only through that turn's identities and the origins (the
+        // guard above rules out a compaction), and for a turn Sotto already holds it usually changes neither.
+        const saved = (): string => JSON.stringify([alias.messageIdentities.length, alias.messageIdentities.at(-1), alias.origins])
+        const before = saved()
         this.applyTurn(id, turn)
         this.settleRead(id)
-        await this.persist()
+        if (saved() !== before) await this.persist()
         confirmed = true
       })
     } catch (error) {
