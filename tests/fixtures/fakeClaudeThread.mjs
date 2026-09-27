@@ -72,7 +72,11 @@ const timer = setInterval(() => {
   unlinkSync(control)
   if (action.type === 'exit') { process.exit(1) }
   // `persist` also writes the burst to the session log first, as the CLI records what it streams.
-  if (action.type === 'raw-burst') { if (action.persist) for (const frame of action.frames) persist(frame); process.stdout.write(action.frames.map(frame => JSON.stringify(frame) + '\n').join('')); return }
+  if (action.type === 'raw-burst') {
+    if (action.persist) { for (const frame of action.frames) persist(frame) }
+    process.stdout.write(action.frames.map(frame => JSON.stringify(frame) + '\n').join(''))
+    return
+  }
   if (action.type === 'raw') { if (action.persist) persist(action.frame); output(action.frame); return }
   if (action.type === 'subagent') {
     // Claude Code 2.1.280: a workflow (with `runId`) or a background Agent call reports one task and no
