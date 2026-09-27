@@ -153,9 +153,9 @@ describe('scaling screenshots down to the bound', () => {
     expect(staged.at(-1)).toMatchObject({ mimeType: 'image/png', dimensions: attachment.dimensions })
     expect(stagedBytes()).toBe(12)
     rerender([attachment])
-    // The sent size is on the chip itself, where a keyboard user sees it too; the tooltip adds the size before.
-    expect(screen.getByText('Resized to 2576 x 1449', { exact: true })).toBeVisible()
-    expect(screen.getByText('Resized to 2576 x 1449', { exact: true }).parentElement).toHaveAttribute('title', 'Resized from 3840 by 2160 to 2576 by 1449 pixels')
+    // Both sizes are on the chip itself, where a keyboard user sees them too, and a screen reader reads them as words.
+    expect(screen.getByText('Resized from 3840 x 2160 to 2576 x 1449', { exact: true })).toBeVisible()
+    expect(screen.getByText('Resized from 3840 x 2160 to 2576 x 1449', { exact: true }).parentElement).not.toHaveAttribute('title')
     expect(screen.getByText('Resized from 3840 by 2160 to 2576 by 1449 pixels')).toHaveClass('tt-visually-hidden')
   })
   it('hands a 1200x800 PNG on byte for byte and shows no note', async () => {

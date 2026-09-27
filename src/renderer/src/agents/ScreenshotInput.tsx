@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Paperclip, X } from 'lucide-react'
-import { AGENT_IMAGE_MIME_TYPES, AGENT_MAX_ATTACHMENT_BYTES, AGENT_MAX_ATTACHMENTS, AGENT_MAX_IMAGE_BYTES, agentAttachmentHandlesSchema, type AgentAttachmentDimensions, type AgentAttachmentHandle } from '../../../shared/agents'
+import { AGENT_IMAGE_MIME_TYPES, AGENT_MAX_ATTACHMENT_BYTES, AGENT_MAX_ATTACHMENTS, AGENT_MAX_IMAGE_BYTES, agentAttachmentHandlesSchema, type AgentAttachmentDimensions, type AgentAttachmentHandle, type AgentImageSize } from '../../../shared/agents'
 import { Button } from '../components/Button'
 import { prepareScreenshot, wasResized } from './screenshotResize'
 import { stageImage, useThumbnail } from './stagedImages'
@@ -22,7 +22,10 @@ async function stageFile(target: string | null, file: File): Promise<AgentAttach
   return stageImage(target, { name: file.name || 'Screenshot.png', mimeType: file.type, blob, ...(dimensions ? { dimensions } : {}) })
 }
 
-/** "Resized from 3840 by 2160 to 2576 by 1449 pixels": sizes only, for the chip's tooltip and what a screen reader reads. */
+/** "3840 x 2160", joined by no-break spaces so a size is never split across the chip's lines, nor "to" from the size after it. */
+const shownSize = ({ width, height }: AgentImageSize): string => `${width}\u00a0x\u00a0${height}`
+
+/** "Resized from 3840 by 2160 to 2576 by 1449 pixels": sizes only, for what a screen reader reads. */
 function resizedDescription({ original, sent }: AgentAttachmentDimensions): string {
   return `Resized from ${original.width} by ${original.height} to ${sent.width} by ${sent.height} pixels`
 }
@@ -33,8 +36,9 @@ function Chip({ target, attachment, disabled, onRemove }: { readonly target: str
   return <figure>
     {thumbnail ? <img src={thumbnail} alt={attachment.name} /> : <span className="screenshot-previews__pending" role="img" aria-label={attachment.name} />}
     <figcaption title={attachment.name}>{attachment.name}</figcaption>
-    {wasResized(attachment.dimensions) && <small className="screenshot-previews__resized" title={resizedDescription(attachment.dimensions)}>
-      <span aria-hidden="true">Resized to {attachment.dimensions.sent.width} x {attachment.dimensions.sent.height}</span><span className="tt-visually-hidden">{resizedDescription(attachment.dimensions)}</span></small>}
+    {wasResized(attachment.dimensions) && <small className="screenshot-previews__resized">
+      <span aria-hidden="true">Resized from {shownSize(attachment.dimensions.original)} to&nbsp;{shownSize(attachment.dimensions.sent)}</span>
+      <span className="tt-visually-hidden">{resizedDescription(attachment.dimensions)}</span></small>}
     <button type="button" title={`Remove ${attachment.name}`} aria-label={`Remove ${attachment.name}`} disabled={disabled} onClick={onRemove}><X size={12} /></button>
   </figure>
 }
