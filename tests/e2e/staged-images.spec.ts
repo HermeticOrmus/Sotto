@@ -32,7 +32,7 @@ test('repairs a missing staged screenshot when the user attaches the same image 
     // restored thumbnail uses, so it discovers the missing file without fabricating a refusal or changing the host.
     expect(await page.evaluate(async request => window.sotto!.agents!.attachmentContent!(request), { threadId: draft.threadId, digest: handle.digest })).toBeNull()
     await page.getByRole('button', { name: 'Send prompt', exact: true }).click()
-    await expect(page.getByText('An image in this message is no longer kept on this computer. Remove it and attach it again. Nothing else was changed.', { exact: true }).first()).toBeVisible()
+    await expect(page.getByRole('article', { name: 'Pending message' })).toContainText('An image in this message is no longer kept on this computer. Remove it and attach it again. Nothing else was changed. It is back in the composer.')
     await page.screenshot({ path: `${run}/missing.png`, animations: 'disabled' })
     await expect(page.getByLabel('Thread transcript', { exact: true }).getByAltText('Repair.png')).toHaveCount(0)
     await page.getByRole('button', { name: 'Remove Repair.png', exact: true }).click()
