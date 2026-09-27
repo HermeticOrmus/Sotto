@@ -11,6 +11,7 @@ export default tseslint.config(
       'artifacts/agent-browser/**',
       'artifacts/browser-grant/**',
       'artifacts/new-thread-setup/**',
+      'artifacts/host-folder-browser-run/**',
       'artifacts/command-receipt/**',
       '.cache/**',
       'artifacts/settled-folder-new-thread/**',

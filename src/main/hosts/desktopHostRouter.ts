@@ -4,6 +4,7 @@ import type { ClientIdentity, HostService } from '../agents/hostService'
 import type { GitRefsPage, GitRefsRequest } from '../../shared/gitRefs'
 import type { GitChangedFiles, GitChangedFilesRequest } from '../../shared/gitChangedFiles'
 import type { GitPullRequestDetail, GitPullRequestRequest } from '../../shared/gitPullRequests'
+import type { HostFoldersClientRequest, HostFoldersRequest, HostFoldersResult } from '../../shared/hostFolders'
 
 export interface DesktopHostConnection {
   hostId: string
@@ -18,6 +19,7 @@ export interface DesktopHostConnection {
   gitRefs?(request: GitRefsRequest): Promise<GitRefsPage>
   gitChangedFiles?(request: GitChangedFilesRequest): Promise<GitChangedFiles>
   gitPullRequest?(request: GitPullRequestRequest): Promise<GitPullRequestDetail | null>
+  hostFolders?(request: HostFoldersRequest): Promise<HostFoldersResult>
   observe?(threadIds: string[]): Promise<unknown>
   subscribeDetail?(listener: (detail: AgentThreadDetailUpdate) => void): () => void
   available?: () => boolean
@@ -156,6 +158,15 @@ export class DesktopHostRouter {
     if (!connection.gitPullRequest) throw new Error('Pull requests are unavailable on this host.')
     if (connection.available?.() === false) throw new Error('This host is disconnected. Connect again to read its pull requests.')
     return connection.gitPullRequest({ ...request, threadId: id! })
+  }
+  /** The folder browser names its host directly: it has no thread yet to carry a client-scoped key. */
+  async hostFolders(request: HostFoldersClientRequest): Promise<HostFoldersResult> {
+    const entry = this.hosts.get(request.hostId)
+    if (!entry) throw new Error('That computer is not connected. Nothing was changed. Connect it in Settings > Hosts, then try again.')
+    const { connection } = entry
+    if (connection.available?.() === false) throw new Error('This host is disconnected. Nothing was changed. Connect again to see its folders.')
+    if (!connection.hostFolders) throw new Error('This host cannot list its folders yet. Update Sotto on it, then try again.')
+    return connection.hostFolders(request.path === undefined ? {} : { path: request.path })
   }
   async command(input: unknown, client: ClientIdentity): Promise<AgentState> {
     this.notice = undefined

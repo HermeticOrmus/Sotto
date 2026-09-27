@@ -30,7 +30,9 @@ Sotto is a desktop dictation app that is becoming a voice development coordinato
 
 **Provider session.** The native client's own identifier for a thread, distinct from the Sotto thread ID. In prose and user-facing text say "provider session", not "session" on its own or "remote ID".
 
-**Project.** A working folder the provider knows about, with an ID, a title and a path. A thread belongs to exactly one project.
+**Project.** A working folder the provider knows about, with an ID, a title and a path. A thread belongs to exactly one project. A project lives on one host, and its threads run there; the path is in that host's own format.
+
+**Folder browser.** Add project's dialog, and New thread's folder source: which computer the project lives on when more than one is paired (none is chosen for the user), then that computer's folders, listed by its host from its home folder (ADR-0025, September 26 amendment). Folders only, with Git and Project marks. **New folder** is a name until **Use this folder**, which adds the project and makes the folder on the host. On this computer it also offers **Browse with File Explorer** (Finder on a Mac), the system's own dialog. Avoid: "file picker", "remote file browser", which would be the Tools panel's files.
 
 **Thread working copy.** The folder in which a thread's provider works: the shared project folder by default, or an explicitly chosen new or existing Git worktree. Threads sharing a folder share its files and checked-out branch; a separate working copy provides isolation without changing the thread's project memory scope (ADR-0014).
 
@@ -192,7 +194,7 @@ Answering a question or permission request and creating a project are also part 
 
 **Switched on, switched off (a saved host).** Whether this computer keeps a saved remote host connected. On, Sotto connects now and every time it starts, in the background, and a dropped connection reconnects on the backoff until a failure only the user can fix stops it. Off, this computer does not connect: the row and its pairing stay, and a host Sotto started keeps running, since switching off stops nothing on the host; Stop host does that, and switches the host off so the next launch does not start it again. A host is saved only once Add host has connected and paired, and a host saved before the switch existed reads as on (ADR-0025). Avoid: "enabled" in anything a user reads, "disconnected" for off, since a host that is on can be disconnected for a moment.
 
-**Host for new work.** The host a new thread or a new project goes to when nothing else names one: the router's selected host. New thread sets it when it adds a folder as a project on the host chosen there; opening a thread or project also moves it to that thread's host. A thread's own host never changes once the thread exists. Avoid: "active host", "current host".
+**Host for new work.** The host a new thread or a new project goes to when nothing else names one: the router's selected host. New thread and Add project set it when they add a folder as a project on the host chosen there; opening a thread or project also moves it to that thread's host. A thread's own host never changes once the thread exists. Avoid: "active host", "current host".
 
 **Host lock.** `host-listener.lock` in a host's data folder, which keeps a second host from opening the same stores. It holds the lease of the host that owns the folder: its process, a nonce and the machine's boot identity. The next start reclaims a lock whose process has ended, or that was written before the machine last restarted, and does it atomically: starting hosts take turns to clear a stale lock through `host-listener.lock.reclaim`, so however many start together, only one owns the folder. A lock whose process still runs, even one another account owns, is refused and the refusal names that process. `src/host/lock.ts` (ADR-0025). Avoid: "pidfile", "lease" for the file itself.
 
