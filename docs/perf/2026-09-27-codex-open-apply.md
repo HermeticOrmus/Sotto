@@ -109,7 +109,8 @@ The rest fell partly for the same reason and partly because it holds the thread 
   kept. That is the conservative direction. No test reached that case before or after.
 - **Activity.** `tests/unit/main/codexActivity.test.ts` drives the same 680 turns of started, streamed, completed
   and replayed items, anchors and turns through two projections, one of them forced onto the full merge after
-  every call, and checks that both threads' activity is equal after every turn, past the 2,000-record bound.
+  every call, and checks that both threads' activity is equal after every turn, past the 2,000-record bound. The
+  other now and then holds a frozen snapshot copy, as it does after an emit, so it moves between both paths.
 
 ## What remains
 

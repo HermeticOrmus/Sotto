@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
 import { CodexActivityProjection, codexItemSchema } from '../../../src/main/agents/codexActivity'
+import { immutableActivities } from '../../../src/main/agents/activitySnapshots'
 import { agentThreadSchema, type AgentThread } from '../../../src/shared/agents'
 import { MAX_ACTIVITY_TEXT, MAX_AGENT_ACTIVITIES, mergeAgentActivities } from '../../../src/shared/agentActivity'
 import { activityItems } from '../../fixtures/codexActivityFixture'
@@ -129,6 +130,9 @@ describe('Codex activity projection', () => {
       both((projection, t) => projection.item(t, codexItemSchema.parse({ ...activityItems.command, id: `command-${index}` }), { turnId, phase: 'history' }))
       both((projection, t) => projection.turn(t, { id: turnId, status: 'completed', startedAt: at, completedAt: at + 1 }, true))
       expect(placed.activities).toEqual(merged.activities)
+      // An activity snapshot installs a frozen copy on the first thread from time to time, as the adapter does on an
+      // emit; its next record takes the full merge, and the ones after it are placed again.
+      if (index % 7 === 3) placed.activities = immutableActivities(placed.activities!)
     }
     expect(placed.activities).toHaveLength(MAX_AGENT_ACTIVITIES)
     expect(placed.activities?.[0]?.truncated).toBe(true)
