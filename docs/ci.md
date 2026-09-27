@@ -255,3 +255,7 @@ npx vitest run tests/integration/codexComputerUseLive.test.ts --maxWorkers=1
 ```
 
 Build and run `npx playwright test tests/e2e/agent-browser.spec.ts tests/e2e/tools-sidecar.spec.ts tests/e2e/phase-three-tools-bridge.spec.ts` to exercise the real Electron browser, permission continuation, feedback drafts and the Tools pane. The agent test uses a local page and test-only provider entry point; it needs no provider account. Screenshots and a geometry report are written to ignored `artifacts/agent-browser/`. Native-provider compatibility and actual desktop results are recorded separately in `docs/verification/`.
+
+## Fake Claude event timestamps
+
+`tests/integration/claudeFixtureTimestamp.test.ts` runs the scripted Claude child and compares live messages with its saved transcript. Completion, persisted raw frames, bursts and user echoes must carry the same event timestamp on both paths; explicit timestamps remain unchanged. The regression fails deterministically on the earlier fixture because its live replies omit timestamps. `personalChatProviders.test.ts` retains full history equality across restart; the fixture supplies consistent events rather than relaxing that assertion.
