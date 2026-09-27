@@ -26,9 +26,10 @@ function setup(command: (command: AgentCommand) => Promise<AgentState | null>, s
   const view = render(<NewThreadDialog {...props} />)
   return { ...view, onCreated, update: (next: AgentState) => view.rerender(<NewThreadDialog {...props} state={next} />) }
 }
-/** Choose the Local folder source, the only step left before the thread opens on its own (issue #347). */
+/** Choose a folder with the Local folder source's File Explorer button, the only step left before the thread opens on its own (issue #347). */
 async function browse() {
   fireEvent.click(screen.getByRole('button', { name: /Local folder/ }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Browse with File Explorer' }))
 }
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 

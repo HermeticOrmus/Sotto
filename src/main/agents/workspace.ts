@@ -727,15 +727,16 @@ export class WorkspaceHost implements AgentHost {
     this.threadStore = new ThreadStore(join(directory, 'threads.sqlite'))
     this.subagentStore = new SubagentStore(join(directory, 'subagents.sqlite'))
     this.store = new AtomicJsonStore(join(directory, 'workspace.json'), workspaceSchema.parse, () => this.state)
+    // A host that says what changed is believed: its events are this thread's history, and the array
+    // comparison below is left for a host that publishes whole histories and nothing else. Such a host
+    // is asked to leave the messages out of its snapshots, since none would be read (#322).
+    this.eventSourced = typeof inner.subscribeEvents === 'function'
     this.providerSubscriptions.push(subscribeActivitySnapshots(inner, snapshot => {
       if (!this.ready || this.deliveryStopped) return
       this.accept(snapshot)
       this.writeSoon()
       this.publishSoon()
-    }))
-    // A host that says what changed is believed: its events are this thread's history, and the array
-    // comparison below is left for a host that publishes whole histories and nothing else.
-    this.eventSourced = typeof inner.subscribeEvents === 'function'
+    }, { historyFromEvents: this.eventSourced }))
     const unsubscribeEvents = inner.subscribeEvents?.(({ threadId, event }) => {
       if (!this.deliveryStopped) this.recordEvent(threadId, event)
     })
@@ -1542,8 +1543,21 @@ export class WorkspaceHost implements AgentHost {
     if (thread.nativeSessionStarted === false || !isThreadProviderConnected(this.state.snapshot, thread)) return this.workspaceSnapshot()
     const creation = this.state.creations.find(item => item.threadId === threadId)
     this.accept(await (creation && creation.phase !== 'started' ? this.inner.snapshot(thread.providerId)
-      : this.inner.refreshThread?.(threadId, purpose) ?? this.inner.snapshot(thread.providerId)))
+      : this.inner.refreshThread?.(threadId, this.hostRead(purpose)) ?? this.inner.snapshot(thread.providerId)))
     await this.flush(); this.publish(); return this.workspaceSnapshot()
+  }
+  /**
+   * What the workspace asks of a thread refresh or a settings result from its host. A host that publishes events has
+   * already said what each thread said, and `accept` keeps that history rather than the result's messages, so it is
+   * asked to leave them out instead of copying every held thread's history only for it to be dropped (#368). A
+   * host that publishes none is read whole, whatever the caller here asked of the workspace's own result.
+   */
+  private hostRead<T extends { historyFromEvents?: boolean }>(purpose: T): T
+  private hostRead<T extends { historyFromEvents?: boolean }>(purpose: T | undefined): T | undefined
+  private hostRead<T extends { historyFromEvents?: boolean }>(purpose: T | undefined): T | undefined {
+    // A read with no purpose becomes `{ historyFromEvents: true }`, which is a purpose of its own.
+    if (this.eventSourced) return { ...purpose, historyFromEvents: true } as T
+    return purpose?.historyFromEvents ? { ...purpose, historyFromEvents: false } : purpose
   }
   async setWorkspaceSettled(kind: 'project' | 'thread', id: string, settled: boolean): Promise<AgentHostSnapshot> {
     await this.initialize()
@@ -1899,7 +1913,9 @@ export class WorkspaceHost implements AgentHost {
       await this.recordSentBranch(thread.id)
     }
     if (command.type === 'send') await this.checkpointHooks?.beforeTurn(thread.id)
-    const result = await this.inner.execute(command.type === 'send' && preparedSkills ? { ...command, skills: preparedSkills } : command)
+    const dispatched = command.type === 'send' && preparedSkills ? { ...command, skills: preparedSkills }
+      : command.type === 'configure-thread' ? this.hostRead(command) : command
+    const result = await this.inner.execute(dispatched)
     if (command.type === 'send' && firstSend && result.accepted) this.nameBranch(thread.id, command.text)
     if (command.type === 'configure-thread') {
       const [confirmed, snapshot] = confirmedSettingsSnapshot(result)

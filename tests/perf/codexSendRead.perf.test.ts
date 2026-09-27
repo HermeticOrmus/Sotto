@@ -19,11 +19,12 @@
  *   SOTTO_PERF_BENCH=1 SOTTO_PERF_WITHOUT_TURNS_LIST=1 npx vitest run tests/perf/codexSendRead.perf.test.ts --maxWorkers=1 --disable-console-intercept
  */
 import { randomUUID } from 'node:crypto'
-import { readFile, writeFile } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { CodexAppServerHost } from '../../src/main/agents/codex'
-import { aroundTurnStart, codexFixture, historyReads } from '../fixtures/codexFixture'
+import { aroundTurnStart, historyReads } from '../fixtures/codexFixture'
+import { opened, seededCodexThread, type CodexFixture as Fixture, type FakeThread } from '../fixtures/codexSeededThread'
 import { manualSendCoordinator } from '../fixtures/manualSendCoordinator'
 import { median, PERF_BENCH, round } from '../fixtures/perfBench'
 
@@ -31,21 +32,8 @@ const SENDS = 5
 /** Measure the send as it was before #324: the fake refuses `thread/turns/list` as a Codex without it does. */
 const WITHOUT_TURNS_LIST = process.env.SOTTO_PERF_WITHOUT_TURNS_LIST === '1'
 const SIZES = [50, 500, 2000] as const
-type Fixture = Awaited<ReturnType<typeof codexFixture>>
 type Stage = 'refreshThread' | 'read' | 'newestTurn' | 'applyThread' | 'persist'
 const STAGES = ['refreshThread', 'read', 'newestTurn', 'applyThread', 'persist'] as const
-type FakeThread = { turns: { id: string; items: { type: string }[] }[] }
-
-/** One completed turn of the shape a coding turn has: a prompt, a reasoning summary, a command and a reply. */
-function turn(index: number, cwd: string): Record<string, unknown> {
-  const at = 1_790_000_000 + index * 60
-  return { id: randomUUID(), status: 'completed', startedAt: at, completedAt: at + 30, itemsView: 'full', items: [
-    { type: 'userMessage', id: randomUUID(), content: [{ type: 'text', text: 'u'.repeat(200) }] },
-    { type: 'reasoning', id: randomUUID(), summary: ['r'.repeat(300)] },
-    { type: 'commandExecution', id: randomUUID(), status: 'completed', command: 'c'.repeat(40), cwd, aggregatedOutput: 'o'.repeat(2000), exitCode: 0, durationMs: 120 },
-    { type: 'agentMessage', id: randomUUID(), text: 'a'.repeat(1200) },
-  ] }
-}
 
 /**
  * Time the adapter's own steps while the benchmark runs. `read` and `newestTurn` are `rpc` for `thread/read` and
@@ -91,33 +79,12 @@ async function replies(root: string): Promise<{ method: string; bytes: number }[
 }
 
 /**
- * A fixture whose Codex holds a thread with `turns` completed turns, not yet connected. `wrapped` puts the adapter
- * behind the Sotto thread host, so the coordinator addresses it by Sotto thread ID. The workspace and provider hosts
- * the app also puts between them hand a read's purpose on unchanged (threadReadPurpose.test.ts) and are left out.
- * Under `SOTTO_PERF_WITHOUT_TURNS_LIST=1` the fake is a Codex without `thread/turns/list`, so every send reads the
- * whole transcript as it did before #324: that run gives the "before" figures.
+ * A seeded thread (`codexSeededThread.ts`) whose fake records the size of every reply. Under
+ * `SOTTO_PERF_WITHOUT_TURNS_LIST=1` the fake is a Codex without `thread/turns/list`, so every send reads the whole
+ * transcript as it did before #324: that run gives the "before" figures.
  */
-async function seededFixture(turns: number, wrapped = false): Promise<{ f: Fixture; id: string }> {
-  const first = await codexFixture(undefined, wrapped, 60_000)
-  await first.host.connect()
-  await first.host.execute({ type: 'create-project', commandId: randomUUID(), projectId: first.projectId, title: 'Bench', path: first.root })
-  const id = randomUUID()
-  await first.host.execute({ type: 'create-thread', commandId: randomUUID(), threadId: id, projectId: first.projectId, modelId: first.modelId, title: 'Bench' })
-  const codexThreadId = await first.realId(id)
-  first.host.disconnect(); await first.adapter.closed()
-  const statePath = join(first.root, 'state.json')
-  const state = JSON.parse(await readFile(statePath, 'utf8')) as { threads: Record<string, FakeThread> }
-  state.threads[codexThreadId]!.turns = Array.from({ length: turns }, (_, index) => turn(index, first.root)) as FakeThread['turns']
-  await writeFile(statePath, JSON.stringify(state))
-  const f = await first.driver.restart() as Fixture
-  await f.script({ recordReplyBytes: true, ...(WITHOUT_TURNS_LIST ? { withoutTurnsList: true } : {}) })
-  return { f, id }
-}
-/** Wait for the adapter's own read of a thread it was told to show, and say how long that took from `startedAt`. */
-async function opened(f: Fixture, sessionId: string, startedAt: number): Promise<number> {
-  await (f.adapter as unknown as { open(id: string): Promise<void> }).open(sessionId)
-  return performance.now() - startedAt
-}
+const seededFixture = (turns: number, wrapped = false) =>
+  seededCodexThread(turns, wrapped, { recordReplyBytes: true, ...(WITHOUT_TURNS_LIST ? { withoutTurnsList: true } : {}) })
 /** A seeded thread opened the way the Threads page opens it, on the adapter alone. */
 async function seeded(turns: number): Promise<{ f: Fixture; id: string; openMs: number }> {
   const { f, id } = await seededFixture(turns)

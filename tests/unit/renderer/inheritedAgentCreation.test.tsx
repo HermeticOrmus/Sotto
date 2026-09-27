@@ -1,5 +1,5 @@
 import React from 'react'
-import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { type AgentState, type SubscriptionAccount } from '../../../src/shared/agents'
 import type { TerminalWorkspaceBridge } from '../../../src/shared/terminalWorkspace'
@@ -134,14 +134,24 @@ describe('inherited agent in terminal creation', () => {
   })
 })
 
+/** Add project, through the folder browser's File Explorer button, which answers with the stubbed folder. */
+async function addWithExplorer(state: AgentState, command: (request: never) => Promise<AgentState | null>) {
+  function AddProject() {
+    const addProject = useAddProject(state, command)
+    return <><button type="button" onClick={() => void addProject.add()}>Add project</button>{addProject.dialog}</>
+  }
+  render(<AddProject />)
+  fireEvent.click(screen.getByRole('button', { name: 'Add project' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Browse with File Explorer' }))
+}
+
 describe('inherited agent in folder registration', () => {
   it('registers the selected folder with the native agent even when its selected model is missing', async () => {
     const state = fixture()
     vi.stubGlobal('sotto', { agents: { chooseProjectDirectory: vi.fn(async () => 'C:/new-folder') } })
     const command = vi.fn(async () => state)
-    const hook = renderHook(() => useAddProject(state, command))
-    await act(async () => { await hook.result.current.add() })
-    expect(command).toHaveBeenCalledWith({ type: 'create-project', title: 'new-folder', path: 'C:/new-folder', useExisting: true, provider: 'claude' })
+    await addWithExplorer(state, command)
+    await waitFor(() => expect(command).toHaveBeenCalledWith({ type: 'create-project', title: 'new-folder', path: 'C:/new-folder', useExisting: true, provider: 'claude' }))
   })
 
   it('selects an existing folder without moving it to the inherited provider', async () => {
@@ -149,8 +159,7 @@ describe('inherited agent in folder registration', () => {
     const project = state.host.projects[0]!
     vi.stubGlobal('sotto', { agents: { chooseProjectDirectory: vi.fn(async () => project.path) } })
     const command = vi.fn(async () => state)
-    const hook = renderHook(() => useAddProject(state, command))
-    await act(async () => { await hook.result.current.add() })
-    expect(command).toHaveBeenCalledExactlyOnceWith({ type: 'select-project', projectId: project.id })
+    await addWithExplorer(state, command)
+    await waitFor(() => expect(command).toHaveBeenCalledExactlyOnceWith({ type: 'select-project', projectId: project.id }))
   })
 })

@@ -71,7 +71,12 @@ const timer = setInterval(() => {
   // Consume before delivery so a resumed process cannot replay this as a new live event.
   unlinkSync(control)
   if (action.type === 'exit') { process.exit(1) }
-  if (action.type === 'raw-burst') { process.stdout.write(action.frames.map(frame => JSON.stringify(frame) + '\n').join('')); return }
+  // `persist` also writes the burst to the session log first, as the CLI records what it streams.
+  if (action.type === 'raw-burst') {
+    if (action.persist) { for (const frame of action.frames) persist(frame) }
+    process.stdout.write(action.frames.map(frame => JSON.stringify(frame) + '\n').join(''))
+    return
+  }
   if (action.type === 'raw') { if (action.persist) persist(action.frame); output(action.frame); return }
   if (action.type === 'subagent') {
     // Claude Code 2.1.280: a workflow (with `runId`) or a background Agent call reports one task and no
@@ -173,8 +178,10 @@ lines.on('line', line => {
       output({ type: 'control_response', response: { subtype: 'success', request_id: frame.request_id } })
     }
     else if (frame.request.subtype === 'interrupt') {
+      // interrupt-script.json `error`: close the stopped turn as Claude Code does, with an error result.
+      const error = existsSync(join(root, 'interrupt-script.json')) && JSON.parse(readFileSync(join(root, 'interrupt-script.json'), 'utf8')).error === true
       output({ type: 'control_response', response: { subtype: 'success', request_id: frame.request_id, response: {} } })
-      output({ type: 'result', subtype: 'success', session_id: session, is_error: false, result: '' })
+      output(error ? { type: 'result', subtype: 'error_during_execution', session_id: session, is_error: true, result: '' } : { type: 'result', subtype: 'success', session_id: session, is_error: false, result: '' })
     } else violation('Unknown control request')
   } else if (frame.type === 'user') {
     if (!initialized) violation('User prompt arrived before successful initialization')

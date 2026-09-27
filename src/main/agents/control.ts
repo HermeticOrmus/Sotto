@@ -16,7 +16,7 @@ import { nearestReasoningEffort, resolveNewThreadPermission } from '../../shared
 import { AtomicJsonStore } from '../storage/atomicJsonStore'
 import type { MemoryProfile } from '../memory/profile'
 import type { AgentCredentials } from './credentials'
-import { approvalWords, classifyRiskyAction, denialWords, mayGrantLocally, UNPAIRED_CLIENT_ERROR, type Authority } from './authority'
+import { approvalWords, classifyRiskyAction, denialWords, mayGrantLocally, REMOTE_PERMISSION_DENIED, UNPAIRED_CLIENT_ERROR, type Authority } from './authority'
 import { desktopWindowClient, supervisionClient, type ClientIdentity } from './hostService'
 import type { AgentHost, AgentHostCommand, PromptImage, ThreadReadPurpose } from './host'
 import type { AgentPreference, AgentReasoner } from './reasoning'
@@ -1863,7 +1863,11 @@ export class AgentControl {
         const targetProvider = this.state.host.providers?.find(status => status.id === provider)
         if (targetProvider && targetProvider.connection !== 'connected') throw new Error(`Connect ${PROVIDER_LABELS[provider]} before creating a project.`)
         if (!(targetProvider?.capabilities ?? this.state.host.capabilities).projects) throw new Error('This provider does not support creating projects.')
-        if (/[<>:"/\\|?*]/u.test(command.title) || /[. ]$/u.test(command.title) || /^(\.|\.\.|con|prn|aux|nul|com\d|lpt\d)$/iu.test(command.title)) throw new Error('Choose a project name that can be used as a folder name.')
+        // The name is a folder's on this host, so this host's own rules decide it: Windows refuses more than Linux or macOS.
+        const unusableName = process.platform === 'win32'
+          ? /[<>:"/\\|?*]/u.test(command.title) || /[. ]$/u.test(command.title) || /^(\.|\.\.|con|prn|aux|nul|com\d|lpt\d)$/iu.test(command.title)
+          : command.title.includes('/') || /^\.\.?$/u.test(command.title)
+        if (unusableName) throw new Error('Choose a project name that can be used as a folder name.')
         const target = command.path || (this.state.configuration.projectsDirectory ? join(this.state.configuration.projectsDirectory, command.title) : '')
         if (!target || !isAbsolute(target)) throw new Error('Choose an absolute project folder or configure a default projects directory.')
         const path = resolve(target)
@@ -1958,6 +1962,8 @@ export class AgentControl {
         // so the coordinator's and voice's own threads follow them too; a caller's explicit choice still wins.
         const defaults = this.newThreadOptionDefaults(command, model)
         validateThreadOptions(this.state.host, { modelId: command.modelId, ...defaults })
+        const validatePermission = (): void => this.guardThreadPermission(client, defaults, model)
+        validatePermission()
         // The window may already be showing this thread under an ID it minted; main adopts it so nothing has to move.
         if (command.threadId !== undefined && this.state.host.threads.some(thread => thread.id === command.threadId)) {
           throw new Error('This thread already exists. Select it instead of creating it again.')
@@ -1973,7 +1979,7 @@ export class AgentControl {
             ...(command.baseBranch ? { baseBranch: command.baseBranch } : {}),
             ...(command.startFromOrigin !== undefined ? { startFromOrigin: command.startFromOrigin } : {}),
             ...(command.existingWorktreePath ? { existingWorktreePath: command.existingWorktreePath } : {}),
-            ...defaults }, turn)
+            ...defaults }, turn, validatePermission)
         } catch (error) { if (selectionRevision === this.selectionRevision) this.queueSelectionPinned = previousSelectionPinned; throw error }
         if (selectionRevision === this.selectionRevision) {
           this.presentedQueueId = null
@@ -2009,6 +2015,7 @@ export class AgentControl {
           if (thread.status === 'running' || thread.requests.length) throw new Error('Wait for this thread to finish and answer its pending requests before changing settings.')
           if (thread.nativeSessionStarted !== false && command.modelId && thread.providerId && resolveModel(this.state.host.models, command.modelId)?.providerId !== thread.providerId) throw new Error('Choose a model from this thread provider. Existing sessions cannot move between providers.')
           validateThreadOptions(this.state.host, command, thread.modelId)
+          this.guardThreadPermission(client, command, resolveModel(this.state.host.models, command.modelId ?? thread.modelId))
         }
         validate()
         // The thread interface exposes two distinct commands. Each has its own durable identity;
@@ -2151,14 +2158,21 @@ export class AgentControl {
       throw new Error('Save the current thread draft before handing it to management.')
     }
   }
+  /** Defaults and provider profiles are preferences, never a remote client's policy grant. */
+  private guardThreadPermission(client: ClientIdentity, options: { runtimeMode?: AgentRuntimeMode | undefined; providerMode?: string | undefined }, model: AgentModel | undefined): void {
+    if ((options.runtimeMode !== undefined && options.runtimeMode !== 'approval-required')
+      || (options.providerMode !== undefined && !model?.providerModes?.some(mode => mode.id === options.providerMode && mode.allows === 'nothing'))) {
+      this.guardClientGrant(client, REMOTE_PERMISSION_DENIED)
+    }
+  }
   /**
    * Whether this client's answer may count as a grant at all. The desktop window on this machine
    * always may; a remote client may only while a policy record names it (ADR-0004). The pairing token
    * says which client is speaking and nothing more, so this asks policy rather than the token.
    */
-  private guardClientGrant(client: ClientIdentity): void {
+  private guardClientGrant(client: ClientIdentity, refusal = UNPAIRED_CLIENT_ERROR): void {
     const verdict = this.dependencies.authority?.mayGrant(client) ?? mayGrantLocally(client)
-    if (!verdict.allowed) throw new Error(UNPAIRED_CLIENT_ERROR)
+    if (!verdict.allowed) throw new Error(refusal)
   }
   /**
    * Writes who answered into the thread's own log. The answer's words are deliberately left out — an

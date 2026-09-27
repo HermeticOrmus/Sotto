@@ -77,6 +77,7 @@ artifacts/agents-view/
 artifacts/agent-browser/
 artifacts/browser-grant/
 artifacts/new-thread-setup/
+artifacts/host-folder-browser-run/
 artifacts/command-receipt/
 artifacts/sidebar-question/
 artifacts/tools-rail-run/
@@ -92,3 +93,5 @@ artifacts/screenshot-resize-run/
 
 # A workflow's agents in the roster (#339): every e2e capture; the note cites a copy in artifacts/workflow-agent-rows/
 artifacts/workflow-agent-rows-run/
+
+artifacts/review-377/

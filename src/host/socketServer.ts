@@ -11,6 +11,7 @@ import type { AgentCommand, AgentThreadDetail } from '../shared/agents'
 import { isAgentThreadDetailDelta } from '../shared/agentThreadDetail'
 import { resolveModel } from '../shared/modelCatalog'
 import { version as packageVersion } from '../../package.json'
+import { REMOTE_PERMISSION_DENIED } from '../main/agents/authority'
 import { remoteCommandRefusal } from './remoteCommands'
 import { SocketFrames } from './socketFrames'
 
@@ -18,7 +19,7 @@ const errors: Record<HostErrorCode, string> = {
   unauthenticated: HOST_SESSION_REJECTED,
   invalid_request: 'This request is not supported. Update this client and try again.',
   stale_request: 'This request has already changed or been answered. Refresh the thread before answering.',
-  forbidden: 'This action is not allowed from this device. Check its permission policy or complete the action on the host.',
+  forbidden: REMOTE_PERMISSION_DENIED,
   unavailable: 'The host could not complete this request. Refresh the thread before trying again.',
   busy: 'The host has too many pending requests. Wait for them to finish and try again.',
   too_large: 'A thread on this host is too large to send to this device. Nothing on the host was lost, and the thread keeps working there. Your other threads still load here.',
@@ -246,6 +247,9 @@ export async function startSocketServer(options: SocketServerOptions) {
       case 'git-pull-request':
         if (!service.gitPullRequest) throw new Refusal('invalid_request')
         try { return await service.gitPullRequest(request.request) } catch { throw new Refusal('unavailable') }
+      case 'host-folders':
+        if (!service.hostFolders) throw new Refusal('invalid_request')
+        try { return await service.hostFolders(request.request) } catch { throw new Refusal('unavailable') }
       case 'stage-attachment': {
         if (!service.stageAttachment) throw new Refusal('invalid_request')
         // Up to about 14 MB of base64 in, and 10 MiB held until it is kept: one at a time per peer, on the preview's guard.

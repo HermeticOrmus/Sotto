@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { access } from 'node:fs/promises'
+import { access, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import { claudeFixture } from '../fixtures/claudeFixture'
@@ -117,6 +117,80 @@ it('keeps background work through the turn result and clears it on interrupt, an
   await f.host.connect()
   await f.adapter.refreshThread('thread')
   expect((await thread(f)).backgroundWork ?? []).toEqual([])
+})
+
+// Claude Code 2.1.283 answers a finished task with a turn of its own and sends no prompt for it: the turn opens a query
+// and makes a model request the thread did not ask for, and its result says where the prompt came from instead of which
+// prompt it was. Every turn opens its query the same way, one Sotto sent included.
+const query = { type: 'system', subtype: 'init' }
+const reporting = { type: 'system', subtype: 'status', status: 'requesting', uuid: '4b7c1c1e-5f3a-4b8e-9d51-2f0c0f6f9a11' }
+const reported = { type: 'result', subtype: 'success', is_error: false, result: 'The review found nothing.', origin: { kind: 'task-notification' } }
+const promptTurn = async (f: Awaited<ReturnType<typeof fixture>>) => (await thread(f)).activities?.find(activity => activity.kind === 'turn' && activity.turnId === 'prompt')?.status
+async function prompted(f: Awaited<ReturnType<typeof fixture>>) {
+  expect(await f.host.execute({ type: 'send', commandId: 'send', messageId: 'prompt', threadId: 'thread', text: 'Review the diff in the background.' })).toEqual({ accepted: true })
+  await f.driver.backgroundWork!.completeLeaving('thread', 'Left an agent running.', 'Review the diff')
+  await expect.poll(async () => (await thread(f)).status).toBe('idle')
+  expect((await thread(f)).backgroundWork).toHaveLength(1)
+  await f.driver.backgroundWork!.end('thread')
+  await expect.poll(async () => (await thread(f)).backgroundWork ?? []).toEqual([])
+  await f.action('thread', { type: 'raw-burst', frames: [query, reporting] })
+  await expect.poll(async () => (await thread(f)).status).toBe('running')
+}
+
+it('shows the turn Claude Code starts on its own to report finished work as running until its result', async () => {
+  const f = await fixture()
+  await prompted(f)
+  expect((await thread(f)).lastTurn).toEqual({ id: reporting.uuid, status: 'running' })
+  await f.action('thread', { type: 'raw-burst', frames: [
+    { type: 'stream_event', event: { type: 'message_start', message: { id: 'report', role: 'assistant' } } },
+    { type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'The review found nothing.' } } },
+    reported] })
+  await expect.poll(async () => (await thread(f)).status).toBe('idle')
+  expect((await thread(f)).lastTurn).toEqual({ id: reporting.uuid, status: 'completed' })
+  await expect.poll(async () => (await thread(f)).messages.at(-1)?.text).toBe('The review found nothing.')
+})
+
+it('reads a model request outside any query as no turn', async () => {
+  const f = await fixture()
+  await f.driver.completeTurn('thread', 'Nothing to report.')
+  await expect.poll(async () => (await thread(f)).messages.at(-1)?.text).toBe('Nothing to report.')
+  // The agent after the request shows only once the request has been read.
+  await f.action('thread', { type: 'raw-burst', frames: [reporting, agent] })
+  await expect.poll(async () => (await thread(f)).backgroundWork?.length).toBe(1)
+  expect((await thread(f)).status).toBe('idle')
+})
+
+it('goes straight on to a prompt that waited behind a turn Claude Code gave itself', async () => {
+  const f = await fixture()
+  // Claude Code holds a prompt that arrives as its own turn begins and hands it back once that turn's result is out.
+  await writeFile(join(f.root, 'script.json'), JSON.stringify({ delay: 1000 }))
+  const sent = f.host.execute({ type: 'send', commandId: 'send', messageId: 'prompt', threadId: 'thread', text: 'Anything new?' })
+  await expect.poll(async () => (await thread(f)).status).toBe('running')
+  const origin = JSON.parse(await readFile(join(f.root, 'claude-threads.json'), 'utf8')).thread.origins.at(-1).uuid as string
+  // The held prompt's own turn opens a query and makes a request before the prompt comes back; the agent marks them read.
+  await f.action('thread', { type: 'raw-burst', frames: [reported, query, { ...reporting, uuid: '9d2e6a40-3c1b-4f7e-8a55-6b0e1f2d3c4a' }, agent] })
+  await expect.poll(async () => (await thread(f)).backgroundWork?.length).toBe(1)
+  expect((await thread(f)).status).toBe('running')
+  expect(await sent).toEqual({ accepted: true })
+  expect((await thread(f)).lastTurn).toEqual({ id: origin, status: 'running' })
+  expect(await promptTurn(f)).toBe('running')
+  await f.driver.completeTurn('thread', 'Nothing new.')
+  await expect.poll(async () => promptTurn(f)).toBe('completed')
+  expect((await thread(f)).lastTurn).toEqual({ id: origin, status: 'completed' })
+})
+
+it('stops a turn Claude Code started on its own without calling it a failure', async () => {
+  const f = await fixture()
+  await prompted(f)
+  await writeFile(join(f.root, 'interrupt-script.json'), JSON.stringify({ error: true }))
+  expect(await f.host.execute({ type: 'interrupt', commandId: 'stop', threadId: 'thread' })).toEqual({ accepted: true })
+  // The agent after the interrupt's error result shows only once that result has been read.
+  await raw(f, agent)
+  await expect.poll(async () => (await thread(f)).backgroundWork?.length).toBe(1)
+  expect((await thread(f)).status).toBe('idle')
+  expect((await thread(f)).lastTurn).toEqual({ id: reporting.uuid, status: 'interrupted' })
+  expect((await f.host.snapshot()).error).toBeUndefined()
+  expect(await promptTurn(f)).toBe('completed')
 })
 
 // A shell left running in the background: stopping the CLI under it would stop the command too.

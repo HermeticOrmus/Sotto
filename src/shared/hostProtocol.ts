@@ -4,6 +4,7 @@ import { threadEventSchema, type StoredThreadEvent } from './threadEvents'
 import { gitRefsRequestSchema } from './gitRefs'
 import { gitChangedFilesRequestSchema } from './gitChangedFiles'
 import { gitPullRequestRequestSchema } from './gitPullRequests'
+import { hostFoldersRequestSchema } from './hostFolders'
 
 /**
  * Protocol version 1 is frozen (ADR-0025; every message is listed in docs/host-protocol.md). A later host
@@ -20,9 +21,10 @@ export const HOST_PROTOCOL_VERSION = 1 as const
  * `git-pull-request`: the host answers the `git-pull-request` request with one of a thread's pull requests,
  * read through gh, for the Pull request surface and its dialogs. `attachment-staging`: the host keeps an image a client
  * sends once and answers with its handle (`stage-attachment`), and hands a staged image back by digest
- * (`attachment-content`); drafts and commands carry the handle (ADR-0031).
+ * (`attachment-content`); drafts and commands carry the handle (ADR-0031). `host-folders`: the host answers the
+ * `host-folders` request with one folder's subfolders on the host machine, for the Add project dialog's folder browser.
  */
-export const HOST_FEATURES = ['detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging'] as const
+export const HOST_FEATURES = ['detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders'] as const
 export type HostFeature = typeof HOST_FEATURES[number]
 /**
  * Whether a host's Sotto version is later than this client's, by release number. A version that cannot
@@ -84,6 +86,8 @@ export const hostRequestSchema = z.discriminatedUnion('op', [
   z.object({ ...base, op: z.literal('stage-attachment'), image: hostAttachmentSchema }).strict(),
   /** A staged image's bytes by digest, for a chip the client holds no copy of; null once the host no longer keeps it. */
   z.object({ ...base, op: z.literal('attachment-content'), digest: attachmentDigestSchema }).strict(),
+  /** One folder's subfolders on the host, for the Add project dialog's folder browser; read on request. */
+  z.object({ ...base, op: z.literal('host-folders'), request: hostFoldersRequestSchema }).strict(),
 ])
 export type HostRequest = z.infer<typeof hostRequestSchema>
 export type HostOperation = HostRequest extends infer R ? R extends HostRequest ? Omit<R, 'v' | 'id' | 'session'> : never : never

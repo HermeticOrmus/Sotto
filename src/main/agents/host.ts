@@ -19,7 +19,9 @@ export interface PromptImage extends AgentAttachmentHandle { read(): Promise<Uin
 export type AgentHostCommand =
   | { readonly type: 'create-project'; readonly provider?: ProviderId; readonly commandId: string; readonly projectId: string; readonly title: string; readonly path: string }
   | ({ readonly type: 'create-thread'; readonly commandId: string; readonly threadId: string; readonly projectId: string; readonly title: string; readonly modelId: string; readonly titleSource?: 'user' | 'default'; readonly project?: AgentProject; readonly workingCopy?: 'independent' | 'shared'; readonly baseBranch?: string; readonly startFromOrigin?: boolean; readonly existingWorktreePath?: string; readonly workingDirectory?: string } & AgentThreadOptions)
-  | ({ readonly type: 'configure-thread'; readonly commandId: string; readonly threadId: string } & AgentThreadOptions)
+  | ({ readonly type: 'configure-thread'; readonly commandId: string; readonly threadId: string
+    /** The caller keeps history from the host's events, so the result's snapshot may leave every thread's messages out (`ThreadReadPurpose`, #368). */
+    readonly historyFromEvents?: boolean } & AgentThreadOptions)
   | { readonly type: 'send'; readonly commandId: string; readonly threadId: string; readonly messageId: string; readonly text: string; readonly attachments?: readonly PromptImage[]; readonly skills?: AgentSkillReference[]; readonly files?: AgentFileReference[]; readonly expectedLastUserMessageId?: string | null }
   | { readonly type: 'steer'; readonly commandId: string; readonly threadId: string; readonly messageId: string; readonly text: string; readonly attachments?: readonly PromptImage[]; readonly skills?: AgentSkillReference[]; readonly files?: AgentFileReference[]; readonly expectedLastUserMessageId?: string | null }
   | { readonly type: 'answer'; readonly commandId: string; readonly threadId: string; readonly requestId: string; readonly answer: string; readonly approved?: boolean; readonly questionAnswers?: AgentQuestionAnswers; readonly permissionChoice?: string }
@@ -31,7 +33,9 @@ export interface AgentHostResult {
   /**
    * For `configure-thread`: the snapshot the adapter emitted once the provider confirmed the change, carrying
    * the thread's effective settings. The coordinator accepts it in place of reading the thread again, and
-   * reads only when it is absent. Never set on an uncertain result, which is reconciled from the outbox.
+   * reads only when it is absent. Never set on an uncertain result, which is reconciled from the outbox. It
+   * carries no messages, and may share frozen activity trees, when the command asked `historyFromEvents` of a
+   * host that publishes events.
    */
   readonly snapshot?: AgentHostSnapshot
   /**
@@ -50,11 +54,19 @@ export function confirmedSettingsSnapshot(result: AgentHostResult): [Omit<AgentH
   return [rest, rest.accepted && !rest.uncertain ? snapshot : undefined]
 }
 /**
- * What a thread read is for. `beforeSend` is the read immediately before a send: an adapter that can show nothing
- * changed without reading the whole transcript may do that instead (Codex's newest-turn check, ADR-0005), and
- * reads it whole whenever it cannot. Every other read omits it.
+ * What a thread read is for, and what its reader keeps for itself. `beforeSend` is the read immediately before a
+ * send: an adapter that can show nothing changed without reading the whole transcript may do that instead (Codex's
+ * newest-turn check, ADR-0005), and reads it whole whenever it cannot. Every other read omits it.
  */
-export interface ThreadReadPurpose { readonly beforeSend?: boolean }
+export interface ThreadReadPurpose {
+  readonly beforeSend?: boolean
+  /**
+   * The reader keeps each thread's history from the host's `subscribeEvents` and reads none from what the read
+   * hands back, as an activity subscriber that asks for it does. A host that publishes events then hands back
+   * every thread with its summary and no messages (ADR-0016, #368). What the read does is the same either way.
+   */
+  readonly historyFromEvents?: boolean
+}
 /**
  * What Sotto asks a thread's own client to write on the side: a title, a branch name, a commit message or
  * pull request text (ADR-0026). The instruction and the material stay apart so a client that takes a
@@ -85,6 +97,15 @@ export interface ThreadHistorySource {
   activities?(threadId: string, historyEpoch?: string): readonly AgentActivity[] | undefined
   /** Indexed text-free classification for a native task older than the activity window. */
   activity?(threadId: string, activityId: string, historyEpoch?: string): AgentActivity | undefined
+}
+/** What an activity subscriber asks of the host it subscribes to. */
+export interface ActivitySubscriptionOptions {
+  /**
+   * The subscriber keeps each thread's history from the host's `subscribeEvents` and reads none from the
+   * snapshots, so a host that publishes events leaves every thread's messages out and carries its summary
+   * instead (ADR-0016, #322). A subscriber that reads messages from the snapshots leaves this unset.
+   */
+  historyFromEvents?: boolean
 }
 /**
  * Sotto thread interface: create = execute create-thread; resume = observeThreads then snapshot;
@@ -169,7 +190,9 @@ export interface AgentHost {
   createProjectId?(provider: ProviderId): string
   connect(provider?: ProviderId): Promise<AgentHostSnapshot>
   snapshot(provider?: ProviderId): Promise<AgentHostSnapshot>
-  /** Refresh only this thread's authoritative history/status, returning the full cached snapshot.
+  /** Refresh only this thread's authoritative history/status, returning the full cached snapshot, with every
+   * thread's messages unless `purpose.historyFromEvents` says the caller reads none from it. A result without
+   * messages may share frozen activity trees, as an activity snapshot does; the provider switch copies it.
    * Native adapters must not join a refresh blocked on another thread or model discovery. */
   refreshThread?(threadId: string, purpose?: ThreadReadPurpose): Promise<AgentHostSnapshot>
   /** Throws only for a definitive rejection before commitment; unknown delivery returns uncertain. */
@@ -181,8 +204,10 @@ export interface AgentHost {
   subscribe(listener: (snapshot: AgentHostSnapshot) => void): () => void
   /** Internal readers may share deeply immutable activity trees. All other containers remain
    * isolated for the consumer. Callers needing writable activities use subscribe/snapshot instead.
-   * Absence means mutable legacy data: never infer unchanged activity from array identity alone. */
-  subscribeActivitySnapshots?(listener: (snapshot: AgentHostSnapshot) => void): () => void
+   * Absence means mutable legacy data: never infer unchanged activity from array identity alone.
+   * A subscriber that keeps history from `subscribeEvents` says so in `options`, and then a host that
+   * publishes events carries every thread with its summary and no messages, held or not (ADR-0016, #322). */
+  subscribeActivitySnapshots?(listener: (snapshot: AgentHostSnapshot) => void, options?: ActivitySubscriptionOptions): () => void
   /**
    * Every change to what a thread said, as it happens. An adapter that implements this publishes each
    * change once through its own append path, and its snapshots then carry the messages only for the

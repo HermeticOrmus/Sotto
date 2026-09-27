@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
-import { immutableActivities, isImmutableActivities, cloneActivitySnapshot } from '../../../src/main/agents/activitySnapshots'
+import { ActivitySubscribers, immutableActivities, isImmutableActivities, cloneActivitySnapshot } from '../../../src/main/agents/activitySnapshots'
 import { cloneHostSnapshot } from '../../../src/main/agents/cloneHostSnapshot'
 import { EMPTY_AGENT_HOST, type AgentHostSnapshot } from '../../../src/shared/agents'
 import type { AgentActivity } from '../../../src/shared/agentActivity'
@@ -70,5 +70,24 @@ describe('owned activity snapshots', () => {
     expect(first.threads[0]!.activities![0]!.output).toBe('first')
     expect(second.threads[0]!.activities![0]!.output).toBe('Later')
     expect(isImmutableActivities(second.threads[0]!.activities)).toBe(false)
+  })
+})
+
+describe('the activity subscribers of an adapter', () => {
+  it('builds each form a subscriber asked for once, and hands every subscriber its own copy (#322)', () => {
+    const subscribers = new ActivitySubscribers()
+    const received: Array<[string, AgentHostSnapshot]> = []
+    subscribers.add(value => received.push(['events', value]), { historyFromEvents: true })
+    subscribers.add(value => received.push(['also events', value]), { historyFromEvents: true })
+    const off = subscribers.add(value => received.push(['snapshots', value]))
+    const built: boolean[] = []
+    subscribers.publish(historyFromEvents => { built.push(historyFromEvents); return snapshot(records()) })
+    expect(built).toEqual([true, false])
+    expect(received.map(([name]) => name)).toEqual(['events', 'also events', 'snapshots'])
+    expect(received[0]![1]).not.toBe(received[1]![1])
+    off(); built.length = 0
+    subscribers.publish(historyFromEvents => { built.push(historyFromEvents); return snapshot(records()) })
+    expect(built).toEqual([true])
+    expect(subscribers.size).toBe(2)
   })
 })

@@ -21,7 +21,7 @@ Sotto runs the Claude Code, Codex, Grok Build and Devin clients you already have
 ## What it does
 
 - **One sidebar for every agent.** Each provider keeps its own sign-in and models. Sotto keeps the threads.
-- **You answer every request.** Anything a thread's permissions don't already allow waits for you.
+- **You answer every request.** Anything a thread's permissions don't already allow waits for you. A paired device needs your permission to answer requests or create threads with permissions that allow actions without asking, even when those permissions come from the host's defaults.
 - **Tools beside each thread.** A browser, a terminal, the thread's files and its changes.
 - **Codex's Computer Use.** In a Codex thread set to Full access, with the Codex app open, Codex can operate the apps on your computer.
 - **Git in one press.** Commit, push and open a pull request. Leave the message empty and the agent writes it.
@@ -60,6 +60,8 @@ Sotto has no account of its own and collects nothing about you: no analytics, no
 
 Dictation history stays on your computer, and you can turn it off. Screenshots you attach to a thread are kept as files on the computer that runs the thread, only while an unsent draft, a queued message or a recent message's preview needs them and for an hour after; with history off, new ones stay in memory and are not written to disk. Keys are kept in your operating system's credential store.
 
+The iPhone app, in development, talks only to your own Sotto host, through your private Tailscale address. It looks the host's name up through Tailscale's own name service on the phone, pairs with a code the host prints, and never answers a permission unless you have allowed it on the host.
+
 ## Build from source
 
 With Node.js 24:
@@ -76,6 +78,7 @@ npm run dev
 
 - [Guide](docs/guide.md): every feature, settings, remote hosts and troubleshooting
 - [Agent control](docs/agent-control.md): providers and threads in depth
+- [iPhone app](apps/ios/README.md): building, pairing and installing the iPhone client (in development)
 - [Contributing](AGENTS.md)
 
 ## License
