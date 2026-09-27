@@ -8,7 +8,7 @@ import { cloneActivitySnapshot, subscribeActivitySnapshots } from './activitySna
 import { join, resolve } from 'node:path'
 import { EMPTY_AGENT_HOST, PROVIDER_LABELS, parsePublicProviderEntityId, providerIdSchema, publicProviderEntityId, type AgentCapabilities, type AgentHostSnapshot, type AgentProviderStatus, type ProviderId } from '../../shared/agents'
 import { resolveModel } from '../../shared/modelCatalog'
-import { confirmedSettingsSnapshot, type AgentHost, type AgentHostCommand, type AgentHostResult, type AgentSkillScope, type RestoredThreadHistory, type ShortTextPrompt, type ThreadHistorySource, type ThreadHostEvent } from './host'
+import { confirmedSettingsSnapshot, type AgentHost, type AgentHostCommand, type AgentHostResult, type AgentSkillScope, type RestoredThreadHistory, type ShortTextPrompt, type ThreadHistorySource, type ThreadHostEvent, type ThreadRead } from './host'
 
 /** Public IDs are opaque to callers and reversible only at the provider boundary. */
 export function providerEntityId(provider: ProviderId, kind: 'model' | 'project', value: string): string {
@@ -203,10 +203,10 @@ export class ConfiguredProviderHost implements AgentHost {
   async restoreThreadHistory(threads: readonly RestoredThreadHistory[]): Promise<void> {
     await Promise.all(providerIdSchema.options.map(id => this.options.hosts[id].restoreThreadHistory?.(threads)))
   }
-  async refreshThread(threadId: string): Promise<AgentHostSnapshot> {
+  async refreshThread(threadId: string, purpose?: ThreadRead): Promise<AgentHostSnapshot> {
     const id = this.owner(threadId); this.requireConnected(id)
     const slot = this.slots.get(id)!; const epoch = slot.epoch; const host = this.options.hosts[id]
-    const snapshot = await (host.refreshThread?.(threadId) ?? host.snapshot())
+    const snapshot = await (host.refreshThread?.(threadId, purpose) ?? host.snapshot())
     if (slot.epoch !== epoch) throw new Error('This thread provider disconnected while reading the thread.')
     this.accept(id, snapshot); this.publish(); return cloneHostSnapshot(this.aggregate())
   }
