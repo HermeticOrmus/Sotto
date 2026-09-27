@@ -86,10 +86,6 @@ export interface ThreadHistorySource {
   /** Indexed text-free classification for a native task older than the activity window. */
   activity?(threadId: string, activityId: string, historyEpoch?: string): AgentActivity | undefined
 }
-/**
- * Sotto thread interface: create = execute create-thread; resume = observeThreads then snapshot;
- * prompt = execute send; cancel = execute interrupt; status = snapshot; events = subscribe.
- */
 /** What an activity subscriber asks of the host it subscribes to. */
 export interface ActivitySubscriptionOptions {
   /**
@@ -99,7 +95,10 @@ export interface ActivitySubscriptionOptions {
    */
   historyFromEvents?: boolean
 }
-
+/**
+ * Sotto thread interface: create = execute create-thread; resume = observeThreads then snapshot;
+ * prompt = execute send; cancel = execute interrupt; status = snapshot; events = subscribe.
+ */
 export interface AgentHost {
   /** Inject shared browser tools before connecting the native providers. */
   useBrowserTools?(tools: BrowserAgentTools): void
