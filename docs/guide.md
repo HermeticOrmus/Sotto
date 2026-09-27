@@ -139,7 +139,7 @@ After an interrupted command, reconnect and check its result before choosing to 
 
 ### iPhone app
 
-*In development; build it yourself from `apps/ios` ([its README](../apps/ios/README.md)).*
+*In development. Builds reach iPhones through TestFlight; [the app's README](../apps/ios/README.md) says how to set that up and how to build it yourself.*
 
 The iPhone app reads and answers a host's threads over Tailscale. Install Tailscale on the iPhone and on the host machine, and point Tailscale Serve on the host machine at the host's loopback port. Then pair:
 

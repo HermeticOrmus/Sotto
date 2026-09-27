@@ -230,6 +230,10 @@ npx vitest run tests/integration/codexComputerUseLive.test.ts --maxWorkers=1
 
 Build and run `npx playwright test tests/e2e/agent-browser.spec.ts tests/e2e/tools-sidecar.spec.ts tests/e2e/phase-three-tools-bridge.spec.ts` to exercise the real Electron browser, permission continuation, feedback drafts and the Tools pane. The agent test uses a local page and test-only provider entry point; it needs no provider account. Screenshots and a geometry report are written to ignored `artifacts/agent-browser/`. Native-provider compatibility and actual desktop results are recorded separately in `docs/verification/`.
 
+## iPhone app to TestFlight
+
+`.github/workflows/ios-testflight.yml` is the one workflow that signs and publishes (ADR-0032). It runs only when a tag named `ios-testflight-*` is pushed, or by hand, never for a pull request. On `macos-15` with Xcode 16.4 it runs the SottoCore tests, then `apps/ios/Scripts/testflight.sh` archives the app with automatic cloud-managed signing and uploads it to App Store Connect. Its four secrets (`APP_STORE_CONNECT_KEY`, `APP_STORE_CONNECT_KEY_ID`, `APP_STORE_CONNECT_ISSUER_ID`, `APPLE_TEAM_ID`) belong to the `testflight` environment, which only this job names and which accepts only `ios-testflight-*` tags; the key file exists only for the job. Setup is in `apps/ios/README.md`. It is not a gate: a failed upload blocks nothing.
+
 ## Native iOS gate
 
 **Native iOS client (macOS)** runs `sh apps/ios/Scripts/verify.sh` on `macos-15`, selecting `/Applications/Xcode_16.4.app/Contents/Developer` explicitly. [The runner inventory](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-arm64-Readme.md) lists that toolchain and its iOS 18.5 simulator SDK, which satisfy the package's Swift 5.9 tools and app's iOS 17 minimum. The job prints its actual Xcode/Swift versions, runs the native SottoCore package tests, and builds the unsigned iOS simulator app with the shared Xcode scheme. It needs no signing secrets, never uploads to TestFlight, and does not run npm or Electron.

@@ -26,28 +26,31 @@ Choose an installed iPhone simulator using Xcode or `xcrun simctl list devices a
 
 ## Sign and install on an iPhone
 
-Open `apps/ios/Sotto.xcodeproj`, choose the Sotto target, set your own development team in Signing & Capabilities, and confirm that `com.millzach.sotto.ios` is available for that team (change the identifier if needed). Connect the iPhone, enable Developer Mode when Xcode requests it, select it as the run destination and build. Do not commit team-specific provisioning material or account credentials.
+With a Mac, open `apps/ios/Sotto.xcodeproj`, choose the Sotto target, set your own development team in Signing & Capabilities, and confirm that `com.millzach.sotto.ios` is available for that team (change the identifier if needed). Connect the iPhone, enable Developer Mode when Xcode requests it, select it as the run destination and build. Do not commit team-specific provisioning material or account credentials.
 
 Install/sign in to Tailscale on the iPhone and grant the intended tailnet access, with MagicDNS on for the tailnet. Configure Tailscale Serve on the host machine to forward its private HTTPS origin to the host's loopback listener. On the iPhone, type the machine's name (`forge`): the app resolves it through the system resolver, which Tailscale answers with MagicDNS, takes the full `forge.<tailnet>.ts.net` name from the canonical or reverse-lookup answer, and reads `/v1/health` there before asking for a code. The full `.ts.net` address can be typed instead. Then enter the fresh code printed by the host's pairing command; the pairing is refused if a different host answers than the one found. Allowing this client's answers is a separate explicit host policy operation; use the host CLI's documented `--allow-answers` operation with this client ID. No credential or pairing secret belongs in a URL or log.
 
-## TestFlight preparation
+## TestFlight from GitHub Actions
 
-The owner chose TestFlight. Paid program enrollment, App Store Connect team access and signing remain to be verified on the build Mac. Review a signed device build before uploading. A release-style archive does not depend on Metro or another development server:
-
-```sh
-xcodebuild -project apps/ios/Sotto.xcodeproj -scheme Sotto -configuration Release \
-  -destination 'generic/platform=iOS' -archivePath apps/ios/.build-native/Sotto.xcarchive \
-  DEVELOPMENT_TEAM=YOUR_TEAM_ID archive
-```
-
-Copy `ExportOptions.example.plist` to the ignored `ExportOptions.local.plist`, set the actual team ID, then export locally:
+No Mac is needed to put the app on an iPhone. `.github/workflows/ios-testflight.yml` archives, signs and uploads it to TestFlight on a macOS runner whenever a tag named `ios-testflight-*` is pushed (ADR-0032):
 
 ```sh
-xcodebuild -exportArchive -archivePath apps/ios/.build-native/Sotto.xcarchive \
-  -exportOptionsPlist apps/ios/ExportOptions.local.plist -exportPath apps/ios/.build-native/export
+git tag ios-testflight-$(date +%Y%m%d-%H%M) && git push origin --tags
 ```
 
-The example exports and does not upload. Check bundle/version/build numbers, privacy/export-compliance answers and the signing profile before TestFlight submission. Increment build numbers deliberately. This app uses platform TLS/Keychain, does not contain a custom cryptographic algorithm, and declares standard encryption use in Info.plist; review that declaration if the implementation changes. App Store review/acceptance is not implied by a local archive.
+About half an hour later the build appears in the TestFlight app on the phones of the internal testing group. The build number is the workflow's run number; the marketing version is `MARKETING_VERSION` in the Xcode project.
+
+One-time setup, all in a browser plus `gh`:
+
+1. In the Apple Developer account, under Certificates, Identifiers & Profiles, register the App ID `com.millzach.sotto.ios` (explicit, no capabilities), and note the Team ID under Membership.
+2. In App Store Connect, create the app under Apps with that bundle ID. The App Store name must be unique across the store; the name on the home screen stays Sotto.
+3. In App Store Connect under Users and Access, Integrations, App Store Connect API, generate a team key with the **Admin** role (cloud-managed signing needs it). Download the `.p8` once and note its Key ID and the Issuer ID.
+4. Store them as secrets of the `testflight` environment: `APP_STORE_CONNECT_KEY` (the `.p8` file's text), `APP_STORE_CONNECT_KEY_ID`, `APP_STORE_CONNECT_ISSUER_ID` and `APPLE_TEAM_ID`.
+5. After the first upload, add yourself to an internal testing group under TestFlight in App Store Connect, and install the TestFlight app on the iPhone.
+
+No certificate or profile is stored anywhere: Xcode's automatic signing uses Apple's cloud-managed certificates, authorised by the key. Revoke the key in App Store Connect if the repository's secrets are ever in doubt. The app declares standard encryption only (`ITSAppUsesNonExemptEncryption` is false), because it uses the platform's TLS and Keychain and no cryptography of its own; review that if the implementation changes. External testing and the App Store need Apple's review and are not set up.
+
+On a Mac, the same archive can be made locally: open the project, set your team under Signing & Capabilities, and use Product > Archive, or run `apps/ios/Scripts/testflight.sh` with the environment it documents.
 
 ## Lifecycle and privacy
 
