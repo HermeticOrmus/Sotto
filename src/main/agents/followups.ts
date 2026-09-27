@@ -8,8 +8,9 @@ import type { StageInline } from './attachmentStore'
 
 /** Why a follow-up came back from a restart without an image it had, whatever the reason the image was not kept. */
 export const LOST_IMAGES = 'An image in this follow-up was no longer kept when Sotto started, so the follow-up was paused rather than sent without it. Attach the image again or remove the follow-up.'
-export function followupDigest(input: Pick<AgentFollowup, 'text' | 'attachments' | 'skills' | 'files'>): string {
-  const base = input.skills?.length ? [input.text.trim(), input.attachments, input.skills] : [input.text.trim(), input.attachments]
+/** Shared identity for prompt admission, the outbox and queue receipts. Images stay handles, never content reads. */
+export function followupDigest(input: Pick<AgentFollowup, 'text' | 'skills' | 'files'> & { readonly attachments?: readonly AgentAttachmentHandle[] | undefined }): string {
+  const base = input.skills?.length ? [input.text.trim(), input.attachments ?? [], input.skills] : [input.text.trim(), input.attachments ?? []]
   // Mentioned files join the digest only when there are any, so revisions without them keep their existing identity.
   return createHash('sha256').update(JSON.stringify(input.files?.length ? [...base, input.files] : base)).digest('hex')
 }

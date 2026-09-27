@@ -359,7 +359,7 @@ export class AgentControl {
     for (const item of this.outbox) {
       if ((item.type !== 'send' && item.type !== 'steer') || !item.threadId) continue
       item.draftId ??= this.state.threadDrafts?.find(draft => draft.threadId === item.threadId && (item.draftDigest
-        ? item.draftDigest === this.promptDigest(draft.text, draft.attachments, draft.skills, draft.files) : draft.requestId === null))?.draftId ?? randomUUID()
+        ? item.draftDigest === followupDigest(draft) : draft.requestId === null))?.draftId ?? randomUUID()
       this.setDelivery(item.threadId, item.draftId, 'uncertain', { commandId: item.id, messageId: item.messageId })
     }
     // Redaction also reaches disk when control is disabled and no reconnect will run.
@@ -1069,7 +1069,7 @@ export class AgentControl {
       if (submitted && submitted.status !== 'failed') throw new Error('Use a new draft revision when editing a submitted prompt.')
       const previous = this.state.threadDrafts?.find(item => item.threadId === draft.threadId)
       const sameRevision = previous ? previous.draftId === draft.draftId && previous.text === draft.text && previous.requestId === draft.requestId
-        && this.promptDigest(previous.text, previous.attachments, previous.skills, previous.files) === this.promptDigest(draft.text, draft.attachments, draft.skills, draft.files)
+        && followupDigest(previous) === followupDigest(draft)
         : this.emptyDraftRevisions.get(draft.threadId) === draft.draftId && !draft.text.length && !draft.attachments.length
       if (command.composer === 'manual' && !sameRevision && this.state.assignments.some(item => item.threadId === draft.threadId && item.mode === 'managed')) {
         throw new Error('This draft now belongs to the managed composer. Your manual edit was not saved over it. Stop managing before saving that edit.')
@@ -1309,7 +1309,7 @@ export class AgentControl {
     const prompt = structuredClone({ ...command, draftId: command.draftId ?? randomUUID() })
     const { threadId, draftId } = prompt
     const key = JSON.stringify([threadId, draftId])
-    const digest = this.promptDigest(prompt.text, prompt.attachments, prompt.skills)
+    const digest = followupDigest(prompt)
     const pending = this.promptAdmissions.get(key)
     const queue = this.followupStore.get()
     const matches = (item: { threadId?: string | undefined; draftId?: string | undefined }): boolean => item.threadId === threadId && item.draftId === draftId
@@ -2257,7 +2257,7 @@ export class AgentControl {
       ...('requestId' in command ? { requestId: command.requestId } : {}),
       ...(answerQuestions.length ? { questionsDigest: requestQuestionsDigest(answerQuestions) } : {}),
       ...(command.type === 'configure-thread' ? { options: agentThreadOptionsSchema.parse({ ...command, ...(startingEffort ? { reasoningEffort: startingEffort } : {}) }) } : {}),
-      ...(prompt ? { draftDigest: this.promptDigest(prompt.text, prompt.attachments, prompt.skills, prompt.files), ...(draftId ? { draftId } : {}),
+      ...(prompt ? { draftDigest: followupDigest(prompt), ...(draftId ? { draftId } : {}),
         ...(prompt.attachments?.length ? { attachmentDigests: prompt.attachments.map(image => image.digest) } : {}) } : {}),
       ...(command.type === 'create-project' ? { entityId: command.projectId } : command.type === 'create-thread' ? { entityId: command.threadId } : {}),
     })
@@ -2483,9 +2483,6 @@ export class AgentControl {
     this.state.draft = ''; this.state.draftThreadId = null; this.state.draftRequestId = null; this.state.composing = false
   }
   private hasDraft(): boolean { return Boolean(this.state.draft.trim() || this.state.draftAttachments?.length) }
-  private promptDigest(text: string, attachments: readonly AgentAttachmentHandle[] = [], skills: AgentSkillReference[] = [], files: AgentFileReference[] = []): string {
-    return followupDigest({ text, attachments: [...attachments], skills, files })
-  }
   private readPreferences(query: string, projectId: string | null, threadId: string | null, turn?: ActiveTurn): AgentPreference[] {
     if (!this.dependencies.preferences) return []
     const started = Date.now()
@@ -2646,9 +2643,10 @@ export class AgentControl {
       // Only the exact adapter acknowledgement above can retire retained content.
       const turn = this.dispatchTurns.get(item.id)
       if (turn) this.feedbackReady.add(turn)
-      // Match both representations while the selected skills and revision owner still exist.
+      // Match both representations while the selected skills, files and revision owner still exist.
+      const savedDraft = this.state.threadDrafts?.find(d => d.threadId === this.state.draftThreadId && d.draftId === this.manualDraftId)
       const clearsLegacyDraft = message && (!item.draftId || item.draftId === this.manualDraftId) && this.state.draftThreadId === thread?.id && (item.draftDigest
-        ? item.draftDigest === this.promptDigest(this.state.draft, this.state.draftAttachments, this.state.threadDrafts?.find(d => d.threadId === this.state.draftThreadId && d.draftId === this.manualDraftId)?.skills)
+        ? item.draftDigest === followupDigest({ text: this.state.draft, attachments: this.state.draftAttachments, skills: savedDraft?.skills, files: savedDraft?.files })
         : !this.state.draftAttachments?.length && this.state.draft.trim() === message.text)
       this.outbox = this.outbox.filter(o => o.id !== item.id)
       if (message && item.draftId && item.threadId) {
@@ -2658,7 +2656,7 @@ export class AgentControl {
         if (item.draftDigest) this.deliveredPromptDigests = [...this.deliveredPromptDigests.filter(r => r.threadId !== item.threadId || r.draftId !== item.draftId),
           { threadId: item.threadId, draftId: item.draftId, digest: item.draftDigest }].slice(-MAX_DELIVERED_DRAFTS)
         this.state.threadDrafts = (this.state.threadDrafts ?? []).filter(draft => draft.threadId !== item.threadId || draft.draftId !== item.draftId
-          || item.draftDigest !== this.promptDigest(draft.text, draft.attachments, draft.skills, draft.files))
+          || item.draftDigest !== followupDigest(draft))
       }
       if (clearsLegacyDraft) {
         this.clearDraft()
