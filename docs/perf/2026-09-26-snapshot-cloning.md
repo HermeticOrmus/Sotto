@@ -1,9 +1,10 @@
 # Snapshot cloning across held threads - September 26, 2026
 
 Issue #322. Both performance reviews pointed at `view()` in the Claude and Codex adapters: every adapter emit
-was said to clone every held thread's history. A held thread is one whose messages the adapter's message log
-keeps in hand: a pane shows it, or its provider session is open. The session reaper keeps an idle session for
-thirty minutes, so during a working session most threads are held. The issue asked for numbers before any
+was said to clone every held thread's history. A held thread (`CONTEXT.md`) is one whose messages the
+adapter's message log keeps in memory: it is in the watched set, its provider session is open, or nothing has
+yet said what is watched. The session reaper keeps an idle session for thirty minutes, so during a working
+session most threads are held. The issue asked for numbers before any
 change: objects traversed and time per `view()` and per `shell()` with 1, 4 and 8 threads and short and long
 histories, the process memory split, and how much of `view()` is held-thread cloning.
 
@@ -83,24 +84,33 @@ and stays under 0.2 ms, so a per-thread change report into the coordinator would
 
 A window with no pane gave the same numbers within noise (8 x 1,001: 11.46 ms an emit, 8.23 ms a `view()`),
 because every thread is held by its open CLI either way. A minimised window does not change what main
-holds: the page keeps its panes and main keeps the same watched set, so main's side of the numbers does not
-depend on it.
+holds, so it was not measured separately. The watched set is what the page sends with `observe-threads`, and
+the page sends it only when its panes or its pin change and, with an empty list, when the Threads page
+unmounts (`ThreadWorkspace.tsx`, the `observe` callback and its unmount effect). Nothing sends it on
+`visibilitychange`: the page's only listener for it, in `AgentContext.tsx`, flushes a pending shell update when
+the window is hidden and changes nothing main holds. So a minimised window keeps the same watched set, and
+main's side of the numbers is the same as for a visible one.
 
 ## The change
 
 A subscriber that keeps history from the host's thread events now says so:
 `subscribeActivitySnapshots(listener, { historyFromEvents: true })`. The workspace asks it whenever its host
-publishes events, and the provider switch passes it on to each provider when every one of its own activity
-subscribers asked it and nobody reads its ordinary `subscribe`. An adapter that publishes events then hands
-that subscriber every thread the way it already handed over a thread nobody is watching: an empty `messages`
-array and its summary from the log's own facts (`ThreadMessageLog.summarizedThread`). Claude, Codex, Grok and
-Devin all do, through one `ActivitySubscribers` helper that builds each form once a publication.
+publishes events. The provider switch passes it on to a provider that publishes events when every one of its
+own activity subscribers asked it and nobody reads its ordinary `subscribe`, and asks again whenever a
+subscriber comes or goes; when messages are wanted again it reads each connected provider afresh, since what
+they last published carries none. An adapter that publishes events then hands that subscriber every thread the
+way it already handed over a thread nobody is watching: an empty `messages` array and its summary from the
+log's own facts (`ThreadMessageLog.activityThread`). Claude, Codex, Grok and Devin all do, through one
+`ActivitySubscribers` helper that builds each form once a publication; the switch keeps its own subscribers in
+the same helper.
 
 A subscriber that does not ask still gets the messages. That keeps a coordinator wired straight to an adapter,
 as a dozen integration tests do, reading them where it always did; in the app the coordinator reads the
 workspace, whose own snapshots are unchanged. Nothing is put away by the change: the watched set, pinning and
-the reaper decide what the log holds as before, and public `snapshot()`, `connect()`, a thread refresh and
-command results still carry a held thread's messages. ADR-0016 has the amendment, and
+the reaper decide what the log holds as before, and the adapters' public `snapshot()`, `connect()`, a thread
+refresh and command results still carry a held thread's messages. The switch's own `connect()` is not one of
+those: for a provider already connected it returns what that provider last published, which for the
+workspace carries no messages, and the workspace reads none from it. ADR-0016 has the amendment, and
 `AgentHost.subscribeActivitySnapshots` says it.
 
 A first version left the messages out for every activity subscriber. The full suite caught the coordinator
@@ -127,7 +137,15 @@ next emit replaced it. Streaming publishes at most every 16 ms, so before the ch
 cost the main thread about two thirds of each streaming interval in copies.
 
 A window with no pane gave the same numbers (8 x 1,001: 0.14-0.17 ms an emit). `view()` and `shell()` did
-not change (8 x 1,001: 6.8-8.4 ms and 0.11-0.13 ms), as expected.
+not change (8 x 1,001: 6.8-8.4 ms and 0.11-0.13 ms), as expected. A run after the review fixes, which made the
+switch ask again when a subscriber comes or goes, gave 0.22 ms an emit, 10.0-10.6 ms a `view()` and
+0.16 ms a `shell()` for 8 x 1,001 on a busier machine, with the same object counts.
+
+Each activity publication still works out a held thread's summary, which the workspace then ignores, since
+it keeps the summary it built from events (`old?.summary` in `WorkspaceHost.accept`). That is accepted: the
+summary costs the same for every thread whatever its history holds, a handful of objects and two short
+messages, and the activity summaries it rests on are cached per frozen activity array. Leaving it out would
+make an activity snapshot's thread differ from the one every other reader sees for a thread nobody watches.
 
 ## Process memory
 
@@ -139,14 +157,16 @@ Code's. The in-app split was last measured by `tests/e2e/multi-thread-cpu.spec.t
 274-290 MiB, the GPU process 125 MiB and the utility process 48 MiB. That spec drives a synthetic provider on
 the legacy snapshot contract, not the native adapters, so it cannot show this change, and it was not run again
 here. How much of main's working set in a real session is held histories depends on how many threads are held
-and how long they are; the heap figures above are the benchmark's share of it.
+and how long they are; the heap figures above are the benchmark's share of it. The per-process split with the
+native adapters is not measured; #369 asks for an e2e that runs them over the fake CLIs.
 
 ## What was not changed
 
 - `view()` still clones every held history, 7-10 ms with eight long threads. It runs once for a connect, a
   `snapshot()`, a thread refresh or a settings result, not for each update, and its readers outside the
   workspace, the adapter contract among them, expect the messages there. The workspace discards those too
-  when it accepts a refresh or a settings result; a later change could drop them for that caller alone.
+  when it accepts a refresh or a settings result, and the provider switch copies them again on the way; #368
+  is the follow-up that drops them for that caller alone.
 - The session reaper keeps its thirty minutes, as the issue asked.
 
 ## Tests
@@ -156,11 +176,13 @@ and how long they are; the heap figures above are the benchmark's share of it.
   messages, the last one carries its summary with the reply, and the events carry the prompt; a subscriber
   that did not ask, and the public snapshot, still carry the messages.
 - `tests/unit/main/activitySnapshotProviders.test.ts` checks that the provider switch, through the Sotto
-  identity wrapper, asks a provider to leave messages out only when every subscriber keeps history from events
-  and nobody reads its ordinary subscription.
+  identity wrapper, asks a provider to leave messages out only when that provider publishes events, every
+  subscriber keeps history from events and nobody reads its ordinary subscription, and that a subscriber that
+  reads messages and arrives after connect makes it ask again and is handed the messages.
 - `tests/unit/main/activitySnapshots.test.ts` checks that `ActivitySubscribers` builds each form once and
   hands every subscriber its own copy, and `tests/unit/main/threadMessageLog.test.ts` that summarizing a held
   thread copies nothing and puts nothing away.
+- The benchmark's own file checks, in the default suite, that the private members it times still exist.
 - The existing workspace, parity, streaming and coordinator suites (`multiThreadUpdateParity`,
   `workspacePaneActivity`, `nativeStreamingResponsiveness`, `codexStreamingResponsiveness`,
   `nativeQueueOwnership`, `confirmedNativeDelivery`, among others) pass unchanged, so the history the
