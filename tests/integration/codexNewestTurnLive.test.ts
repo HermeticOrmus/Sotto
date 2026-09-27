@@ -5,7 +5,8 @@
  * file exist, and filler turns are written into that file the way Codex writes a turn. It checks that
  * `thread/turns/list` works on a legacy thread and hands back the same newest turn `thread/read` does, and that on a
  * thread this app-server has resumed both see a turn written to the file from outside, as another Codex process
- * writes one. Then it prints, for 50, 500 and 2,000 turns, the round trip and reply size of each: counters, sizes
+ * writes one. It checks that a request Codex does not have, and a value in one it does not know, are refused in the
+ * wording the adapter reads. Then it prints, for 50, 500 and 2,000 turns, the round trip and reply size of each: counters, sizes
  * and timers only. It reads nothing from the user's own Codex home and never runs in CI:
  *
  *   SOTTO_CODEX_TURNS_LIVE=1 npx vitest run tests/integration/codexNewestTurnLive.test.ts --maxWorkers=1 --disable-console-intercept
@@ -115,6 +116,23 @@ describe.skipIf(!LIVE)('Codex thread/turns/list against the installed app-server
       expect(after.read).not.toBe(before.read)
       // Why a timestamp could not stand in for either request: whether the thread's own time moved with that turn.
       console.info(`codex turns live: ${JSON.stringify({ updatedAtMovedWithOutsideTurn: after.updatedAt !== before.updatedAt })}`)
+    } finally { await server.stop(); await rm(home, { recursive: true, force: true }) }
+  }, 120_000)
+
+  it('names a request, or a value in one, it does not have in the wording the adapter reads', async () => {
+    const executable = await findExecutable()
+    if (!executable) throw new Error('Install Codex to run this check')
+    const { home, threadId } = await legacyThread(executable)
+    const server = await AppServer.start(executable, home)
+    try {
+      // `Rejected` in codex.ts stops the newest-turn check on a connection by this wording (0.157.1). A Codex that
+      // words it differently fails here, and until the adapter follows it costs a refused check on every send.
+      const missing = await server.rpc('thread/bogus/list', { threadId })
+      expect(missing.error?.code).toBe(-32600)
+      expect(missing.error?.message).toMatch(/^Invalid request: unknown variant `thread\/bogus\/list`/)
+      const unknownValue = await server.rpc('thread/turns/list', { threadId, limit: 1, sortDirection: 'desc', itemsView: 'bogus' })
+      expect(unknownValue.error?.code).toBe(-32600)
+      expect(unknownValue.error?.message).toMatch(/^Invalid request: unknown variant `bogus`/)
     } finally { await server.stop(); await rm(home, { recursive: true, force: true }) }
   }, 120_000)
 

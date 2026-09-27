@@ -75,7 +75,13 @@ turn is the benchmark's own short one, 442 bytes, whose user message is 170 byte
 
 What remains of the read at 2,000 turns, 60-99 ms, is mostly the fake: it copies the whole thread to answer any
 history request, and its save of the thread on `turn/start` is inside the send figure too. Saving the thread record,
-which holds an identity for every turn, is 19-38 ms of it.
+which holds an identity for every turn, was 19-38 ms of it.
+
+After review the check saves the thread record only when applying the newest turn changed it, which a turn Sotto
+already holds usually does not. One run afterwards, with the fake's history naming items as the stream does, made
+no save inside any check. The adapter's read took 4.7, 11 and 45 ms at 50, 500 and 2,000 turns and its whole send
+23, 68 and 204 ms; sends from the Threads page took 57, 119 and 347 ms, with no whole read before or after
+`turn/start`.
 
 ## Against Codex CLI 0.157.1
 
@@ -109,8 +115,9 @@ the check saves it little. What the check saves is the transcript on the pipe, 4
 and Sotto parsing and applying all of it, which the fake shows is where the seconds were.
 
 The same client answers a request it does not have, and a params value it does not know, in one shape: an invalid
-request naming an unknown variant (``unknown variant `thread/bogus/list` ``, ``unknown variant `bogus` ``). So Sotto stops
-asking for the check on a connection only when the variant named is `thread/turns/list` itself.
+request naming an unknown variant (``unknown variant `thread/bogus/list` ``, ``unknown variant `bogus` ``). Either would
+be refused the same way on every send, since the check always sends the same values, so either stops Sotto asking for
+the check on that connection. The live suite checks that wording, so a Codex that changes it shows there.
 
 ## What the check keeps
 
@@ -126,8 +133,9 @@ Threads page, use the check alone, including when Codex names history items diff
 another process added or is still running, and a message in the newest turn Sotto cannot match, are read in full and
 the stale reply refused before `turn/start`. Input typed into the session log is refused on the check alone. A turn
 another process took back is read in full and the send goes, as it did before. A turn that does not match leaves the
-thread as it was when the whole read after it fails. A reply without `itemsView` is read in full. Any refusal is read
-in full; only a Codex without `thread/turns/list` is not asked again on that connection.
+thread as it was when the whole read after it fails. A reply without `itemsView` is read in full. Any refusal, and a
+check that gets no reply in time, is read in full, and the send goes when that read allows it. A Codex without
+`thread/turns/list`, or without a value the check sends, is not asked again on that connection.
 `tests/unit/main/threadReadPurpose.test.ts` shows that the workspace, provider and Sotto thread hosts hand the read's
 purpose on, that the coordinator marks its reads before a manual send, a draft send and a supervision follow-up, and
 that its assign, select and retry reads stay whole.

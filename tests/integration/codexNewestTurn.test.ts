@@ -7,11 +7,9 @@
  * connection's stream. The takeover and stale-reply contract itself is `adapterContract.ts`'s, unchanged.
  */
 import { randomUUID } from 'node:crypto'
-import { readFile } from 'node:fs/promises'
-import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AgentControl } from '../../src/main/agents/control'
-import { codexFixture, type RecordedRpc } from '../fixtures/codexFixture'
+import { aroundTurnStart, codexFixture, historyReads } from '../fixtures/codexFixture'
 import { manualSendCoordinator } from '../fixtures/manualSendCoordinator'
 
 type Fixture = Awaited<ReturnType<typeof codexFixture>>
@@ -37,19 +35,13 @@ async function turn(f: Fixture, id: string, messageId: string, expectedLastUserM
 }
 const send = (f: Fixture, id: string, messageId: string, expectedLastUserMessageId?: string) =>
   f.host.execute({ type: 'send', threadId: id, commandId: randomUUID(), messageId, text: `Prompt ${messageId}`, ...(expectedLastUserMessageId ? { expectedLastUserMessageId } : {}) })
-/** Act as a second Codex process, and wait until the fake's shared history holds what it did. */
+/** Act as a second Codex process, and wait until the fake says the shared history holds what it did. */
 async function elsewhere(f: Fixture, id: string, action: Record<string, unknown>): Promise<void> {
-  const codexThreadId = await f.realId(id)
-  const turns = async () => JSON.stringify((JSON.parse(await readFile(join(f.root, 'state.json'), 'utf8')) as { threads: Record<string, { turns: unknown[] }> }).threads[codexThreadId]!.turns)
-  const before = await turns()
-  await f.action(id, action)
-  await expect.poll(turns).not.toBe(before)
+  const acted = await f.action(id, action)
+  await expect.poll(() => f.acted(acted)).toBe(true)
 }
 /** The history requests made since `from`, as `turns` (the newest-turn check) and `read` (the whole transcript). */
-async function historyRequests(f: Fixture, from: number): Promise<('turns' | 'read')[]> {
-  return (await f.driver.requests()).slice(from).flatMap((request: RecordedRpc) => request.method === 'thread/turns/list' ? ['turns' as const]
-    : request.method === 'thread/read' && request.params?.includeTurns === true ? ['read' as const] : [])
-}
+const historyRequests = async (f: Fixture, from: number): Promise<('turns' | 'read')[]> => historyReads((await f.driver.requests()).slice(from))
 
 describe('Codex send checks the newest turn before reading the whole transcript', () => {
   it('sends after a finished turn on the newest turn alone', async () => {
@@ -72,6 +64,20 @@ describe('Codex send checks the newest turn before reading the whole transcript'
     const messages = (await f.host.snapshot()).threads.find(thread => thread.id === id)!.messages
     expect(messages.map(message => [message.role, message.text])).toEqual(['own-1', 'own-2', 'own-3']
       .flatMap(own => [['user', `Prompt ${own}`], ['assistant', `Reply to ${own}`]]))
+  })
+
+  it('saves the thread record after the check only when the newest turn taught it something', async () => {
+    const saves = async (script: Record<string, unknown>): Promise<number> => {
+      const { f, id } = await answeredThread(script)
+      const persist = vi.spyOn(f.adapter as unknown as { persist(): Promise<void> }, 'persist')
+      const from = (await f.driver.requests()).length
+      await f.host.refreshThread!(id, { beforeSend: true })
+      expect(await historyRequests(f, from)).toEqual(['turns'])
+      return persist.mock.calls.length
+    }
+    expect(await saves({})).toBe(0)
+    // History that names items differently from the stream binds the history's names to the messages Sotto holds.
+    expect(await saves({ historyItemIds: true })).toBe(1)
   })
 
   it('reads the whole transcript and refuses a stale reply when another Codex process added a turn', async () => {
@@ -151,14 +157,28 @@ describe('Codex send checks the newest turn before reading the whole transcript'
     expect(await historyRequests(f, from)).toEqual(['turns', 'read', 'turns'])
   })
 
-  it('asks again on the next send when Codex names an unknown value rather than the request', async () => {
+  it('reads the whole transcript and sends when the check gets no reply, and the late reply changes nothing', async () => {
+    const { f, id } = await answeredThread()
+    await f.script({ holdReply: 'thread/turns/list' })
+    const from = (await f.driver.requests()).length
+    await expect(send(f, id, 'own-2', 'own-1')).resolves.toEqual({ accepted: true })
+    expect(await historyRequests(f, from)).toEqual(['turns', 'read'])
+    const released = await f.action(id, { type: 'release-reply', method: 'thread/turns/list' })
+    await expect.poll(() => f.acted(released)).toBe(true)
+    await f.driver.completeTurn(id, 'Reply to own-2')
+    await expect.poll(async () => (await f.host.snapshot()).threads.find(thread => thread.id === id)?.status).toBe('idle')
+    const messages = (await f.host.snapshot()).threads.find(thread => thread.id === id)!.messages
+    expect(messages.map(message => [message.role, message.text])).toEqual(['own-1', 'own-2'].flatMap(own => [['user', `Prompt ${own}`], ['assistant', `Reply to ${own}`]]))
+  })
+
+  it('stops asking on that connection when Codex names a value the check sends as unknown', async () => {
     const { f, id } = await answeredThread()
     // How Codex 0.157.1 answers a params value it does not know, here an itemsView it has no such view for.
     await f.script({ reject: 'thread/turns/list', rejection: { code: -32600, message: 'Invalid request: unknown variant `bogus`, expected one of `notLoaded`, `summary`, `full`' } })
     const from = (await f.driver.requests()).length
     await turn(f, id, 'own-2', 'own-1')
     await turn(f, id, 'own-3', 'own-2')
-    expect(await historyRequests(f, from)).toEqual(['turns', 'read', 'turns'])
+    expect(await historyRequests(f, from)).toEqual(['turns', 'read', 'read'])
   })
 
   it('checks the newest turn before a personal-chat send', async () => {
@@ -225,7 +245,7 @@ describe('A send from the Threads page uses the newest-turn check', () => {
     return { f, id, control }
   }
   async function manual(f: Fixture, control: AgentControl, id: string, text: string): Promise<void> {
-    await control.command({ type: 'manual-send', threadId: id, text })
+    expect((await control.command({ type: 'manual-send', threadId: id, text })).error).toBeNull()
     await f.driver.completeTurn(id, `Reply to ${text}`)
     await expect.poll(async () => { await control.command({ type: 'refresh' }); return control.get().host.threads.find(thread => thread.id === id)?.status }).toBe('idle')
   }
@@ -233,18 +253,12 @@ describe('A send from the Threads page uses the newest-turn check', () => {
   afterEach(async () => { for (const control of controls.splice(0)) { control.dispose(); await control.privacyChanged() } })
 
   /** The history requests made since `from` and before the send's `turn/start`. */
-  async function beforeStart(f: Fixture, from: number): Promise<('turns' | 'read')[]> {
-    const sent = (await f.driver.requests()).slice(from)
-    const start = sent.findIndex(request => request.method === 'turn/start')
-    expect(start).toBeGreaterThan(-1)
-    return sent.slice(0, start).flatMap(request => request.method === 'thread/turns/list' ? ['turns' as const]
-      : request.method === 'thread/read' && request.params?.includeTurns === true ? ['read' as const] : [])
-  }
+  const beforeStart = async (f: Fixture, from: number): Promise<('turns' | 'read')[]> => historyReads(aroundTurnStart((await f.driver.requests()).slice(from)).before)
 
   it('checks the newest turn, not the whole transcript, before turn/start', async () => {
     const { f, id, control } = await coordinated()
     const from = (await f.driver.requests()).length
-    await control.command({ type: 'manual-send', threadId: id, text: 'Second prompt' })
+    expect((await control.command({ type: 'manual-send', threadId: id, text: 'Second prompt' })).error).toBeNull()
     // The coordinator's read before the send and the adapter's own, each the newest turn alone.
     expect(await beforeStart(f, from)).toEqual(['turns', 'turns'])
     expect(control.get().host.threads.find(thread => thread.id === id)!.messages.filter(message => message.role === 'user').map(message => message.text)).toEqual(['First prompt', 'Second prompt'])
@@ -255,7 +269,7 @@ describe('A send from the Threads page uses the newest-turn check', () => {
     await elsewhere(f, id, { type: 'native-turn', text: 'Typed in another Codex' })
     const from = (await f.driver.requests()).length
     // A manual send is written against what the coordinator's read shows, so after reading the other turn it goes.
-    await control.command({ type: 'manual-send', threadId: id, text: 'After the other turn' })
+    expect((await control.command({ type: 'manual-send', threadId: id, text: 'After the other turn' })).error).toBeNull()
     expect(await beforeStart(f, from)).toEqual(['turns', 'read', 'turns'])
     expect(control.get().host.threads.find(thread => thread.id === id)!.messages.filter(message => message.role === 'user').map(message => message.text))
       .toEqual(['First prompt', 'Typed in another Codex', 'After the other turn'])
