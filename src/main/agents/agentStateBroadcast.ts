@@ -68,10 +68,11 @@ export class AgentStateBroadcaster {
    * its broadcast therefore takes a revision of its own for the old content, and the next broadcast takes
    * another for the new content and sends it in full to both windows, the widget included (ADR-0028's
    * September 26 amendment).
+   *
+   * An arrow property rather than a method, so `registerAgentIpc` can be handed it on its own.
    */
-  encodeReceipt(state: AgentState): AgentCommandReceipt {
-    return this.encode(state, (key, models): AgentModelCatalogRevision => ({ revision: this.revisionFor(key, models), omitted: true }))
-  }
+  readonly encodeReceipt = (state: AgentState): AgentCommandReceipt =>
+    this.encode(state, (key, models): AgentModelCatalogRevision => ({ revision: this.revisionFor(key, models), omitted: true }))
 
   /** `state` with `host.models` and every `host.clientHosts[].models` replaced by what `catalog` makes of it. */
   private encode<Catalog>(state: AgentState, catalog: (key: string, models: readonly AgentModel[]) => Catalog): EncodedState<Catalog> {
