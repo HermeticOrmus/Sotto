@@ -40,7 +40,7 @@ git tag ios-testflight-$(date +%Y%m%d-%H%M) && git push origin --tags
 
 About half an hour later the build appears in the TestFlight app on the phones of the internal testing group. The build number is the workflow's run number; the marketing version is `MARKETING_VERSION` in the Xcode project.
 
-One-time setup, all in a browser plus `gh`:
+One-time setup, all in a browser plus `gh`. `bash apps/ios/Scripts/testflight-setup.sh` walks through steps 1 to 4, opening each page and storing the secrets without showing them:
 
 1. In the Apple Developer account, under Certificates, Identifiers & Profiles, register the App ID `com.millzach.sotto.ios` (explicit, no capabilities), and note the Team ID under Membership.
 2. In App Store Connect, create the app under Apps with that bundle ID. The App Store name must be unique across the store; the name on the home screen stays Sotto.
