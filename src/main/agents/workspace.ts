@@ -198,6 +198,8 @@ export class WorkspaceHost implements AgentHost {
   private readonly eventSourced: boolean
   /** Events waiting to be written, so a streamed reply costs one transaction per publish, not per word. */
   private readonly pendingEvents = new Map<string, ThreadEvent[]>()
+  /** A failed privacy transition must not later promote these pending words to durable history. */
+  private pendingEventsPrivate = false
   /** Failed batches stay ahead of later events; organization saves cannot acknowledge their warning. */
   private readonly failedEventThreads = new Set<string>()
   private historyRetryTimer: ReturnType<typeof setTimeout> | undefined
@@ -950,6 +952,7 @@ export class WorkspaceHost implements AgentHost {
    * at the next publish rather than per event, which keeps a streamed reply at one publish per window.
    */
   private recordEvent(threadId: string, event: ThreadEvent): void {
+    if (!this.historyEnabled()) this.pendingEventsPrivate = true
     const waiting = this.pendingEvents.get(threadId)
     if (waiting) waiting.push(event)
     else this.pendingEvents.set(threadId, [event])
@@ -959,6 +962,9 @@ export class WorkspaceHost implements AgentHost {
   /** Write what the events said. Called before anything reads the store, and at every publish. */
   private writeEvents(force = false): void {
     if (this.pendingEvents.size === 0 || !this.ready || this.storeUnavailable) return
+    // Another store may have stopped privacyChanged before this connection could be replaced.
+    // The setting already forbids durable text, including a timer or shutdown retry.
+    if (!this.threadStore.ephemeral && (!this.historyEnabled() || this.pendingEventsPrivate)) return
     for (const [threadId, events] of this.pendingEvents) {
       if (!force && this.historyRetryTimer && this.failedEventThreads.has(threadId)) continue
       try {
@@ -1515,7 +1521,18 @@ export class WorkspaceHost implements AgentHost {
    */
   async privacyChanged(): Promise<void> {
     this.activityInputs.clear()
-    if (!this.historyEnabled()) this.activityJsonFallbackAllowed = false
+    if (!this.historyEnabled()) {
+      this.activityJsonFallbackAllowed = false
+      this.pendingEventsPrivate = true
+    } else if (this.pendingEventsPrivate) {
+      // Clear before either store switches: an earlier failed redaction may have left this one durable.
+      this.pendingEvents.clear()
+      this.failedEventThreads.clear()
+      clearTimeout(this.historyRetryTimer)
+      this.historyRetryTimer = undefined
+      this.historyRetryDelay = 1_000
+      this.pendingEventsPrivate = false
+    }
     if (!this.subagentUnavailable && this.subagentStore.ephemeral === this.historyEnabled()) {
       try {
         const unsettled = new Map(this.state.snapshot.threads.map(thread => {
@@ -1545,8 +1562,6 @@ export class WorkspaceHost implements AgentHost {
           this.historyRetryTimer = undefined
           this.historyRetryDelay = 1_000
           if (wanted) {
-            this.pendingEvents.clear()
-            this.failedEventThreads.clear()
             this.saveActivities()
             this.threadStore.becomeDurable()
           } else {

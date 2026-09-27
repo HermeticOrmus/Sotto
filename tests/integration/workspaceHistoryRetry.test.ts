@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import { WorkspaceHost } from '../../src/main/agents/workspace'
 import { ThreadStore } from '../../src/main/agents/threadStore'
+import { SubagentStore } from '../../src/main/agents/subagentStore'
 import type { ThreadHostEvent } from '../../src/main/agents/host'
 import type { ThreadEvent } from '../../src/shared/threadEvents'
 import { FakeProviderHost } from '../fixtures/fakeProviderHost'
@@ -156,4 +157,48 @@ it('keeps a failed thread warning while another thread commits, then restores re
   expect(host.workspaceSnapshot().error).toBeUndefined()
   expect(host.threadMessages('session-workshop')).toMatchObject([{ id: 'replacement', text: 'After reset' }])
   expect(host.eventsAfter(0, 'session-workshop').map(row => row.event.kind)).toEqual(['message-added', 'messages-reset', 'message-added'])
+})
+
+it('does not retry into the durable connection if another privacy store fails before it switches', async () => {
+  let history = true
+  const { directory, adapter, host } = await fixture(() => history)
+  vi.useFakeTimers()
+  const append = failWrites()
+  adapter.publish(added('reply', 'PRIVATE BLOCKED SWITCH'))
+  expect(host.workspaceSnapshot().error).toContain('Thread messages could not be saved')
+  append.mockRestore()
+  const privacy = vi.spyOn(SubagentStore.prototype, 'privacyChanged').mockImplementation(() => { throw new Error('Synthetic failed redaction') })
+  history = false
+  await expect(host.privacyChanged()).rejects.toThrow('Saved agent history could not be removed')
+  await vi.advanceTimersByTimeAsync(1_000)
+  const disk = new ThreadStore(join(directory, 'threads.sqlite'))
+  disk.open()
+  try { expect(disk.readMessages('session-workshop').messages).toEqual([]) }
+  finally { disk.close() }
+  privacy.mockRestore()
+  await host.privacyChanged()
+  expect(host.threadMessages('session-workshop')).toMatchObject([{ text: 'PRIVATE BLOCKED SWITCH' }])
+  await host.close()
+})
+
+it('discards private pending events if retention resumes after an interrupted privacy switch', async () => {
+  let history = true
+  const { directory, adapter, host } = await fixture(() => history)
+  const append = failWrites()
+  adapter.publish(added('reply', 'PRIVATE BEFORE SWITCH'))
+  host.workspaceSnapshot()
+  const privacy = vi.spyOn(SubagentStore.prototype, 'privacyChanged').mockImplementation(() => { throw new Error('Synthetic failed redaction') })
+  history = false
+  await expect(host.privacyChanged()).rejects.toThrow('Saved agent history could not be removed')
+  adapter.publish(added('off', 'PRIVATE DURING SWITCH'))
+  append.mockRestore()
+  privacy.mockRestore()
+  history = true
+  await host.privacyChanged()
+  adapter.publish(added('new', 'New retained reply'))
+  await host.close()
+  const disk = new ThreadStore(join(directory, 'threads.sqlite'))
+  disk.open()
+  try { expect(disk.readMessages('session-workshop').messages).toMatchObject([{ id: 'new', text: 'New retained reply' }]) }
+  finally { disk.close() }
 })

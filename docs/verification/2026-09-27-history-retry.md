@@ -6,7 +6,9 @@ Verified on Windows against base `7b5fdb84`. No provider account, paid model tur
 
 `tests/integration/workspaceHistoryRetry.test.ts` drives WorkspaceHost with provider events and a real SQLite store. Only the append failure is injected. Before the fix, four of its first five cases failed: an organization save cleared the warning, shutdown lost the opening message, 600 chunks caused 601 failed appends, and the privacy transition lost the pending message. The normal coalescing case passed.
 
-The six final cases check ordered retry plus later text and restart, forced shutdown retry, persistent-failure backoff and shutdown rejection, both privacy transitions, normal streaming and another thread committing beside a failed thread followed by a reset. A failed thread stays in memory until its whole transaction commits. A recovered thread reloads its window even with no new provider event. During a persistent failure, repeated reads and 600 additional chunks make no extra attempt before the retry timer; delays start at one second and double up to thirty seconds. A normal 601-event burst takes at most two commits, with all 601 events retained exactly once.
+The eight final cases check ordered retry plus later text and restart, forced shutdown retry, persistent-failure backoff and shutdown rejection, both privacy transitions, normal streaming and another thread committing beside a failed thread followed by a reset. A failed thread stays in memory until its whole transaction commits. A recovered thread reloads its window even with no new provider event. During a persistent failure, repeated reads and 600 additional chunks make no extra attempt before the retry timer; delays start at one second and double up to thirty seconds. A normal 601-event burst takes at most two commits, with all 601 events retained exactly once.
+
+Two additional post-review regressions exposed interrupted privacy changes: subagent redaction could fail before the history connection switched, and re-enabling retention afterward could promote private pending events. Both failed before the guard/provenance fix and now pass; 61 related history, activity, subagent and quit-drain tests pass. A retry refuses a durable connection while retention is off, and pending events remember the privacy transition even when another store interrupted it.
 
 History off moves pending durable events to the ephemeral connection after redaction; enabling history discards remaining ephemeral events before reopening the durable connection. Tests search every profile file for the synthetic private text after the transitions.
 
@@ -16,8 +18,8 @@ Shutdown callers were inspected: runtime.close drains providers before Workspace
 
 - Typecheck, lint and third-party notices passed.
 - Runtime preparation and production build passed.
-- Focused history, activity and coalescing suites passed (43 tests before the final cross-thread case; the final retry suite passes all six cases).
-- Full two-worker gate: 435 files passed, 37 skipped; 5,733 tests passed, 129 skipped (730.55 seconds).
+- Focused history, activity and coalescing suites passed (43 tests before the final cross-thread case; the final retry suite passes all eight cases).
+- Initial full two-worker gate: 435 files passed, 37 skipped; 5,733 tests passed, 129 skipped (730.55 seconds). The gate is rerunning after the interrupted-privacy correction.
 - Isolated performance checks: pending coordinated idle slot.
 
 ## Electron and visual inspection
@@ -30,6 +32,6 @@ The [dark two-pane transcript](../../artifacts/review-378/threads-dark.png) and 
 
 ## Review
 
-Independent native GPT-6-astra standards and spec review of `d08d6c7f` reported zero verified findings after inspecting the source, tests and shutdown callers. The coordinating agent performs its own review separately.
+Independent native GPT-6-astra standards and spec review of `d08d6c7f` reported zero verified findings after inspecting the source, tests and shutdown callers. A follow-up independent native review of the interrupted-privacy guard and regressions also reported zero verified Standards or Spec findings. The coordinating agent performs its own review separately.
 
 The four external CLI slots from the code-review skill were attempted. Automatic approval review rejected the Astra spec and both Grok calls because external disclosure of the private source was not authorized. Astra standards started but could not read the checkout because its child sandbox failed to initialize. No external slot produced review evidence. The authorized native review replaces those unavailable calls; this is not a cross-model review.
