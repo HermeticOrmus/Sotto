@@ -255,3 +255,7 @@ npx vitest run tests/integration/codexComputerUseLive.test.ts --maxWorkers=1
 ```
 
 Build and run `npx playwright test tests/e2e/agent-browser.spec.ts tests/e2e/tools-sidecar.spec.ts tests/e2e/phase-three-tools-bridge.spec.ts` to exercise the real Electron browser, permission continuation, feedback drafts and the Tools pane. The agent test uses a local page and test-only provider entry point; it needs no provider account. Screenshots and a geometry report are written to ignored `artifacts/agent-browser/`. Native-provider compatibility and actual desktop results are recorded separately in `docs/verification/`.
+
+## Workflow assignment detail readiness
+
+The workflow journey in `tests/unit/renderer/subagents.test.tsx` holds the first assignment response until it has checked the pending view. The summary and fallback both show the workflow description during that interval; only the full task response removes the fallback. The test scopes pending assertions to each location, releases the response explicitly, and checks the loaded detail before requiring a unique description. It also retains the existing Escape and return-focus journey. Back-button focus is not proof that asynchronous assignment detail has loaded (#402).
