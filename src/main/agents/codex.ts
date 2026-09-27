@@ -17,7 +17,7 @@ import type { AgentSkillCatalog, AgentSkillReference } from '../../shared/agentS
 import { codexSkillInput, parseCodexSkillCatalog } from './codexSkills'
 import type { AgentFileReference } from '../../shared/agentFiles'
 import { verifyFileMentions } from './promptFiles'
-import type { AgentHost, AgentHostCommand, AgentHostResult, AgentSkillScope, PromptImage, ShortTextPrompt, ThreadHistorySource, ThreadHostEvent, ThreadRead } from './host'
+import type { AgentHost, AgentHostCommand, AgentHostResult, AgentSkillScope, PromptImage, ShortTextPrompt, ThreadHistorySource, ThreadHostEvent, ThreadReadPurpose } from './host'
 import { SIDE_WRITING_TIMEOUT_MS, sideWritingEffort } from './sideWriting'
 import { ThreadMessageLog } from './threadMessageLog'
 import { cloneHostSnapshot } from './cloneHostSnapshot'
@@ -100,8 +100,7 @@ class Rejected extends Error {
   readonly missingThreadId: string | undefined
   /**
    * The name Codex said it does not know. Codex 0.157.1 answers a request it does not have as an invalid request
-   * naming an unknown variant, and names an unknown value inside the params the same way, so a caller compares it
-   * with the method it asked for.
+   * naming an unknown variant, and names an unknown value inside the params the same way.
    */
   readonly unknownVariant: string | undefined
   /** JSON-RPC's own "method not found". */
@@ -146,7 +145,7 @@ export class CodexAppServerHost implements AgentHost {
   private readonly resuming = new Map<string, Promise<void>>()
   private readonly opening = new Map<string, Promise<void>>()
   private readonly threadReads = new Map<string, Promise<void>>()
-  /** Whether this connection's Codex answers `thread/turns/list`; an older one says the method is unknown once. */
+  /** Whether this connection's Codex answers `thread/turns/list` as Sotto asks for it; one that cannot says so once. */
   private turnsListSupported = true
   private readonly revisions = new Map<string, number>()
   private readonly dispatching = new Set<string>()
@@ -465,7 +464,7 @@ export class CodexAppServerHost implements AgentHost {
    * Read the thread back from Codex. The read before a send first asks only for the newest turn
    * (`confirmNewestTurn`) and reads the whole transcript when that cannot show nothing changed.
    */
-  async refreshThread(id: string, purpose: ThreadRead = {}): Promise<AgentHostSnapshot> {
+  async refreshThread(id: string, purpose: ThreadReadPurpose = {}): Promise<AgentHostSnapshot> {
     if (!this.aliases[id]) throw new Error('That Codex thread is unavailable.')
     const generation = this.generation
     const work = (this.threadReads.get(id) ?? Promise.resolve()).catch(() => undefined).then(async () => {
@@ -484,10 +483,7 @@ export class CodexAppServerHost implements AgentHost {
             // A late read must not overwrite streamed text, a completion, or a permission.
             if (!current || generation !== this.generation || revision !== this.revisions.get(id)) return
             this.applyThread(id, threadResponse.parse(value).thread, z.object({ thread: z.object({ turns: z.array(z.unknown()) }) }).safeParse(value).success); await this.persist(); applied = true
-            this.histories.add(id)
-            this.flushLogMessages(id); this.orderMessages(id)
-            const read = this.ensureThread(id)
-            if (!alias.pendingSettings) { delete read.historyStatus; delete read.historyError }
+            this.settleRead(id)
           }
           try { await this.rpc('thread/read', { threadId: alias.codexThreadId, includeTurns: true }, apply) }
           catch (error) {
@@ -513,15 +509,23 @@ export class CodexAppServerHost implements AgentHost {
     }
     finally { if (this.threadReads.get(id) === work) this.threadReads.delete(id) }
   }
+  /** What a read that applied the thread does last, whether it read the whole transcript or the newest turn alone. */
+  private settleRead(id: string): void {
+    this.histories.add(id)
+    this.flushLogMessages(id); this.orderMessages(id)
+    const read = this.ensureThread(id)
+    if (!this.aliases[id]!.pendingSettings) { delete read.historyStatus; delete read.historyError }
+  }
   /**
    * The newest-turn check (#324): the read before a send, without reading the whole transcript. It asks Codex for
    * its newest turn alone with `thread/turns/list`, which reads the same session file `thread/read` does, so it
    * sees a turn another Codex process added. It answers true only when that turn is the newest one Sotto already
    * holds, has ended, and reconciles onto exactly the messages Sotto already has; then a whole read would change
-   * nothing a send checks. Anything else answers false and the caller reads the whole transcript. ADR-0005's
-   * follow-up lists every such case; the condition and the refusal handling below are that list in code. The match
-   * is decided on copies with the same reconciliation `applyTurn` runs, and only a turn that matches is applied, so
-   * a turn that does not match leaves the thread as it was for the whole read, or a failed one, to find.
+   * nothing a send checks. Anything else answers false and the caller reads the whole transcript, a refusal or a
+   * lost reply included. ADR-0005's follow-up lists every such case; the condition and the error handling below
+   * are that list in code. The match is decided on copies with the same reconciliation `applyTurn` runs, and only
+   * a turn that matches is applied, so a turn that does not match leaves the thread as it was for the whole read,
+   * or a failed one, to find. A reply that comes after the check gave up is dropped, as a late whole read is.
    */
   private async confirmNewestTurn(id: string, generation: number): Promise<boolean> {
     const alias = this.aliases[id]!, thread = this.ensureThread(id)
@@ -531,10 +535,10 @@ export class CodexAppServerHost implements AgentHost {
       || this.pendingLogMessages.has(id) || this.runningTurns.has(id) || thread.status !== 'idle' || thread.requests.length || thread.historyStatus) return false
     const revision = this.revisions.get(id)
     const held = newest.messages.map(message => message.id)
-    let confirmed = false
+    let confirmed = false, current = true
     try {
       await this.rpc('thread/turns/list', { threadId: alias.codexThreadId, limit: 1, sortDirection: 'desc', itemsView: 'full' }, async value => {
-        if (generation !== this.generation || revision !== this.revisions.get(id)) return
+        if (!current || generation !== this.generation || revision !== this.revisions.get(id)) return
         // Only a reply that says it carries the full items counts; turnSchema would take a missing itemsView as full.
         const page = z.object({ data: z.array(turnSchema.extend({ itemsView: z.literal('full') })) }).safeParse(value)
         const turn = page.success && page.data.data.length === 1 ? page.data.data[0]! : undefined
@@ -543,16 +547,21 @@ export class CodexAppServerHost implements AgentHost {
         const trial = structuredClone(newest)
         this.reconcileTurn(id, [...alias.messageIdentities.slice(0, -1), trial], structuredClone(alias.origins), turn)
         if (!trial.ordered || !trial.messages.every(message => message.complete && held.includes(message.id))) return
+        // Applying the newest turn writes to the saved record only through that turn's identities and the origins (the
+        // guard above rules out a compaction), and for a turn Sotto already holds it usually changes neither.
+        const saved = (): string => JSON.stringify([alias.messageIdentities.length, alias.messageIdentities.at(-1), alias.origins])
+        const before = saved()
         this.applyTurn(id, turn)
-        this.flushLogMessages(id); this.orderMessages(id)
-        await this.persist()
+        this.settleRead(id)
+        if (saved() !== before) await this.persist()
         confirmed = true
       })
     } catch (error) {
-      if (!(error instanceof Rejected)) throw error
-      if (error.methodNotFound || error.unknownVariant === 'thread/turns/list') this.turnsListSupported = false
+      // A Codex without the request, or without a value the request sends, answers the same way on every send, so
+      // this connection stops asking. Any refusal, and a reply that never came, reads the whole transcript.
+      if (error instanceof Rejected && (error.methodNotFound || error.unknownVariant)) this.turnsListSupported = false
       return false
-    }
+    } finally { current = false }
     return confirmed
   }
   private touch(id: string): void { this.revisions.set(id, (this.revisions.get(id) ?? 0) + 1) }

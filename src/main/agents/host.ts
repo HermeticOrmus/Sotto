@@ -54,7 +54,7 @@ export function confirmedSettingsSnapshot(result: AgentHostResult): [Omit<AgentH
  * changed without reading the whole transcript may do that instead (Codex's newest-turn check, ADR-0005), and
  * reads it whole whenever it cannot. Every other read omits it.
  */
-export interface ThreadRead { readonly beforeSend?: boolean }
+export interface ThreadReadPurpose { readonly beforeSend?: boolean }
 /**
  * What Sotto asks a thread's own client to write on the side: a title, a branch name, a commit message or
  * pull request text (ADR-0026). The instruction and the material stay apart so a client that takes a
@@ -171,7 +171,7 @@ export interface AgentHost {
   snapshot(provider?: ProviderId): Promise<AgentHostSnapshot>
   /** Refresh only this thread's authoritative history/status, returning the full cached snapshot.
    * Native adapters must not join a refresh blocked on another thread or model discovery. */
-  refreshThread?(threadId: string, purpose?: ThreadRead): Promise<AgentHostSnapshot>
+  refreshThread?(threadId: string, purpose?: ThreadReadPurpose): Promise<AgentHostSnapshot>
   /** Throws only for a definitive rejection before commitment; unknown delivery returns uncertain. */
   execute(command: AgentHostCommand): Promise<AgentHostResult>
   /** Resolve saved pre-composite IDs without changing provider session identity. */

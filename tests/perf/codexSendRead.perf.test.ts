@@ -23,7 +23,7 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { CodexAppServerHost } from '../../src/main/agents/codex'
-import { codexFixture } from '../fixtures/codexFixture'
+import { aroundTurnStart, codexFixture, historyReads } from '../fixtures/codexFixture'
 import { manualSendCoordinator } from '../fixtures/manualSendCoordinator'
 import { median, PERF_BENCH, round } from '../fixtures/perfBench'
 
@@ -60,7 +60,8 @@ function instrument(): void {
   const prototype = CodexAppServerHost.prototype as unknown as Record<string, (...args: unknown[]) => unknown>
   const timed = (name: string, stage: Stage, when: (args: unknown[]) => boolean, around?: { enter(): void; leave(): void }): void => {
     const original = prototype[name]!
-    originals.set(name, original)
+    // `rpc` is wrapped twice, once per stage; keep the method itself, not the first wrapper, for restore().
+    if (!originals.has(name)) originals.set(name, original)
     prototype[name] = function (this: unknown, ...args: unknown[]) {
       if (!when(args)) return original.apply(this, args)
       const startedAt = performance.now()
@@ -128,10 +129,9 @@ async function seeded(turns: number): Promise<{ f: Fixture; id: string; openMs: 
 
 /** The whole reads a send made before its `turn/start` and after it. */
 async function wholeReads(f: Fixture, from: number): Promise<{ before: number; after: number }> {
-  const sent = (await f.driver.requests()).slice(from)
-  const start = sent.findIndex(request => request.method === 'turn/start')
-  const whole = (requests: typeof sent) => requests.filter(request => request.method === 'thread/read' && request.params?.includeTurns === true).length
-  return { before: whole(sent.slice(0, start)), after: whole(sent.slice(start)) }
+  const { before, after } = aroundTurnStart((await f.driver.requests()).slice(from))
+  const whole = (requests: typeof before) => historyReads(requests).filter(read => read === 'read').length
+  return { before: whole(before), after: whole(after) }
 }
 
 const lastUser = (f: Fixture, id: string): string | null =>
@@ -194,8 +194,10 @@ describe.skipIf(!PERF_BENCH)('Codex send-time read on a long thread', () => {
           const from = (await f.driver.requests()).length
           spent.clear()
           const startedAt = performance.now()
-          await control.command({ type: 'manual-send', threadId: id, text: 'Synthetic prompt' })
+          const result = await control.command({ type: 'manual-send', threadId: id, text: 'Synthetic prompt' })
           samples.send.push(performance.now() - startedAt)
+          // A refused send would be timed as a fast one with no reads.
+          expect(result.error).toBeNull()
           for (const stage of STAGES) samples[stage].push(spent.get(stage) ?? 0)
           reads.push(await wholeReads(f, from))
           await f.driver.completeTurn(id, 'Synthetic reply')

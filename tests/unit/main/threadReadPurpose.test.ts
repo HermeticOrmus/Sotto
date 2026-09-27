@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { AgentControl } from '../../../src/main/agents/control'
-import type { AgentHost, ThreadRead } from '../../../src/main/agents/host'
+import type { AgentHost, ThreadReadPurpose } from '../../../src/main/agents/host'
 import { ConfiguredProviderHost } from '../../../src/main/agents/providerSwitch'
 import type { AgentReasoner } from '../../../src/main/agents/reasoning'
 import { SottoThreadHost, ThreadRegistry } from '../../../src/main/agents/threads'
@@ -19,8 +19,8 @@ import { manualSendCoordinator } from '../../fixtures/manualSendCoordinator'
  * every other read has to arrive without it.
  */
 class ReadRecordingHost extends E2EAgentHost {
-  readonly reads: { threadId: string; purpose: ThreadRead | undefined }[] = []
-  async refreshThread(threadId: string, purpose?: ThreadRead): Promise<AgentHostSnapshot> {
+  readonly reads: { threadId: string; purpose: ThreadReadPurpose | undefined }[] = []
+  async refreshThread(threadId: string, purpose?: ThreadReadPurpose): Promise<AgentHostSnapshot> {
     this.reads.push({ threadId, purpose: purpose && structuredClone(purpose) }); return this.snapshot()
   }
 }
