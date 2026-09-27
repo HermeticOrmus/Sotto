@@ -126,3 +126,10 @@ Now a caller that keeps history from events says so for these too: `historyFromE
 The option never crosses the host socket. A remote host runs its own workspace over its own provider switch in one process, and the socket carries coordinator commands, so the protocol is unchanged and an older host needs nothing.
 
 With eight held Claude threads of 1,001 messages each, the copies a refresh makes on its way to the workspace fell from about 14-17 ms to about 0.2 ms and a settings result's from about 12-13 ms to about 0.1 ms, and what the switch hands the workspace from 8,083 objects to 98 (`docs/perf/2026-09-27-workspace-results-without-history.md`).
+
+
+## Amendment: retry failed event batches (September 27, 2026, #378)
+
+A workspace removes a pending event batch only after its SQLite transaction commits. Later events for the same thread join behind it; another thread can still commit. A failed batch has its own warning, independent of organization saves. Retry starts after one second and doubles up to thirty seconds while storage remains unavailable, so streaming and reads cannot turn a storage failure into a write attempt per chunk. A successful retry refreshes the thread's window even without a new provider event. Normal streaming keeps the same coalesced transaction boundary.
+
+Shutdown makes a final attempt and reports failure if events remain; it cannot promise recovery across a restart while storage is still unavailable. Pending words are not put in another file. Turning retention off moves pending batches to the ephemeral store after durable redaction. Turning it back on discards any still-pending ephemeral batch before opening the durable connection, so words received while retention was off never reach disk through a retry.
