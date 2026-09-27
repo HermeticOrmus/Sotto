@@ -142,6 +142,7 @@ export class WorkspaceHost implements AgentHost {
   private writeTimer: ReturnType<typeof setTimeout> | undefined
   private readonly lanes = new Map<string, Promise<unknown>>()
   private readonly organizationLanes = new Map<string, Promise<unknown>>()
+  private readonly interruptLanes = new Map<string, Promise<unknown>>()
   /** In-flight working-copy setup per thread, so a send waits for it instead of starting a second one. */
   private readonly preparations = new Map<string, Promise<void>>()
   private readonly worktrees: ThreadWorktrees
@@ -1157,7 +1158,7 @@ export class WorkspaceHost implements AgentHost {
   /** Finish command lanes before detaching provider delivery and closing SQLite. */
   async close(): Promise<void> {
     this.stopping = true
-    await Promise.allSettled([...this.branchWrites, ...this.lanes.values()])
+    await Promise.allSettled([...this.branchWrites, ...this.lanes.values(), ...this.interruptLanes.values()])
     this.stopDelivery()
     try { if (this.ready) await this.flush() } finally { this.dispose() }
   }
@@ -1732,8 +1733,8 @@ export class WorkspaceHost implements AgentHost {
     return existingWorkingDirectory(resolveThreadWorkingDirectory(current, this.state.snapshot.projects.find(project => project.id === current.projectId)))
   }
   execute(command: AgentHostCommand): Promise<AgentHostResult> {
-    // Cancellation must reach a running provider even while its prompt acknowledgement holds the lane.
-    if (command.type === 'interrupt') return this.executeOne(command)
+    // Cancellation passes a held prompt, but remains tracked so shutdown drains its final publication.
+    if (command.type === 'interrupt') return this.onLane(command.threadId, () => this.executeOne(command), this.interruptLanes)
     const key = 'threadId' in command ? command.threadId : command.projectId
     // Creation changes older threads' settlement too. Keep that transaction apart from
     // settlement edits in the same project so failed writes cannot cross their rollbacks.

@@ -66,11 +66,25 @@ describe('workspace controller integration', () => {
       f.adapters.codex.emit()
       await expect.poll(() => f.control.get().deliveries?.find(item => item.draftId === prompt.draftId)?.status).toBe('accepted')
       await f.control.command(prompt)
-      expect((await saved()).outbox).toEqual([])
+      await expect.poll(async () => (await saved()).outbox).toEqual([])
       expect(execute.mock.calls.filter(([command]) => command.type === 'send')).toHaveLength(1)
     } finally { release(); await Promise.allSettled([sending, stopping]); execute.mockRestore() }
   })
 
+  it('releases a rejected interrupt lane before a reconnect, another Stop and a fresh send', async () => {
+    const f = await fixture()
+    const threadId = f.control.get().host.threads.find(thread => thread.providerId === 'codex')!.id
+    const execute = vi.spyOn(f.adapters.codex, 'execute').mockRejectedValueOnce(new Error('Synthetic Stop failure'))
+    try {
+      expect((await f.control.command({ type: 'interrupt', threadId })).error).toBe('Synthetic Stop failure')
+      expect(JSON.parse(await readFile(join(f.root, 'agents.json'), 'utf8')).outbox).toEqual([])
+      await f.control.command({ type: 'disconnect', provider: 'codex' })
+      expect((await f.control.command({ type: 'connect', provider: 'codex' })).error).toBeNull()
+      expect((await f.control.command({ type: 'interrupt', threadId })).error).toBeNull()
+      expect((await f.control.command({ type: 'manual-send', threadId, draftId: randomUUID(), text: 'Fresh work after reconnect' })).error).toBeNull()
+      expect(f.adapters.codex.commands.map(command => command.type)).toEqual(['interrupt', 'send'])
+    } finally { execute.mockRestore() }
+  })
   it('opens only the known thread’s validated working folder and rejects arbitrary targets', async () => {
     const f = await fixture()
     const initial = f.control.get()
