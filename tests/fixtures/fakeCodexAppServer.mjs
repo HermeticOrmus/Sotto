@@ -293,10 +293,14 @@ function control(action) {
   if (!thread) return
   if (action.type === 'complete') complete(thread, action.text, action.status)
   // Another Codex process on the same session: what it does reaches the shared history, never this connection's stream.
+  // `count` adds that many turns at once, all but the last completed, and `reply` is what each completed one answered.
   else if (action.type === 'native-turn') {
-    const running = action.status === 'inProgress'
-    thread.turns.push({ id: randomUUID(), status: running ? 'inProgress' : 'completed', startedAt: Math.floor(Date.now() / 1000), items: [
-      { type: 'userMessage', id: randomUUID(), content: [{ type: 'text', text: action.text }] }, ...running ? [] : [{ type: 'agentMessage', id: randomUUID(), text: 'Native reply' }]] })
+    const count = action.count ?? 1
+    for (let index = 0; index < count; index++) {
+      const running = action.status === 'inProgress' && index === count - 1
+      thread.turns.push({ id: randomUUID(), status: running ? 'inProgress' : 'completed', startedAt: Math.floor(Date.now() / 1000), items: [
+        { type: 'userMessage', id: randomUUID(), content: [{ type: 'text', text: action.text }] }, ...running ? [] : [{ type: 'agentMessage', id: randomUUID(), text: action.reply ?? 'Native reply' }]] })
+    }
     save()
   } else if (action.type === 'native-rewind') { thread.turns = thread.turns.slice(0, -1); save() }
   // A message in the newest turn that this connection never streamed, so Sotto cannot match it to one it holds.
