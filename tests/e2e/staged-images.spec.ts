@@ -24,18 +24,24 @@ test('repairs a missing staged screenshot when the user attaches the same image 
     await paste(page, image, 'Repair.png')
     await thumbnail(page, 'Repair.png')
     await expect.poll(async () => (await page.evaluate(async () => window.sotto!.agents!.get())).threadDrafts?.[0]?.attachments[0]?.name).toBe('Repair.png')
-    const handle = (await page.evaluate(async () => window.sotto!.agents!.get())).threadDrafts![0]!.attachments[0]!
+    const draft = (await page.evaluate(async () => window.sotto!.agents!.get())).threadDrafts![0]!
+    const handle = draft.attachments[0]!
     const file = join(launched.userData, 'attachments', `${handle.digest}.png`)
     await rm(file)
+    // The E2E provider does not resolve image bytes. Exercise the real preload/main content boundary that a
+    // restored thumbnail uses, so it discovers the missing file without fabricating a refusal or changing the host.
+    expect(await page.evaluate(async request => window.sotto!.agents!.attachmentContent!(request), { threadId: draft.threadId, digest: handle.digest })).toBeNull()
     await page.getByRole('button', { name: 'Send prompt', exact: true }).click()
     await expect(page.getByText('An image in this message is no longer kept on this computer. Remove it and attach it again. Nothing else was changed.', { exact: true }).first()).toBeVisible()
     await page.screenshot({ path: `${run}/missing.png`, animations: 'disabled' })
+    await expect(page.getByLabel('Thread transcript', { exact: true }).getByAltText('Repair.png')).toHaveCount(0)
     await page.getByRole('button', { name: 'Remove Repair.png', exact: true }).click()
     await paste(page, image, 'Repair.png')
     await thumbnail(page, 'Repair.png')
     await expect.poll(async () => readFile(file).catch(() => null)).toEqual(icon)
     await page.getByRole('button', { name: 'Send prompt', exact: true }).click()
     await expect(page.getByLabel('Thread transcript', { exact: true }).getByAltText('Repair.png')).toBeVisible()
+    await expect(page.getByLabel('Thread transcript', { exact: true }).getByAltText('Repair.png')).toHaveCount(1)
     await expect(page.getByLabel('Attached screenshots')).toHaveCount(0)
     await page.screenshot({ path: `${run}/repaired.png`, animations: 'disabled' })
   } finally { await closeSotto(launched) }
