@@ -247,7 +247,7 @@ export class GrokAcpHost implements AgentHost {
       thread.activities = immutableActivities(thread.activities)
     }
     return { ...this.state, threads: [...this.threads.values()]
-      .filter((thread): thread is AgentThread => 'projectId' in thread).map(thread => historyFromEvents ? this.log.summarizedThread(thread) : this.log.publishedThread(thread)) }
+      .filter((thread): thread is AgentThread => 'projectId' in thread).map(thread => this.log.activityThread(thread, historyFromEvents)) }
   }
   private emit(streaming = false): void { this.publisher.publish(streaming) }
   subscribe(listener: (snapshot: AgentHostSnapshot) => void): () => void { this.listeners.add(listener); return () => { this.listeners.delete(listener) } }

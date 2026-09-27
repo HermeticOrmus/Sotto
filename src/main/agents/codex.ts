@@ -385,7 +385,7 @@ export class CodexAppServerHost implements AgentHost {
       thread.activities = immutableActivities(thread.activities)
     }
     return { ...this.state, threads: [...this.threads.values()]
-      .filter((thread): thread is AgentThread => 'projectId' in thread).map(thread => historyFromEvents ? this.log.summarizedThread(thread) : this.log.publishedThread(thread)) }
+      .filter((thread): thread is AgentThread => 'projectId' in thread).map(thread => this.log.activityThread(thread, historyFromEvents)) }
   }
   personalSnapshot(): CodexPersonalConversation[] {
     return structuredClone([...this.threads.values()].filter((thread): thread is CodexPersonalConversation => 'kind' in thread && thread.kind === 'personal')

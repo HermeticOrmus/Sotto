@@ -31,7 +31,8 @@ describe('the append path a provider rail is handed to', () => {
     const thread: { id: string; messages: AgentMessage[]; summary?: AgentThreadSummary } = { id: 't', messages: [] }
     const published = log.publishedThread(thread)
     expect(published.messages.map(item => item.id)).toEqual(['u', 'a'])
-    const summarized = log.summarizedThread(thread)
+    expect(log.activityThread(thread, false).messages.map(item => item.id)).toEqual(['u', 'a'])
+    const summarized = log.activityThread(thread, true)
     expect(summarized.messages).toEqual([])
     expect(summarized.summary).toMatchObject({ messageCount: 2, lastUser: { text: 'Ask' }, lastAssistant: { text: 'Answer' } })
     // Summarizing puts nothing away: the thread is still held, and its snapshot still carries every message.

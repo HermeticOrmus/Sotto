@@ -145,11 +145,16 @@ export class ThreadMessageLog {
     return this.summarizedThread(thread)
   }
   /**
-   * One thread as the internal activity subscription carries it: its summary and no messages, whether or
-   * not they are in hand. Every message has already left this log as an event, and the workspace keeps
-   * history from those, so a copy of the held ones on every update was made only to be thrown away (#322).
+   * One thread as the internal activity subscription carries it. A subscriber that keeps history from this
+   * log's events gets its summary and no messages, whether or not they are in hand: every message has already
+   * left as an event, so a copy of the held ones on every update was made only to be thrown away (#322). Any
+   * other subscriber gets the thread as a snapshot carries it.
    */
-  summarizedThread<T extends { id: string; messages: AgentMessage[]; activities?: AgentActivity[] | undefined; summary?: AgentThreadSummary | undefined }>(thread: T): T {
+  activityThread<T extends { id: string; messages: AgentMessage[]; activities?: AgentActivity[] | undefined; summary?: AgentThreadSummary | undefined }>(thread: T, historyFromEvents: boolean): T {
+    return historyFromEvents ? this.summarizedThread(thread) : this.publishedThread(thread)
+  }
+  /** One thread with its summary and no messages. */
+  private summarizedThread<T extends { id: string; messages: AgentMessage[]; activities?: AgentActivity[] | undefined; summary?: AgentThreadSummary | undefined }>(thread: T): T {
     return { ...thread, messages: [], summary: this.summaryBeside(thread.id, thread.activities) }
   }
   count(threadId: string): number { return this.track(threadId).order.length }

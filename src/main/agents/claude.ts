@@ -1078,7 +1078,7 @@ export class ClaudeStreamJsonHost implements AgentHost {
       thread.activities = immutableActivities(thread.activities)
     }
     return { ...this.state, threads: [...this.threads.values()]
-      .filter((thread): thread is AgentThread => 'projectId' in thread).map(thread => historyFromEvents ? this.messageLog.summarizedThread(thread) : this.messageLog.publishedThread(thread)) }
+      .filter((thread): thread is AgentThread => 'projectId' in thread).map(thread => this.messageLog.activityThread(thread, historyFromEvents)) }
   }
   /**
    * Read a starting session's tool list for the approval surface Sotto asked for. The CLI does not report

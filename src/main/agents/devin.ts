@@ -209,7 +209,7 @@ export class DevinAcpHost implements AgentHost {
     for (const thread of this.threads.values()) if (thread.activities && !isImmutableActivities(thread.activities)) {
       thread.activities = immutableActivities(thread.activities)
     }
-    return { ...this.state, threads: [...this.threads.values()].map(thread => historyFromEvents ? this.log.summarizedThread(thread) : this.log.publishedThread(thread)) }
+    return { ...this.state, threads: [...this.threads.values()].map(thread => this.log.activityThread(thread, historyFromEvents)) }
   }
   private emit(streaming = false): void { this.publisher.publish(streaming) }
   subscribe(listener: (snapshot: AgentHostSnapshot) => void): () => void {
