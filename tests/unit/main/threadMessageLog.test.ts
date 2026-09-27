@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
 import { ThreadMessageLog } from '../../../src/main/agents/threadMessageLog'
-import type { AgentMessage } from '../../../src/shared/agents'
+import type { AgentMessage, AgentThreadSummary } from '../../../src/shared/agents'
 import type { ThreadHostEvent } from '../../../src/main/agents/host'
 import { immutableActivities } from '../../../src/main/agents/activitySnapshots'
 import type { AgentActivity } from '../../../src/shared/agentActivity'
@@ -23,6 +23,21 @@ describe('the append path a provider rail is handed to', () => {
     source[0]!.status = 'completed'
     expect(log.summaryBeside('t', source).runningTurnStartedAt).toBeUndefined()
     expect(log.summaryBeside('t', owned).runningTurnStartedAt).toBe('2026-09-23T10:00:00Z')
+  })
+  it('summarizes a held thread for the activity subscription without copying the messages its snapshot carries (#322)', () => {
+    const log = new ThreadMessageLog()
+    log.pin('t')
+    log.set('t', [message('u', 'user', 'Ask'), message('a', 'assistant', 'Answer')])
+    const thread: { id: string; messages: AgentMessage[]; summary?: AgentThreadSummary } = { id: 't', messages: [] }
+    const published = log.publishedThread(thread)
+    expect(published.messages.map(item => item.id)).toEqual(['u', 'a'])
+    expect(log.activityThread(thread, false).messages.map(item => item.id)).toEqual(['u', 'a'])
+    const summarized = log.activityThread(thread, true)
+    expect(summarized.messages).toEqual([])
+    expect(summarized.summary).toMatchObject({ messageCount: 2, lastUser: { text: 'Ask' }, lastAssistant: { text: 'Answer' } })
+    // Summarizing puts nothing away: the thread is still held, and its snapshot still carries every message.
+    expect(log.holding('t')).toBe(true)
+    expect(log.publishedThread(thread).messages.map(item => item.id)).toEqual(['u', 'a'])
   })
   it('knows a thread has messages from seeded identities alone, and asking does not block a later seed', () => {
     const log = new ThreadMessageLog()

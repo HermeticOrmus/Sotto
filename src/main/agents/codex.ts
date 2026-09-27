@@ -17,11 +17,11 @@ import type { AgentSkillCatalog, AgentSkillReference } from '../../shared/agentS
 import { codexSkillInput, parseCodexSkillCatalog } from './codexSkills'
 import type { AgentFileReference } from '../../shared/agentFiles'
 import { verifyFileMentions } from './promptFiles'
-import type { AgentHost, AgentHostCommand, AgentHostResult, AgentSkillScope, PromptImage, ShortTextPrompt, ThreadHistorySource, ThreadHostEvent, ThreadReadPurpose } from './host'
+import type { ActivitySubscriptionOptions, AgentHost, AgentHostCommand, AgentHostResult, AgentSkillScope, PromptImage, ShortTextPrompt, ThreadHistorySource, ThreadHostEvent, ThreadReadPurpose } from './host'
 import { SIDE_WRITING_TIMEOUT_MS, sideWritingEffort } from './sideWriting'
 import { ThreadMessageLog } from './threadMessageLog'
 import { cloneHostSnapshot } from './cloneHostSnapshot'
-import { cloneActivitySnapshot, immutableActivities, isImmutableActivities } from './activitySnapshots'
+import { ActivitySubscribers, immutableActivities, isImmutableActivities } from './activitySnapshots'
 import { findExecutable, nativeEnvironment, writeWithCodexExec } from './subscriptionCodex'
 import { CodexSessionLogWatcher, promptDigest, textOf } from './codexSessionLog'
 import { answerRequest, declineRequest, pendingRequest, requestKey, type CodexPendingRequest } from './codexRequests'
@@ -160,13 +160,10 @@ export class CodexAppServerHost implements AgentHost {
   private readonly waiters = new Map<string, Waiter>()
   private readonly settingsConfirmations = new Map<string, { desired: Alias['pendingSettings']; settle: (confirmed: boolean) => void }>()
   private readonly listeners = new Set<(snapshot: AgentHostSnapshot) => void>()
-  private readonly activityListeners = new Set<(snapshot: AgentHostSnapshot) => void>()
+  private readonly activityListeners = new ActivitySubscribers()
   private readonly publisher = new ProviderSnapshotPublisher(() => {
     for (const listener of this.listeners) listener(this.current())
-    if (this.activityListeners.size) {
-      const snapshot = this.activitySnapshot()
-      for (const listener of this.activityListeners) listener(cloneActivitySnapshot(snapshot))
-    }
+    this.activityListeners.publish(historyFromEvents => this.activitySnapshot(historyFromEvents))
   })
   private readonly unconfirmedDispatchSessionIds = new Set<string>()
   private readonly creating = new Set<string>()
@@ -381,12 +378,14 @@ export class CodexAppServerHost implements AgentHost {
     return cloneHostSnapshot({ ...this.state, threads: [...this.threads.values()]
       .filter((thread): thread is AgentThread => 'projectId' in thread).map(thread => this.log.publishedThread(thread)) })
   }
-  private activitySnapshot(): AgentHostSnapshot {
+  /** What activity subscribers are handed. One that keeps history from this adapter's events gets each
+   * thread's summary and no messages: those already left as events (#322). */
+  private activitySnapshot(historyFromEvents: boolean): AgentHostSnapshot {
     for (const thread of this.threads.values()) if (thread.activities && !isImmutableActivities(thread.activities)) {
       thread.activities = immutableActivities(thread.activities)
     }
     return { ...this.state, threads: [...this.threads.values()]
-      .filter((thread): thread is AgentThread => 'projectId' in thread).map(thread => this.log.publishedThread(thread)) }
+      .filter((thread): thread is AgentThread => 'projectId' in thread).map(thread => this.log.activityThread(thread, historyFromEvents)) }
   }
   personalSnapshot(): CodexPersonalConversation[] {
     return structuredClone([...this.threads.values()].filter((thread): thread is CodexPersonalConversation => 'kind' in thread && thread.kind === 'personal')
@@ -429,8 +428,8 @@ export class CodexAppServerHost implements AgentHost {
   }
   private emit(streaming = false): void { this.publisher.publish(streaming) }
   subscribe(listener: (snapshot: AgentHostSnapshot) => void): () => void { this.listeners.add(listener); return () => { this.listeners.delete(listener) } }
-  subscribeActivitySnapshots(listener: (snapshot: AgentHostSnapshot) => void): () => void {
-    this.activityListeners.add(listener); return () => this.activityListeners.delete(listener)
+  subscribeActivitySnapshots(listener: (snapshot: AgentHostSnapshot) => void, options?: ActivitySubscriptionOptions): () => void {
+    return this.activityListeners.add(listener, options)
   }
   subscribeEvents(listener: (event: ThreadHostEvent) => void): () => void { return this.log.subscribeEvents(listener) }
   useThreadHistory(source: ThreadHistorySource): void { this.history = source }

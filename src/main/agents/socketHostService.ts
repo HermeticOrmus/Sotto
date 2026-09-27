@@ -312,13 +312,17 @@ export class SocketHostService implements HostService {
   }
   /**
    * Stages an image on the host, which is where the provider reads it (ADR-0031). A host that does not list
-   * `attachment-staging` is from before staged images; the version sentence says which side to update, and nothing is sent.
+   * `attachment-staging` is from before staged images; the version sentence says which side to update, and nothing is
+   * sent. Queued behind previews and content reads, since the host takes one of these large frames at a time.
    */
   async stageAttachment(image: AgentAttachmentUpload): Promise<AgentAttachmentHandle> {
     if (!this.features.includes('attachment-staging')) throw new HostConnectionError(this.mismatch(), 'version_mismatch')
-    const data = Buffer.from(image.bytes.buffer, image.bytes.byteOffset, image.bytes.byteLength).toString('base64')
-    return this.read(agentAttachmentHandleSchema, await this.call({ op: 'stage-attachment', image: { name: image.name, mimeType: image.mimeType, data,
-      ...(image.dimensions ? { dimensions: image.dimensions } : {}) } }))
+    const result = this.previewTail.then(async () => {
+      const data = Buffer.from(image.bytes.buffer, image.bytes.byteOffset, image.bytes.byteLength).toString('base64')
+      return this.read(agentAttachmentHandleSchema, await this.call({ op: 'stage-attachment', image: { name: image.name, mimeType: image.mimeType, data,
+        ...(image.dimensions ? { dimensions: image.dimensions } : {}) } }))
+    })
+    this.previewTail = result.catch(() => undefined); return result
   }
   /** A staged image's bytes, queued behind previews: the host answers one of these large frames at a time. */
   attachmentContent(digest: string): Promise<AgentAttachmentContent | null> {

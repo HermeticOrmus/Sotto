@@ -3,6 +3,7 @@ import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { AgentState } from '../../../src/shared/agents'
+import type { AgentBackgroundWork } from '../../../src/shared/agentMonitoring'
 import { E2E_THREADS_NOW } from '../../../src/shared/e2e'
 import { useAgents } from '../../../src/renderer/src/agents/AgentContext'
 import { FinishedThreadWatch, showThreads, watchThreads } from '../../../src/renderer/src/agents/finishedThreads'
@@ -183,6 +184,44 @@ describe('a thread that finishes out of sight', () => {
     // Leaving for another thread does not make the finish unseen after the fact.
     act(() => { live.publish({ activeThreadId: 'visual-gate' }) })
     expect(status('Weekly note')).toHaveTextContent('Done')
+  })
+})
+
+describe('a thread whose turn ended with work still running', () => {
+  const agent: AgentBackgroundWork = { id: 'build', label: 'Engine: engine:build2', type: 'workflow' }
+  const command: AgentBackgroundWork = { id: 'serve', label: 'npm run dev', type: 'command' }
+  const withWork = (state: AgentState, threadId: string, backgroundWork: AgentBackgroundWork[] | undefined): Partial<AgentState> =>
+    ({ host: { ...state.host, threads: state.host.threads.map(thread => thread.id === threadId ? { ...thread, status: 'idle', backgroundWork } : thread) } })
+
+  it('stays working until the agents it started report back, and a lone command is waited on', () => {
+    const state = threadsStateFixture()
+    const prompt = rowFor(state, 'footer-links').workingSince
+    Object.assign(state, withWork(state, 'footer-links', [agent, command]))
+    // The clock keeps counting from your prompt, so the row reads as one piece of work.
+    expect(rowFor(state, 'footer-links')).toMatchObject({ state: 'working', stateLabel: 'Working', workingSince: prompt })
+    Object.assign(state, withWork(state, 'footer-links', [command]))
+    expect(rowFor(state, 'footer-links')).toMatchObject({ state: 'working', stateLabel: 'Waiting' })
+    Object.assign(state, withWork(state, 'footer-links', undefined))
+    expect(rowFor(state, 'footer-links')).toMatchObject({ state: 'done', stateLabel: 'Done' })
+  })
+
+  it('says it just finished only once the background work ends', () => {
+    const live = mount(threadsStateFixture(), NOW)
+    act(() => { live.publish(withWork(live.state, 'footer-links', [agent])) })
+    expect(status('Footer links')).toHaveTextContent('Working')
+    expect(status('Footer links')).toHaveAttribute('data-state', 'working')
+    expect(status('Footer links')).not.toHaveAttribute('data-unseen')
+    act(() => { live.publish(withWork(live.state, 'footer-links', undefined)) })
+    expect(status('Footer links')).toHaveTextContent('Just finished')
+  })
+
+  it('never says it just finished when a disconnect cut the work off', () => {
+    const live = mount(threadsStateFixture(), NOW)
+    act(() => { live.publish(withWork(live.state, 'footer-links', [agent])) })
+    const disconnected = withWork(live.state, 'footer-links', undefined)
+    act(() => { live.publish({ host: { ...disconnected.host!, threads: disconnected.host!.threads.map(thread => thread.id === 'footer-links' ? { ...thread, clientConnected: false } : thread) } }) })
+    expect(status('Footer links')).not.toHaveAttribute('data-unseen')
+    expect(status('Footer links')).not.toHaveTextContent('Just finished')
   })
 })
 

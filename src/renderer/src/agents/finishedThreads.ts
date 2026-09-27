@@ -1,5 +1,5 @@
 import { useEffect, useSyncExternalStore } from 'react'
-import type { AgentThread } from '../../../shared/agents'
+import { isThreadProviderConnected, type AgentHostSnapshot, type AgentThread } from '../../../shared/agents'
 import { useAgents } from './AgentContext'
 
 /**
@@ -19,13 +19,20 @@ function publish(next: ReadonlySet<string>): void {
   for (const listener of listeners) listener()
 }
 
-/** Note which threads are running now: one that was running and is idle out of sight earns the mark. */
-export function watchThreads(threads: readonly AgentThread[]): void {
-  const live = new Set(threads.filter(thread => thread.status === 'running').map(thread => thread.id))
-  const stopped = [...working].filter(id => !live.has(id))
+/** A thread is still at it while its turn runs or work the turn started runs on in the background. */
+const busy = (thread: AgentThread): boolean => thread.status === 'running' || (thread.backgroundWork?.length ?? 0) > 0
+
+/**
+ * Note which threads are busy now: one that was busy and is idle out of sight earns the mark. A disconnect ends
+ * background work without finishing it, so a thread whose provider is gone does not earn it.
+ */
+export function watchThreads(threads: readonly AgentThread[], host?: AgentHostSnapshot): void {
+  const live = new Set(threads.filter(busy).map(thread => thread.id))
+  const cutOff = (id: string): boolean => host !== undefined && threads.some(thread => thread.id === id && !isThreadProviderConnected(host, thread))
+  const stopped = [...working].filter(id => !live.has(id) && !cutOff(id))
   working = live
   // The mark lasts only while the thread is still finished, still known, and still out of sight.
-  const finishedUnseen = (id: string): boolean => !onScreen.has(id) && threads.some(thread => thread.id === id && thread.status === 'idle')
+  const finishedUnseen = (id: string): boolean => !onScreen.has(id) && threads.some(thread => thread.id === id && thread.status === 'idle' && !busy(thread))
   publish(new Set([...unseen, ...stopped].filter(finishedUnseen)))
 }
 
@@ -48,8 +55,8 @@ export function useFinishedUnseen(): ReadonlySet<string> {
 /** Keeps the record from the published state for as long as it is mounted; seated once inside the agent provider. */
 export function FinishedThreadWatch(): null {
   const { state } = useAgents()
-  const threads = state?.host.threads
+  const host = state?.host
   // While main has no state to publish the record stands as it was, the way the sidebar's absence leaves it.
-  useEffect(() => { if (threads !== undefined) watchThreads(threads) }, [threads])
+  useEffect(() => { if (host !== undefined) watchThreads(host.threads, host) }, [host])
   return null
 }

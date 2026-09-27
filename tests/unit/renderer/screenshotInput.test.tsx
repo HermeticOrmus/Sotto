@@ -1,8 +1,9 @@
 import React, { useState } from 'react'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { AGENT_MAX_ATTACHMENT_BYTES, type AgentAttachmentHandle, type AgentAttachmentStageRequest } from '../../../src/shared/agents'
+import { AGENT_MAX_ATTACHMENT_BYTES, SCREENSHOT_NOT_ITS_TYPE, SCREENSHOT_WRONG_TYPE, SCREENSHOT_TOO_LARGE, SCREENSHOTS_TOO_LARGE_IN_TOTAL, type AgentAttachmentHandle, type AgentAttachmentStageRequest } from '../../../src/shared/agents'
 import { ScreenshotInput } from '../../../src/renderer/src/agents/ScreenshotInput'
+import type { ScreenshotReadPort } from '../../../src/renderer/src/agents/threadDraftStore'
 import { handleOf } from '../../fixtures/stagedImages'
 
 /** Every staging the window asks main for, answered with the handle main would give. */
@@ -23,6 +24,8 @@ const file = () => new File([new Uint8Array(PNG_SIGNATURE)], 'shot.png', { type:
 const MB = 1024 * 1024
 /** A small PNG that reports `size` bytes, so a test can cross the limits without allocating them. */
 const sized = (name: string, size: number) => Object.defineProperty(new File([new Uint8Array(PNG_SIGNATURE)], name, { type: 'image/png' }), 'size', { value: size })
+/** A draft store's side of the input's reads, recording what it is told. */
+const port = (overrides: Partial<ScreenshotReadPort> = {}): ScreenshotReadPort => ({ pending: false, problem: null, begin: vi.fn(() => () => undefined), addLate: vi.fn(), ...overrides })
 /** An attachment already on the composer whose content is `bytes` long. */
 const attached = (id: string, bytes: number): AgentAttachmentHandle => ({ id, name: `${id}.png`, mimeType: 'image/png', sizeBytes: bytes, digest: 'a'.repeat(64) })
 
@@ -45,27 +48,53 @@ describe('screenshot attachment input', () => {
   it('rejects unsupported files and models with useful feedback', async () => {
     const view = render(<Harness />)
     fireEvent.change(screen.getByLabelText('Screenshot files'), { target: { files: [new File(['text'], 'note.txt', { type: 'text/plain' })] } })
-    expect(await screen.findByRole('alert')).toHaveTextContent('PNG, JPEG, GIF, or WebP')
+    expect(await screen.findByRole('alert')).toHaveTextContent(SCREENSHOT_WRONG_TYPE)
     view.rerender(<Harness supported={false} />)
     expect(screen.getByRole('button', { name: 'Attach screenshots' })).toBeDisabled()
     fireEvent.paste(screen.getByRole('textbox'), { clipboardData: { items: [{ kind: 'file', getAsFile: file }] } })
     expect(screen.getByRole('alert')).toHaveTextContent('does not support screenshots')
     expect(staged).toEqual([])
   })
+  it('names the screenshot that could not be added, adds the ones before it, and says the rest were not attached', async () => {
+    let calls = 0
+    vi.stubGlobal('sotto', { agents: { stageAttachment: vi.fn(async (request: AgentAttachmentStageRequest) => {
+      calls += 1
+      if (calls === 2) throw new Error('STAGE_FAILED')
+      return handleOf(request.bytes, crypto.randomUUID(), request.name, request.mimeType)
+    }) } })
+    const change = vi.fn()
+    render(<ScreenshotInput target="workshop" attachments={[]} onChange={change} disabled={false} supported><textarea aria-label="Prompt" /></ScreenshotInput>)
+    fireEvent.change(screen.getByLabelText('Screenshot files'), { target: { files: ['a.png', 'b.png', 'c.png'].map(name => new File([new Uint8Array(PNG_SIGNATURE)], name, { type: 'image/png' })) } })
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not add b.png, so it and the 1 after it were not attached. Try adding them again.')
+    expect(change).toHaveBeenCalledWith([expect.objectContaining({ name: 'a.png' })])
+    expect(calls).toBe(2)
+  })
+  it('gives staging\'s reason after naming what was not attached, without claiming nothing was', async () => {
+    let calls = 0
+    vi.stubGlobal('sotto', { agents: { stageAttachment: vi.fn(async (request: AgentAttachmentStageRequest) => {
+      calls += 1
+      if (calls === 2) throw new Error('This host is disconnected. Connect again before attaching images. Nothing was attached.')
+      return handleOf(request.bytes, crypto.randomUUID(), request.name, request.mimeType)
+    }) } })
+    render(<Harness />)
+    fireEvent.change(screen.getByLabelText('Screenshot files'), { target: { files: ['a.png', 'b.png'].map(name => new File([new Uint8Array(PNG_SIGNATURE)], name, { type: 'image/png' })) } })
+    expect(await screen.findByRole('alert')).toHaveTextContent(/^Could not add b\.png, so it was not attached\. This host is disconnected\. Connect again before attaching images\.$/u)
+    expect(screen.getByRole('img', { name: 'a.png' })).toBeVisible()
+  })
   it('says so when main refuses to stage an image, and attaches nothing', async () => {
-    vi.stubGlobal('sotto', { agents: { stageAttachment: vi.fn(async () => { throw new Error('The image content does not match its file type.') }) } })
+    vi.stubGlobal('sotto', { agents: { stageAttachment: vi.fn(async () => { throw new Error(SCREENSHOT_NOT_ITS_TYPE) }) } })
     const change = vi.fn()
     render(<ScreenshotInput target="workshop" attachments={[]} onChange={change} disabled={false} supported><textarea aria-label="Prompt" /></ScreenshotInput>)
     fireEvent.change(screen.getByLabelText('Screenshot files'), { target: { files: [file()] } })
-    expect(await screen.findByRole('alert')).toHaveTextContent('The image content does not match its file type.')
+    expect(await screen.findByRole('alert')).toHaveTextContent(SCREENSHOT_NOT_ITS_TYPE)
     expect(change).not.toHaveBeenCalled()
   })
   it('refuses dropped screenshots that total more than 20 MB before staging any of them', () => {
     const change = vi.fn()
     const read = vi.fn(() => () => undefined)
-    render(<ScreenshotInput target="workshop" attachments={[]} onChange={change} onRead={read} disabled={false} supported><textarea aria-label="Prompt" /></ScreenshotInput>)
+    render(<ScreenshotInput target="workshop" attachments={[]} onChange={change} reads={port({ begin: read })} disabled={false} supported><textarea aria-label="Prompt" /></ScreenshotInput>)
     fireEvent.drop(screen.getByRole('textbox'), { dataTransfer: { files: [sized('a.png', 8 * MB), sized('b.png', 8 * MB), sized('c.png', 8 * MB)], types: ['Files'] } })
-    expect(screen.getByRole('alert')).toHaveTextContent('Screenshots must total 20 MB or less. Remove an image or choose smaller files.')
+    expect(screen.getByRole('alert')).toHaveTextContent(SCREENSHOTS_TOO_LARGE_IN_TOTAL)
     expect(staged).toEqual([])
     expect(read).not.toHaveBeenCalled()
     expect(change).not.toHaveBeenCalled()
@@ -89,13 +118,13 @@ describe('screenshot attachment input', () => {
   it('names the oversized screenshot rather than the total when one file is over 10 MB', () => {
     render(<Harness />)
     fireEvent.drop(screen.getByRole('textbox'), { dataTransfer: { files: [sized('huge.png', 25 * MB)], types: ['Files'] } })
-    expect(screen.getByRole('alert')).toHaveTextContent('Each screenshot must be 10 MB or smaller.')
+    expect(screen.getByRole('alert')).toHaveTextContent(SCREENSHOT_TOO_LARGE)
     expect(staged).toEqual([])
   })
   it('does not attach an in-flight staging to a thread after the input unmounts', async () => {
     const change = vi.fn()
     const handedOn = vi.fn()
-    const view = render(<ScreenshotInput target="workshop" attachments={[]} onChange={change} onRead={() => handedOn} disabled={false} supported><textarea /></ScreenshotInput>)
+    const view = render(<ScreenshotInput target="workshop" attachments={[]} onChange={change} reads={port({ begin: () => handedOn, addLate: undefined })} disabled={false} supported><textarea /></ScreenshotInput>)
     fireEvent.change(screen.getByLabelText('Screenshot files'), { target: { files: [file()] } })
     view.unmount()
     // The read is over only once its screenshots have been handed on, or dropped for want of a draft to take them.
@@ -104,14 +133,14 @@ describe('screenshot attachment input', () => {
   })
   it('adds nothing and says it is still adding while an earlier input reads for the same draft', () => {
     const read = vi.fn(() => () => undefined)
-    render(<ScreenshotInput target="workshop" attachments={[]} onChange={vi.fn()} onRead={read} pending disabled={false} supported><textarea aria-label="Prompt" /></ScreenshotInput>)
+    render(<ScreenshotInput target="workshop" attachments={[]} onChange={vi.fn()} reads={port({ begin: read, pending: true })} disabled={false} supported><textarea aria-label="Prompt" /></ScreenshotInput>)
     expect(screen.getByRole('status')).toHaveTextContent('Adding screenshots...')
     expect(screen.getByRole('button', { name: 'Attach screenshots' })).toBeDisabled()
     fireEvent.paste(screen.getByRole('textbox'), { clipboardData: { items: [{ kind: 'file', getAsFile: file }] } })
     expect(read).not.toHaveBeenCalled()
   })
   it('shows what became of screenshots an earlier input read', () => {
-    render(<ScreenshotInput target="workshop" attachments={[]} onChange={vi.fn()} notice="A screenshot did not fit." disabled={false} supported><textarea aria-label="Prompt" /></ScreenshotInput>)
+    render(<ScreenshotInput target="workshop" attachments={[]} onChange={vi.fn()} reads={port({ problem: 'A screenshot did not fit.' })} disabled={false} supported><textarea aria-label="Prompt" /></ScreenshotInput>)
     expect(screen.getByRole('alert')).toHaveTextContent('A screenshot did not fit.')
   })
 })
@@ -153,9 +182,9 @@ describe('scaling screenshots down to the bound', () => {
     expect(staged.at(-1)).toMatchObject({ mimeType: 'image/png', dimensions: attachment.dimensions })
     expect(stagedBytes()).toBe(12)
     rerender([attachment])
-    // The sent size is on the chip itself, where a keyboard user sees it too; the tooltip adds the size before.
-    expect(screen.getByText('Resized to 2576 x 1449', { exact: true })).toBeVisible()
-    expect(screen.getByText('Resized to 2576 x 1449', { exact: true }).parentElement).toHaveAttribute('title', 'Resized from 3840 by 2160 to 2576 by 1449 pixels')
+    // Both sizes are on the chip itself, where a keyboard user sees them too, and a screen reader reads them as words.
+    expect(screen.getByText('Resized from 3840 x 2160 to 2576 x 1449', { exact: true })).toBeVisible()
+    expect(screen.getByText('Resized from 3840 x 2160 to 2576 x 1449', { exact: true }).parentElement).not.toHaveAttribute('title')
     expect(screen.getByText('Resized from 3840 by 2160 to 2576 by 1449 pixels')).toHaveClass('tt-visually-hidden')
   })
   it('hands a 1200x800 PNG on byte for byte and shows no note', async () => {
@@ -210,10 +239,23 @@ describe('reading several screenshots at once', () => {
   it('hands screenshots that finish reading after the composer closes to the draft they were attached to', async () => {
     const change = vi.fn()
     const late = vi.fn()
-    const view = render(<ScreenshotInput target="workshop" attachments={[]} onChange={change} onAddAfterClose={late} disabled={false} supported><textarea /></ScreenshotInput>)
+    const view = render(<ScreenshotInput target="workshop" attachments={[]} onChange={change} reads={port({ addLate: late })} disabled={false} supported><textarea /></ScreenshotInput>)
     fireEvent.change(screen.getByLabelText('Screenshot files'), { target: { files: [file()] } })
     view.unmount()
-    await waitFor(() => expect(late).toHaveBeenCalledWith([expect.objectContaining({ name: 'shot.png', digest: expect.stringMatching(/^[a-f0-9]{64}$/u) })]))
+    await waitFor(() => expect(late).toHaveBeenCalledWith([expect.objectContaining({ name: 'shot.png', digest: expect.stringMatching(/^[a-f0-9]{64}$/u) })], null))
     expect(change).not.toHaveBeenCalled()
+  })
+  it('hands the draft what was read and the failure when a screenshot fails after the composer closed', async () => {
+    let calls = 0
+    vi.stubGlobal('sotto', { agents: { stageAttachment: vi.fn(async (request: AgentAttachmentStageRequest) => {
+      calls += 1
+      if (calls === 2) throw new Error('STAGE_FAILED')
+      return handleOf(request.bytes, crypto.randomUUID(), request.name, request.mimeType)
+    }) } })
+    const late = vi.fn()
+    const view = render(<ScreenshotInput target="workshop" attachments={[]} onChange={vi.fn()} reads={port({ addLate: late })} disabled={false} supported><textarea /></ScreenshotInput>)
+    fireEvent.change(screen.getByLabelText('Screenshot files'), { target: { files: ['a.png', 'b.png'].map(name => new File([new Uint8Array(PNG_SIGNATURE)], name, { type: 'image/png' })) } })
+    view.unmount()
+    await waitFor(() => expect(late).toHaveBeenCalledWith([expect.objectContaining({ name: 'a.png' })], 'Could not add b.png, so it was not attached. Try adding it again.'))
   })
 })

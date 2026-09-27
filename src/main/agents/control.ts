@@ -54,6 +54,10 @@ type WithHandles<C> = Omit<C, 'attachments'> & { readonly attachments?: readonly
 type PromptWithHandles = WithHandles<Extract<AgentHostCommand, { type: 'send' }>> | WithHandles<Extract<AgentHostCommand, { type: 'steer' }>>
 /** What `dispatch` is handed: any host command, with a send's or steer's images as handles. */
 type DispatchCommand = Exclude<AgentHostCommand, { type: 'send' | 'steer' }> | PromptWithHandles
+/** The send or steer a command is, or null for any other: what `dispatch` asks, once, of every command. */
+function promptOf(command: DispatchCommand): PromptWithHandles | null {
+  return command.type === 'send' || command.type === 'steer' ? command : null
+}
 /** A draft saved without an image its window still showed: the text is kept, the image is not. */
 export const DRAFT_IMAGE_NOT_SAVED = 'An image in this draft is no longer kept, so the draft was saved without it. Your text was saved. Remove the image and attach it again.'
 const savedSchema = z.object({
@@ -88,6 +92,8 @@ type Saved = z.infer<typeof savedSchema>
 type QueuedWrite = { serialized: string; outbox: Saved['outbox']; written: Promise<void> }
 class SupersededSupervision extends Error {}
 const PRIVACY_CLEANUP_ERROR = 'Could not finish applying history privacy. Sotto will retry when local storage is available.'
+/** The 30-second upkeep of previews and staged images failed: nothing anyone still needs was touched. */
+const ATTACHMENT_UPKEEP_ERROR = 'Could not remove screenshots Sotto no longer needs. Nothing was lost. Check access to local storage.'
 /**
  * The first thing asked of a thread and the first answer it got, the only content a generated title is
  * written from. Automatic naming needs the thread to be at its first exchange and settled: a running turn
@@ -276,7 +282,7 @@ export class AgentControl {
       membership: { status: 'free', label: 'Free dictation', expiresAt: null },
     }
     this.store = new AtomicJsonStore(join(dependencies.directory, 'agents.json'), savedSchema.parse, () => this.saved())
-    this.attachments = new AttachmentStore(dependencies.directory, () => dependencies.historyEnabled?.() !== false, undefined, dependencies.missingAttachment)
+    this.attachments = new AttachmentStore(dependencies.directory, { historyEnabled: () => dependencies.historyEnabled?.() !== false, missing: dependencies.missingAttachment })
     this.stageInline = inlineStager(this.attachments)
     this.attachmentPreviews = new AttachmentPreviews(dependencies.directory, this.attachments, () => dependencies.historyEnabled?.() !== false)
   }
@@ -363,7 +369,7 @@ export class AgentControl {
     this.membershipTimer = setInterval(() => {
       const pendingPrivacy = this.privacyCleanupPending
       void (pendingPrivacy ? this.privacyChanged() : this.maintainAttachments()).catch(() => {
-        this.state.error = pendingPrivacy ? PRIVACY_CLEANUP_ERROR : 'Could not apply attachment preview retention. Check access to local storage.'
+        this.state.error = pendingPrivacy ? PRIVACY_CLEANUP_ERROR : ATTACHMENT_UPKEEP_ERROR
         this.publish()
       })
       void this.dependencies.membership.status().then(status => {
@@ -608,7 +614,8 @@ export class AgentControl {
   }
   /**
    * Preview retention first, then the content nothing owns any more. With `historyOff`, content only previews kept
-   * goes at once; anything else unowned, such as an image staged for a draft not yet saved, keeps its grace.
+   * goes at once; anything else unowned, such as an image staged for a draft not yet saved, keeps its grace. That
+   * includes content a preview names that was staged again since, for a draft.
    */
   private async maintainAttachments(historyOff = false): Promise<void> {
     const previewed = historyOff ? this.attachmentPreviews.named() : undefined
@@ -2213,20 +2220,22 @@ export class AgentControl {
     // Refused here, before an outbox entry exists and long before the provider hears anything.
     if (command.type === 'answer') this.guardClientGrant(client)
     const threadId = 'threadId' in command ? command.threadId : undefined
+    const prompt = promptOf(command)
     const provider = command.type === 'create-project' ? command.provider ?? this.state.configuration.provider
       : command.type === 'create-thread' || (command.type === 'configure-thread' && command.modelId && this.thread(command.threadId).nativeSessionStarted === false)
         ? resolveModel(this.state.host.models, command.modelId)?.providerId : command.type === 'answer'
           ? requestDraftProvider(this.state.host, this.thread(command.threadId), this.state.configuration.provider) : this.thread(command.threadId).providerId
     if (threadId && command.type !== 'create-thread' && !(command.type === 'configure-thread' && this.thread(threadId).nativeSessionStarted === false)) this.canAct(threadId)
-    if ((command.type === 'send' || command.type === 'steer') || command.type === 'answer') {
-      const thread = this.thread(command.threadId); const capabilities = capabilitiesForThread(this.state.host, thread)
-      if ((command.type === 'send' || command.type === 'steer') && (!capabilities.submit || !capabilities.reconcile)) throw new Error('This connection cannot safely send and reconcile a prompt.')
+    const toThread = prompt ?? (command.type === 'answer' ? command : null)
+    if (toThread) {
+      const thread = this.thread(toThread.threadId); const capabilities = capabilitiesForThread(this.state.host, thread)
+      if (prompt && (!capabilities.submit || !capabilities.reconcile)) throw new Error('This connection cannot safely send and reconcile a prompt.')
       if (command.type === 'answer') {
         const request = thread.requests.find(request => request.id === command.requestId)
         if (request && !(request.kind === 'permission' ? capabilities.permissions : capabilities.questions)) throw new Error('This provider does not support answering this request.')
       }
     }
-    if ((command.type === 'send' || command.type === 'steer')) draftId ??= randomUUID()
+    if (prompt) draftId ??= randomUUID()
     if (this.outbox.some(item => threadId ? item.threadId === threadId : item.threadId === undefined && (item.provider ?? this.state.configuration.provider) === provider)) throw new Error('An earlier action has an unknown result. Reconnect and inspect the provider before retrying; Sotto will not send it twice.')
     const answerRequest = command.type === 'answer' ? this.thread(command.threadId).requests.find(item => item.id === command.requestId) : undefined
     const answerQuestions = answerRequest ? requestDraftQuestions(answerRequest) : []
@@ -2238,14 +2247,14 @@ export class AgentControl {
       ...('requestId' in command ? { requestId: command.requestId } : {}),
       ...(answerQuestions.length ? { questionsDigest: requestQuestionsDigest(answerQuestions) } : {}),
       ...(command.type === 'configure-thread' ? { options: agentThreadOptionsSchema.parse({ ...command, ...(startingEffort ? { reasoningEffort: startingEffort } : {}) }) } : {}),
-      ...((command.type === 'send' || command.type === 'steer') ? { draftDigest: this.promptDigest(command.text, command.attachments, command.skills, command.files), ...(draftId ? { draftId } : {}),
-        ...(command.attachments?.length ? { attachmentDigests: command.attachments.map(image => image.digest) } : {}) } : {}),
+      ...(prompt ? { draftDigest: this.promptDigest(prompt.text, prompt.attachments, prompt.skills, prompt.files), ...(draftId ? { draftId } : {}),
+        ...(prompt.attachments?.length ? { attachmentDigests: prompt.attachments.map(image => image.digest) } : {}) } : {}),
       ...(command.type === 'create-project' ? { entityId: command.projectId } : command.type === 'create-thread' ? { entityId: command.threadId } : {}),
     })
     const answerIntent = command.type === 'answer' ? this.outbox.find(item => item.id === command.commandId) : undefined
     if (command.type === 'configure-thread') this.settingsDispatching.add(command.commandId)
-    if ((command.type === 'send' || command.type === 'steer') && draftId) {
-      this.setDelivery(command.threadId, draftId, 'submitting', { commandId: command.commandId, messageId: command.messageId })
+    if (prompt && draftId) {
+      this.setDelivery(prompt.threadId, draftId, 'submitting', { commandId: prompt.commandId, messageId: prompt.messageId })
       // The message shows as Sending as soon as the intent exists, not after the disk write.
       // Durability still gates dispatch: the outbox entry is persisted below, before host.execute.
       this.publish()
@@ -2254,21 +2263,22 @@ export class AgentControl {
     catch (error) {
       // Nothing crossed the adapter boundary. Do not leave phantom uncertain intent.
       this.outbox = this.outbox.filter(item => item.id !== command.commandId)
-      if ((command.type === 'send' || command.type === 'steer') && draftId) { this.setDelivery(command.threadId, draftId, 'failed'); this.publish() }
+      if (prompt && draftId) { this.setDelivery(prompt.threadId, draftId, 'failed'); this.publish() }
       throw error
     }
     let result
-    if ((command.type === 'send' || command.type === 'steer') || command.type === 'answer') addTurnContext(turn, (command.type === 'send' || command.type === 'steer') ? command.text : command.answer)
+    if (prompt) addTurnContext(turn, prompt.text)
+    else if (command.type === 'answer') addTurnContext(turn, command.answer)
     let providerLatencyMs: number | undefined
     let previewAttachments: AgentAttachmentHandle[] = []
     try {
       this.canAct(); this.guardAuthority(command, turn); validate?.()
-      if ((command.type === 'send' || command.type === 'steer') && command.attachments?.length) {
+      if (prompt?.attachments?.length) {
         // Checked again now the outbox entry owns the content: a sweep that runs from here on keeps it, and one
         // that ran while this waited behind a running lane is caught here rather than at the adapter.
-        this.attachments.verify(command.attachments)
+        this.attachments.verify(prompt.attachments)
         // Checked before the provider hears anything; kept as a preview only once it has.
-        previewAttachments = validatePromptAttachments(this.state.host, this.thread(command.threadId).modelId, command.attachments)
+        previewAttachments = validatePromptAttachments(this.state.host, this.thread(prompt.threadId).modelId, prompt.attachments)
       }
       if (command.type === 'answer' && answerRequest && answerQuestions.length && provider) {
         const draftAnswers = answerRequest.questions?.length ? command.questionAnswers : { [answerRequest.id]: { optionIds: [command.answer] } }
@@ -2277,47 +2287,47 @@ export class AgentControl {
       }
       const providerStartedAt = Date.now()
       // The images become the adapter's to read here, at the provider boundary, and not before (ADR-0031).
-      const hostCommand = ((command.type === 'send' || command.type === 'steer') && command.attachments?.length
-        ? { ...command, attachments: command.attachments.map(image => this.promptImage(image)) } : command) as AgentHostCommand
+      const hostCommand = (prompt?.attachments?.length
+        ? { ...prompt, attachments: prompt.attachments.map(image => this.promptImage(image)) } : command) as AgentHostCommand
       try { this.canAct(); result = await this.dependencies.host.execute(hostCommand) }
       finally { providerLatencyMs = Math.max(0, Date.now() - providerStartedAt) }
     } catch (error) {
       this.outbox = this.outbox.filter(o => o.id !== command.commandId)
-      if ((command.type === 'send' || command.type === 'steer') && draftId) this.setDelivery(command.threadId, draftId, 'failed')
+      if (prompt && draftId) this.setDelivery(prompt.threadId, draftId, 'failed')
       await this.persist()
       throw error
     } finally {
       if (turn) turn.delegationMs += providerLatencyMs ?? 0
-      if ((command.type === 'send' || command.type === 'steer') && draftId && providerLatencyMs !== undefined) {
-        const delivery = this.state.deliveries?.find(item => item.threadId === command.threadId && item.draftId === draftId)
-        this.setDelivery(command.threadId, draftId, delivery?.status ?? 'submitting', { providerLatencyMs })
+      if (prompt && draftId && providerLatencyMs !== undefined) {
+        const delivery = this.state.deliveries?.find(item => item.threadId === prompt.threadId && item.draftId === draftId)
+        this.setDelivery(prompt.threadId, draftId, delivery?.status ?? 'submitting', { providerLatencyMs })
       }
     }
     // Previews are decoration, not history: the provider hears the prompt first, and a definitive refusal records nothing.
-    if ((command.type === 'send' || command.type === 'steer') && previewAttachments.length
+    if (prompt && previewAttachments.length
       && (result.accepted || result.uncertain || !this.outbox.some(item => item.id === command.commandId))) {
-      this.rememberPreviews(command.threadId, command.messageId, command.commandId, previewAttachments)
+      this.rememberPreviews(prompt.threadId, prompt.messageId, prompt.commandId, previewAttachments)
     }
     // An exact native message already reconciled this outbox item. Delivery is
     // settled even if its running turn prevents a later display/history read.
-    if ((command.type === 'send' || command.type === 'steer') && !this.outbox.some(item => item.id === command.commandId)) {
+    if (prompt && !this.outbox.some(item => item.id === command.commandId)) {
       await this.persist()
       return
     }
-    if ((command.type === 'send' || command.type === 'steer') && draftId) this.setDelivery(command.threadId, draftId, result.accepted || result.uncertain ? 'uncertain' : 'failed')
+    if (prompt && draftId) this.setDelivery(prompt.threadId, draftId, result.accepted || result.uncertain ? 'uncertain' : 'failed')
     // An adapter that knows more about what an unconfirmed action cost says it; the intent is kept either way.
     if (result.uncertain && this.outbox.some(o => o.id === command.commandId)) throw new Error(result.error ?? PROVIDER_RESULT_UNCONFIRMED)
-    if ((command.type === 'configure-thread' || (command.type === 'send' || command.type === 'steer')) && result.accepted) {
+    if ((command.type === 'configure-thread' || prompt) && result.accepted) {
       // A settings change the provider confirmed comes back with the snapshot it produced, which is the
       // reconciliation; the thread is read again only when the adapter has none to give.
       try { this.acceptSnapshot(command.type === 'configure-thread' && result.snapshot ? result.snapshot : await this.readThread(threadId)) }
       catch (error) {
         // The exact echo can arrive while this required reconciliation read is
         // in flight. Keep its receipt; an unconfirmed command still fails here.
-        if ((command.type !== 'send' && command.type !== 'steer') || this.outbox.some(item => item.id === command.commandId)) throw error
+        if (!prompt || this.outbox.some(item => item.id === command.commandId)) throw error
       }
       await this.persist()
-      if (this.outbox.some(item => item.id === command.commandId)) throw new Error((command.type === 'send' || command.type === 'steer')
+      if (this.outbox.some(item => item.id === command.commandId)) throw new Error(prompt
         ? 'The provider has not confirmed this user message in its state. Refresh to reconcile the existing send; it will not be replayed.'
         : THREAD_SETTINGS_UNRECONCILED)
       return

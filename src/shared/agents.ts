@@ -60,6 +60,14 @@ export const AGENT_IMAGE_MIME_TYPES = ['image/png', 'image/jpeg', 'image/gif', '
 export const AGENT_MAX_ATTACHMENTS = 8
 export const AGENT_MAX_IMAGE_BYTES = 10 * 1024 * 1024
 export const AGENT_MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+// What a screenshot is refused with wherever it is checked: the composer before it reads a file, and staging after.
+// The guide gives these limits in MB, so the sentences do too.
+export const SCREENSHOT_WRONG_TYPE = 'Only PNG, JPEG, GIF, and WebP screenshots can be attached. Nothing was attached. Choose files of those types.'
+export const SCREENSHOT_TOO_LARGE = 'Each screenshot must be 10 MB or smaller. Nothing was attached. Choose a smaller file.'
+export const SCREENSHOTS_TOO_LARGE_IN_TOTAL = 'Screenshots must total 20 MB or less. Nothing was attached. Remove an image or choose smaller files.'
+export const SCREENSHOT_NOT_ITS_TYPE = 'This screenshot’s content does not match its file type. Nothing was attached. Save it again as PNG, JPEG, GIF, or WebP, then attach it.'
+/** What a host from before staged images (ADR-0031) is refused with when asked to keep one. */
+export const HOST_CANNOT_STAGE_SCREENSHOTS = 'This host cannot keep screenshots. Update Sotto there, then attach them again. Nothing was attached.'
 export const agentRuntimeModeSchema = z.enum(['approval-required', 'auto-accept-edits', 'auto', 'full-access'])
 export type AgentRuntimeMode = z.infer<typeof agentRuntimeModeSchema>
 export function attachmentSizeBytes(dataUrl: string): number {
@@ -121,9 +129,13 @@ export const agentAttachmentHandleSchema = z.object({
   dimensions: agentAttachmentDimensionsSchema.optional(),
 }).strict()
 export type AgentAttachmentHandle = z.infer<typeof agentAttachmentHandleSchema>
+/** The bytes a set of staged images holds between them: what the 20 MiB total is measured on. */
+export function attachmentHandlesBytes(items: readonly Pick<AgentAttachmentHandle, 'sizeBytes'>[]): number {
+  return items.reduce((sum, item) => sum + item.sizeBytes, 0)
+}
 export const agentAttachmentHandlesSchema = z.array(agentAttachmentHandleSchema).max(AGENT_MAX_ATTACHMENTS)
   .refine(items => new Set(items.map(item => item.id)).size === items.length, 'Attachment IDs must be unique.')
-  .refine(items => items.reduce((size, item) => size + item.sizeBytes, 0) <= AGENT_MAX_ATTACHMENT_BYTES, 'Images must total no more than 20 MiB.')
+  .refine(items => attachmentHandlesBytes(items) <= AGENT_MAX_ATTACHMENT_BYTES, 'Images must total no more than 20 MiB.')
 const imageBytes = (limit: number) => z.custom<Uint8Array>(value => value instanceof Uint8Array && value.byteLength > 0 && value.byteLength <= limit,
   'Choose a PNG, JPEG, GIF or WebP image no larger than 10 MiB.')
 /** The window hands an image's bytes to main once; the handle comes back. `threadId` picks the host that runs it. */

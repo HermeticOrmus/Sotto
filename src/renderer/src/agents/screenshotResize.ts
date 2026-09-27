@@ -19,6 +19,11 @@ const RESIZABLE = new Set(['image/png', 'image/jpeg', 'image/webp'])
  * first 30 bytes; a JPEG names it after its metadata segments, which a camera or an editor can make large.
  */
 const HEADER_BYTES = 256 * 1024
+/**
+ * The most pixels one image is decoded at, which is also the largest canvas Chromium draws (16384 x 16384). Decoding
+ * takes four bytes a pixel, so an image past this would hold more than a gigabyte in the renderer; it goes as attached.
+ */
+export const SCREENSHOT_MAX_DECODE_PIXELS = 16384 * 16384
 
 /** `size` scaled down so its longer edge is `bound`, with its aspect ratio kept, or `size` itself when it already fits. */
 export function fitLongEdge(size: AgentImageSize, bound = SCREENSHOT_MAX_LONG_EDGE): AgentImageSize {
@@ -197,11 +202,13 @@ const untouched = (file: Blob, size: AgentImageSize): PreparedScreenshot => ({ b
  * The screenshot as the composer hands it on. One whose longer edge is past `bound` is scaled down to it in
  * its own format; anything else, and anything that cannot be scaled without changing its format, growing or
  * losing its animation, goes as the user attached it. Never scales up. An image whose first bytes show it
- * fits is never decoded, so only one that may need scaling pays for a decode.
+ * fits is never decoded, so only one that may need scaling pays for a decode, and one whose first bytes show it
+ * too large to decode safely is not decoded either.
  */
 export async function prepareScreenshot(file: Blob, decode: ScreenshotDecoder = canvasDecoder, bound = SCREENSHOT_MAX_LONG_EDGE): Promise<PreparedScreenshot> {
   const header = await headerOf(file).catch(() => null)
-  if (header && (sameSize(fitLongEdge(header.size, bound), header.size) || header.animated || !RESIZABLE.has(file.type))) return untouched(file, header.size)
+  if (header && (sameSize(fitLongEdge(header.size, bound), header.size) || header.animated || !RESIZABLE.has(file.type)
+    || header.size.width * header.size.height > SCREENSHOT_MAX_DECODE_PIXELS)) return untouched(file, header.size)
   const decoded = await decode(file).catch(() => null)
   if (!decoded) return { blob: file }
   try {
@@ -215,46 +222,20 @@ export async function prepareScreenshot(file: Blob, decode: ScreenshotDecoder = 
   } finally { decoded.close() }
 }
 
-/** A screenshot as a data URL, ready to join a draft, with the sizes it was attached and sent at when they are known. */
-export interface ReadScreenshot {
-  readonly dataUrl: string
-  readonly dimensions?: AgentAttachmentDimensions
-}
-
-function readDataUrl(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onerror = () => reject(new Error('Could not read this screenshot. Try selecting it again.'))
-    reader.onload = () => resolve(String(reader.result))
-    reader.readAsDataURL(blob)
-  })
-}
-
-/**
- * A file the user attached, prepared and read into a data URL. A screenshot larger than any model reads is
- * scaled down before it is encoded, so the bytes past the bound never become a data URL at all.
- */
-export async function readScreenshot(file: Blob, decode: ScreenshotDecoder = canvasDecoder): Promise<ReadScreenshot> {
-  const { blob, dimensions } = await prepareScreenshot(file, decode)
-  return { dataUrl: await readDataUrl(blob), ...(dimensions ? { dimensions } : {}) }
-}
-
-/**
- * A screenshot Sotto already holds as a data URL, such as a capture of its own browser, prepared the way the
- * composer prepares a file. The data URL comes back as it was when nothing needed scaling.
- */
-export async function prepareScreenshotDataUrl(dataUrl: string, decode: ScreenshotDecoder = canvasDecoder): Promise<ReadScreenshot> {
-  const prefix = /^data:([^;,]+);base64,/u.exec(dataUrl)
-  if (!prefix) return { dataUrl }
-  let source: Blob
+/** The bytes of a base64 data URL of `mimeType`, decoded natively where the renderer can, or null when it is not one. */
+export function dataUrlBlob(dataUrl: string, mimeType: string): Blob | null {
+  const prefix = `data:${mimeType};base64,`
+  if (!dataUrl.startsWith(prefix)) return null
+  const base64 = dataUrl.slice(prefix.length)
   try {
-    const binary = atob(dataUrl.slice(prefix[0].length))
+    // Chromium decodes base64 natively; the loop is for a runtime without it, such as an older test environment.
+    const native = Uint8Array as unknown as { fromBase64?: (text: string) => Uint8Array<ArrayBuffer> }
+    if (native.fromBase64) return new Blob([native.fromBase64(base64)], { type: mimeType })
+    const binary = atob(base64)
     const bytes = new Uint8Array(binary.length)
     for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index)
-    source = new Blob([bytes], { type: prefix[1]! })
-  } catch { return { dataUrl } }
-  const { blob, dimensions } = await prepareScreenshot(source, decode)
-  return { dataUrl: blob === source ? dataUrl : await readDataUrl(blob), ...(dimensions ? { dimensions } : {}) }
+    return new Blob([bytes], { type: mimeType })
+  } catch { return null }
 }
 
 /** Whether an attachment went out smaller than it came in. */

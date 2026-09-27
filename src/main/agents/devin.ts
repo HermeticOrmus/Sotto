@@ -6,10 +6,10 @@ import { version as appVersion } from '../../../package.json'
 import { agentProjectSchema, type AgentHostSnapshot, type AgentMessage, type AgentProviderMode, type AgentRuntimeMode, type AgentThread } from '../../shared/agents'
 import { mergeAgentActivities } from '../../shared/agentActivity'
 import { AtomicJsonStore } from '../storage/atomicJsonStore'
-import type { AgentHost, AgentHostCommand, AgentHostResult, ThreadHistorySource, ThreadHostEvent } from './host'
+import type { ActivitySubscriptionOptions, AgentHost, AgentHostCommand, AgentHostResult, ThreadHistorySource, ThreadHostEvent } from './host'
 import { ThreadMessageLog } from './threadMessageLog'
 import { cloneHostSnapshot } from './cloneHostSnapshot'
-import { cloneActivitySnapshot, immutableActivities, isImmutableActivities } from './activitySnapshots'
+import { ActivitySubscribers, immutableActivities, isImmutableActivities } from './activitySnapshots'
 import { ProviderSnapshotPublisher } from './providerSnapshotPublisher'
 import { SessionReaper } from './sessionReaper'
 import { existingWorkingDirectory } from './threadWorktrees'
@@ -152,16 +152,13 @@ export class DevinAcpHost implements AgentHost {
   private readonly dispatching = new Set<string>()
   private readonly observed = new Set<string>()
   private readonly listeners = new Set<(snapshot: AgentHostSnapshot) => void>()
-  private readonly activityListeners = new Set<(snapshot: AgentHostSnapshot) => void>()
+  private readonly activityListeners = new ActivitySubscribers()
   private readonly allProcesses = new Set<DevinRpc>()
   private readonly log = new ThreadMessageLog()
   private history: ThreadHistorySource | undefined
   private readonly publisher = new ProviderSnapshotPublisher(() => {
     for (const listener of this.listeners) listener(this.current())
-    if (this.activityListeners.size) {
-      const snapshot = this.activitySnapshot()
-      for (const listener of this.activityListeners) listener(cloneActivitySnapshot(snapshot))
-    }
+    this.activityListeners.publish(historyFromEvents => this.activitySnapshot(historyFromEvents))
   })
   private readonly reaper: SessionReaper
   private state: AgentHostSnapshot = {
@@ -206,18 +203,20 @@ export class DevinAcpHost implements AgentHost {
   private current(): AgentHostSnapshot {
     return cloneHostSnapshot({ ...this.state, threads: [...this.threads.values()].map(thread => this.log.publishedThread(thread)) })
   }
-  private activitySnapshot(): AgentHostSnapshot {
+  /** What activity subscribers are handed. One that keeps history from this adapter's events gets each
+   * thread's summary and no messages: those already left as events (#322). */
+  private activitySnapshot(historyFromEvents: boolean): AgentHostSnapshot {
     for (const thread of this.threads.values()) if (thread.activities && !isImmutableActivities(thread.activities)) {
       thread.activities = immutableActivities(thread.activities)
     }
-    return { ...this.state, threads: [...this.threads.values()].map(thread => this.log.publishedThread(thread)) }
+    return { ...this.state, threads: [...this.threads.values()].map(thread => this.log.activityThread(thread, historyFromEvents)) }
   }
   private emit(streaming = false): void { this.publisher.publish(streaming) }
   subscribe(listener: (snapshot: AgentHostSnapshot) => void): () => void {
     this.listeners.add(listener); return () => this.listeners.delete(listener)
   }
-  subscribeActivitySnapshots(listener: (snapshot: AgentHostSnapshot) => void): () => void {
-    this.activityListeners.add(listener); return () => this.activityListeners.delete(listener)
+  subscribeActivitySnapshots(listener: (snapshot: AgentHostSnapshot) => void, options?: ActivitySubscriptionOptions): () => void {
+    return this.activityListeners.add(listener, options)
   }
   subscribeEvents(listener: (event: ThreadHostEvent) => void): () => void { return this.log.subscribeEvents(listener) }
   useThreadHistory(source: ThreadHistorySource): void { this.history = source }

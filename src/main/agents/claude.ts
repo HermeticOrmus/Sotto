@@ -12,11 +12,11 @@ import { isAbsolute, join } from 'node:path'
 import { z } from 'zod'
 import { agentAttachmentReferenceSchema, agentProjectSchema, agentRuntimeModeSchema, type AgentHostSnapshot, type AgentMessage, type AgentRuntimeMode, type AgentThread } from '../../shared/agents'
 import { AtomicJsonStore } from '../storage/atomicJsonStore'
-import type { AgentHost, AgentHostCommand, AgentHostResult, AgentSkillScope, RestoredThreadHistory, ShortTextPrompt, ThreadHistorySource, ThreadHostEvent } from './host'
+import type { ActivitySubscriptionOptions, AgentHost, AgentHostCommand, AgentHostResult, AgentSkillScope, RestoredThreadHistory, ShortTextPrompt, ThreadHistorySource, ThreadHostEvent } from './host'
 import { SIDE_WRITING_TIMEOUT_MS, sideWritingEffort } from './sideWriting'
 import { ThreadMessageLog } from './threadMessageLog'
 import { cloneHostSnapshot } from './cloneHostSnapshot'
-import { cloneActivitySnapshot, immutableActivities, isImmutableActivities } from './activitySnapshots'
+import { ActivitySubscribers, immutableActivities, isImmutableActivities } from './activitySnapshots'
 import type { AgentSkillCatalog } from '../../shared/agentSkills'
 import type { AgentBackgroundWork } from '../../shared/agentMonitoring'
 import { claudeSkillPrompt, discoverClaudeSkills } from './claudeSkills'
@@ -165,13 +165,10 @@ export class ClaudeStreamJsonHost implements AgentHost {
   private readonly closing = new Map<string, Promise<void>>()
   private readonly logs = new Map<string, ClaudeSessionLog>()
   private readonly listeners = new Set<(snapshot: AgentHostSnapshot) => void>()
-  private readonly activityListeners = new Set<(snapshot: AgentHostSnapshot) => void>()
+  private readonly activityListeners = new ActivitySubscribers()
   private readonly publisher = new ProviderSnapshotPublisher(() => {
     for (const listener of this.listeners) listener(this.view())
-    if (this.activityListeners.size) {
-      const snapshot = this.activityView()
-      for (const listener of this.activityListeners) listener(cloneActivitySnapshot(snapshot))
-    }
+    this.activityListeners.publish(historyFromEvents => this.activityView(historyFromEvents))
   })
   private readonly acknowledgements = new Map<string, (delivered?: boolean) => void>()
   private readonly dispatching = new Set<string>()
@@ -358,8 +355,8 @@ export class ClaudeStreamJsonHost implements AgentHost {
     return this.view()
   }
   subscribe(listener: (snapshot: AgentHostSnapshot) => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener) }
-  subscribeActivitySnapshots(listener: (snapshot: AgentHostSnapshot) => void): () => void {
-    this.activityListeners.add(listener); return () => this.activityListeners.delete(listener)
+  subscribeActivitySnapshots(listener: (snapshot: AgentHostSnapshot) => void, options?: ActivitySubscriptionOptions): () => void {
+    return this.activityListeners.add(listener, options)
   }
   subscribeEvents(listener: (event: ThreadHostEvent) => void): () => void { return this.messageLog.subscribeEvents(listener) }
   useThreadHistory(source: ThreadHistorySource): void { this.history = source }
@@ -1074,12 +1071,14 @@ export class ClaudeStreamJsonHost implements AgentHost {
     return cloneHostSnapshot({ ...this.state, threads: [...this.threads.values()]
       .filter((thread): thread is AgentThread => 'projectId' in thread).map(thread => this.messageLog.publishedThread(thread)) })
   }
-  private activityView(): AgentHostSnapshot {
+  /** What activity subscribers are handed. One that keeps history from this adapter's events gets each
+   * thread's summary and no messages: those already left as events (#322). */
+  private activityView(historyFromEvents: boolean): AgentHostSnapshot {
     for (const thread of this.threads.values()) if (thread.activities && !isImmutableActivities(thread.activities)) {
       thread.activities = immutableActivities(thread.activities)
     }
     return { ...this.state, threads: [...this.threads.values()]
-      .filter((thread): thread is AgentThread => 'projectId' in thread).map(thread => this.messageLog.publishedThread(thread)) }
+      .filter((thread): thread is AgentThread => 'projectId' in thread).map(thread => this.messageLog.activityThread(thread, historyFromEvents)) }
   }
   /**
    * Read a starting session's tool list for the approval surface Sotto asked for. The CLI does not report

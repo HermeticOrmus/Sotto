@@ -240,6 +240,9 @@ export async function startSocketServer(options: SocketServerOptions) {
         try { return await service.hostFolders(request.request) } catch { throw new Refusal('unavailable') }
       case 'stage-attachment': {
         if (!service.stageAttachment) throw new Refusal('invalid_request')
+        // Up to about 14 MB of base64 in, and 10 MiB held until it is kept: one at a time per peer, on the preview's guard.
+        if (peer.preview) throw new Refusal('busy')
+        peer.preview = true
         const bytes = Buffer.from(request.image.data, 'base64')
         try {
           return await service.stageAttachment({ name: request.image.name, mimeType: request.image.mimeType, bytes: new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength),
@@ -249,7 +252,7 @@ export async function startSocketServer(options: SocketServerOptions) {
           // An image refused for what it is says so; anything else is the host's failure to keep it.
           if (error instanceof RefusedImage) throw new Refusal('invalid_request', error.message)
           throw new Refusal('unavailable')
-        }
+        } finally { peer.preview = false }
       }
       case 'attachment-content': {
         // Up to about 14 MB of base64: one at a time per peer, on the same guard as a preview.
