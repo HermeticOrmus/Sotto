@@ -94,7 +94,7 @@ function restore(): void {
 }
 
 describe('Codex open benchmark', () => {
-  it('wraps adapter members that still exist', () => {
+  it('wraps adapter and activity members that still exist', () => {
     for (const owner of Object.keys(WRAPPED) as (keyof typeof WRAPPED)[]) {
       for (const name of WRAPPED[owner]) expect(typeof owners[owner][name], `${owner}.${name}`).toBe('function')
     }
