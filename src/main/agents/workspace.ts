@@ -727,15 +727,16 @@ export class WorkspaceHost implements AgentHost {
     this.threadStore = new ThreadStore(join(directory, 'threads.sqlite'))
     this.subagentStore = new SubagentStore(join(directory, 'subagents.sqlite'))
     this.store = new AtomicJsonStore(join(directory, 'workspace.json'), workspaceSchema.parse, () => this.state)
+    // A host that says what changed is believed: its events are this thread's history, and the array
+    // comparison below is left for a host that publishes whole histories and nothing else. Such a host
+    // is asked to leave the messages out of its snapshots, since none would be read (#322).
+    this.eventSourced = typeof inner.subscribeEvents === 'function'
     this.providerSubscriptions.push(subscribeActivitySnapshots(inner, snapshot => {
       if (!this.ready || this.deliveryStopped) return
       this.accept(snapshot)
       this.writeSoon()
       this.publishSoon()
-    }))
-    // A host that says what changed is believed: its events are this thread's history, and the array
-    // comparison below is left for a host that publishes whole histories and nothing else.
-    this.eventSourced = typeof inner.subscribeEvents === 'function'
+    }, { historyFromEvents: this.eventSourced }))
     const unsubscribeEvents = inner.subscribeEvents?.(({ threadId, event }) => {
       if (!this.deliveryStopped) this.recordEvent(threadId, event)
     })

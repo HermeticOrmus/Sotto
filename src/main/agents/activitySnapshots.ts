@@ -1,6 +1,6 @@
 import type { AgentActivity } from '../../shared/agentActivity'
 import type { AgentHostSnapshot } from '../../shared/agents'
-import type { AgentHost } from './host'
+import type { ActivitySubscriptionOptions, AgentHost } from './host'
 import { cloneHostSnapshot } from './cloneHostSnapshot'
 
 /** Only objects copied and recursively frozen here may cross the internal activity subscription
@@ -40,6 +40,27 @@ export function cloneActivitySnapshot(snapshot: AgentHostSnapshot): AgentHostSna
 }
 
 /** Legacy hosts can mutate their published arrays, so their updates still take the full copy path. */
-export function subscribeActivitySnapshots(host: AgentHost, listener: (snapshot: AgentHostSnapshot) => void): () => void {
-  return host.subscribeActivitySnapshots ? host.subscribeActivitySnapshots(listener) : host.subscribe(listener)
+export function subscribeActivitySnapshots(host: AgentHost, listener: (snapshot: AgentHostSnapshot) => void, options?: ActivitySubscriptionOptions): () => void {
+  return host.subscribeActivitySnapshots ? host.subscribeActivitySnapshots(listener, options) : host.subscribe(listener)
+}
+
+/**
+ * An adapter's activity subscribers and what each asked for. A publication builds each form of the
+ * snapshot once, whichever subscribers want it, and hands every subscriber its own copy.
+ */
+export class ActivitySubscribers {
+  private readonly listeners = new Map<(snapshot: AgentHostSnapshot) => void, boolean>()
+  get size(): number { return this.listeners.size }
+  add(listener: (snapshot: AgentHostSnapshot) => void, options?: ActivitySubscriptionOptions): () => void {
+    this.listeners.set(listener, options?.historyFromEvents === true)
+    return () => this.listeners.delete(listener)
+  }
+  publish(view: (historyFromEvents: boolean) => AgentHostSnapshot): void {
+    const views = new Map<boolean, AgentHostSnapshot>()
+    for (const [listener, historyFromEvents] of this.listeners) {
+      let snapshot = views.get(historyFromEvents)
+      if (!snapshot) { snapshot = view(historyFromEvents); views.set(historyFromEvents, snapshot) }
+      listener(cloneActivitySnapshot(snapshot))
+    }
+  }
 }

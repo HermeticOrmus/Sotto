@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import { cloneActivitySnapshot, immutableActivities, isImmutableActivities } from '../../../src/main/agents/activitySnapshots'
+import type { ActivitySubscriptionOptions } from '../../../src/main/agents/host'
 import { ConfiguredProviderHost } from '../../../src/main/agents/providerSwitch'
 import { SottoThreadHost, ThreadRegistry } from '../../../src/main/agents/threads'
 import type { AgentHostSnapshot } from '../../../src/shared/agents'
@@ -105,4 +106,32 @@ it('copies mutable legacy activity on each arrival, including edits within one a
   expect(snapshots.at(-1)!.threads[0]!.activities![0]!.output).toBe('Second')
   expect(first[0]!.output).toBe('First')
   expect(snapshots.at(-1)!.threads[0]!.activities).not.toBe(first)
+})
+
+/** Records what each activity subscription asked of it, through the Sotto identity wrapper. */
+class AskedProvider extends FakeProviderHost {
+  readonly asked: Array<ActivitySubscriptionOptions | undefined> = []
+  subscribeActivitySnapshots(_listener: (snapshot: AgentHostSnapshot) => void, options?: ActivitySubscriptionOptions): () => void {
+    this.asked.push(options); return () => undefined
+  }
+}
+
+it.each([
+  ['every subscriber keeps history from events', [true, true], false, true],
+  ['one subscriber reads messages from its snapshots', [true, false], false, false],
+  ['an ordinary subscriber reads whole snapshots', [true], true, false],
+  ['nothing has subscribed yet', [], false, false],
+] as const)('asks a provider to leave messages out only when %s (#322)', async (_case, subscribers, ordinary, expected) => {
+  const root = await mkdtemp(join(tmpdir(), 'sotto-activity-asked-'))
+  const registry = new ThreadRegistry(root)
+  const claude = new AskedProvider()
+  const host = new ConfiguredProviderHost({
+    hosts: { codex: new FakeProviderHost(), claude: new SottoThreadHost('claude', claude, registry), grok: new FakeProviderHost(), devin: new FakeProviderHost() },
+    provider: () => 'claude', enabledProviders: () => ['claude'],
+  })
+  cleanup.push(async () => { host.disconnect(); await registry.flush(); await rm(root, { recursive: true, force: true }) })
+  for (const historyFromEvents of subscribers) host.subscribeActivitySnapshots(() => undefined, historyFromEvents ? { historyFromEvents } : undefined)
+  if (ordinary) host.subscribe(() => undefined)
+  await host.connect()
+  expect(claude.asked).toEqual([{ historyFromEvents: expected }])
 })

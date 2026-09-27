@@ -8,7 +8,7 @@ import { cloneActivitySnapshot, subscribeActivitySnapshots } from './activitySna
 import { join, resolve } from 'node:path'
 import { EMPTY_AGENT_HOST, PROVIDER_LABELS, parsePublicProviderEntityId, providerIdSchema, publicProviderEntityId, type AgentCapabilities, type AgentHostSnapshot, type AgentProviderStatus, type ProviderId } from '../../shared/agents'
 import { resolveModel } from '../../shared/modelCatalog'
-import { confirmedSettingsSnapshot, type AgentHost, type AgentHostCommand, type AgentHostResult, type AgentSkillScope, type RestoredThreadHistory, type ShortTextPrompt, type ThreadHistorySource, type ThreadHostEvent, type ThreadReadPurpose } from './host'
+import { confirmedSettingsSnapshot, type ActivitySubscriptionOptions, type AgentHost, type AgentHostCommand, type AgentHostResult, type AgentSkillScope, type RestoredThreadHistory, type ShortTextPrompt, type ThreadHistorySource, type ThreadHostEvent, type ThreadReadPurpose } from './host'
 
 /** Public IDs are opaque to callers and reversible only at the provider boundary. */
 export function providerEntityId(provider: ProviderId, kind: 'model' | 'project', value: string): string {
@@ -35,7 +35,8 @@ export class ConfiguredProviderHost implements AgentHost {
   private observed: readonly string[] | undefined
   private readonly slots = new Map<ProviderId, Slot>()
   private readonly listeners = new Set<(snapshot: AgentHostSnapshot) => void>()
-  private readonly activityListeners = new Set<(snapshot: AgentHostSnapshot) => void>()
+  /** Each activity subscriber, and whether it keeps history from the providers' events. */
+  private readonly activityListeners = new Map<(snapshot: AgentHostSnapshot) => void, boolean>()
   private readonly eventListeners = new Set<(event: ThreadHostEvent) => void>()
   /** Thread events from whichever provider owns the thread. Absent when no provider publishes any. */
   readonly subscribeEvents?: (listener: (event: ThreadHostEvent) => void) => () => void
@@ -126,7 +127,7 @@ export class ConfiguredProviderHost implements AgentHost {
     if (!this.listeners.size && !this.activityListeners.size) return
     const snapshot = this.aggregate()
     for (const listener of this.listeners) listener(cloneHostSnapshot(snapshot))
-    for (const listener of this.activityListeners) listener(cloneActivitySnapshot(snapshot))
+    for (const listener of this.activityListeners.keys()) listener(cloneActivitySnapshot(snapshot))
   }
   async connect(provider?: ProviderId): Promise<AgentHostSnapshot> {
     const requested = (provider ? [provider] : this.options.enabledProviders?.() ?? [this.options.provider()]).map(id => ({ id, epoch: this.slots.get(id)!.epoch }))
@@ -145,7 +146,7 @@ export class ConfiguredProviderHost implements AgentHost {
       if (!slot.wanted || slot.epoch !== epoch) return
       this.accept(id, snapshot)
       this.publish()
-    })
+    }, { historyFromEvents: this.historyFromEvents() })
     // A thread belongs to one provider. Its events keep that provider's connection epoch.
     slot.unsubscribeEvents = this.options.hosts[id].subscribeEvents?.(event => {
       if (!slot.wanted || slot.epoch !== epoch) return
@@ -327,7 +328,13 @@ export class ConfiguredProviderHost implements AgentHost {
   subscribe(listener: (snapshot: AgentHostSnapshot) => void): () => void {
     this.listeners.add(listener); return () => this.listeners.delete(listener)
   }
-  subscribeActivitySnapshots(listener: (snapshot: AgentHostSnapshot) => void): () => void {
-    this.activityListeners.add(listener); return () => this.activityListeners.delete(listener)
+  /** What a subscriber asks is read when a provider connects. The workspace subscribes as it is made, before any does. */
+  subscribeActivitySnapshots(listener: (snapshot: AgentHostSnapshot) => void, options?: ActivitySubscriptionOptions): () => void {
+    this.activityListeners.set(listener, options?.historyFromEvents === true); return () => this.activityListeners.delete(listener)
+  }
+  /** A provider's own messages are left out of what it publishes here only when every subscriber keeps
+   * history from the events this switch forwards, and none reads them from the ordinary subscription. */
+  private historyFromEvents(): boolean {
+    return this.listeners.size === 0 && this.activityListeners.size > 0 && [...this.activityListeners.values()].every(Boolean)
   }
 }

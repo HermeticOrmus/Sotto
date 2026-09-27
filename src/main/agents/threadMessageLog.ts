@@ -142,6 +142,14 @@ export class ThreadMessageLog {
    */
   publishedThread<T extends { id: string; messages: AgentMessage[]; activities?: AgentActivity[] | undefined; summary?: AgentThreadSummary | undefined }>(thread: T): T {
     if (this.holding(thread.id)) return { ...thread, messages: this.published(thread.id) }
+    return this.summarizedThread(thread)
+  }
+  /**
+   * One thread as the internal activity subscription carries it: its summary and no messages, whether or
+   * not they are in hand. Every message has already left this log as an event, and the workspace keeps
+   * history from those, so a copy of the held ones on every update was made only to be thrown away (#322).
+   */
+  summarizedThread<T extends { id: string; messages: AgentMessage[]; activities?: AgentActivity[] | undefined; summary?: AgentThreadSummary | undefined }>(thread: T): T {
     return { ...thread, messages: [], summary: this.summaryBeside(thread.id, thread.activities) }
   }
   count(threadId: string): number { return this.track(threadId).order.length }

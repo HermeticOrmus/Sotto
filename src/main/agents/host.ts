@@ -90,6 +90,16 @@ export interface ThreadHistorySource {
  * Sotto thread interface: create = execute create-thread; resume = observeThreads then snapshot;
  * prompt = execute send; cancel = execute interrupt; status = snapshot; events = subscribe.
  */
+/** What an activity subscriber asks of the host it subscribes to. */
+export interface ActivitySubscriptionOptions {
+  /**
+   * The subscriber keeps each thread's history from the host's `subscribeEvents` and reads none from the
+   * snapshots, so a host that publishes events leaves every thread's messages out and carries its summary
+   * instead (ADR-0016, #322). A subscriber that reads messages from the snapshots leaves this unset.
+   */
+  historyFromEvents?: boolean
+}
+
 export interface AgentHost {
   /** Inject shared browser tools before connecting the native providers. */
   useBrowserTools?(tools: BrowserAgentTools): void
@@ -181,8 +191,10 @@ export interface AgentHost {
   subscribe(listener: (snapshot: AgentHostSnapshot) => void): () => void
   /** Internal readers may share deeply immutable activity trees. All other containers remain
    * isolated for the consumer. Callers needing writable activities use subscribe/snapshot instead.
-   * Absence means mutable legacy data: never infer unchanged activity from array identity alone. */
-  subscribeActivitySnapshots?(listener: (snapshot: AgentHostSnapshot) => void): () => void
+   * Absence means mutable legacy data: never infer unchanged activity from array identity alone.
+   * A subscriber that keeps history from `subscribeEvents` says so in `options`, and then a host that
+   * publishes events carries every thread with its summary and no messages, held or not (ADR-0016, #322). */
+  subscribeActivitySnapshots?(listener: (snapshot: AgentHostSnapshot) => void, options?: ActivitySubscriptionOptions): () => void
   /**
    * Every change to what a thread said, as it happens. An adapter that implements this publishes each
    * change once through its own append path, and its snapshots then carry the messages only for the

@@ -10,12 +10,12 @@ import { z } from 'zod'
 import { agentProjectSchema, type AgentHostSnapshot, type AgentThread, type AgentMessage, type AgentRuntimeMode } from '../../shared/agents'
 import { orderReasoningEfforts } from '../../shared/reasoningEfforts'
 import { AtomicJsonStore } from '../storage/atomicJsonStore'
-import type { AgentHost, AgentHostCommand, AgentHostResult, AgentSkillScope, ShortTextPrompt, ThreadHistorySource, ThreadHostEvent } from './host'
+import type { ActivitySubscriptionOptions, AgentHost, AgentHostCommand, AgentHostResult, AgentSkillScope, ShortTextPrompt, ThreadHistorySource, ThreadHostEvent } from './host'
 import { SIDE_WRITING_TIMEOUT_MS } from './sideWriting'
 import { GrokSubscriptionClient, sweepLeftoverSessions } from './subscriptionGrok'
 import { ThreadMessageLog } from './threadMessageLog'
 import { cloneHostSnapshot } from './cloneHostSnapshot'
-import { cloneActivitySnapshot, immutableActivities, isImmutableActivities } from './activitySnapshots'
+import { ActivitySubscribers, immutableActivities, isImmutableActivities } from './activitySnapshots'
 import type { AgentSkillCatalog } from '../../shared/agentSkills'
 import { discoverGrokSkills, grokSkillPrompt } from './grokSkills'
 import { verifyFileMentions } from './promptFiles'
@@ -156,13 +156,10 @@ export class GrokAcpHost implements AgentHost {
   private readonly selections = new Map<string, { model: string; effort: string | undefined }>()
   private readonly seenUpdates = new Set<string>()
   private readonly listeners = new Set<(snapshot: AgentHostSnapshot) => void>()
-  private readonly activityListeners = new Set<(snapshot: AgentHostSnapshot) => void>()
+  private readonly activityListeners = new ActivitySubscribers()
   private readonly publisher = new ProviderSnapshotPublisher(() => {
     for (const listener of this.listeners) listener(this.current())
-    if (this.activityListeners.size) {
-      const snapshot = this.activitySnapshot()
-      for (const listener of this.activityListeners) listener(cloneActivitySnapshot(snapshot))
-    }
+    this.activityListeners.publish(historyFromEvents => this.activitySnapshot(historyFromEvents))
   })
   private rpc: GrokRpc | undefined
   private stopping = Promise.resolve()
@@ -243,17 +240,19 @@ export class GrokAcpHost implements AgentHost {
     return cloneHostSnapshot({ ...this.state, threads: [...this.threads.values()]
       .filter((thread): thread is AgentThread => 'projectId' in thread).map(thread => this.log.publishedThread(thread)) })
   }
-  private activitySnapshot(): AgentHostSnapshot {
+  /** What activity subscribers are handed. One that keeps history from this adapter's events gets each
+   * thread's summary and no messages: those already left as events (#322). */
+  private activitySnapshot(historyFromEvents: boolean): AgentHostSnapshot {
     for (const thread of this.threads.values()) if (thread.activities && !isImmutableActivities(thread.activities)) {
       thread.activities = immutableActivities(thread.activities)
     }
     return { ...this.state, threads: [...this.threads.values()]
-      .filter((thread): thread is AgentThread => 'projectId' in thread).map(thread => this.log.publishedThread(thread)) }
+      .filter((thread): thread is AgentThread => 'projectId' in thread).map(thread => historyFromEvents ? this.log.summarizedThread(thread) : this.log.publishedThread(thread)) }
   }
   private emit(streaming = false): void { this.publisher.publish(streaming) }
   subscribe(listener: (snapshot: AgentHostSnapshot) => void): () => void { this.listeners.add(listener); return () => { this.listeners.delete(listener) } }
-  subscribeActivitySnapshots(listener: (snapshot: AgentHostSnapshot) => void): () => void {
-    this.activityListeners.add(listener); return () => this.activityListeners.delete(listener)
+  subscribeActivitySnapshots(listener: (snapshot: AgentHostSnapshot) => void, options?: ActivitySubscriptionOptions): () => void {
+    return this.activityListeners.add(listener, options)
   }
   subscribeEvents(listener: (event: ThreadHostEvent) => void): () => void { return this.log.subscribeEvents(listener) }
   useThreadHistory(source: ThreadHistorySource): void { this.history = source }
