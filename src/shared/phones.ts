@@ -21,11 +21,11 @@ export type ServeCheck =
       readonly status: 'failed'
       /**
        * `port-taken`: port 8443 already carries another Serve setting, which Sotto leaves alone.
-       * `not-enabled`: the tailnet has not turned Serve on; `enableUrl` says whether Sotto can open the page that does.
+       * `not-enabled`: the tailnet has not turned Serve on; `canOpenSetup` says whether Sotto has the page that turns it on.
        * `listener`: Sotto could not open its own loopback listener. `failed`: the serve command failed some other way.
        */
       readonly reason: 'port-taken' | 'not-enabled' | 'listener' | 'failed'
-      readonly enableUrl?: boolean
+      readonly canOpenSetup?: boolean
     }
 
 export interface PairedPhone {

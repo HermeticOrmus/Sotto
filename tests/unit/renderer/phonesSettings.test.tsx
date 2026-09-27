@@ -91,7 +91,7 @@ it('paired: a phone row with its date, whether it is connected, Can answer off a
   const row = await screen.findByRole('region', { name: 'Zach’s iPhone' })
   expect(within(row).getByText(/^Paired /u).textContent).toBe('Paired Sep 26 · Connected')
   expect(within(row).getByText('Reads and replies. Can’t answer questions or permissions.')).toBeTruthy()
-  const answer = within(row).getByRole('switch', { name: 'Let Zach’s iPhone answer questions and permissions' })
+  const answer = within(row).getByRole('switch', { name: 'Can answer: let Zach’s iPhone answer questions and permissions' })
   expect(answer.getAttribute('aria-checked')).toBe('false')
   const user = userEvent.setup()
   await user.click(answer)
@@ -124,7 +124,7 @@ it('port taken: says Sotto left the other app’s setting alone', async () => {
 })
 
 it('Serve not turned on for the tailnet: offers the page that turns it on', async () => {
-  const { command } = show({ ...READY, phase: 'failed', serve: { status: 'failed', reason: 'not-enabled', enableUrl: true }, address: null })
+  const { command } = show({ ...READY, phase: 'failed', serve: { status: 'failed', reason: 'not-enabled', canOpenSetup: true }, address: null })
   await userEvent.setup().click(await screen.findByRole('button', { name: 'Turn on Serve in Tailscale' }))
   expect(command).toHaveBeenCalledWith({ type: 'open-serve-setup' })
 })
@@ -134,7 +134,11 @@ it('local host off: says phone access needs it, disables the switch and offers H
   await userEvent.setup().click(await screen.findByRole('button', { name: 'Go to Hosts' }))
   expect(openHosts).toHaveBeenCalled()
   expect(screen.getByText(/Phone access needs the local host, which is off\./u)).toBeTruthy()
-  expect((screen.getByRole('switch', { name: 'Let phones connect' }) as HTMLButtonElement).disabled).toBe(true)
+  // Still on from before, so it can be turned off; it cannot be turned on until the local host runs.
+  expect((screen.getByRole('switch', { name: 'Let phones connect' }) as HTMLButtonElement).disabled).toBe(false)
+  cleanup()
+  show({ ...OFF, localHostRunning: false })
+  expect((await screen.findByRole('switch', { name: 'Let phones connect' }) as HTMLButtonElement).disabled).toBe(true)
 })
 
 it('saves the name phones show on Enter, and Escape puts the saved one back', async () => {

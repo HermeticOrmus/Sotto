@@ -85,6 +85,7 @@ export class PhoneAccess {
   private serveCheck: ServeCheck = WAITING
   private address: string | null = null
   private enableUrl: string | undefined
+  private readonly formerPorts = new Set<number>()
   private code: { code: string; expiresAt: string } | null = null
   private codeTimer: ReturnType<typeof setTimeout> | undefined
   private retryTimer: ReturnType<typeof setTimeout> | undefined
@@ -217,7 +218,7 @@ export class PhoneAccess {
 
   private async turnOn(): Promise<void> {
     this.clearRetry()
-    this.phase = 'starting'; this.tailscaleCheck = WAITING; this.serveCheck = WAITING; this.address = null; this.enableUrl = undefined
+    this.reset('starting')
     this.publish()
     let status: TailscaleStatus
     try { status = await this.options.tailscale.status() } catch { status = { state: 'not-running' } }
@@ -232,13 +233,13 @@ export class PhoneAccess {
     this.publish()
     let owner: ReturnType<typeof servePortOwner>
     try { owner = servePortOwner(await this.options.tailscale.serveStatus(), PHONE_ACCESS_SERVE_PORT, this.ourPorts()) }
-    catch { this.options.log?.('phone-access-serve-status-failed'); this.serveCheck = { status: 'failed', reason: 'failed' }; await this.fail(); return }
-    if (owner === 'taken') { this.serveCheck = { status: 'failed', reason: 'port-taken' }; await this.fail(); return }
+    catch { this.options.log?.('phone-access-serve-status-failed'); await this.failServe('failed'); return }
+    if (owner === 'taken') { await this.failServe('port-taken'); return }
     if (!this.listener) {
       // Paired phones that cannot be read are never replaced: the listener stays shut until they can be.
-      if (!await this.loadPairing()) { this.serveCheck = { status: 'failed', reason: 'listener' }; await this.fail(); return }
+      if (!await this.loadPairing()) { await this.failServe('listener'); return }
       try { this.listener = await this.listen() }
-      catch { this.options.log?.('phone-access-listener-failed'); this.serveCheck = { status: 'failed', reason: 'listener' }; await this.fail(); return }
+      catch { this.options.log?.('phone-access-listener-failed'); await this.failServe('listener'); return }
     }
     const port = this.listener.descriptor.port
     await this.save({ port, mapped: true })
@@ -247,10 +248,9 @@ export class PhoneAccess {
     if (!result.ok) {
       this.options.log?.(result.reason === 'not-enabled' ? 'phone-access-serve-not-enabled' : 'phone-access-serve-failed')
       this.enableUrl = result.reason === 'not-enabled' ? result.enableUrl : undefined
-      this.serveCheck = { status: 'failed', reason: result.reason, ...(this.enableUrl ? { enableUrl: true } : {}) }
       // Nothing new was set up, so a setting that was already Sotto's is the only one that may still be there.
       await this.save({ port, mapped: owner === 'ours' })
-      await this.fail()
+      await this.failServe(result.reason)
       return
     }
     this.serveCheck = { status: 'ok' }
@@ -260,9 +260,23 @@ export class PhoneAccess {
     this.publish()
   }
 
-  /** A failed step: close the listener if it opened, and say which step failed. The Serve setting was not changed. */
+  private reset(phase: PhonesState['phase']): void {
+    this.phase = phase; this.tailscaleCheck = WAITING; this.serveCheck = WAITING; this.address = null; this.enableUrl = undefined
+  }
+
+  private async failServe(reason: 'port-taken' | 'not-enabled' | 'listener' | 'failed'): Promise<void> {
+    this.serveCheck = { status: 'failed', reason, ...(this.enableUrl ? { canOpenSetup: true } : {}) }
+    await this.fail()
+  }
+
+  /**
+   * A failed step: say which one, remove a Serve setting of Sotto's that is still there (a crash's, say),
+   * and close the listener if it opened. Nothing else is changed, and a failure never leaves 8443
+   * pointing at a loopback port Sotto is not listening on.
+   */
   private async fail(): Promise<void> {
     this.phase = 'failed'
+    await this.removeMapping()
     await this.closeListener()
     this.publish()
   }
@@ -270,18 +284,21 @@ export class PhoneAccess {
   private async turnOff(): Promise<void> {
     this.clearRetry()
     this.cancelCode()
-    if (this.record.mapped) {
-      try {
-        const owner = servePortOwner(await this.options.tailscale.serveStatus(), PHONE_ACCESS_SERVE_PORT, this.ourPorts())
-        if (owner === 'free' || (owner === 'ours' && await this.options.tailscale.unserve(PHONE_ACCESS_SERVE_PORT))) await this.save({ ...this.record, mapped: false })
-        // Someone else's setting on 8443 now is not Sotto's to remove, and Sotto's own is gone.
-        else if (owner === 'taken') await this.save({ ...this.record, mapped: false })
-        else this.options.log?.('phone-access-serve-remove-failed')
-      } catch { this.options.log?.('phone-access-serve-remove-failed') }
-    }
+    await this.removeMapping()
     await this.closeListener()
-    this.phase = 'off'; this.tailscaleCheck = WAITING; this.serveCheck = WAITING; this.address = null; this.enableUrl = undefined
+    this.reset('off')
     this.publish()
+  }
+
+  /** Removes Sotto's own Serve setting when the record says one may be there. Anyone else's on 8443 is never touched. */
+  private async removeMapping(): Promise<void> {
+    if (!this.record.mapped) return
+    try {
+      const owner = servePortOwner(await this.options.tailscale.serveStatus(), PHONE_ACCESS_SERVE_PORT, this.ourPorts())
+      if (owner === 'ours' && !await this.options.tailscale.unserve(PHONE_ACCESS_SERVE_PORT)) { this.options.log?.('phone-access-serve-remove-failed'); return }
+      // Free, removed, or someone else's now: in each case no setting of Sotto's is left.
+      await this.save({ ...this.record, mapped: false })
+    } catch { this.options.log?.('phone-access-serve-remove-failed') }
   }
 
   private async listen(): Promise<Listener> {
@@ -307,11 +324,13 @@ export class PhoneAccess {
     await listener?.close().catch(() => this.options.log?.('phone-access-listener-close-failed'))
   }
 
+  /** Every loopback port Sotto has served phones from in this run, so its own older setting still reads as its own. */
   private ourPorts(): number[] {
-    return [...new Set([this.record.port, this.listener?.descriptor.port].filter((port): port is number => typeof port === 'number'))]
+    return [...new Set([...this.formerPorts, this.record.port, this.listener?.descriptor.port].filter((port): port is number => typeof port === 'number'))]
   }
 
   private async save(record: PhoneAccessRecord): Promise<void> {
+    if (this.record.port !== null && this.record.port !== record.port) this.formerPorts.add(this.record.port)
     this.record = record
     try { await this.store.write(record) } catch { this.options.log?.('phone-access-record-write-failed') }
   }

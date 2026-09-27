@@ -60,7 +60,7 @@ function PhoneRow({ phone, answersAvailable, onCanAnswer, onRemove }: {
     <div className="hosts-row__actions">
       <span className="phones-answer">
         <span aria-hidden="true">Can answer</span>
-        <button type="button" role="switch" aria-checked={phone.canAnswer} aria-label={`Let ${phone.name} answer questions and permissions`} disabled={!answersAvailable}
+        <button type="button" role="switch" aria-checked={phone.canAnswer} aria-label={`Can answer: let ${phone.name} answer questions and permissions`} disabled={!answersAvailable}
           className="tt-toggle tt-focusable hosts-switch__control" onClick={() => onCanAnswer(!phone.canAnswer)}>
           <span className="tt-toggle__track" aria-hidden="true"><span className="tt-toggle__thumb" /></span>
         </button>
@@ -183,7 +183,7 @@ export function PhonesSettings({ phoneAccess, phoneAccessName, onUpdateSettings,
       <Button variant="secondary" onClick={onOpenHosts}>Go to Hosts</Button>
     </div> : null}
     <div className="phones-switch">
-      <Toggle label="Let phones connect" checked={phoneAccess} disabled={!bridge || !localHostRunning}
+      <Toggle label="Let phones connect" checked={phoneAccess} disabled={!bridge || (!localHostRunning && !phoneAccess)}
         onCheckedChange={enabled => { setError(null); void onUpdateSettings({ phoneAccess: enabled }) }}
         description={`Sotto adds this computer to Tailscale Serve on port ${PHONE_ACCESS_SERVE_PORT}, so phones on your tailnet can find it. Only phones you pair can connect. Turning this off removes the setting.`} />
     </div>
@@ -201,7 +201,7 @@ export function PhonesSettings({ phoneAccess, phoneAccessName, onUpdateSettings,
           <p>{serveStep === 'ok' ? 'Sotto added it. Port 443 stays free for other apps.' : serveStep === 'failed' ? failure : tailscaleStep === 'failed' ? 'Waits for Tailscale.' : starting ? 'Setting it up…' : notYet}</p>
         </div>
         {serveStep === 'failed' ? <span className="phones-step__actions">
-          {state?.serve.status === 'failed' && state.serve.enableUrl ? <Button variant="secondary" onClick={() => void run({ type: 'open-serve-setup' })}>Turn on Serve in Tailscale</Button> : null}
+          {state?.serve.status === 'failed' && state.serve.canOpenSetup ? <Button variant="secondary" onClick={() => void run({ type: 'open-serve-setup' })}>Turn on Serve in Tailscale</Button> : null}
           {retry}
         </span> : null}
       </li>
