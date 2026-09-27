@@ -264,14 +264,14 @@ describe('wrapAgentBridge', () => {
       expect(delivered[0]!.host.models).toBe(models)
     })
 
-    // The preload refuses a whole state from main's command (agentCommandReceiptSchema); this is the path a
-    // test bridge standing in for main takes, which the renderer suites rely on.
-    it('passes a whole state from a bridge standing in for main through untouched', async () => {
-      const whole = fullState([model('gpt-5')])
-      const { bridge, get } = receiptBridge(() => Promise.reject(new Error('unused')), whole)
+    // Main never sends a bare catalog, and the preload refuses one from main's command
+    // (agentCommandReceiptSchema), so the page does not trust one either: it asks main.
+    it('recovers a catalog sent as a bare list rather than trusting it', async () => {
+      const read = [model('gpt-5')]
+      const { bridge, get } = receiptBridge(() => Promise.resolve(fullState(read)), fullState([model('stale')]))
       const reply = await wrapAgentBridge(bridge).command(voice)
-      expect(reply.host.models).toBe(whole.host.models)
-      expect(get).not.toHaveBeenCalled()
+      expect(reply.host.models).toBe(read)
+      expect(get).toHaveBeenCalledTimes(1)
     })
 
     it('resolves a receipt naming an older revision from the newer catalog the window holds, without asking main', async () => {

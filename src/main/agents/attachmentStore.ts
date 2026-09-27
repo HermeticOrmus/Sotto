@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { z } from 'zod'
 import { AGENT_IMAGE_MIME_TYPES, AGENT_MAX_IMAGE_BYTES, agentAttachmentHandleSchema, attachmentDigestSchema, bytesHaveRasterSignature,
-  type AgentAttachment, type AgentAttachmentDimensions, type AgentAttachmentHandle } from '../../shared/agents'
+  SCREENSHOT_NOT_ITS_TYPE, SCREENSHOT_TOO_LARGE, SCREENSHOT_WRONG_TYPE, type AgentAttachment, type AgentAttachmentDimensions, type AgentAttachmentHandle } from '../../shared/agents'
 import { AtomicJsonStore } from '../storage/atomicJsonStore'
 
 type ImageType = typeof AGENT_IMAGE_MIME_TYPES[number]
@@ -23,21 +23,27 @@ const entrySchema = z.object({ digest: attachmentDigestSchema, mimeType: z.enum(
   sizeBytes: z.number().int().min(1).max(AGENT_MAX_IMAGE_BYTES), stagedAt: z.number().finite() }).strict()
 type Entry = z.infer<typeof entrySchema>
 type Index = { version: 1; entries: Entry[] }
-/** Content this store keeps: on disk under its digest, or in memory alone while history is off. */
-interface Held extends Entry { memory?: Buffer; unownedSince: number | null }
+/**
+ * Content this store keeps: on disk under its digest, or in memory alone while history is off. `lastStagedAt` is
+ * this run's latest staging of it, which a privacy change reads to tell content staged again for a draft from
+ * content only an older preview names.
+ */
+interface Held extends Entry { memory?: Buffer; unownedSince: number | null; lastStagedAt: number }
 
 /** Content staging refuses for what it is (its type, its size, its signature), not for a failure to keep it. */
 export class RefusedImage extends Error {}
 
 /**
  * Stages one image a file from before ADR-0031 kept inline, answering with its handle under the image's own ID, or
- * null for one that is not the image it claims. Failing to keep one is thrown: that is storage, not the image.
+ * null for one that is not the image it claims. Failing to keep one is thrown: that is storage, not the image. The
+ * bytes are already on disk inside that file, so they are written to the store whatever the history setting: kept
+ * in memory alone, the rewrite of the file would lose them at the next restart.
  */
 export type StageInline = (attachment: AgentAttachment) => Promise<AgentAttachmentHandle | null>
 export function inlineStager(store: Pick<AttachmentStore, 'stage'>): StageInline {
   return async attachment => {
     const bytes = Buffer.from(attachment.dataUrl.slice(attachment.dataUrl.indexOf(',') + 1), 'base64')
-    try { return { ...await store.stage({ name: attachment.name, mimeType: attachment.mimeType, bytes, ...(attachment.dimensions ? { dimensions: attachment.dimensions } : {}) }), id: attachment.id } }
+    try { return { ...await store.stage({ name: attachment.name, mimeType: attachment.mimeType, bytes, ...(attachment.dimensions ? { dimensions: attachment.dimensions } : {}) }, { onDisk: true }), id: attachment.id } }
     catch (error) { if (error instanceof RefusedImage) return null; throw error }
   }
 }
@@ -58,12 +64,16 @@ export class AttachmentStore {
   private readonly folder: string
   private readonly index: AtomicJsonStore<Index>
   private serial: Promise<unknown> = Promise.resolve()
+  private readonly historyEnabled: () => boolean
+  private readonly now: () => number
   /**
-   * `missing` is the sentence a handle whose content is gone is refused with: this computer's on the desktop,
+   * The sentence a handle whose content is gone is refused with: this computer's on the desktop,
    * MISSING_REMOTE_ATTACHMENT on a headless host, whose refusals a desktop shows.
    */
-  constructor(directory: string, private readonly historyEnabled: () => boolean = () => true, private readonly now: () => number = () => Date.now(),
-    readonly missing: string = MISSING_ATTACHMENT) {
+  readonly missing: string
+  constructor(directory: string, { historyEnabled = () => true, now = () => Date.now(), missing = MISSING_ATTACHMENT }: {
+    readonly historyEnabled?: () => boolean; readonly now?: () => number; readonly missing?: string | undefined } = {}) {
+    this.historyEnabled = historyEnabled; this.now = now; this.missing = missing
     this.folder = join(directory, 'attachments')
     this.index = new AtomicJsonStore(join(this.folder, INDEX_FILE), value => {
       const saved = z.object({ version: z.literal(1), entries: z.array(z.unknown()) }).parse(value)
@@ -101,7 +111,7 @@ export class AttachmentStore {
           continue
         }
         const entry = indexed.get(match[1]!)
-        this.held.set(match[1]!, { digest: match[1]!, mimeType, sizeBytes: size, stagedAt: entry?.stagedAt ?? now, unownedSince: now })
+        this.held.set(match[1]!, { digest: match[1]!, mimeType, sizeBytes: size, stagedAt: entry?.stagedAt ?? now, unownedSince: now, lastStagedAt: entry?.stagedAt ?? now })
       }
       if (saved.entries.length !== this.held.size || saved.entries.some(entry => !this.held.has(entry.digest))) await this.writeIndex()
     })
@@ -114,13 +124,15 @@ export class AttachmentStore {
   /**
    * Keeps an image's bytes once and answers with its handle. The type, size and signature are checked here, whoever
    * sent them. With history on the bytes are on disk, and in the index, before this resolves; with it off they are
-   * kept in memory and nothing is written.
+   * kept in memory and nothing is written. `onDisk` writes them whatever the setting, for bytes that were already on
+   * disk elsewhere (`inlineStager`) and so are not new.
    */
-  stage(input: { readonly name: string; readonly mimeType: string; readonly bytes: Uint8Array; readonly dimensions?: AgentAttachmentDimensions | undefined }): Promise<AgentAttachmentHandle> {
+  stage(input: { readonly name: string; readonly mimeType: string; readonly bytes: Uint8Array; readonly dimensions?: AgentAttachmentDimensions | undefined },
+    { onDisk = false }: { readonly onDisk?: boolean } = {}): Promise<AgentAttachmentHandle> {
     const mimeType = input.mimeType as ImageType
-    if (!(AGENT_IMAGE_MIME_TYPES as readonly string[]).includes(input.mimeType)) return Promise.reject(new RefusedImage('Choose PNG, JPEG, GIF, or WebP screenshots.'))
-    if (input.bytes.byteLength < 1 || input.bytes.byteLength > AGENT_MAX_IMAGE_BYTES) return Promise.reject(new RefusedImage('Each screenshot must be 10 MB or smaller.'))
-    if (!bytesHaveRasterSignature(mimeType, input.bytes)) return Promise.reject(new RefusedImage('The image content does not match its file type.'))
+    if (!(AGENT_IMAGE_MIME_TYPES as readonly string[]).includes(input.mimeType)) return Promise.reject(new RefusedImage(SCREENSHOT_WRONG_TYPE))
+    if (input.bytes.byteLength < 1 || input.bytes.byteLength > AGENT_MAX_IMAGE_BYTES) return Promise.reject(new RefusedImage(SCREENSHOT_TOO_LARGE))
+    if (!bytesHaveRasterSignature(mimeType, input.bytes)) return Promise.reject(new RefusedImage(SCREENSHOT_NOT_ITS_TYPE))
     const bytes = Buffer.from(input.bytes.buffer, input.bytes.byteOffset, input.bytes.byteLength)
     const digest = createHash('sha256').update(bytes).digest('hex')
     // The sizes are the composer's word for what it attached and staged; they describe, and are never read as content.
@@ -131,19 +143,24 @@ export class AttachmentStore {
     return this.enqueue(async () => {
       const now = this.now()
       const existing = this.held.get(digest)
-      // Re-staging content starts its grace again; the same bytes are never written twice.
-      if (existing) { existing.unownedSince = existing.unownedSince === null ? null : now; return handle }
-      if (!this.historyEnabled()) {
-        this.held.set(digest, { digest, mimeType, sizeBytes: bytes.byteLength, stagedAt: now, memory: Buffer.from(bytes), unownedSince: now })
+      // Re-staging content starts its grace again; the same bytes are never written twice, unless only memory had
+      // them and they must now reach disk.
+      if (existing && !(onDisk && existing.memory)) {
+        existing.unownedSince = existing.unownedSince === null ? null : now; existing.lastStagedAt = now
+        return handle
+      }
+      if (!onDisk && !this.historyEnabled()) {
+        this.held.set(digest, { digest, mimeType, sizeBytes: bytes.byteLength, stagedAt: now, memory: Buffer.from(bytes), unownedSince: now, lastStagedAt: now })
         return handle
       }
       await this.writeContent({ digest, mimeType }, bytes)
-      const held: Held = { digest, mimeType, sizeBytes: bytes.byteLength, stagedAt: now, unownedSince: now }
+      const held: Held = { digest, mimeType, sizeBytes: bytes.byteLength, stagedAt: existing?.stagedAt ?? now,
+        unownedSince: existing?.unownedSince === null ? null : now, lastStagedAt: now }
       this.held.set(digest, held)
       try { await this.writeIndex() }
       catch (error) {
         // Without its index entry the content still comes back at the next start and is removed there.
-        this.held.delete(digest)
+        if (existing) this.held.set(digest, existing); else this.held.delete(digest)
         await unlink(this.file(held)).catch(() => undefined)
         throw error
       }
@@ -196,7 +213,9 @@ export class AttachmentStore {
   /**
    * The bytes a digest names, or null when this store no longer keeps them. Bytes read from disk are hashed first:
    * a file truncated, damaged or replaced since it was staged is not the image the user attached, so it is treated
-   * as gone rather than sent under their digest. Staging the same image again writes it afresh.
+   * as gone rather than sent under their digest. The file and its index entry go too, so the next start does not
+   * take it back and every draft or follow-up that names it meets the missing-image sentence rather than a failed
+   * send. Staging the same image again writes it afresh.
    */
   async read(digest: string): Promise<Buffer | null> {
     const held = this.held.get(digest)
@@ -206,7 +225,15 @@ export class AttachmentStore {
     try { bytes = await readFile(this.file(held)) }
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error }
     if (createHash('sha256').update(bytes).digest('hex') === digest) return bytes
-    if (this.held.get(digest) === held) this.held.delete(digest)
+    if (this.held.get(digest) === held) {
+      this.held.delete(digest)
+      // In turn with staging: an image staged again meanwhile has written a good file, which is left alone.
+      await this.enqueue(async () => {
+        if (this.held.has(digest)) return
+        await unlink(this.file(held)).catch((error: NodeJS.ErrnoException) => { if (error.code !== 'ENOENT') throw error })
+        await this.writeIndex()
+      }).catch(() => undefined)
+    }
     return null
   }
   /** The type a digest was staged as, so a reader can say what the bytes are. */
@@ -215,9 +242,10 @@ export class AttachmentStore {
   /**
    * Removes content nothing owns once it has been unowned for `graceMs`. Owned content starts its grace again the
    * next time nothing owns it. Content in `releaseNow` that nothing owns goes at once, without a grace: that is what
-   * turning history off asks for the content only previews kept.
+   * turning history off asks for the content only previews kept. Each is given with the time its latest preview was
+   * stored; content staged again after that, for a draft not saved yet, keeps its grace instead.
    */
-  sweep(owned: ReadonlySet<string> | (() => ReadonlySet<string>), graceMs = UNOWNED_ATTACHMENT_GRACE_MS, releaseNow: ReadonlySet<string> = new Set()): Promise<void> {
+  sweep(owned: ReadonlySet<string> | (() => ReadonlySet<string>), graceMs = UNOWNED_ATTACHMENT_GRACE_MS, releaseNow: ReadonlyMap<string, number> = new Map()): Promise<void> {
     return this.enqueue(async () => {
       // Asked when the sweep runs, not when it was queued: whatever came to own content meanwhile keeps it.
       const kept = typeof owned === 'function' ? owned() : owned
@@ -226,7 +254,8 @@ export class AttachmentStore {
       for (const held of this.held.values()) {
         if (kept.has(held.digest)) { held.unownedSince = null; continue }
         held.unownedSince ??= now
-        if (releaseNow.has(held.digest) || now - held.unownedSince >= graceMs) expired.push(held)
+        const previewedAt = releaseNow.get(held.digest)
+        if ((previewedAt !== undefined && held.lastStagedAt <= previewedAt) || now - held.unownedSince >= graceMs) expired.push(held)
       }
       if (!expired.length) return
       for (const held of expired) this.held.delete(held.digest)

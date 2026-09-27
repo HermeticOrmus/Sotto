@@ -1,9 +1,9 @@
 import React, { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { BrowserBridge, BrowserCapture, BrowserPage } from '../../../shared/browser'
-import { AGENT_MAX_ATTACHMENT_BYTES, AGENT_MAX_ATTACHMENTS, agentAttachmentHandlesSchema } from '../../../shared/agents'
+import { AGENT_MAX_ATTACHMENT_BYTES, AGENT_MAX_ATTACHMENTS, agentAttachmentHandlesSchema, attachmentHandlesBytes } from '../../../shared/agents'
 import { dataUrlBlob, prepareScreenshot, wasResized, type PreparedScreenshot } from '../agents/screenshotResize'
 import type { ThreadDraftStore } from '../agents/threadDraftStore'
-import { stageImage } from '../agents/stagedImages'
+import { STAGING_FAILED, stageImage } from '../agents/stagedImages'
 
 const ANSWERING = 'This draft answers a question. Finish that answer before adding browser feedback.'
 const DOES_NOT_FIT = 'This screenshot does not fit in the draft. Remove an attachment or capture a smaller region.'
@@ -25,10 +25,10 @@ export async function appendBrowserFeedback(store: ThreadDraftStore, threadId: s
   if (signal?.aborted) return null
   const { dimensions } = prepared
   const before = store.draft(threadId)
-  if (before.attachments.length >= AGENT_MAX_ATTACHMENTS || before.attachments.reduce((sum, item) => sum + item.sizeBytes, 0) + prepared.blob.size > AGENT_MAX_ATTACHMENT_BYTES) return DOES_NOT_FIT
+  if (before.attachments.length >= AGENT_MAX_ATTACHMENTS || attachmentHandlesBytes(before.attachments) + prepared.blob.size > AGENT_MAX_ATTACHMENT_BYTES) return DOES_NOT_FIT
   let image
   try { image = await stageImage(threadId, { name: 'Browser feedback.png', mimeType: 'image/png', ...prepared }) }
-  catch (error) { return error instanceof Error ? error.message : 'Could not add this screenshot. Nothing was added. Try again.' }
+  catch (error) { return error instanceof Error ? error.message : STAGING_FAILED }
   if (signal?.aborted) return null
   const current = store.draft(threadId)
   if (current.requestId !== null) return ANSWERING
@@ -70,7 +70,7 @@ export function BrowserFeedback({ page, initial, bridge, onAdd, onClose }: {
   const add = (): void => {
     setBusy(true); setProblem(null)
     const controller = new AbortController(); adding.current = controller
-    void Promise.resolve().then(() => onAdd(capture, comment, controller.signal)).catch(() => 'Could not add this screenshot to the draft. Nothing was added. Try again.')
+    void Promise.resolve().then(() => onAdd(capture, comment, controller.signal)).catch(() => STAGING_FAILED)
       .then(error => {
         if (controller.signal.aborted) return
         adding.current = null

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Paperclip, X } from 'lucide-react'
-import { AGENT_IMAGE_MIME_TYPES, AGENT_MAX_ATTACHMENT_BYTES, AGENT_MAX_ATTACHMENTS, AGENT_MAX_IMAGE_BYTES, agentAttachmentHandlesSchema, type AgentAttachmentDimensions, type AgentAttachmentHandle, type AgentImageSize } from '../../../shared/agents'
+import { AGENT_IMAGE_MIME_TYPES, AGENT_MAX_ATTACHMENT_BYTES, AGENT_MAX_ATTACHMENTS, AGENT_MAX_IMAGE_BYTES, agentAttachmentHandlesSchema, attachmentHandlesBytes,
+  SCREENSHOT_TOO_LARGE, SCREENSHOT_WRONG_TYPE, SCREENSHOTS_TOO_LARGE_IN_TOTAL, type AgentAttachmentDimensions, type AgentAttachmentHandle, type AgentImageSize } from '../../../shared/agents'
 import { Button } from '../components/Button'
 import type { ScreenshotReadPort } from './threadDraftStore'
 import { prepareScreenshot, wasResized } from './screenshotResize'
@@ -8,13 +9,9 @@ import { stageImage, stagingReason, useThumbnail } from './stagedImages'
 import './screenshots.css'
 
 // The refusals a file's own type and size decide, checked before anything is read.
-const NOT_A_SCREENSHOT = 'Choose PNG, JPEG, GIF, or WebP screenshots.'
-const TOO_LARGE = 'Each screenshot must be 10 MB or smaller.'
-const TOO_LARGE_IN_TOTAL = 'Screenshots must total 20 MB or less. Remove an image or choose smaller files.'
-
 function checkImage(file: File): void {
-  if (!(AGENT_IMAGE_MIME_TYPES as readonly string[]).includes(file.type)) throw new Error(NOT_A_SCREENSHOT)
-  if (file.size > AGENT_MAX_IMAGE_BYTES) throw new Error(TOO_LARGE)
+  if (!(AGENT_IMAGE_MIME_TYPES as readonly string[]).includes(file.type)) throw new Error(SCREENSHOT_WRONG_TYPE)
+  if (file.size > AGENT_MAX_IMAGE_BYTES) throw new Error(SCREENSHOT_TOO_LARGE)
 }
 
 /** Scales a screenshot past the bound down in its own format (ADR-0030), then stages what is sent (ADR-0031). */
@@ -45,11 +42,11 @@ function resizedDescription({ original, sent }: AgentAttachmentDimensions): stri
   return `Resized from ${original.width} by ${original.height} to ${sent.width} by ${sent.height} pixels`
 }
 
-/** One attached image: its thumbnail, drawn in this window, or its name alone while there is none. */
+/** One attached image: its thumbnail, drawn in this window, or a placeholder with its name while the thumbnail is read and when there is none. */
 function Chip({ target, attachment, disabled, onRemove }: { readonly target: string | null; readonly attachment: AgentAttachmentHandle; readonly disabled: boolean; readonly onRemove: () => void }): ReactNode {
   const thumbnail = useThumbnail(target, attachment)
   return <figure>
-    {thumbnail ? <img src={thumbnail} alt={attachment.name} /> : <span className="screenshot-previews__pending" role="img" aria-label={attachment.name} />}
+    {thumbnail ? <img src={thumbnail} alt={attachment.name} /> : <span className="screenshot-previews__placeholder" role="img" aria-label={attachment.name} />}
     <figcaption title={attachment.name}>{attachment.name}</figcaption>
     {wasResized(attachment.dimensions) && <small className="screenshot-previews__resized">
       <span aria-hidden="true">Resized from {shownSize(attachment.dimensions.original)} to&nbsp;{shownSize(attachment.dimensions.sent)}</span>
@@ -94,8 +91,8 @@ export function ScreenshotInput({ target, attachments, onChange, disabled, suppo
     if (files.length + current.current.length > AGENT_MAX_ATTACHMENTS) { setError(`Attach up to ${AGENT_MAX_ATTACHMENTS} screenshots at a time.`); return }
     // Every refusal that the file sizes alone can decide comes before any file is read and staged.
     try { files.forEach(checkImage) } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not read these screenshots.'); return }
-    const total = current.current.reduce((sum, item) => sum + item.sizeBytes, 0) + files.reduce((sum, file) => sum + file.size, 0)
-    if (total > AGENT_MAX_ATTACHMENT_BYTES) { setError(TOO_LARGE_IN_TOTAL); return }
+    const total = attachmentHandlesBytes(current.current) + files.reduce((sum, file) => sum + file.size, 0)
+    if (total > AGENT_MAX_ATTACHMENT_BYTES) { setError(SCREENSHOTS_TOO_LARGE_IN_TOTAL); return }
     reading.current = true; setReadingHere(true)
     const handedOn = reads?.begin()
     // One at a time, so at most one decoded image is held in memory however many are added at once. A failure
@@ -112,7 +109,7 @@ export function ScreenshotInput({ target, attachments, onChange, disabled, suppo
       if (images.length === 0) return
       // The schema stays the authority: it checks what was actually staged, not what the files claimed.
       const result = agentAttachmentHandlesSchema.safeParse([...current.current, ...images])
-      if (!result.success) { setError(TOO_LARGE_IN_TOTAL); return }
+      if (!result.success) { setError(SCREENSHOTS_TOO_LARGE_IN_TOTAL); return }
       latestChange.current(result.data)
     } finally {
       handedOn?.()

@@ -1,8 +1,8 @@
 .screenshot-input { min-width: 0; }
 .screenshot-previews { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
 .screenshot-previews figure { position: relative; width: 88px; margin: 0; padding: 4px; border: 1px solid var(--tt-field-border); border-radius: 9px; background: var(--tt-field); }
-.screenshot-previews img, .screenshot-previews__pending { display: block; width: 78px; height: 60px; border-radius: 5px; object-fit: cover; }
-.screenshot-previews__pending { background: var(--tt-hover-strong); }
+.screenshot-previews img, .screenshot-previews__placeholder { display: block; width: 78px; height: 60px; border-radius: 5px; object-fit: cover; }
+.screenshot-previews__placeholder { background: var(--tt-hover-strong); }
 .screenshot-previews figcaption { margin-top: 5px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--tt-text-muted); font-size: 10px; }
 .screenshot-previews__resized { display: block; margin-top: 2px; color: var(--tt-text-muted); font-size: 10px; }
 .screenshot-previews button { position: absolute; top: -6px; right: -6px; display: grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 1px solid var(--tt-border-faint); border-radius: 50%; background: var(--tt-hover-strong); color: var(--tt-text); cursor: pointer; }
