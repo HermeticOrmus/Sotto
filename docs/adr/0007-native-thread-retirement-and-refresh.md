@@ -16,6 +16,10 @@ A settings change now reads nothing before it goes out. The coordinator checks i
 
 The outbox entry and its write before the change goes out stay: they are what makes an uncertain change reconcilable after a crash. When the provider confirms the change inside the same dispatch and nothing else in the coordinator's state changed, the write that would only remove the entry is not made. The next write carries the removal, and closing Sotto writes it. After a crash in between, the entry is on disk and the next connection reconciles it against the thread's settings like any other. If the thread's settings were changed outside Sotto in that window, the entry does not match and the thread refuses new actions with the existing unknown-result error, as an uncertain change already can. The measurements are in [the light-path note](../perf/2026-09-25-settings-light-path.md).
 
+## Amendment, September 27, 2026: the cached view carries no messages for the workspace (#368)
+
+The complete cached provider view that send validation and confirmation refresh return carries no thread's messages when the caller is the workspace, which keeps history from thread events. The read itself, its target and its guards are unchanged. ADR-0016's #368 amendment has the rule.
+
 ## Amendment, September 26, 2026: Codex's send-validation read is the newest-turn check (#324)
 
 The decision above has send validation refresh the target thread. For Codex that read is now the newest-turn check: it asks Codex for the thread's newest turn alone and reads the whole transcript only when that turn is not the finished one Sotto already holds, with the same messages. The dispatch-time takeover and stale-reply checks after it are unchanged. [ADR-0005](0005-codex-app-server-adapter.md)'s follow-up has the full list of what still reads whole, and the measurements are in [the send-read note](../perf/2026-09-26-codex-send-read.md).
