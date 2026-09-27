@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { access } from 'node:fs/promises'
+import { access, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import { claudeFixture } from '../fixtures/claudeFixture'
@@ -144,6 +144,19 @@ it('shows the turn Claude Code starts on its own to report finished work as runn
   await expect.poll(async () => (await thread(f)).status).toBe('idle')
   expect((await thread(f)).lastTurn).toEqual({ id: report.uuid, status: 'completed' })
   await expect.poll(async () => (await thread(f)).messages.at(-1)?.text).toBe('The review found nothing.')
+})
+
+it('stops a turn Claude Code started on its own without calling it a failure', async () => {
+  const f = await fixture()
+  await prompted(f)
+  await writeFile(join(f.root, 'interrupt-script.json'), JSON.stringify({ error: true }))
+  expect(await f.host.execute({ type: 'interrupt', commandId: 'stop', threadId: 'thread' })).toEqual({ accepted: true })
+  // The agent after the interrupt's error result shows only once that result has been read.
+  await raw(f, agent)
+  await expect.poll(async () => (await thread(f)).backgroundWork?.length).toBe(1)
+  expect((await thread(f)).status).toBe('idle')
+  expect((await thread(f)).lastTurn).toEqual({ id: report.uuid, status: 'interrupted' })
+  expect((await f.host.snapshot()).error).toBeUndefined()
 })
 
 // A shell left running in the background: stopping the CLI under it would stop the command too.
