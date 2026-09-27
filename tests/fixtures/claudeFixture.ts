@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { ClaudeStreamJsonHost, type ClaudeStreamJsonHostOptions } from '../../src/main/agents/claude'
@@ -18,7 +18,15 @@ export async function claudeFixture(root?: string, requestTimeoutMs = 2000, envi
   root ??= await mkdtemp(join(tmpdir(), 'sotto-claude-'))
   const adapter = new ClaudeStreamJsonHost({ userDataPath: root, executable: process.execPath, args: [resolve('tests/fixtures/fakeClaudeThread.mjs'), root], claudeHome: join(root, 'home'), requestTimeoutMs, pollIntervalMs: 15, ...(environment ? { environment } : {}), ...session })
   const realId = async (id: string): Promise<string> => JSON.parse(await readFile(join(root, 'claude-threads.json'), 'utf8'))[id].sessionId
-  const action = async (id: string, value: Record<string, unknown>) => { await writeFile(join(root, `control-${await realId(id)}.json`), JSON.stringify({ id: randomUUID(), ...value })) }
+  // The fake CLI holds one scripted action at a time, so a second written before it read the first would replace it.
+  const action = async (id: string, value: Record<string, unknown>) => {
+    const control = join(root, `control-${await realId(id)}.json`)
+    for (const deadline = Date.now() + 10_000; await stat(control).then(() => true, () => false);) {
+      if (Date.now() > deadline) throw new Error('The fake Claude CLI never read its previous scripted action.')
+      await new Promise(done => setTimeout(done, 5))
+    }
+    await writeFile(control, JSON.stringify({ id: randomUUID(), ...value }))
+  }
   const check = async () => { const violations = await readFile(join(root, 'violations.jsonl'), 'utf8').catch(() => ''); if (violations) throw new Error(violations) }
   const records = async (): Promise<RecordedRpc[]> => { await check(); return (await readFile(join(root, 'requests.jsonl'), 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line) as RecordedRpc) }
   const liveSettings: NonNullable<AdapterFixture['liveSettings']> = {
