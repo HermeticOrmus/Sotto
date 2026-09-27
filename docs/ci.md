@@ -66,6 +66,19 @@ npx vitest run tests/integration/claudeSettingsLive.test.ts --maxWorkers=1 --dis
 SOTTO_CLAUDE_LIVE=1 npx vitest run tests/integration/claudeSettingsLive.test.ts --maxWorkers=1 --disable-console-intercept
 ```
 
+## Claude background report live check
+
+`tests/integration/claudeBackgroundReportLive.test.ts` is gated by `SOTTO_CLAUDE_LIVE=1`. It runs two model turns with the installed, signed-in Claude Code in a temporary synthetic project. One thread leaves a background agent running; the other leaves a background command running, with bypassing allowed. In each, the check holds the row state the sidebar would show until Claude has reported back. It fails when the row reads Done for 500 ms or more before the report settles, or when a prompt sent during the report is not refused. It prints the CLI version, the row states and their timings, never a prompt or a reply. It was last run on Claude Code 2.1.283 (`docs/verification/2026-09-27-claude-report-turn-live.md`):
+
+```powershell
+$env:SOTTO_CLAUDE_LIVE = '1'
+npx vitest run tests/integration/claudeBackgroundReportLive.test.ts --maxWorkers=1 --disable-console-intercept
+```
+
+```sh
+SOTTO_CLAUDE_LIVE=1 npx vitest run tests/integration/claudeBackgroundReportLive.test.ts --maxWorkers=1 --disable-console-intercept
+```
+
 ## Codex newest-turn live check
 
 `tests/integration/codexNewestTurnLive.test.ts` is gated by `SOTTO_CODEX_TURNS_LIVE=1`. It starts the installed Codex app-server in a throwaway `CODEX_HOME`, so it needs no sign-in and never reads the user's own Codex threads, and it runs no model turn. On a legacy thread whose session file it fills with filler turns, it checks that `thread/turns/list` hands back the same newest turn `thread/read` does and that both see a turn written to the file from outside, which is what the newest-turn check before a Codex send rests on (ADR-0005). It checks that Codex still words a request it does not have, and a value in one it does not know, the way the adapter reads a refusal, so a new Codex that words them differently shows up here. It then prints each request's round trip and reply size at 50, 500 and 2,000 turns. It was last run on Codex CLI 0.157.1 (`docs/perf/2026-09-26-codex-send-read.md`):
