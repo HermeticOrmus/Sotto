@@ -111,7 +111,7 @@ and Sotto parsing and applying all of it, which the fake shows is where the seco
 The same client answers a request it does not have, and a params value it does not know, in one shape: an invalid
 request naming an unknown variant (``unknown variant `thread/bogus/list` ``, ``unknown variant `bogus` ``). Either would
 be refused the same way on every send, since the check always sends the same values, so either stops Sotto asking for
-the check on that connection.
+the check on that connection. The live suite checks that wording, so a Codex that changes it shows there.
 
 ## What the check keeps
 
