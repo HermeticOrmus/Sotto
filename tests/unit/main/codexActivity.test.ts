@@ -107,6 +107,33 @@ describe('Codex activity projection', () => {
     expect(t.activities?.[0]?.truncated).toBe(true)
   })
 
+  it('places each record where the full merge would, past the bound as well (#352)', () => {
+    // The same events on two threads. The second's array is replaced by a copy after every call, so the
+    // projection never recognises it and merges every record into the whole list, as it did before #352.
+    const placed = thread(), merged = thread()
+    const projections = [new CodexActivityProjection(() => 5_000), new CodexActivityProjection(() => 5_000)] as const
+    const both = (call: (projection: CodexActivityProjection, t: AgentThread) => void): void => {
+      call(projections[0], placed); call(projections[1], merged)
+      merged.activities = merged.activities && [...merged.activities]
+    }
+    // Three records a turn, so the last few turns evict the oldest.
+    for (let index = 0; index < 680; index++) {
+      const turnId = `turn-${index}`, at = 1_000 + index
+      both((projection, t) => projection.turn(t, { id: turnId, status: 'inProgress', startedAt: at }, true))
+      both((projection, t) => projection.item(t, codexItemSchema.parse({ ...activityItems.command, id: `command-${index}` }), { turnId, phase: 'started' }))
+      both((projection, t) => projection.delta(t, 'item/commandExecution/outputDelta', { turnId, itemId: `command-${index}`, delta: 'ok ' }))
+      both((projection, t) => projection.item(t, codexItemSchema.parse({ ...activityItems.reasoning, id: `reasoning-${index}` }), { turnId, phase: 'completed' }))
+      both((projection, t) => projection.anchor(t, turnId, `message-${index}`))
+      both((projection, t) => projection.item(t, codexItemSchema.parse({ ...activityItems.commandDone, id: `command-${index}` }), { turnId, phase: 'completed', completedAtMs: at * 1000 + 800 }))
+      // A late replay of a finished item must not reopen it.
+      both((projection, t) => projection.item(t, codexItemSchema.parse({ ...activityItems.command, id: `command-${index}` }), { turnId, phase: 'history' }))
+      both((projection, t) => projection.turn(t, { id: turnId, status: 'completed', startedAt: at, completedAt: at + 1 }, true))
+      expect(placed.activities).toEqual(merged.activities)
+    }
+    expect(placed.activities).toHaveLength(MAX_AGENT_ACTIVITIES)
+    expect(placed.activities?.[0]?.truncated).toBe(true)
+  })
+
   it('anchors a new turn only to its own first user message, not the previous prompt', () => {
     const t = thread(); const projection = new CodexActivityProjection()
     projection.turn(t, { id: 'new-turn', status: 'inProgress' }, true)
