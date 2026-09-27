@@ -104,6 +104,9 @@ function offeredModes(reported: ReadonlyMap<string, { readonly name: string; rea
 const modeOf = (id: string | undefined): DevinMode => DEVIN_MODES.find(mode => mode.id === id) ?? DEVIN_MODES[0]
 /** What an allowance means in Sotto's own four, so every surface that reads `runtimeMode` still reads the truth. */
 const RUNTIME_OF_ALLOWANCE: Record<DevinAllowance, AgentRuntimeMode> = { nothing: 'approval-required', edits: 'auto-accept-edits', everything: 'full-access' }
+/** Devin's own reason when it gave one, since the provider notice is the only place a thread's open failure is read. */
+const openFailure = (error: unknown): string => error instanceof Error && !(error instanceof DevinUncertain) && error.message
+  ? error.message : 'A Devin session could not be opened. Your thread is kept. Check the native client and reconnect.'
 
 interface Connection {
   rpc: DevinRpc
@@ -351,7 +354,15 @@ export class DevinAcpHost implements AgentHost {
     this.state.connected = true; this.state.version = version + ' / ACP 1'; delete this.state.error
     if (compareClientVersions(version, DEVIN_CLI_VERSION) > 0) this.state.verifiedVersion = DEVIN_CLI_VERSION
     else delete this.state.verifiedVersion
-    for (const id of this.observed) if (this.aliases[id]?.devinSessionId) await this.open(id)
+    // A thread that cannot be opened is that thread's error, not the provider's: the rest stay usable.
+    for (const id of this.observed) if (this.aliases[id]?.devinSessionId) {
+      try { await this.open(id) } catch (error) {
+        if (generation !== this.generation) throw new DevinUncertain('Devin connection changed.')
+        if (error instanceof DevinUncertain) throw error
+        this.thread(id).status = 'error'
+        this.state.error = openFailure(error)
+      }
+    }
     if (generation !== this.generation) throw new DevinUncertain('Devin connection changed.')
     this.reaper.start()
     this.pollTimer = setInterval(() => { void this.poll().catch(() => {
@@ -387,26 +398,38 @@ export class DevinAcpHost implements AgentHost {
     if (generation !== this.generation) { connection.intentionalClose = true; connection.rpc.close(); throw new DevinUncertain('Devin connection changed.') }
     connection.replaying = true
     this.connections.set(id, connection)
-    try {
-      if (alias.ephemeral && alias.emptyReleased && alias.origins.length === 0) {
-        // Reserve recreation before transmission. A missing acknowledgement must never create again.
-        alias.emptyReleased = false; alias.settingsConfirmed = false; await this.persist()
+    // Devin keeps a session only from its first prompt, so an empty one ends with the process that made it,
+    // however that process ended. A thread Sotto never sent to has nothing to resend, so it gets a new empty
+    // session under the same model and mode. A thread with a dispatch record, or any message at all, is never recreated.
+    const neverSent = (): boolean => alias.ephemeral && alias.origins.length === 0 && !this.log.hasMessages(id)
+    const renew = async (): Promise<void> => {
+      // A known release skips the load that would fail; the reservation keeps a lost acknowledgement from
+      // skipping it again, so the next open asks Devin before making another.
+      alias.emptyReleased = false; alias.settingsConfirmed = false; await this.persist()
+      if (generation !== this.generation || this.connections.get(id) !== connection) throw new DevinUncertain('Devin connection changed.')
+      await connection.rpc.request('session/new', { cwd: alias.cwd, mcpServers: [] }, async value => {
         if (generation !== this.generation || this.connections.get(id) !== connection) throw new DevinUncertain('Devin connection changed.')
-        await connection.rpc.request('session/new', { cwd: alias.cwd, mcpServers: [] }, async value => {
-          if (generation !== this.generation || this.connections.get(id) !== connection) throw new DevinUncertain('Devin connection changed.')
-          alias.devinSessionId = z.object({ sessionId: z.string().min(1) }).parse(value).sessionId
-          alias.emptyReleased = false; connection.fresh = true; await this.persist()
-        })
-        await connection.rpc.request('session/set_config_option', { sessionId: alias.devinSessionId, configId: 'model', value: alias.modelId }, value => {
-          if (generation !== this.generation || this.connections.get(id) !== connection) throw new DevinUncertain('Devin connection changed.')
-          if (modelConfig(value).current !== alias.modelId) throw new Error('Devin did not confirm the model for this thread.')
-        })
-      } else {
+        alias.devinSessionId = z.object({ sessionId: z.string().min(1) }).parse(value).sessionId
+        alias.emptyReleased = false; connection.fresh = true; await this.persist()
+      })
+      await connection.rpc.request('session/set_config_option', { sessionId: alias.devinSessionId, configId: 'model', value: alias.modelId }, value => {
+        if (generation !== this.generation || this.connections.get(id) !== connection) throw new DevinUncertain('Devin connection changed.')
+        if (modelConfig(value).current !== alias.modelId) throw new Error('Devin did not confirm the model for this thread. Your thread and draft are kept. Reconnect Devin, or start a new thread.')
+      })
+    }
+    try {
+      if (neverSent() && alias.emptyReleased) await renew()
+      else {
         let loadedModel: string | undefined
-        await connection.rpc.request('session/load', { sessionId: alias.devinSessionId, cwd: alias.cwd, mcpServers: [] }, value => {
-          if (generation !== this.generation || this.connections.get(id) !== connection) throw new DevinUncertain('Devin connection changed.')
-          loadedModel = modelConfig(value).current
-        })
+        try {
+          await connection.rpc.request('session/load', { sessionId: alias.devinSessionId, cwd: alias.cwd, mcpServers: [] }, value => {
+            if (generation !== this.generation || this.connections.get(id) !== connection) throw new DevinUncertain('Devin connection changed.')
+            loadedModel = modelConfig(value).current
+          })
+        } catch (error) {
+          if (!(error instanceof DevinRejected && error.code === -32016 && neverSent())) throw error
+          await renew(); loadedModel = alias.modelId
+        }
         if (loadedModel !== alias.modelId) throw new Error('Devin changed the saved model. Your thread and draft are kept. Restore the original model in Devin and reconnect, or start a new thread. Sotto will not substitute it.')
       }
       // A session opens on Devin's own default mode, whether it was loaded or made again, so the mode this
@@ -442,9 +465,9 @@ export class DevinAcpHost implements AgentHost {
     this.log.observe(ids)
     if (!this.state.connected) return
     const generation = this.generation
-    for (const id of ids) if (this.aliases[id]?.devinSessionId) void this.open(id).catch(() => {
+    for (const id of ids) if (this.aliases[id]?.devinSessionId) void this.open(id).catch((error: unknown) => {
       if (generation !== this.generation) return
-      this.thread(id).status = 'error'; this.state.error = 'A Devin session could not be opened. Your thread is kept. Check the native client and reconnect.'; this.emit()
+      this.thread(id).status = 'error'; this.state.error = openFailure(error); this.emit()
     })
   }
   async snapshot(): Promise<AgentHostSnapshot> { if (this.state.connected) await this.poll(); return this.current() }
