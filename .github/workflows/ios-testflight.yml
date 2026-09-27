@@ -18,11 +18,12 @@ concurrency:
 jobs:
   testflight:
     name: Build and upload to TestFlight
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 45
     environment: testflight
     env:
-      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+      # App Store Connect refuses builds made with an SDK older than iOS 26. Keep in step with ci.yml.
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
     steps:
       - name: Check out the repository
         uses: actions/checkout@v4

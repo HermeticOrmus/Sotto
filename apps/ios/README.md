@@ -6,7 +6,7 @@ This directory is independent of the Electron/npm package. SwiftUI, Foundation a
 
 ## Build and test
 
-Use a Mac with Xcode 15 or newer (iOS 17 SDK or newer) and its command-line tools selected. From the repository root:
+Use a Mac with Xcode 15 or newer (iOS 17 SDK or newer) and its command-line tools selected. Uploading to App Store Connect needs Xcode 26 or newer, which is what CI uses. From the repository root:
 
 ```sh
 swift test --package-path apps/ios
