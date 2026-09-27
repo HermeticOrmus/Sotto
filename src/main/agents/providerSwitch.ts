@@ -232,7 +232,10 @@ export class ConfiguredProviderHost implements AgentHost {
   async refreshThread(threadId: string, purpose?: ThreadReadPurpose): Promise<AgentHostSnapshot> {
     const id = this.owner(threadId); this.requireConnected(id)
     const slot = this.slots.get(id)!; const epoch = slot.epoch; const host = this.options.hosts[id]
-    const snapshot = await (host.refreshThread?.(threadId, purpose) ?? host.snapshot())
+    // A caller that keeps history from events is handed no messages only when this connection's own subscription
+    // asked the same: what the read puts in the slot is what every subscriber is published next (#368).
+    const read = purpose?.historyFromEvents && !slot.historyFromEvents ? { ...purpose, historyFromEvents: false } : purpose
+    const snapshot = await (host.refreshThread?.(threadId, read) ?? host.snapshot())
     if (slot.epoch !== epoch) throw new Error('This thread provider disconnected while reading the thread.')
     this.accept(id, snapshot); this.publish(); return cloneHostSnapshot(this.aggregate())
   }
@@ -328,7 +331,9 @@ export class ConfiguredProviderHost implements AgentHost {
     if (needed && !capabilities[needed]) throw new Error('This provider does not support that thread action.')
     if (command.type !== 'configure-thread') return this.options.hosts[id].execute(command)
     const slot = this.slots.get(id)!; const epoch = slot.epoch
-    const [result, snapshot] = confirmedSettingsSnapshot(await this.options.hosts[id].execute(command.modelId !== undefined ? { ...command, modelId: nativeEntityId(id, 'model', command.modelId) } : command))
+    // As for a thread refresh: no messages only when this connection's subscription asked for none either (#368).
+    const settings = command.historyFromEvents && !slot.historyFromEvents ? { ...command, historyFromEvents: false } : command
+    const [result, snapshot] = confirmedSettingsSnapshot(await this.options.hosts[id].execute(settings.modelId !== undefined ? { ...settings, modelId: nativeEntityId(id, 'model', settings.modelId) } : settings))
     // The provider's snapshot of a confirmed change becomes the whole view, as a read of the thread would.
     // One from a connection that has since changed is dropped.
     if (!snapshot || slot.epoch !== epoch) return result

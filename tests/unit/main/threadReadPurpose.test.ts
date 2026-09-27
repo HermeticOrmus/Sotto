@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { AgentControl } from '../../../src/main/agents/control'
-import type { AgentHost, ThreadReadPurpose } from '../../../src/main/agents/host'
+import type { AgentHost, AgentHostCommand, AgentHostResult, ThreadReadPurpose } from '../../../src/main/agents/host'
 import { ConfiguredProviderHost } from '../../../src/main/agents/providerSwitch'
 import type { AgentReasoner } from '../../../src/main/agents/reasoning'
 import { SottoThreadHost, ThreadRegistry } from '../../../src/main/agents/threads'
@@ -22,6 +22,15 @@ class ReadRecordingHost extends E2EAgentHost {
   readonly reads: { threadId: string; purpose: ThreadReadPurpose | undefined }[] = []
   async refreshThread(threadId: string, purpose?: ThreadReadPurpose): Promise<AgentHostSnapshot> {
     this.reads.push({ threadId, purpose: purpose && structuredClone(purpose) }); return this.snapshot()
+  }
+}
+/** The same, publishing thread events so a workspace above it keeps history from them, and recording settings changes (#368). */
+class EventReadRecordingHost extends ReadRecordingHost {
+  readonly subscribeEvents = (): (() => void) => () => undefined
+  readonly settings: { threadId: string; historyFromEvents: boolean | undefined }[] = []
+  override async execute(command: AgentHostCommand): Promise<AgentHostResult> {
+    if (command.type === 'configure-thread') this.settings.push({ threadId: command.threadId, historyFromEvents: command.historyFromEvents })
+    return super.execute(command)
   }
 }
 
@@ -81,6 +90,54 @@ describe('the hosts between the coordinator and the adapter hand on what a read 
     await host.refreshThread!('workshop', { beforeSend: true })
     await host.refreshThread!('workshop')
     expect(inner.reads).toEqual([{ threadId: 'workshop', purpose: { beforeSend: true } }, { threadId: 'workshop', purpose: undefined }])
+  })
+})
+
+describe('a workspace that keeps history from events asks its reads and settings results for no messages (#368)', () => {
+  /** The adapter under the Sotto thread host, the provider switch and the workspace, with `ordinary` reading the switch whole beside it. */
+  async function composed(ordinary = false): Promise<{ host: WorkspaceHost; adapter: EventReadRecordingHost; id: string }> {
+    const root = await directory()
+    const adapter = new EventReadRecordingHost()
+    const registry = new ThreadRegistry(root)
+    const hosts = {} as Record<ProviderId, AgentHost>
+    for (const provider of providerIdSchema.options) hosts[provider] = new SottoThreadHost(provider, provider === 'codex' ? adapter : new ReadRecordingHost(), registry)
+    const providers = new ConfiguredProviderHost({ directory: root, hosts, provider: () => 'codex', threadProvider: id => registry.byThread(id)?.provider })
+    if (ordinary) cleanup.push(providers.subscribe(() => undefined))
+    const host = new WorkspaceHost(providers, root)
+    cleanup.push(async () => { host.disconnect(); await host.close(); await registry.flush() })
+    const connected = await host.connect()
+    return { host, adapter, id: connected.threads.find(thread => thread.title === 'Workshop')!.id }
+  }
+
+  it('reaches the adapter asking for no messages, beside what the read is for', async () => {
+    const { host, adapter, id } = await composed()
+    adapter.reads.length = 0
+    await host.refreshThread(id, { beforeSend: true })
+    await host.refreshThread(id)
+    expect(adapter.reads).toEqual([{ threadId: 'workshop', purpose: { beforeSend: true, historyFromEvents: true } },
+      { threadId: 'workshop', purpose: { historyFromEvents: true } }])
+    expect((await host.execute({ type: 'configure-thread', commandId: 'settings', threadId: id, runtimeMode: 'full-access' })).accepted).toBe(true)
+    expect(adapter.settings).toEqual([{ threadId: 'workshop', historyFromEvents: true }])
+  })
+
+  it('is read whole when something beside the workspace reads the provider switch\'s messages', async () => {
+    const { host, adapter, id } = await composed(true)
+    adapter.reads.length = 0
+    await host.refreshThread(id, { beforeSend: true })
+    expect(adapter.reads).toEqual([{ threadId: 'workshop', purpose: { beforeSend: true, historyFromEvents: false } }])
+    expect((await host.execute({ type: 'configure-thread', commandId: 'settings', threadId: id, runtimeMode: 'full-access' })).accepted).toBe(true)
+    expect(adapter.settings).toEqual([{ threadId: 'workshop', historyFromEvents: false }])
+  })
+
+  it('reads a host that publishes no events whole, whatever the workspace\'s own caller asked', async () => {
+    const root = await directory()
+    const inner = new ReadRecordingHost()
+    const host = new WorkspaceHost(inner, root)
+    cleanup.push(async () => { host.disconnect(); await host.close() })
+    await host.connect()
+    inner.reads.length = 0
+    await host.refreshThread('workshop', { beforeSend: true, historyFromEvents: true })
+    expect(inner.reads).toEqual([{ threadId: 'workshop', purpose: { beforeSend: true, historyFromEvents: false } }])
   })
 })
 

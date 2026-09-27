@@ -166,7 +166,7 @@ native adapters is not measured; #369 asks for an e2e that runs them over the fa
   `snapshot()`, a thread refresh or a settings result, not for each update, and its readers outside the
   workspace, the adapter contract among them, expect the messages there. The workspace discards those too
   when it accepts a refresh or a settings result, and the provider switch copies them again on the way; #368
-  is the follow-up that drops them for that caller alone.
+  is the follow-up that drops them for that caller alone (`2026-09-27-workspace-results-without-history.md`).
 - The session reaper keeps its thirty minutes, as the issue asked.
 
 ## Tests

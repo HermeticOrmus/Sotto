@@ -10,12 +10,12 @@ import { z } from 'zod'
 import { agentProjectSchema, type AgentHostSnapshot, type AgentThread, type AgentMessage, type AgentRuntimeMode } from '../../shared/agents'
 import { orderReasoningEfforts } from '../../shared/reasoningEfforts'
 import { AtomicJsonStore } from '../storage/atomicJsonStore'
-import type { ActivitySubscriptionOptions, AgentHost, AgentHostCommand, AgentHostResult, AgentSkillScope, ShortTextPrompt, ThreadHistorySource, ThreadHostEvent } from './host'
+import type { ActivitySubscriptionOptions, AgentHost, AgentHostCommand, AgentHostResult, AgentSkillScope, ShortTextPrompt, ThreadHistorySource, ThreadHostEvent, ThreadReadPurpose } from './host'
 import { SIDE_WRITING_TIMEOUT_MS } from './sideWriting'
 import { GrokSubscriptionClient, sweepLeftoverSessions } from './subscriptionGrok'
 import { ThreadMessageLog } from './threadMessageLog'
 import { cloneHostSnapshot } from './cloneHostSnapshot'
-import { ActivitySubscribers, immutableActivities, isImmutableActivities } from './activitySnapshots'
+import { ActivitySubscribers, cloneActivitySnapshot, immutableActivities, isImmutableActivities } from './activitySnapshots'
 import type { AgentSkillCatalog } from '../../shared/agentSkills'
 import { discoverGrokSkills, grokSkillPrompt } from './grokSkills'
 import { verifyFileMentions } from './promptFiles'
@@ -236,7 +236,11 @@ export class GrokAcpHost implements AgentHost {
     this.log.release(id)
     await this.closeSession(rpc, alias)
   }
-  private current(): AgentHostSnapshot {
+  /** The public snapshot: a copy of everything, held threads' messages included. A caller that keeps history
+   * from this adapter's events is handed every thread with its summary and no messages, as an activity
+   * subscriber that asks for it is (#368). */
+  private current(historyFromEvents = false): AgentHostSnapshot {
+    if (historyFromEvents) return cloneActivitySnapshot(this.activitySnapshot(true))
     return cloneHostSnapshot({ ...this.state, threads: [...this.threads.values()]
       .filter((thread): thread is AgentThread => 'projectId' in thread).map(thread => this.log.publishedThread(thread)) })
   }
@@ -391,13 +395,13 @@ export class GrokAcpHost implements AgentHost {
       ...(this.options.environment ? { environment: this.options.environment } : {}) })
     return writer.write({ ...prompt, model: alias.nativeModelId ?? alias.modelId, workingDirectory: await existingWorkingDirectory(alias.cwd), timeoutMs: SIDE_WRITING_TIMEOUT_MS, ...(signal ? { signal } : {}) })
   }
-  async refreshThread(id: string): Promise<AgentHostSnapshot> {
+  async refreshThread(id: string, purpose?: ThreadReadPurpose): Promise<AgentHostSnapshot> {
     if (!this.aliases[id]?.grokSessionId) throw new Error('This Grok thread has no confirmed provider session.')
     // Reading a thread is opening it, so a session that is not loaded on this connection loads here.
     await this.loadSession(id)
     // An explicit refresh reads to the end of the history: what it reports decides whether a prompt is sent.
     await this.queueRead(id)
-    return this.current()
+    return this.current(purpose?.historyFromEvents)
   }
   private async queueRead(id: string, maxPages = Number.POSITIVE_INFINITY): Promise<void> {
     const generation = this.generation
@@ -673,7 +677,7 @@ export class GrokAcpHost implements AgentHost {
       }
       this.emit()
       // What was emitted is the reconciliation of a confirmed settings change.
-      return settled ? { accepted: true, snapshot: this.current() } : { accepted: true }
+      return settled ? { accepted: true, snapshot: this.current(command.type === 'configure-thread' && command.historyFromEvents) } : { accepted: true }
     } catch (error) { if (error instanceof GrokUncertain) return { accepted: false, uncertain: true }; throw error }
   }
   private async frame(frame: GrokFrame): Promise<void> {

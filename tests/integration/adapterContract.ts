@@ -158,6 +158,20 @@ export function describeAdapterContract(name: string, factory: (session?: Adapte
         expect((await thread()).messages.map(message => message.id)).toContain('own-message')
       } finally { offEvents(); offWhole() }
     })
+    it('hands a thread refresh back without messages to a caller that keeps history from events, and with them to any other (#368)', async context => {
+      if (!f.host.refreshThread || !f.host.subscribeEvents) { context.skip(); return }
+      await send()
+      await f.driver.completeTurn(sessionId, 'Completed reply')
+      await expect.poll(async () => (await thread()).status).toBe('idle')
+      const fromEvents = (await f.host.refreshThread(sessionId, { historyFromEvents: true })).threads.find(t => t.id === sessionId)!
+      expect(fromEvents.messages).toEqual([])
+      expect(fromEvents.summary?.lastAssistant?.text ?? '').toContain('Completed reply')
+      // Every other reader, the read before a send among them, still gets the messages, and nothing was put away.
+      for (const purpose of [undefined, { beforeSend: true }]) {
+        expect((await f.host.refreshThread(sessionId, purpose)).threads.find(t => t.id === sessionId)!.messages.map(message => message.id)).toContain('own-message')
+      }
+      expect((await thread()).messages.map(message => message.id)).toContain('own-message')
+    })
     it('writes short text on the side, and the thread\'s own session never hears of it (ADR-0026)', async () => {
       await send()
       await f.driver.completeTurn(sessionId, 'Completed reply')
@@ -537,6 +551,24 @@ export function describeAdapterContract(name: string, factory: (session?: Adapte
       const handed = result.snapshot.threads.find(thread => thread.id === sessionId)
       expect(handed).toMatchObject(requested)
       expect(settingsOf(handed)).toEqual(settingsOf((await f.host.snapshot()).threads.find(thread => thread.id === sessionId)))
+    })
+
+    it('leaves the messages out of a confirmed change\'s snapshot for a caller that keeps history from events (#368)', async context => {
+      const requested = await change()
+      if (!requested || !f.host.subscribeEvents) { context.skip(); return }
+      await f.host.execute({ type: 'send', threadId: sessionId, commandId: randomUUID(), messageId: 'own-message', text: 'Synthetic prompt' })
+      await f.driver.completeTurn(sessionId, 'Completed reply')
+      await expect.poll(async () => (await f.host.snapshot()).threads.find(thread => thread.id === sessionId)?.status).toBe('idle')
+      const result = await f.host.execute({ type: 'configure-thread', commandId: randomUUID(), threadId: sessionId, historyFromEvents: true, ...requested })
+      expect(result.accepted).toBe(true)
+      if (f.settings?.snapshot) expect(result.snapshot).toBeDefined()
+      if (!result.snapshot) return
+      const handed = result.snapshot.threads.find(thread => thread.id === sessionId)!
+      expect(handed).toMatchObject(requested)
+      expect(handed.messages).toEqual([])
+      expect(handed.summary?.lastAssistant?.text ?? '').toContain('Completed reply')
+      // The thread still holds them for every other reader.
+      expect((await f.host.snapshot()).threads.find(thread => thread.id === sessionId)!.messages.map(message => message.id)).toContain('own-message')
     })
 
     it('carries no snapshot on an uncertain change', async context => {
