@@ -235,6 +235,9 @@ export async function startSocketServer(options: SocketServerOptions) {
       case 'git-pull-request':
         if (!service.gitPullRequest) throw new Refusal('invalid_request')
         try { return await service.gitPullRequest(request.request) } catch { throw new Refusal('unavailable') }
+      case 'host-folders':
+        if (!service.hostFolders) throw new Refusal('invalid_request')
+        try { return await service.hostFolders(request.request) } catch { throw new Refusal('unavailable') }
       case 'stage-attachment': {
         if (!service.stageAttachment) throw new Refusal('invalid_request')
         // Up to about 14 MB of base64 in, and 10 MiB held until it is kept: one at a time per peer, on the preview's guard.
