@@ -18,7 +18,7 @@ import type { MemoryProfile } from '../memory/profile'
 import type { AgentCredentials } from './credentials'
 import { approvalWords, classifyRiskyAction, denialWords, mayGrantLocally, UNPAIRED_CLIENT_ERROR, type Authority } from './authority'
 import { desktopWindowClient, supervisionClient, type ClientIdentity } from './hostService'
-import type { AgentHost, AgentHostCommand, PromptImage } from './host'
+import type { AgentHost, AgentHostCommand, PromptImage, ThreadRead } from './host'
 import type { AgentPreference, AgentReasoner } from './reasoning'
 import { addTurnContext, type ActiveTurn, type TurnRecorder } from './turns'
 import { isThreadArchived, isThreadClosed, isWorkspaceThreadSettled } from '../../shared/threadActivity'
@@ -2188,9 +2188,14 @@ export class AgentControl {
     const at = new Date().toISOString()
     for (const action of classifyRiskyAction(request)) this.dependencies.authority?.authorizes({ action, resource: '*', scope: thread.projectId, at })
   }
-  private readThread(threadId?: string, provider?: ProviderId): Promise<AgentHostSnapshot> {
+  /**
+   * Read a thread back from its host. `purpose` says what the read is for: the read immediately before a send
+   * passes `{ beforeSend: true }`, which an adapter may make lighter than a whole read when it can show nothing
+   * changed (Codex's newest-turn check, ADR-0005). What the send then checks is the same.
+   */
+  private readThread(threadId?: string, provider?: ProviderId, purpose?: ThreadRead): Promise<AgentHostSnapshot> {
     const host = this.dependencies.host
-    return threadId && host.refreshThread ? host.refreshThread(threadId) : provider ? host.snapshot(provider) : host.snapshot()
+    return threadId && host.refreshThread ? host.refreshThread(threadId, purpose) : provider ? host.snapshot(provider) : host.snapshot()
   }
   private async dispatch(command: DispatchCommand, turn?: ActiveTurn, validate?: () => void, draftId?: string,
     client: ClientIdentity = this.localClient): Promise<void> {
@@ -2364,7 +2369,7 @@ export class AgentControl {
     }
     this.canAct()
     this.observe(threadId)
-    this.acceptSnapshot(await this.readThread(threadId))
+    this.acceptSnapshot(await this.readThread(threadId, undefined, { beforeSend: true }))
     const validate = (): void => {
       this.canAct()
       const latest = this.thread(threadId)
@@ -2402,7 +2407,7 @@ export class AgentControl {
     }
     this.canAct()
     this.observe()
-    this.acceptSnapshot(await this.readThread(this.state.draftThreadId ?? undefined))
+    this.acceptSnapshot(await this.readThread(this.state.draftThreadId ?? undefined, undefined, { beforeSend: true }))
     const thread = this.thread(this.state.draftThreadId)
     if (!this.hasDraft()) throw new Error('There is no prompt to send.')
     const attachments = validatePromptAttachments(this.state.host, thread.modelId, this.state.draftAttachments)
@@ -2759,7 +2764,7 @@ export class AgentControl {
       assignment.lastFailure = failureFingerprint; assignment.followups += 1
       await this.persist()
       // Refresh immediately before dispatch, so a direct host send revokes this queued reply.
-      this.acceptSnapshot(await this.readThread(thread.id))
+      this.acceptSnapshot(await this.readThread(thread.id, undefined, { beforeSend: true }))
       const validate = (): void => {
         const current = this.state.assignments.find(item => item.threadId === thread.id)
         const live = this.state.host.threads.find(item => item.id === thread.id)

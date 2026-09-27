@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
 import { appendFileSync, existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -63,7 +64,18 @@ if (process.argv.includes('exec')) {
 }
 const state = read('state.json', { threads: {} })
 const loadedThreads = new Set()
-const save = () => { writeFileSync(file('state.tmp'), JSON.stringify(state)); renameSync(file('state.tmp'), file('state.json')) }
+// Windows refuses to rename over a file another process has open, and a test may be reading state.json right then.
+// Wait for the reader, as graceful-fs does, rather than let the refusal end this process.
+const pause = new Int32Array(new SharedArrayBuffer(4))
+const save = () => {
+  writeFileSync(file('state.tmp'), JSON.stringify(state))
+  for (let attempt = 0; ; attempt++) {
+    try { renameSync(file('state.tmp'), file('state.json')); return } catch (error) {
+      if (attempt >= 100 || !['EPERM', 'EACCES', 'EBUSY'].includes(error.code)) throw error
+      Atomics.wait(pause, 0, 0, 10)
+    }
+  }
+}
 const emit = message => process.stdout.write(JSON.stringify(message) + '\n')
 const notify = (method, params) => emit({ method, params })
 const record = message => appendFileSync(file('requests.jsonl'), JSON.stringify(message) + '\n')
@@ -82,6 +94,15 @@ function complete(thread, text, status = 'completed') {
   thread.status = { type: status === 'failed' ? 'systemError' : 'idle' }
   save()
   notify('turn/completed', { threadId: thread.id, turn })
+}
+/** A thread's turns the way a read hands them back; `historyItemIds` reconstructs message item IDs as Codex's legacy history does. */
+function historyTurns(thread, script) {
+  const turns = JSON.parse(JSON.stringify(thread.turns))
+  if (script.historyItemIds) for (const turn of turns) {
+    turn.items = turn.items.map((item, index) => ['userMessage', 'agentMessage'].includes(item.type)
+      ? { ...item, id: `item-${index}` } : item)
+  }
+  return turns
 }
 function raise(thread, kind, text, method, overrides = {}) {
   const id = ++requestId
@@ -119,6 +140,8 @@ createInterface({ input: process.stdin }).on('line', line => {
   const holdReply = script.holdReply === method
   if (holdReply) { delete script.holdReply; writeFileSync(file('script.json'), JSON.stringify(script)) }
   const reply = result => {
+    // A benchmark's count of what each reply weighs: the method and its size on the wire, never the body.
+    if (script.recordReplyBytes) appendFileSync(file('replies.jsonl'), JSON.stringify({ method, bytes: Buffer.byteLength(JSON.stringify({ id, result })) + 1 }) + '\n')
     if (holdReply) heldReplies.set(method, { id, result })
     else setTimeout(() => emit({ id, result }), delay)
   }
@@ -161,16 +184,27 @@ createInterface({ input: process.stdin }).on('line', line => {
         loadedThreads.add(thread.id)
         save()
       }
-      const history = JSON.parse(JSON.stringify(thread))
-      if (method === 'thread/resume' && params.excludeTurns) history.turns = []
-      if (script.historyItemIds) for (const turn of history.turns) {
-        turn.items = turn.items.map((item, index) => ['userMessage', 'agentMessage'].includes(item.type)
-          ? { ...item, id: `item-${index}` } : item)
-      }
+      const history = { ...JSON.parse(JSON.stringify(thread)), turns: method === 'thread/resume' && params.excludeTurns ? [] : historyTurns(thread, script) }
       reply({ thread: history, model: thread.model, approvalPolicy: thread.approvalPolicy, approvalsReviewer: thread.approvalsReviewer,
         reasoningEffort: thread.reasoningEffort, sandbox: { type: thread.sandbox === 'read-only' ? 'readOnly' : thread.sandbox === 'danger-full-access' ? 'dangerFullAccess' : 'workspaceWrite' } })
     }
     else emit({ id, error: { code: -32000, message: 'Unknown thread' } })
+  } else if (method === 'thread/turns/list') {
+    // Codex 0.157.1: newest first unless asked otherwise, a summary of items unless asked for all of them, and
+    // opaque cursors. It reads the same session history thread/read does.
+    // A Codex older than this request answers with JSON-RPC's "method not found" every time it is asked.
+    if (script.withoutTurnsList) { setTimeout(() => emit({ id, error: { code: -32601, message: 'Method not found' } }), delay); return }
+    const thread = state.threads[params.threadId]
+    if (!thread) { emit({ id, error: { code: -32000, message: 'Unknown thread' } }); return }
+    const turns = historyTurns(thread, script)
+    if (params.sortDirection !== 'asc') turns.reverse()
+    const start = params.cursor ? Number(params.cursor) : 0
+    const page = turns.slice(start, start + (params.limit ?? turns.length))
+    const view = params.itemsView ?? 'summary'
+    // `omitTurnsListItemsView` leaves out the field that says which view a turn carries.
+    const data = page.map(turn => ({ ...turn, ...(script.omitTurnsListItemsView ? { itemsView: undefined } : { itemsView: view }),
+      items: view === 'full' ? turn.items : view === 'notLoaded' ? [] : turn.items.filter(item => ['userMessage', 'agentMessage'].includes(item.type)) }))
+    reply({ data, nextCursor: start + page.length < turns.length ? String(start + page.length) : null, backwardsCursor: page.length ? String(start) : null })
   } else if (method === 'thread/settings/update') {
     // Codex 0.155.1 acknowledges separately from its effective-settings notification.
     const thread = state.threads[params.threadId]
@@ -252,6 +286,18 @@ setInterval(() => {
   }
   if (!thread) return
   if (action.type === 'complete') complete(thread, action.text, action.status)
+  // Another Codex process on the same session: what it does reaches the shared history, never this connection's stream.
+  else if (action.type === 'native-turn') {
+    const running = action.status === 'inProgress'
+    thread.turns.push({ id: randomUUID(), status: running ? 'inProgress' : 'completed', startedAt: Math.floor(Date.now() / 1000), items: [
+      { type: 'userMessage', id: randomUUID(), content: [{ type: 'text', text: action.text }] }, ...running ? [] : [{ type: 'agentMessage', id: randomUUID(), text: 'Native reply' }]] })
+    save()
+  } else if (action.type === 'native-rewind') { thread.turns = thread.turns.slice(0, -1); save() }
+  // A message in the newest turn that this connection never streamed, so Sotto cannot match it to one it holds.
+  else if (action.type === 'native-message') {
+    thread.turns.at(-1).items.push({ type: 'userMessage', id: randomUUID(), content: [{ type: 'text', text: action.text }] })
+    save()
+  }
   else if (action.type === 'notify-burst') {
     process.stdout.write(action.frames.map(frame => JSON.stringify(frame) + '\n').join(''))
   }
