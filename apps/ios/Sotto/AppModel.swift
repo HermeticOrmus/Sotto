@@ -254,18 +254,21 @@ struct Live {
         guard storageReady, removing == nil, let saved = computer(hostID) else { return }
         removing = hostID
         defer { removing = nil }
-        var revoked = false
+        var outcome = Revocation.confirmed
         if let endpoint = saved.endpoint {
-            do { try await connection(hostID).revoke(endpoint: endpoint, token: saved.pairing.token); revoked = true } catch {}
-        }
+            do { try await connection(hostID).revoke(endpoint: endpoint, token: saved.pairing.token) }
+            catch is URLError { outcome = .unreachable }
+            catch { outcome = .unconfirmed }
+        } else { outcome = .unconfirmed }
+        // The item goes first: an index entry without its item is skipped at launch, and markers for a
+        // computer that isn't there are dropped then too, so the later writes can fail without harm.
+        do { try keychain.remove(account: ComputerStore.account(hostID)) } catch { feedback = error.localizedDescription; return }
         let rest = computers.filter { $0.hostID != hostID }
         let markers = pending.filter { $0.hostID != hostID }
-        do {
-            try keychain.write(rest.map(\.hostID), account: ComputerStore.indexAccount)
-            try keychain.remove(account: ComputerStore.account(hostID))
-            try keychain.write(markers, account: ComputerStore.pendingAccount)
-        } catch { feedback = error.localizedDescription; return }
-        generations[hostID] = UUID(); connections[hostID]?.disconnect(); connections[hostID] = nil; connecting.remove(hostID)
+        try? keychain.write(rest.map(\.hostID), account: ComputerStore.indexAccount)
+        try? keychain.write(markers, account: ComputerStore.pendingAccount)
+        generations[hostID] = UUID(); connecting.remove(hostID)
+        connections[hostID]?.close(); connections[hostID] = nil
         let gone = Set(pending.filter { $0.hostID == hostID }.map(\.id))
         computers = rest; live[hostID] = nil; pending = markers
         if selected?.hostID == hostID { selected = nil; openDetail = nil }
@@ -274,7 +277,21 @@ struct Live {
         drafts = drafts.filter { !$0.key.hasPrefix(prefix) }
         failedReplies = failedReplies.filter { !$0.key.hasPrefix(prefix) }
         submitted = submitted.filter { !gone.contains($0.key) }
-        feedback = revoked ? "Removed \(saved.name)." : "Removed \(saved.name) from this iPhone. It couldn’t be reached, so it still lists this iPhone: remove it there too, in Settings › Phones."
+        let words = outcome.words(name: saved.name, clientID: saved.pairing.clientId)
+        feedback = words
+        // With nothing left paired the app goes back to the pairing steps, which show this instead.
+        if rest.isEmpty { pairFeedback = words }
+    }
+    private enum Revocation {
+        case confirmed, unreachable, unconfirmed
+        func words(name: String, clientID: String) -> String {
+            let there = "Remove it there too: in Settings › Phones on \(name), or on a host without a screen with its --revoke-client \(clientID) command."
+            switch self {
+            case .confirmed: return "Removed \(name)."
+            case .unreachable: return "Removed \(name) from this iPhone. It couldn’t be reached, so it still lists this iPhone. " + there
+            case .unconfirmed: return "Removed \(name) from this iPhone, but couldn’t confirm removal there, so it may still list this iPhone. " + there
+            }
+        }
     }
 
     // MARK: The open thread

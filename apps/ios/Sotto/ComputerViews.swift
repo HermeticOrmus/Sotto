@@ -109,7 +109,7 @@ private struct ComputerDetails: View {
         .confirmationDialog("Remove \(computer.name)?", isPresented: $confirmRemove, titleVisibility: .visible) {
             Button("Remove from this iPhone", role: .destructive) { Task { await model.remove(hostID) } }
         } message: {
-            Text("This iPhone stops showing its threads. If \(computer.name) can’t be reached, remove this iPhone there too, in Settings › Phones.")
+            Text("This iPhone stops showing its threads. If \(computer.name) can’t be reached, remove this iPhone there too: in Settings › Phones, or with a host’s --revoke-client command.")
         }
         .alert("Rename \(computer.name)", isPresented: $renaming) {
             TextField("Name", text: $newName)

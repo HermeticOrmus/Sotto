@@ -11,13 +11,18 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
     var onPush: ((JSONValue) -> Void)?
     var onDisconnect: (() -> Void)?
     private let redirects = NoRedirects()
-    private lazy var network: URLSession = {
+    private var made: URLSession?
+    /// Made on first use. A session holds its delegate until it is invalidated, so `close()` ends it.
+    private var network: URLSession {
+        if let made { return made }
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpCookieStorage = nil; configuration.urlCredentialStorage = nil
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         configuration.timeoutIntervalForRequest = 30
-        return URLSession(configuration: configuration, delegate: redirects, delegateQueue: nil)
-    }()
+        let session = URLSession(configuration: configuration, delegate: redirects, delegateQueue: nil)
+        made = session
+        return session
+    }
     private var socket: URLSessionWebSocketTask?
     private var reader: Task<Void, Never>?
     private var pending: [String: CheckedContinuation<JSONValue, Error>] = [:]
@@ -80,6 +85,10 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
         guard hello.hostId == pairing.hostId, hello.clientId == pairing.clientId else { disconnect(); throw ClientError.invalidIdentity }
         try hello.shell.validate(hostID: pairing.hostId)
         return hello
+    }
+    /// Ends the connection and its URL session for good, when its computer is removed.
+    func close() {
+        disconnect(); made?.invalidateAndCancel(); made = nil
     }
     func disconnect() {
         generation = UUID(); reader?.cancel(); reader = nil
