@@ -36,6 +36,14 @@ The archive sizes are 1 thread × 100 entries, 4 × 250, and 20 × 250. Each rec
 
 The report includes write requests, entries carried across the persistence boundary, observation-loop and full-drain wall time, process CPU time, archive bytes, and heap samples before observations, after observations and after drain. Heap samples are neither peak memory nor post-GC retained memory. The measurements describe this ledger workload, not Electron latency or native-provider latency. No stopwatch assertion enters CI.
 
+### Harness correction after the first isolated run
+
+The runner's first nine-case run (`artifacts/review-389/native-usage-benchmark.log`) passed the three unchanged-replay cases. All six changing stream/turn cases failed in the baseline child at its restart assertion: JSON had omitted optional `cacheWrite5m` and `cacheWrite1h` properties whose in-memory values were `undefined`. The reported numeric counters, price and context matched. Node's strict deep comparison correctly distinguished the object shapes; the harness had not accounted for JSON's optional-property representation.
+
+`nativeUsageBenchTotals.ts` now removes only undefined properties from the token objects before strict comparison. It preserves zero and every reported counter without rounding, tolerance or JSON coercion. All existing accounting comparisons and actual archive reloads remain, missing thread usage fails explicitly, and the comparison additionally includes context-window size and rate versions.
+
+The regression first reproduced both failures against a small real archive write/reload, without running a timing workload. After the fix, `npx vitest run tests/unit/main/nativeUsageBenchTotals.test.ts tests/unit/main/nativeUsage.test.ts tests/unit/main/nativeUsagePersistence.test.ts --maxWorkers=1` passed 39 tests. Negative cases reject missing or changed values in every latest/total token field, including reported zeros, and reject changes to price, completeness, context and rate versions. Targeted lint passed. The full nine-case benchmark rerun remains the runner's next step; this harness fix is not a claim that it has passed.
+
 Run only on an otherwise idle machine, with no gates or other benchmarks running:
 
 ```powershell

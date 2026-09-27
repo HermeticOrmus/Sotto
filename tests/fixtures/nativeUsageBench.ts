@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setImmediate as nextTask } from 'node:timers/promises'
 import { NativeUsage } from '../../src/main/agents/nativeUsage'
-import type { ThreadUsage } from '../../src/shared/threadUsage'
+import { nativeUsageBenchTotals as totals } from './nativeUsageBenchTotals'
 
 type Archive = Record<string, { entries: Record<string, unknown> }>
 const [seed, threadsText, scenario] = process.argv.slice(2)
@@ -33,8 +33,6 @@ try {
     for (const ledger of Object.values(value)) entriesWritten += Object.keys(ledger.entries).length
     return original(value)
   }
-  const totals = (view: ThreadUsage | undefined) => ({ total: view?.total, latest: view?.latest,
-    estimatedUsd: view?.estimatedUsd, partial: view?.partial, contextUsed: view?.contextUsed })
   const before = totals(usage.get('thread-0'))
   const outputBefore = Array.from({ length: threads }, (_, i) => usage.get(`thread-${i}`)?.total?.output ?? 0).reduce((sum, value) => sum + value, 0)
   const heapBefore = process.memoryUsage().heapUsed
