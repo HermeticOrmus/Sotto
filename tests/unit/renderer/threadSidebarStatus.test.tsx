@@ -214,6 +214,15 @@ describe('a thread whose turn ended with work still running', () => {
     act(() => { live.publish(withWork(live.state, 'footer-links', undefined)) })
     expect(status('Footer links')).toHaveTextContent('Just finished')
   })
+
+  it('never says it just finished when a disconnect cut the work off', () => {
+    const live = mount(threadsStateFixture(), NOW)
+    act(() => { live.publish(withWork(live.state, 'footer-links', [agent])) })
+    const disconnected = withWork(live.state, 'footer-links', undefined)
+    act(() => { live.publish({ host: { ...disconnected.host!, threads: disconnected.host!.threads.map(thread => thread.id === 'footer-links' ? { ...thread, clientConnected: false } : thread) } }) })
+    expect(status('Footer links')).not.toHaveAttribute('data-unseen')
+    expect(status('Footer links')).not.toHaveTextContent('Just finished')
+  })
 })
 
 
