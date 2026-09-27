@@ -265,17 +265,24 @@ while :; do
   [[ "$ISSUER_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] && break
   warn "An Issuer ID looks like 12345678-abcd-1234-abcd-123456789abc. Try again."
 done
-KEY_FILE="$HOME/Downloads/AuthKey_${KEY_ID}.p8"
+KEY_NAME="AuthKey_${KEY_ID}.p8"
+KEY_FILE="$HOME/Downloads/$KEY_NAME"
+# Look in Downloads first on every pass, so a download that finishes after the prompt is still found.
+# A typed answer may be the file or its folder, quoted or not, in Windows or Git Bash form.
 while :; do
-  if [[ -f "$KEY_FILE" ]]; then
+  if [[ -f "$HOME/Downloads/$KEY_NAME" ]]; then
+    KEY_FILE="$HOME/Downloads/$KEY_NAME"
     say "Found the key file: $KEY_FILE"
   else
-    ask KEY_FILE "Path to the downloaded AuthKey_${KEY_ID}.p8 file:"
+    ask KEY_FILE "Path to the downloaded $KEY_NAME file, or the folder it's in (Enter looks in Downloads again):"
     KEY_FILE="${KEY_FILE%\"}"; KEY_FILE="${KEY_FILE#\"}"
-    if [[ "$KEY_FILE" == *\* ]] && command -v cygpath >/dev/null 2>&1; then KEY_FILE=$(cygpath -u "$KEY_FILE"); fi
+    if [[ "$KEY_FILE" == [A-Za-z]:* || "$KEY_FILE" == *[\\]* ]] && command -v cygpath >/dev/null 2>&1; then
+      KEY_FILE=$(cygpath -u "$KEY_FILE")
+    fi
+    [[ -d "$KEY_FILE" ]] && KEY_FILE="${KEY_FILE%/}/$KEY_NAME"
   fi
   if [[ -f "$KEY_FILE" ]] && grep -q "BEGIN PRIVATE KEY" "$KEY_FILE"; then break; fi
-  warn "That file isn't there, or isn't an App Store Connect key. Check the path."
+  [[ -n "$KEY_FILE" ]] && warn "No App Store Connect key at $KEY_FILE. Check the path, or wait for the download to finish."
   KEY_FILE=""
 done
 
