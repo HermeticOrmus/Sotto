@@ -14,7 +14,7 @@
  * - `activity`: the activity projection's `item`, `anchor` and `turn`; the first two run inside `applying`, `turn`
  *   inside `rest`.
  * - `ordering`: `orderMessages`, wherever the read calls it, and how many times it did.
- * - `rest`: the rest of `applyThread` and `settleRead`, and `persist` beside them.
+ * - `rest`: the rest of `applyThread` and `settleRead`. `persist`, inside the read, is reported on its own.
  *
  * Each open is timed on a fresh connection, so the adapter holds nothing for the thread and the read is the one an
  * open makes. Counters and timers only; every seeded text is filler. It asserts no time, so the timed half runs
