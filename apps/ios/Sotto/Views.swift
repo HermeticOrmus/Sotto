@@ -1,38 +1,41 @@
 import SwiftUI
 import SottoCore
 
-/// Pairing until this iPhone holds a host, then three tabs: Needs you, Threads and Host.
+/// Pairing until this iPhone holds a computer, then three tabs: Needs you, Threads and Computers.
 struct RootView: View {
     @EnvironmentObject var model: AppModel
     var body: some View {
-        if model.saved == nil { PairFlow() } else { MainTabs() }
+        if model.computers.isEmpty { PairFlow() } else { MainTabs() }
     }
 }
 
 struct MainTabs: View {
     @EnvironmentObject var model: AppModel
     @State private var tab = Tab.needsYou
-    enum Tab: Hashable { case needsYou, threads, host }
+    enum Tab: Hashable { case needsYou, threads, computers }
     var body: some View {
         TabView(selection: $tab) {
             NavigationStack { NeedsYouView().threadDestination() }
                 .tabItem { Label("Needs you", systemImage: "tray") }
-                .badge(ThreadGroups.waiting(model.threads).count)
+                .badge(waitingCount)
                 .tag(Tab.needsYou)
             NavigationStack { ThreadsView().threadDestination() }
                 .tabItem { Label("Threads", systemImage: "list.bullet") }
                 .tag(Tab.threads)
-            NavigationStack { HostTabView() }
-                .tabItem { Label("Host", systemImage: "server.rack") }
-                .tag(Tab.host)
+            NavigationStack { ComputersView() }
+                .tabItem { Label("Computers", systemImage: "laptopcomputer") }
+                .tag(Tab.computers)
         }
         .toolbarBackground(Palette.surface, for: .tabBar)
+        .sheet(isPresented: $model.adding, onDismiss: { model.closeAdding() }) { AddComputerSheet() }
     }
+    private var waitingCount: Int { ThreadGroups.waiting(model.lists).count }
 }
 
-struct ThreadRoute: Hashable { let id: String }
+/// A thread, named with its computer: two computers can hold the same thread ID.
+struct ThreadRoute: Hashable { let ref: ThreadRef }
 extension View {
-    func threadDestination() -> some View { navigationDestination(for: ThreadRoute.self) { ThreadView(threadID: $0.id) } }
+    func threadDestination() -> some View { navigationDestination(for: ThreadRoute.self) { ThreadView(ref: $0.ref) } }
     /// A tab's page: canvas behind it and a large title.
     func page(_ title: String) -> some View {
         background(Palette.canvas).navigationTitle(title)
@@ -75,6 +78,10 @@ enum Words {
     static func date(_ iso: String?) -> Date? { iso.flatMap { stamp.date(from: $0) ?? plainStamp.date(from: $0) } }
     /// "4 min. ago", or nothing when the host did not say.
     static func ago(_ iso: String?) -> String? { date(iso).map { relative.localizedString(for: $0, relativeTo: Date()) } }
+    /// A card's or row's second line: the agent, the project and the computer.
+    static func place(_ row: HostedThread) -> String {
+        [provider(row.thread.providerId), row.project, row.computer].compactMap { $0 }.joined(separator: " · ")
+    }
     static func duration(_ ms: Double?) -> String? {
         guard let ms, ms >= 1000 else { return nil }
         let seconds = Int(ms / 1000)
@@ -125,22 +132,11 @@ struct CommandBox: View {
     }
 }
 
-/// Says when the host can't be reached, or what just went wrong, above whatever page is open.
-struct ConnectionBanner: View {
+/// Says what just went wrong, above whatever page is open.
+struct FeedbackBanner: View {
     @EnvironmentObject var model: AppModel
     var body: some View {
-        if model.saved != nil && !model.online && !model.working {
-            HStack(spacing: 10) {
-                Image(systemName: "exclamationmark.triangle").foregroundStyle(Palette.warning).accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Can’t reach \(model.hostName)").fontWeight(.semibold)
-                    Text("Work carries on there. Your drafts are kept.").font(.subheadline).foregroundStyle(Palette.muted)
-                }
-                Spacer(minLength: 0)
-                Button("Reconnect") { Task { await model.reconnect() } }.buttonStyle(PlainStyle(compact: true))
-            }
-            .padding(12).background(Palette.warningSurface, in: RoundedRectangle(cornerRadius: 14))
-        } else if let feedback = model.feedback {
+        if let feedback = model.feedback {
             HStack(alignment: .top, spacing: 10) {
                 Text(feedback).font(.subheadline).frame(maxWidth: .infinity, alignment: .leading)
                 Button { model.feedback = nil } label: { Image(systemName: "xmark").frame(width: 44, height: 44) }
@@ -149,6 +145,89 @@ struct ConnectionBanner: View {
             .padding(.leading, 12).background(Palette.raised, in: RoundedRectangle(cornerRadius: 14))
             .accessibilityAddTraits(.updatesFrequently)
         }
+    }
+}
+
+/// In a thread: says when its computer can't be reached, else what just went wrong.
+struct ComputerBanner: View {
+    @EnvironmentObject var model: AppModel
+    let hostID: String
+    var body: some View {
+        if model.status(hostID) == .unreachable {
+            HStack(spacing: 10) {
+                Image(systemName: "exclamationmark.triangle").foregroundStyle(Palette.warning).accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Can’t reach \(model.name(hostID))").fontWeight(.semibold)
+                    Text("Work carries on there. Your drafts are kept.").font(.subheadline).foregroundStyle(Palette.muted)
+                }
+                Spacer(minLength: 0)
+                Button("Reconnect") { Task { await model.connect(hostID) } }.buttonStyle(PlainStyle(compact: true))
+                    .accessibilityLabel("Reconnect to \(model.name(hostID))")
+            }
+            .padding(12).background(Palette.warningSurface, in: RoundedRectangle(cornerRadius: 14))
+        } else {
+            FeedbackBanner()
+        }
+    }
+}
+
+/// Whether a computer can be reached: accent when online, warning when it can't be, muted while connecting.
+struct ComputerDot: View {
+    let status: ComputerStatus
+    var size: CGFloat = 8
+    var body: some View {
+        Circle().fill(color).frame(width: size, height: size).accessibilityHidden(true)
+    }
+    private var color: Color {
+        switch status {
+        case .online: return Palette.accent
+        case .unreachable: return Palette.warning
+        case .connecting: return Palette.muted
+        }
+    }
+}
+
+/// The strip at the top of Needs you and Threads: All, then one pill per computer. It narrows both
+/// tabs to one computer. With one computer paired there is nothing to narrow, so it isn't shown.
+struct ComputerStrip: View {
+    @EnvironmentObject var model: AppModel
+    var body: some View {
+        if model.computers.count > 1 {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    StripPill(title: "All", status: nil, chosen: model.show == .all, label: "Show all computers") { model.show = .all }
+                    ForEach(model.computers, id: \.hostID) { computer in
+                        StripPill(title: computer.name, status: model.status(computer.hostID), chosen: model.show == .only(computer.hostID),
+                                  label: "Show only \(computer.name)") { model.show = .only(computer.hostID) }
+                    }
+                }
+            }
+            .scrollClipDisabled()
+        }
+    }
+}
+
+private struct StripPill: View {
+    let title: String
+    let status: ComputerStatus?
+    let chosen: Bool
+    let label: String
+    let action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 7) {
+                if let status { ComputerDot(status: status) }
+                Text(title).font(.figtree(14, .subheadline, .semibold)).lineLimit(1)
+            }
+            .padding(.horizontal, 13).frame(minHeight: 34)
+            .foregroundStyle(chosen ? Palette.canvas : Palette.ink)
+            .background(chosen ? Palette.ink : Palette.raised, in: Capsule())
+            .frame(minHeight: 44).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+        .accessibilityValue(status?.words ?? "")
+        .accessibilityAddTraits(chosen ? .isSelected : [])
     }
 }
 

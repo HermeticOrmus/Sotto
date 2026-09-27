@@ -3,33 +3,66 @@ import XCTest
 
 final class PhoneTests: XCTestCase {
     private func decode<T: Decodable>(_ type: T.Type, _ text: String) throws -> T { try JSONDecoder().decode(type, from: Data(text.utf8)) }
-    private func thread(_ id: String, project: String = "p", status: String = "idle", requests: String = "[]") throws -> ThreadSummary {
-        try decode(ThreadSummary.self, #"{"id":"\#(id)","projectId":"\#(project)","title":"\#(id)","status":"\#(status)","requests":\#(requests)}"#)
+    private func thread(_ id: String, project: String = "p", status: String = "idle", requests: String = "[]", summary: String? = nil) throws -> ThreadSummary {
+        let stamp = summary.map { #","summary":{"lastMessageAt":"\#($0)"}"# } ?? ""
+        return try decode(ThreadSummary.self, #"{"id":"\#(id)","projectId":"\#(project)","title":"\#(id)","status":"\#(status)","requests":\#(requests)\#(stamp)}"#)
     }
 
     // MARK: Finding the host
 
     func testMachineNameAndFullAddressAreBothAccepted() throws {
         XCTAssertEqual(try HostFinder.read(" Forge "), .name("forge"))
-        XCTAssertEqual(try HostFinder.read("forge.tail5c2e.ts.net"), .address(try HostEndpoint("https://forge.tail5c2e.ts.net")))
-        XCTAssertEqual(try HostFinder.read("https://forge.tail5c2e.ts.net"), .address(try HostEndpoint("https://forge.tail5c2e.ts.net")))
-        for typed in ["", "forge.example.com", "http://forge.tail5c2e.ts.net", "-forge", "for ge", "forge_1", "https://forge.tail5c2e.ts.net/path"] {
+        XCTAssertEqual(try HostFinder.read("forge.tail5c2e.ts.net"), .fullName("forge.tail5c2e.ts.net"))
+        XCTAssertEqual(try HostFinder.read("forge.tail5c2e.ts.net."), .fullName("forge.tail5c2e.ts.net"))
+        XCTAssertEqual(try HostFinder.read("https://forge.tail5c2e.ts.net"), .fullName("forge.tail5c2e.ts.net"))
+        XCTAssertEqual(try HostFinder.read("forge.tail5c2e.ts.net:443"), .address(try HostEndpoint("https://forge.tail5c2e.ts.net")))
+        XCTAssertEqual(try HostFinder.read("https://forge.tail5c2e.ts.net:8443"), .address(try HostEndpoint("https://forge.tail5c2e.ts.net:8443")))
+        for typed in ["", "forge.example.com", "http://forge.tail5c2e.ts.net", "-forge", "for ge", "forge_1", "https://forge.tail5c2e.ts.net/path", "forge.tail5c2e.ts.net:8080", "forge:8443"] {
             XCTAssertThrowsError(try HostFinder.read(typed), typed)
         }
     }
-    func testOnlyThisMachinesTailnetNameBecomesAnAddress() {
-        XCTAssertEqual(HostFinder.endpoint(machine: "forge", resolvedName: "forge.tail5c2e.ts.net.")?.url.absoluteString, "https://forge.tail5c2e.ts.net")
-        XCTAssertNil(HostFinder.endpoint(machine: "forge", resolvedName: "forge.example.com"))
-        XCTAssertNil(HostFinder.endpoint(machine: "forge", resolvedName: "other.tail5c2e.ts.net"))
-        XCTAssertNil(HostFinder.endpoint(machine: "forge", resolvedName: "forge"))
+    func testOnlyThisMachinesTailnetNameIsUsed() {
+        XCTAssertEqual(HostFinder.fullName(machine: "forge", resolvedName: "forge.tail5c2e.ts.net."), "forge.tail5c2e.ts.net")
+        XCTAssertEqual(HostFinder.fullName(machine: "forge", resolvedName: "FORGE.tail5c2e.ts.net"), "forge.tail5c2e.ts.net")
+        XCTAssertNil(HostFinder.fullName(machine: "forge", resolvedName: "forge.example.com"))
+        XCTAssertNil(HostFinder.fullName(machine: "forge", resolvedName: "other.tail5c2e.ts.net"))
+        XCTAssertNil(HostFinder.fullName(machine: "forge", resolvedName: "forge"))
     }
-    func testFindUsesTheFirstTailnetNameTheResolverGives() async throws {
-        let found = try await HostFinder.find("forge") { _ in ["forge", "100.101.102.103", "forge.tail5c2e.ts.net"] }
-        XCTAssertEqual(found.url.absoluteString, "https://forge.tail5c2e.ts.net")
-        do { _ = try await HostFinder.find("forge") { _ in ["forge.lan"] }; XCTFail("A name off the tailnet must not be used") }
+    func testANameIsTriedOn8443ThenOn443() async throws {
+        let found = try await HostFinder.candidates("forge") { _ in ["forge", "100.101.102.103", "forge.tail5c2e.ts.net"] }
+        XCTAssertEqual(found.map(\.url.absoluteString), ["https://forge.tail5c2e.ts.net:8443", "https://forge.tail5c2e.ts.net"])
+        do { _ = try await HostFinder.candidates("forge") { _ in ["forge.lan"] }; XCTFail("A name off the tailnet must not be used") }
         catch { XCTAssertEqual(error as? ClientError, .hostNotFound("forge")) }
-        let typed = try await HostFinder.find("forge.tail5c2e.ts.net") { _ in XCTFail("A full address needs no lookup"); return [] }
-        XCTAssertEqual(typed.url.host, "forge.tail5c2e.ts.net")
+        let full = try await HostFinder.candidates("forge.tail5c2e.ts.net") { _ in XCTFail("A full address needs no lookup"); return [] }
+        XCTAssertEqual(full.map(\.port), [8443, 443])
+        let typed = try await HostFinder.candidates("https://forge.tail5c2e.ts.net:443") { _ in XCTFail("A typed port needs no lookup"); return [] }
+        XCTAssertEqual(typed.map(\.port), [443])
+    }
+    func testTheFirstAddressWhereSottoAnswersIsKept() async throws {
+        let candidates = HostFinder.endpoints(fullName: "forge.tail5c2e.ts.net")
+        var asked: [Int] = []
+        let desktop = try await HostFinder.probe(candidates) { endpoint -> Int in asked.append(endpoint.port); return endpoint.port }
+        XCTAssertEqual(desktop.endpoint.port, 8443); XCTAssertEqual(asked, [8443])
+        let headless = try await HostFinder.probe(candidates) { endpoint -> Int in
+            if endpoint.port == 8443 { throw ClientError.hostUnreachable("forge") }
+            return endpoint.port
+        }
+        XCTAssertEqual(headless.endpoint.port, 443)
+    }
+    func testWhenNoAddressAnswersTheMostTellingErrorIsKept() async {
+        let candidates = HostFinder.endpoints(fullName: "forge.tail5c2e.ts.net")
+        do {
+            _ = try await HostFinder.probe(candidates) { endpoint -> Int in
+                throw endpoint.port == 8443 ? ClientError.hostUnreachable("forge") : ClientError.notASottoHost("forge")
+            }
+            XCTFail("Nothing answered")
+        } catch { XCTAssertEqual(error as? ClientError, .notASottoHost("forge")) }
+        do {
+            _ = try await HostFinder.probe(candidates) { endpoint -> Int in
+                throw endpoint.port == 8443 ? ClientError.invalidProtocol : ClientError.notASottoHost("forge")
+            }
+            XCTFail("Nothing answered")
+        } catch { XCTAssertEqual(error as? ClientError, .invalidProtocol) }
     }
     func testOnlyTailscaleAddressesAreTrusted() {
         XCTAssertTrue(HostFinder.isTailnetAddress([100, 101, 102, 103]))
@@ -44,6 +77,16 @@ final class PhoneTests: XCTestCase {
         XCTAssertNoThrow(try ready.validate())
         XCTAssertThrowsError(try decode(Health.self, #"{"v":2,"status":"ready","hostId":"00000000-0000-4000-8000-000000000001"}"#).validate())
         XCTAssertThrowsError(try decode(Health.self, #"{"v":1,"status":"ready","hostId":"not-a-host"}"#).validate())
+    }
+    func testHealthNameIsOptionalAndReadsAsOneLine() throws {
+        let desktop = try decode(Health.self, #"{"v":1,"status":"ready","hostId":"00000000-0000-4000-8000-000000000001","name":"  Zach’s\nLaptop  "}"#)
+        XCTAssertNoThrow(try desktop.validate())
+        XCTAssertEqual(desktop.computerName, "Zach’s Laptop")
+        let older = try decode(Health.self, #"{"v":1,"status":"ready","hostId":"00000000-0000-4000-8000-000000000001"}"#)
+        XCTAssertNil(older.name); XCTAssertNil(older.computerName)
+        let blank = try decode(Health.self, #"{"v":1,"status":"ready","hostId":"00000000-0000-4000-8000-000000000001","name":"   "}"#)
+        XCTAssertNil(blank.computerName)
+        XCTAssertEqual(ComputerName.cleaned(String(repeating: "a", count: 80))?.count, ComputerName.maximumLength)
     }
 
     // MARK: Pairing code
@@ -66,19 +109,83 @@ final class PhoneTests: XCTestCase {
         XCTAssertEqual(ThreadState(try thread("d", status: "error")), .failed)
         XCTAssertEqual(ThreadState(try thread("e")).words, "Done")
     }
-    func testThreadsGroupUnderTheirProjectsAndFilter() throws {
-        let projects = try decode([Project].self, #"[{"id":"p","title":"Sotto"},{"id":"q","title":"Releases"}]"#)
-        let threads = [try thread("a", project: "q"), try thread("b", status: "running"), try thread("c", project: "gone")]
-        let all = ThreadGroups.byProject(threads, projects: projects)
-        XCTAssertEqual(all.map(\.title), ["Sotto", "Releases", "Other"])
-        XCTAssertEqual(ThreadGroups.byProject(threads, projects: projects, filter: .working).flatMap { $0.threads.map(\.id) }, ["b"])
-        XCTAssertEqual(ThreadGroups.byProject(threads, projects: projects, filter: .done).flatMap { $0.threads.map(\.id) }, ["a", "c"])
+    func testThreadsFromEveryComputerMergeMostRecentFirst() throws {
+        let laptop = ComputerThreads(hostID: "laptop", name: "Laptop", status: .online, threads: [
+            try thread("a", summary: "2026-09-26T09:00:00.000Z"), try thread("b", status: "running", summary: "2026-09-26T09:30:00Z"),
+        ], projects: try decode([Project].self, #"[{"id":"p","title":"Sotto"}]"#))
+        let forge = ComputerThreads(hostID: "forge", name: "forge", status: .online, threads: [try thread("c", project: "q", summary: "2026-09-26T09:10:00.000Z")])
+        let rows = ThreadGroups.merged([laptop, forge])
+        XCTAssertEqual(rows.map(\.id), ["laptop/b", "forge/c", "laptop/a"])
+        XCTAssertEqual(rows.map(\.computer), ["Laptop", "forge", "Laptop"])
+        XCTAssertEqual(rows.first?.project, "Sotto"); XCTAssertNil(rows[1].project)
+        XCTAssertEqual(ThreadGroups.merged([laptop, forge], filter: .working).map(\.id), ["laptop/b"])
+        XCTAssertEqual(ThreadGroups.merged([laptop, forge], filter: .done).map(\.id), ["forge/c", "laptop/a"])
+    }
+    func testTheStripNarrowsToOneComputer() throws {
+        let laptop = ComputerThreads(hostID: "laptop", name: "Laptop", status: .online, threads: [try thread("a")])
+        let forge = ComputerThreads(hostID: "forge", name: "forge", status: .online, threads: [try thread("b")])
+        XCTAssertEqual(ThreadGroups.merged([laptop, forge], show: .only("forge")).map(\.id), ["forge/b"])
+        XCTAssertEqual(ThreadGroups.merged([laptop, forge], show: .all).count, 2)
+        XCTAssertTrue(ComputerFilter.all.admits("anything")); XCTAssertFalse(ComputerFilter.only("laptop").admits("forge"))
+    }
+    func testTwoComputersWithTheSameThreadIDStayApart() throws {
+        let question = #"[{"id":"r","kind":"question","text":"Which?","options":[]}]"#
+        let laptop = ComputerThreads(hostID: "laptop", name: "Laptop", status: .online, threads: [try thread("same", requests: question)])
+        let forge = ComputerThreads(hostID: "forge", name: "forge", status: .online, threads: [try thread("same", requests: question)])
+        let rows = ThreadGroups.merged([laptop, forge])
+        XCTAssertEqual(Set(rows.map(\.id)).count, 2)
+        XCTAssertNotEqual(rows[0].ref, rows[1].ref)
+        XCTAssertEqual(rows.map(\.ref.threadID), ["same", "same"])
+        XCTAssertEqual(Set(ThreadGroups.waiting([laptop, forge]).map(\.id)), ["laptop/same/r", "forge/same/r"])
+        XCTAssertEqual(ThreadRef(hostID: "laptop", threadID: "same"), ThreadRef(hostID: "laptop", threadID: "same"))
+        XCTAssertNotEqual(ThreadRef(hostID: "laptop", threadID: "same"), ThreadRef(hostID: "forge", threadID: "same"))
+    }
+    func testAComputerThatCantBeReachedHidesNothingElse() throws {
+        let permission = #"[{"id":"r","kind":"permission","text":"Run?","options":[]}]"#
+        let laptop = ComputerThreads(hostID: "laptop", name: "Laptop", status: .online, threads: [try thread("a", requests: permission), try thread("b", status: "running")])
+        let forge = ComputerThreads(hostID: "forge", name: "forge", status: .unreachable,
+                                    threads: [try thread("c", status: "running", requests: permission, summary: "2026-09-26T10:00:00.000Z")])
+        XCTAssertEqual(ThreadGroups.waiting([laptop, forge]).map(\.id), ["laptop/a/r"])
+        XCTAssertEqual(ThreadGroups.working([laptop, forge]).map(\.id), ["laptop/b"])
+        XCTAssertEqual(ThreadGroups.merged([laptop, forge]).map(\.id), ["laptop/a", "laptop/b", "forge/c"])
+        XCTAssertEqual(ThreadGroups.unreachable([laptop, forge]).map(\.name), ["forge"])
+        XCTAssertTrue(ThreadGroups.unreachable([laptop, forge], show: .only("laptop")).isEmpty)
+        XCTAssertEqual(ComputerStatus.unreachable.words, "Can’t reach it")
     }
     func testWaitingListsEveryRequestAndWorkingLeavesThemOut() throws {
         let two = #"[{"id":"r1","kind":"question","text":"One?","options":[]},{"id":"r2","kind":"permission","text":"Two?","options":[]}]"#
-        let threads = [try thread("a", status: "running", requests: two), try thread("b", status: "running")]
-        XCTAssertEqual(ThreadGroups.waiting(threads).map(\.id), ["a/r1", "a/r2"])
-        XCTAssertEqual(ThreadGroups.working(threads).map(\.id), ["b"])
+        let laptop = ComputerThreads(hostID: "h", name: "Laptop", status: .online, threads: [try thread("a", status: "running", requests: two), try thread("b", status: "running")])
+        XCTAssertEqual(ThreadGroups.waiting([laptop]).map(\.id), ["h/a/r1", "h/a/r2"])
+        XCTAssertEqual(ThreadGroups.working([laptop]).map(\.id), ["h/b"])
+    }
+
+    // MARK: Saved computers
+
+    private func pairing(_ n: Int) throws -> Pairing {
+        try decode(Pairing.self, #"{"v":1,"hostId":"00000000-0000-4000-8000-00000000000\#(n)","clientId":"phone","token":"secret"}"#)
+    }
+    func testTheSinglePairingBecomesTheFirstComputer() throws {
+        // The item an earlier build saved under `host`: address and pairing, no names.
+        let legacy = try decode(SavedComputer.self, #"{"address":"https://forge.tail5c2e.ts.net","pairing":{"v":1,"hostId":"00000000-0000-4000-8000-000000000001","clientId":"phone","token":"secret"}}"#)
+        XCTAssertNoThrow(try legacy.validate())
+        XCTAssertEqual(legacy.name, "forge"); XCTAssertNil(legacy.reportedName)
+        XCTAssertEqual(ComputerStore.plan(index: nil, legacy: legacy), ComputerStore.Plan(index: [legacy.hostID], adopt: legacy, removeLegacy: true))
+        // Stopped after writing the index: the next launch only removes the old item.
+        XCTAssertEqual(ComputerStore.plan(index: [legacy.hostID], legacy: legacy), ComputerStore.Plan(index: [legacy.hostID], adopt: nil, removeLegacy: true))
+        XCTAssertEqual(ComputerStore.plan(index: nil, legacy: nil), ComputerStore.Plan(index: [], adopt: nil, removeLegacy: false))
+        let other = SavedComputer(address: "https://laptop.tail5c2e.ts.net:8443", pairing: try pairing(2))
+        XCTAssertEqual(ComputerStore.plan(index: [other.hostID, other.hostID], legacy: legacy).index, [other.hostID, legacy.hostID])
+        XCTAssertEqual(ComputerStore.account(legacy.hostID), "computer.00000000-0000-4000-8000-000000000001")
+    }
+    func testAComputersNameIsTheOneGivenHereThenItsOwnThenItsTailnetName() throws {
+        var computer = SavedComputer(address: "https://laptop.tail5c2e.ts.net:8443", pairing: try pairing(2))
+        XCTAssertEqual(computer.name, "laptop")
+        XCTAssertEqual(computer.endpoint?.port, 8443)
+        computer.reportedName = "Zach’s Laptop"; XCTAssertEqual(computer.name, "Zach’s Laptop")
+        computer.localName = "Desk"; XCTAssertEqual(computer.name, "Desk")
+        computer.localName = "  "; XCTAssertEqual(computer.name, "Zach’s Laptop")
+        let decoded = try JSONDecoder().decode(SavedComputer.self, from: JSONEncoder().encode(computer))
+        XCTAssertEqual(decoded, computer)
     }
 
     // MARK: Answering from a card

@@ -1,8 +1,9 @@
 import SwiftUI
 import SottoCore
 
-/// Pairing in two steps: find the host by its name on the tailnet, then enter the code it printed.
-/// Pairing admits this iPhone; whether it may answer permissions is decided on the host.
+/// Adding a computer in two steps: find it by its name on the tailnet, then enter the code it shows.
+/// Full screen until one computer is paired; after that, the Add computer sheet over Computers.
+/// Pairing admits this iPhone; whether it may answer permissions is decided on that computer.
 struct PairFlow: View {
     @EnvironmentObject var model: AppModel
     var body: some View {
@@ -10,6 +11,24 @@ struct PairFlow: View {
             if let found = model.found { CodeStep(found: found) } else { NameStep() }
         }
         .background(Palette.canvas)
+    }
+}
+
+/// Add computer, over the tabs. Cancel closes it; a code already spent still finishes pairing.
+struct AddComputerSheet: View {
+    @EnvironmentObject var model: AppModel
+    var body: some View {
+        NavigationStack {
+            PairFlow()
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { model.adding = false }.accessibilityLabel("Cancel adding a computer")
+                    }
+                }
+                .toolbarBackground(Palette.canvas, for: .navigationBar)
+                .navigationBarTitleDisplayMode(.inline)
+        }
+        .interactiveDismissDisabled(model.working)
     }
 }
 
@@ -27,10 +46,18 @@ private struct StepHeader: View {
 private struct PairFeedback: View {
     @EnvironmentObject var model: AppModel
     var body: some View {
-        if let feedback = model.feedback {
+        if let feedback = model.pairFeedback {
             Text(feedback).font(.subheadline).foregroundStyle(Palette.warning).multilineTextAlignment(.center)
                 .accessibilityAddTraits(.updatesFrequently)
         }
+    }
+}
+
+private struct FieldLabel: View {
+    let text: String
+    var body: some View {
+        Text(text).font(.subheadline).fontWeight(.semibold).foregroundStyle(Palette.muted)
+            .frame(maxWidth: .infinity, alignment: .leading).accessibilityHidden(true)
     }
 }
 
@@ -42,16 +69,21 @@ struct NameStep: View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(spacing: 24) {
-                    StepHeader(step: 1, title: "Pair with your host", detail: "Its name on your tailnet, such as forge.")
-                    TextField("forge", text: $name).keyboardType(.URL).textContentType(.URL)
-                        .textInputAutocapitalization(.never).autocorrectionDisabled()
-                        .submitLabel(.next).onSubmit(find).focused($focused).fieldSurface()
-                        .accessibilityLabel("Host name")
+                    StepHeader(step: 1, title: "Add computer",
+                               detail: "Read its name in Sotto on that computer: Settings › Phones. For a host without a screen, use its name on your tailnet.")
+                    VStack(spacing: 6) {
+                        FieldLabel(text: "Computer name on your tailnet")
+                        TextField("forge", text: $name).keyboardType(.URL).textContentType(.URL)
+                            .textInputAutocapitalization(.never).autocorrectionDisabled()
+                            .submitLabel(.next).onSubmit(find).focused($focused).fieldSurface()
+                            .accessibilityLabel("Computer name on your tailnet")
+                    }
                     PairFeedback()
                 }.padding(.horizontal, 24).padding(.top, 32)
             }.scrollDismissesKeyboard(.interactively)
-            Button(model.working ? "Finding the host…" : "Next", action: find).buttonStyle(ActionStyle(wide: true))
+            Button(model.working ? "Finding it…" : "Next", action: find).buttonStyle(ActionStyle(wide: true))
                 .disabled(model.working || !model.storageReady || name.trimmingCharacters(in: .whitespaces).isEmpty)
+                .accessibilityLabel(model.working ? "Finding the computer" : "Find this computer")
                 .padding(.horizontal, 24).padding(.bottom, 12)
         }
         .onAppear { focused = true }
@@ -71,8 +103,7 @@ struct CodeStep: View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(spacing: 24) {
-                    StepHeader(step: 2, title: "Enter the pairing code",
-                               detail: "Run the host’s pairing command on \(found.name) and type the code it prints. A code works once, for five minutes.")
+                    StepHeader(step: 2, title: "Enter the pairing code", detail: detail)
                     ZStack {
                         // The field takes the typing; the boxes show it. VoiceOver reads the field.
                         TextField("", text: $code).keyboardType(.asciiCapable).textContentType(.oneTimeCode)
@@ -82,17 +113,13 @@ struct CodeStep: View {
                         CodeBoxes(code: code, focused: focused).allowsHitTesting(false)
                     }
                     .contentShape(Rectangle()).onTapGesture { focused = true }
-                    HStack(spacing: 6) {
-                        Image(systemName: "server.rack").accessibilityHidden(true)
-                        Text(found.endpoint.url.host ?? found.name).lineLimit(1).truncationMode(.middle)
-                        Button("Change") { model.changeHost() }.frame(minHeight: 44).disabled(model.working)
-                            .accessibilityLabel("Change host")
-                    }.font(.subheadline).foregroundStyle(Palette.muted)
+                    FoundLine(found: found)
                     PairFeedback()
                 }.padding(.horizontal, 24).padding(.top, 32)
             }.scrollDismissesKeyboard(.interactively)
             Button(model.working ? "Pairing…" : "Pair", action: pair).buttonStyle(ActionStyle(wide: true))
                 .disabled(model.working || code.count != PairingCode.length)
+                .accessibilityLabel(model.working ? "Pairing" : "Pair with \(found.name)")
                 .padding(.horizontal, 24).padding(.bottom, 12)
         }
         .onAppear { focused = true }
@@ -101,13 +128,30 @@ struct CodeStep: View {
             if cleaned != typed { code = cleaned }
         }
     }
+    private var detail: String {
+        "In Sotto on \(found.name): Settings › Phones › Pair a phone. A host without a screen prints one from its pairing command. A code works once, for five minutes."
+    }
     private func pair() {
         guard code.count == PairingCode.length else { return }
-        Task { await model.pair(code: code); if model.saved != nil { code = "" } }
+        Task { await model.pair(code: code); if model.found == nil { code = "" } }
     }
 }
 
-/// Eight boxes in two groups of four, the way the host prints a code.
+/// Where step 1 found Sotto, with the way back to step 1.
+private struct FoundLine: View {
+    @EnvironmentObject var model: AppModel
+    let found: FoundHost
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "checkmark.circle").foregroundStyle(Palette.accent).accessibilityHidden(true)
+            Text("Found Sotto at \(found.endpoint.address)").lineLimit(1).truncationMode(.middle)
+            Button("Change") { model.changeComputer() }.frame(minHeight: 44).disabled(model.working)
+                .accessibilityLabel("Change computer")
+        }.font(.subheadline).foregroundStyle(Palette.muted)
+    }
+}
+
+/// Eight boxes in two groups of four, the way the computer shows a code.
 private struct CodeBoxes: View {
     let code: String, focused: Bool
     var body: some View {

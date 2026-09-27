@@ -34,37 +34,104 @@ public enum ThreadFilter: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-public struct ProjectGroup: Identifiable, Sendable {
-    public let id: String; public let title: String; public let threads: [ThreadSummary]
+/// A thread as the phone names it. Two computers can hold the same thread ID, so the computer's
+/// host ID is part of every thread's identity: routes, drafts, markers and answers all carry both.
+public struct ThreadRef: Hashable, Codable, Sendable {
+    public let hostID: String; public let threadID: String
+    public init(hostID: String, threadID: String) { self.hostID = hostID; self.threadID = threadID }
+    public var id: String { hostID + "/" + threadID }
+}
+
+/// Whether this iPhone is talking to a paired computer right now.
+public enum ComputerStatus: String, Sendable {
+    case connecting, online, unreachable
+    public var words: String {
+        switch self {
+        case .connecting: return "Connecting…"
+        case .online: return "Online"
+        case .unreachable: return "Can’t reach it"
+        }
+    }
+}
+
+/// One paired computer as the lists read it: its name, whether it can be reached, and the threads
+/// it last shared. A computer shares only its own threads.
+public struct ComputerThreads: Sendable {
+    public let hostID: String; public let name: String; public let status: ComputerStatus
+    public let threads: [ThreadSummary]; public let projects: [Project]
+    public init(hostID: String, name: String, status: ComputerStatus, threads: [ThreadSummary], projects: [Project] = []) {
+        self.hostID = hostID; self.name = name; self.status = status; self.threads = threads; self.projects = projects
+    }
+}
+
+/// A thread with the computer it lives on: a row on Threads, or a card's thread on Needs you.
+public struct HostedThread: Identifiable, Sendable {
+    public let ref: ThreadRef; public let computer: String; public let status: ComputerStatus
+    public let project: String?; public let thread: ThreadSummary
+    public var id: String { ref.id }
+    public var reachable: Bool { status == .online }
 }
 
 /// One request waiting on the user, with the thread it belongs to: a card on Needs you.
 public struct Waiting: Identifiable, Sendable {
-    public let thread: ThreadSummary; public let request: AgentRequest
+    public let thread: HostedThread; public let request: AgentRequest
     public var id: String { thread.id + "/" + request.id }
 }
 
+/// The strip at the top of Needs you and Threads: every computer, or one.
+public enum ComputerFilter: Hashable, Sendable {
+    case all, only(String)
+    public func admits(_ hostID: String) -> Bool {
+        if case .only(let chosen) = self { return chosen == hostID }
+        return true
+    }
+}
+
 public enum ThreadGroups {
-    /// Threads under their projects, in the order the host lists projects; threads whose project
-    /// the shell does not name go last under "Other".
-    public static func byProject(_ threads: [ThreadSummary], projects: [Project], filter: ThreadFilter = .all) -> [ProjectGroup] {
-        let shown = threads.filter { $0.archivedAt == nil && filter.admits($0) }
-        var groups = projects.compactMap { project -> ProjectGroup? in
-            let members = shown.filter { $0.projectId == project.id }
-            return members.isEmpty ? nil : ProjectGroup(id: project.id, title: project.title, threads: members)
+    /// Every open thread on the computers the strip admits, as one list: most recent first, and the
+    /// threads of a computer that can't be reached after the rest, as it last shared them.
+    public static func merged(_ computers: [ComputerThreads], show: ComputerFilter = .all, filter: ThreadFilter = .all) -> [HostedThread] {
+        let rows = computers.filter { show.admits($0.hostID) }.flatMap(hosted).filter { filter.admits($0.thread) }
+        return rows.enumerated().sorted { a, b in
+            if a.element.reachable != b.element.reachable { return a.element.reachable }
+            let x = latest(a.element.thread), y = latest(b.element.thread)
+            if x != y { return (x ?? .distantPast) > (y ?? .distantPast) }
+            return a.offset < b.offset
+        }.map(\.element)
+    }
+    /// Each open request with its thread, on computers that can be reached: a request on a computer
+    /// that can't be reached can't be answered, so it waits there until the computer is back.
+    public static func waiting(_ computers: [ComputerThreads], show: ComputerFilter = .all) -> [Waiting] {
+        merged(computers, show: show).filter(\.reachable).flatMap { row in row.thread.requests.map { Waiting(thread: row, request: $0) } }
+    }
+    /// Threads with a turn running and nothing asked, on computers that can be reached.
+    public static func working(_ computers: [ComputerThreads], show: ComputerFilter = .all) -> [HostedThread] {
+        merged(computers, show: show).filter { $0.reachable && $0.thread.status == "running" && $0.thread.requests.isEmpty }
+    }
+    /// The computers the strip admits that this iPhone can't reach.
+    public static func unreachable(_ computers: [ComputerThreads], show: ComputerFilter = .all) -> [ComputerThreads] {
+        computers.filter { show.admits($0.hostID) && $0.status == .unreachable }
+    }
+    static func hosted(_ computer: ComputerThreads) -> [HostedThread] {
+        let titles = Dictionary(computer.projects.map { ($0.id, $0.title) }, uniquingKeysWith: { first, _ in first })
+        return computer.threads.filter { $0.archivedAt == nil }.map { thread in
+            HostedThread(ref: ThreadRef(hostID: computer.hostID, threadID: thread.id), computer: computer.name,
+                         status: computer.status, project: titles[thread.projectId], thread: thread)
         }
-        let known = Set(projects.map(\.id))
-        let rest = shown.filter { !known.contains($0.projectId) }
-        if !rest.isEmpty { groups.append(ProjectGroup(id: "", title: "Other", threads: rest)) }
-        return groups
     }
-    /// Each open request with its thread, in the order the host lists threads.
-    public static func waiting(_ threads: [ThreadSummary]) -> [Waiting] {
-        threads.filter { $0.archivedAt == nil }.flatMap { thread in thread.requests.map { Waiting(thread: thread, request: $0) } }
+    /// When the thread last moved: its last message or the start of its running turn, whichever is later.
+    static func latest(_ thread: ThreadSummary) -> Date? {
+        [thread.summary?.lastMessageAt, thread.summary?.runningTurnStartedAt].compactMap { $0.flatMap(Stamp.date) }.max()
     }
-    public static func working(_ threads: [ThreadSummary]) -> [ThreadSummary] {
-        threads.filter { $0.archivedAt == nil && $0.status == "running" && $0.requests.isEmpty }
-    }
+}
+
+/// ISO 8601 times as the host writes them, with or without fractional seconds.
+public enum Stamp {
+    private static let fractional: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]; return f
+    }()
+    private static let plain = ISO8601DateFormatter()
+    public static func date(_ iso: String) -> Date? { fractional.date(from: iso) ?? plain.date(from: iso) }
 }
 
 public extension AgentRequest {

@@ -9,8 +9,23 @@ final class ProtocolTests: XCTestCase {
     func testPrivateTLSRouteIsRequired() throws {
         let endpoint = try HostEndpoint("https://forge.example.ts.net")
         XCTAssertEqual(endpoint.route("/v1/socket", socket: true).absoluteString, "wss://forge.example.ts.net/v1/socket")
-        for address in ["http://forge.example.ts.net", "https://evil.ts.net.example.org", "https://forge.example.ts.net/path", "https://user:secret@forge.example.ts.net", "https://forge.example.ts.net?token=secret", "https://forge.example.ts.net#token", "https://localhost", "https://forge.example.ts.net:8443"] {
+        for address in ["http://forge.example.ts.net", "https://evil.ts.net.example.org", "https://forge.example.ts.net/path", "https://user:secret@forge.example.ts.net", "https://forge.example.ts.net?token=secret", "https://forge.example.ts.net#token", "https://localhost", "https://localhost:8443", "http://forge.example.ts.net:8443"] {
             XCTAssertThrowsError(try HostEndpoint(address), address)
+        }
+    }
+    func testOnlyPorts443And8443AreAccepted() throws {
+        let desktop = try HostEndpoint("https://forge.example.ts.net:8443")
+        XCTAssertEqual(desktop.port, 8443)
+        XCTAssertEqual(desktop.address, "forge.example.ts.net:8443")
+        XCTAssertEqual(desktop.route("/v1/health").absoluteString, "https://forge.example.ts.net:8443/v1/health")
+        XCTAssertEqual(desktop.route("/v1/socket", socket: true).absoluteString, "wss://forge.example.ts.net:8443/v1/socket")
+        let headless = try HostEndpoint("https://Forge.Example.ts.net:443/")
+        XCTAssertEqual(headless, try HostEndpoint("https://forge.example.ts.net"))
+        XCTAssertEqual(headless.port, 443)
+        XCTAssertEqual(headless.address, "forge.example.ts.net")
+        XCTAssertEqual(headless.machine, "forge")
+        for port in [80, 444, 8080, 8444, 3000, 4319] {
+            XCTAssertThrowsError(try HostEndpoint("https://forge.example.ts.net:\(port)"), "port \(port)")
         }
     }
     func testUnsupportedProtocolAndOversizeFramesAreRefused() throws {

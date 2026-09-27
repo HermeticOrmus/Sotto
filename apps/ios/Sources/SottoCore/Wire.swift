@@ -35,31 +35,46 @@ public enum ClientError: Error, LocalizedError, Equatable {
     case hostNotFound(String), hostUnreachable(String), notASottoHost(String), invalidCode
     public var errorDescription: String? {
         switch self {
-        case .invalidHost: return "Enter the host's name on your tailnet, such as forge, or its full address ending in .ts.net."
+        case .invalidHost: return "Enter the computer's name on your tailnet, such as forge, or its full address ending in .ts.net."
         case .hostNotFound(let name): return "Couldn't find \(name) on your tailnet. Check that Tailscale is connected on this iPhone and MagicDNS is on for your tailnet, or enter the full address ending in .ts.net."
         case .hostUnreachable(let name): return "Couldn't reach \(name). Check that it's online and that Tailscale is connected on this iPhone."
-        case .notASottoHost(let name): return "\(name) answered, but no Sotto host is listening there. Check that Tailscale Serve on \(name) forwards to the host."
-        case .invalidCode: return "A pairing code is eight letters and numbers. Check the code the host printed."
-        case .invalidProtocol: return "This host uses a different connection format. Update Sotto before connecting."
-        case .invalidIdentity: return "This address belongs to a different host. Forget it and pair again if you intended to change hosts."
-        case .invalidRequest: return "This request changed or is not supported on this iPhone. Refresh the thread or answer on the desktop."
-        case .disconnected: return "Connection lost. Work continues on the host. Reconnect to check the thread."
+        case .notASottoHost(let name): return "\(name) answered, but Sotto isn't listening there. In Sotto on \(name), turn on phone access in Settings > Phones. For a host without a screen, check that Tailscale Serve forwards to it."
+        case .invalidCode: return "A pairing code is eight letters and numbers. Check the code on that computer."
+        case .invalidProtocol: return "This computer uses a different connection format. Update Sotto before connecting."
+        case .invalidIdentity: return "A different computer answered at this address. Remove it and add it again if you meant to change computers."
+        case .invalidRequest: return "This request changed or is not supported on this iPhone. Refresh the thread or answer on the computer."
+        case .disconnected: return "Connection lost. Work carries on on the computer. Reconnect to check the thread."
         case .uncertain: return "Delivery is unconfirmed. Check the thread before sending again."
         case .rejected(let message): return message
         }
     }
 }
 
+/// A computer's private HTTPS origin on the tailnet: `https://<machine>.<tailnet>.ts.net`, on port 443
+/// or 8443 only. The desktop serves its host through Tailscale Serve on 8443 so 443 stays free for
+/// other apps; a host without a screen is usually on 443. Certificate validation is the platform's.
 public struct HostEndpoint: Equatable, Sendable {
+    public static let ports: Set<Int> = [443, 8443]
     public let url: URL
     public init(_ input: String) throws {
-        guard let c = URLComponents(string: input.trimmingCharacters(in: .whitespacesAndNewlines)),
+        guard var c = URLComponents(string: input.trimmingCharacters(in: .whitespacesAndNewlines)),
               c.scheme?.lowercased() == "https", let host = c.host?.lowercased(),
               host.hasSuffix(".ts.net"), host.count > 7, c.user == nil, c.password == nil,
-              c.query == nil, c.fragment == nil, c.port == nil || c.port == 443,
-              c.path.isEmpty || c.path == "/", let url = c.url else { throw ClientError.invalidHost }
+              c.query == nil, c.fragment == nil, Self.ports.contains(c.port ?? 443),
+              c.path.isEmpty || c.path == "/" else { throw ClientError.invalidHost }
+        // One spelling per origin, so the same computer typed two ways is the same endpoint.
+        c.scheme = "https"; c.host = host; c.path = ""
+        if c.port == 443 { c.port = nil }
+        guard let url = c.url else { throw ClientError.invalidHost }
         self.url = url
     }
+    /// The full name on the tailnet: `forge.tail5c2e.ts.net`.
+    public var host: String { url.host ?? "" }
+    public var port: Int { url.port ?? 443 }
+    /// The machine's name, the first label of its address: `forge`.
+    public var machine: String { String(host.split(separator: ".").first ?? "") }
+    /// How the address reads on screen: the full name, with the port when it isn't 443.
+    public var address: String { port == 443 ? host : "\(host):\(port)" }
     public func route(_ path: String, socket: Bool = false) -> URL {
         var c = URLComponents(url: url, resolvingAgainstBaseURL: false)!
         c.path = path; c.scheme = socket ? "wss" : "https"
@@ -67,7 +82,7 @@ public struct HostEndpoint: Equatable, Sendable {
     }
 }
 
-public struct Pairing: Codable, Sendable {
+public struct Pairing: Codable, Equatable, Sendable {
     public let v: Int; public let hostId: String; public let clientId: String; public let token: String
     public func validate() throws {
         guard v == 1 else { throw ClientError.invalidProtocol }
@@ -82,13 +97,16 @@ public struct HostSession: Decodable, Sendable {
     }
 }
 /// `GET /v1/health`: read before pairing, so the phone knows it found a Sotto host and which one.
+/// `name` is the computer's own name, which the desktop sends and older hosts don't.
 public struct Health: Decodable, Equatable, Sendable {
     public let v: Int; public let status: String; public let hostId: String
-    public let sottoVersion: String?; public let features: [String]?
+    public let sottoVersion: String?; public let features: [String]?; public let name: String?
+    /// The name to show for the computer, when it gave one that reads as a name.
+    public var computerName: String? { ComputerName.cleaned(name) }
     public func validate() throws {
         guard v == 1 else { throw ClientError.invalidProtocol }
         guard UUID(uuidString: hostId) != nil else { throw ClientError.invalidIdentity }
-        guard status == "ready" else { throw ClientError.rejected("The host is still starting. Try again in a moment.") }
+        guard status == "ready" else { throw ClientError.rejected("Sotto on that computer is still starting. Try again in a moment.") }
     }
 }
 public struct WireFailure: Decodable, Sendable { public let code: String; public let message: String }

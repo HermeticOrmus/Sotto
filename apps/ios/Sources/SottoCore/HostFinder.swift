@@ -3,43 +3,81 @@ import Foundation
 import Darwin
 #endif
 
-/// Turns what the user typed on the pairing screen into the host's private HTTPS address.
+/// Turns what the user typed when adding a computer into the private HTTPS addresses to try.
 /// A bare machine name such as `forge` is looked up through the tailnet's MagicDNS, which the
-/// Tailscale app on this iPhone answers, so the lookup never leaves the tailnet. The address it
-/// finds still has to be a certificate-validated `*.ts.net` origin (`HostEndpoint`).
+/// Tailscale app on this iPhone answers, so the lookup never leaves the tailnet. Every address it
+/// gives still has to be a certificate-validated `*.ts.net` origin (`HostEndpoint`).
 public enum HostFinder {
-    public enum Input: Equatable, Sendable { case address(HostEndpoint), name(String) }
+    /// What was typed: an address with its port, used as typed; a full `.ts.net` name without one;
+    /// or a machine name to look up.
+    public enum Input: Equatable, Sendable { case address(HostEndpoint), fullName(String), name(String) }
     /// Every name the system resolver gives for a machine name: its canonical name and the
     /// reverse-lookup name of each address. Injected so tests need no network.
     public typealias Lookup = @Sendable (String) async -> [String]
+    /// The ports to try for a name, in order: the desktop's Tailscale Serve port, then the usual HTTPS
+    /// port a host without a screen is served on.
+    public static let ports = [8443, 443]
 
     public static func read(_ typed: String) throws -> Input {
         let text = typed.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if text.contains("://") { return .address(try HostEndpoint(text)) }
+        if text.contains("://") || text.contains(":") {
+            let endpoint = try HostEndpoint(text.contains("://") ? text : "https://" + text)
+            let typedPort = URLComponents(string: text.contains("://") ? text : "https://" + text)?.port
+            return typedPort == nil ? .fullName(endpoint.host) : .address(endpoint)
+        }
         if text.contains(".") {
             let bare = text.hasSuffix(".") ? String(text.dropLast()) : text
             guard bare.hasSuffix(".ts.net") else { throw ClientError.invalidHost }
-            return .address(try HostEndpoint("https://" + bare))
+            return .fullName(try HostEndpoint("https://" + bare).host)
         }
         guard isMachineName(text) else { throw ClientError.invalidHost }
         return .name(text)
     }
 
-    /// The private address a resolver's answer names, when it is this machine on a tailnet.
-    public static func endpoint(machine: String, resolvedName: String) -> HostEndpoint? {
+    /// The full tailnet name a resolver's answer gives, when it names this machine on a tailnet.
+    public static func fullName(machine: String, resolvedName: String) -> String? {
         let name = (resolvedName.hasSuffix(".") ? String(resolvedName.dropLast()) : resolvedName).lowercased()
-        guard name.hasSuffix(".ts.net"), name.split(separator: ".").first.map(String.init) == machine else { return nil }
-        return try? HostEndpoint("https://" + name)
+        guard name.hasSuffix(".ts.net"), name.split(separator: ".").first.map(String.init) == machine,
+              let endpoint = try? HostEndpoint("https://" + name) else { return nil }
+        return endpoint.host
     }
 
-    public static func find(_ typed: String, lookup: Lookup = SystemLookup.names) async throws -> HostEndpoint {
+    /// The addresses to try for a full tailnet name, in the order of `ports`.
+    public static func endpoints(fullName: String) -> [HostEndpoint] {
+        ports.compactMap { try? HostEndpoint("https://\(fullName):\($0)") }
+    }
+
+    /// The addresses to check, in order: the one typed with its port, or 8443 then 443 on the
+    /// computer's full name.
+    public static func candidates(_ typed: String, lookup: Lookup = SystemLookup.names) async throws -> [HostEndpoint] {
         switch try read(typed) {
-        case .address(let endpoint): return endpoint
+        case .address(let endpoint): return [endpoint]
+        case .fullName(let name): return endpoints(fullName: name)
         case .name(let machine):
             for name in await lookup(machine) {
-                if let endpoint = endpoint(machine: machine, resolvedName: name) { return endpoint }
+                if let full = fullName(machine: machine, resolvedName: name) { return endpoints(fullName: full) }
             }
             throw ClientError.hostNotFound(machine)
+        }
+    }
+
+    /// Checks each address in order and keeps the first where Sotto answers. When none does, the
+    /// error that says the most wins: a Sotto that refused, then something that answered but isn't
+    /// Sotto, then nothing answering at all.
+    public static func probe<Found>(_ candidates: [HostEndpoint], check: (HostEndpoint) async throws -> Found) async throws -> (endpoint: HostEndpoint, found: Found) {
+        var telling: Error?
+        for endpoint in candidates {
+            do { return (endpoint, try await check(endpoint)) }
+            catch is CancellationError { throw CancellationError() }
+            catch { if weight(error) > (telling.map(weight) ?? -1) { telling = error } }
+        }
+        throw telling ?? ClientError.invalidHost
+    }
+    static func weight(_ error: Error) -> Int {
+        switch error as? ClientError {
+        case .hostUnreachable?: return 0
+        case .notASottoHost?: return 1
+        default: return 2
         }
     }
 

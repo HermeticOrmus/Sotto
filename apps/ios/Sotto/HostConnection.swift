@@ -25,10 +25,11 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
     private var session = ""
     private var generation = UUID()
 
-    /// Confirms a Sotto host is listening at the address before a code is spent on it.
+    /// Confirms Sotto is listening at the address before a code is spent on it. Ten seconds, because
+    /// finding a computer may try two ports and nothing answering on the first is the usual miss.
     func health(endpoint: HostEndpoint) async throws -> Health {
-        let name = endpoint.url.host.map { String($0.split(separator: ".").first ?? "") } ?? "The host"
-        var request = URLRequest(url: endpoint.route("/v1/health")); request.httpMethod = "GET"
+        let name = endpoint.machine
+        var request = URLRequest(url: endpoint.route("/v1/health")); request.httpMethod = "GET"; request.timeoutInterval = 10
         let fetched: (Data, URLResponse)
         do { fetched = try await network.data(for: request) } catch { throw ClientError.hostUnreachable(name) }
         let (data, response) = fetched
@@ -125,7 +126,7 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
         // Retrying Forget after revocation succeeded but local deletion failed is safe.
         if route == "/v1/revoke" && response.statusCode == 401 { return .object(["v": .number(1), "revoked": .bool(true)]) }
         guard (200..<300).contains(response.statusCode) else {
-            throw ClientError.rejected(route == "/v1/pair" ? "That code didn't work. Codes work once and last five minutes; get a new one on the host." : "This iPhone is no longer paired with the host. Pair it again.")
+            throw ClientError.rejected(route == "/v1/pair" ? "That code didn't work. Codes work once and last five minutes; get a new one on that computer." : "This iPhone is no longer paired with that computer. Remove it in Computers and add it again.")
         }
         return try Wire.decode(data)
     }

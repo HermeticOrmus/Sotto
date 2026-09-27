@@ -3,37 +3,38 @@ import SottoCore
 
 /// One thread: its messages as a conversation, or its activity, with the reply box under both.
 /// A waiting question or permission opens as a sheet; dismissed, the reply box offers it again.
+/// Everything here goes to the thread's own computer.
 struct ThreadView: View {
     @EnvironmentObject var model: AppModel
-    let threadID: String
+    let ref: ThreadRef
     @State private var pane = Pane.messages
     @State private var open: AgentRequest?
     @State private var setAside: Set<String> = []
     /// The request the sheet was opened for, set aside when the sheet closes without an answer.
     @State private var shown: String?
     enum Pane: String, CaseIterable, Identifiable { case messages = "Messages", activity = "Activity"; var id: String { rawValue } }
-    private var thread: ThreadSummary? { model.thread(threadID) }
-    private var detail: ThreadDetail? { model.detail?.threadId == threadID ? model.detail : nil }
+    private var thread: ThreadSummary? { model.thread(ref) }
+    private var detail: ThreadDetail? { model.detail(for: ref) }
     var body: some View {
         VStack(spacing: 0) {
             Picker("Show", selection: $pane) { ForEach(Pane.allCases) { Text($0.rawValue).tag($0) } }
                 .pickerStyle(.segmented).padding(.horizontal, 16).padding(.vertical, 8)
-            ConnectionBanner().padding(.horizontal, 16)
+            ComputerBanner(hostID: ref.hostID).padding(.horizontal, 16)
             switch pane {
-            case .messages: MessagesPane(threadID: threadID, detail: detail)
-            case .activity: ActivityPane(detail: detail)
+            case .messages: MessagesPane(ref: ref, detail: detail)
+            case .activity: ActivityPane(detail: detail, online: model.online(ref.hostID))
             }
         }
         .background(Palette.canvas)
         .navigationTitle(thread?.title ?? "Thread").navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(Palette.canvas, for: .navigationBar)
         .toolbar(.hidden, for: .tabBar)
-        .safeAreaInset(edge: .bottom, spacing: 0) { ComposerView(threadID: threadID) { shown = $0.id; open = $0 } }
-        .task(id: threadID) { await model.select(threadID); offer() }
-        .onDisappear { Task { if model.selectedID == threadID { await model.select(nil) } } }
+        .safeAreaInset(edge: .bottom, spacing: 0) { ComposerView(ref: ref) { shown = $0.id; open = $0 } }
+        .task(id: ref) { await model.select(ref); offer() }
+        .onDisappear { Task { if model.selected == ref { await model.select(nil) } } }
         .onChange(of: thread?.requests.first?.id) { _, _ in offer() }
         .sheet(item: $open, onDismiss: { if let shown { setAside.insert(shown) }; shown = nil; offer() }) { request in
-            RequestSheet(threadID: threadID, request: request).presentationDetents([.medium, .large]).presentationDragIndicator(.visible)
+            RequestSheet(ref: ref, request: request).presentationDetents([.medium, .large]).presentationDragIndicator(.visible)
         }
     }
     /// Opens the thread's waiting request once; after "Not now" it waits in the reply box.
@@ -47,30 +48,31 @@ struct ThreadView: View {
 
 private struct MessagesPane: View {
     @EnvironmentObject var model: AppModel
-    let threadID: String
+    let ref: ThreadRef
     let detail: ThreadDetail?
     @State private var dismissMarker: PendingOperation?
     var body: some View {
-        let thread = model.thread(threadID)
+        let thread = model.thread(ref)
+        let online = model.online(ref.hostID)
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
                     if detail?.earlierAvailable == true || thread?.earlierAvailable == true {
-                        Button("Show earlier messages") { Task { await model.earlier() } }
-                            .buttonStyle(PlainStyle(compact: true)).frame(maxWidth: .infinity).disabled(!model.online)
+                        Button("Show earlier messages") { Task { await model.earlier(ref) } }
+                            .buttonStyle(PlainStyle(compact: true)).frame(maxWidth: .infinity).disabled(!online)
                     }
                     if let detail {
                         ForEach(detail.messages) { message in MessageBubble(message: message, provider: Words.provider(thread?.providerId)) }
                     } else {
-                        Text(model.online ? "Reading this thread…" : "Reconnect to read this thread.").foregroundStyle(Palette.muted).padding(.vertical, 24)
+                        Text(online ? "Reading this thread…" : "Reconnect to read this thread.").foregroundStyle(Palette.muted).padding(.vertical, 24)
                     }
-                    ForEach(model.pending(for: threadID)) { item in UnconfirmedRow(item: item, text: model.submitted[item.id]) { dismissMarker = item } }
-                    if let text = model.failedReplies[threadID] {
+                    ForEach(model.pending(for: ref)) { item in UnconfirmedRow(item: item, text: model.submitted[item.id]) { dismissMarker = item } }
+                    if let text = model.failedReplies[ref.id] {
                         VStack(alignment: .leading, spacing: 10) {
                             Text("Your reply wasn’t sent").fontWeight(.semibold)
                             Text(text).textSelection(.enabled)
-                            Button("Put it back in the reply box") { model.restoreReply() }.buttonStyle(PlainStyle(compact: true))
-                                .disabled(!(model.drafts[threadID] ?? "").isEmpty)
+                            Button("Put it back in the reply box") { model.restoreReply(ref) }.buttonStyle(PlainStyle(compact: true))
+                                .disabled(!(model.drafts[ref.id] ?? "").isEmpty)
                         }.card()
                     }
                     if let live = detail?.activities?.last(where: { $0.status == "running" && $0.kind != "turn" }) {
@@ -89,7 +91,7 @@ private struct MessagesPane: View {
         .confirmationDialog("Stop waiting for confirmation?", isPresented: Binding(get: { dismissMarker != nil }, set: { if !$0 { dismissMarker = nil } }), titleVisibility: .visible) {
             Button("I checked the thread") { if let item = dismissMarker { model.acknowledgeUnknown(item.id) }; dismissMarker = nil }
             Button("Cancel", role: .cancel) { dismissMarker = nil }
-        } message: { Text("It may already have reached the host. Nothing is sent again.") }
+        } message: { Text("It may already have reached \(model.name(ref.hostID)). Nothing is sent again.") }
     }
 }
 
@@ -127,7 +129,7 @@ private struct MessageBubble: View {
     }
 }
 
-/// A reply, answer or stop the host hasn't confirmed. It is never sent again on its own.
+/// A reply, answer or stop the thread's computer hasn't confirmed. It is never sent again on its own.
 private struct UnconfirmedRow: View {
     @EnvironmentObject var model: AppModel
     let item: PendingOperation
@@ -145,7 +147,7 @@ private struct UnconfirmedRow: View {
             }.font(.footnote).foregroundStyle(Palette.warning)
             HStack(spacing: 8) {
                 Button("I checked", action: dismiss).buttonStyle(PlainStyle(compact: true))
-                Button("Check again") { Task { await model.checkDelivery() } }.buttonStyle(PlainStyle(compact: true)).disabled(!model.online)
+                Button("Check again") { Task { await model.checkDelivery(item.hostID) } }.buttonStyle(PlainStyle(compact: true)).disabled(!model.online(item.hostID))
             }
         }.frame(maxWidth: .infinity, alignment: .trailing)
     }
@@ -161,13 +163,13 @@ private struct UnconfirmedRow: View {
 // MARK: Activity
 
 private struct ActivityPane: View {
-    @EnvironmentObject var model: AppModel
     let detail: ThreadDetail?
+    let online: Bool
     var body: some View {
         let rows = (detail?.activities ?? []).filter { $0.kind != "turn" }.sorted { $0.sequence < $1.sequence }
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                if detail == nil { Text(model.online ? "Reading this thread…" : "Reconnect to read this thread.").foregroundStyle(Palette.muted).padding(.vertical, 24) }
+                if detail == nil { Text(online ? "Reading this thread…" : "Reconnect to read this thread.").foregroundStyle(Palette.muted).padding(.vertical, 24) }
                 else if rows.isEmpty { Text("No activity yet.").foregroundStyle(Palette.muted).padding(.vertical, 24) }
                 ForEach(rows) { record in
                     ActivityRow(record: record)
@@ -222,26 +224,26 @@ private struct ActivityRow: View {
 
 private struct ComposerView: View {
     @EnvironmentObject var model: AppModel
-    let threadID: String
+    let ref: ThreadRef
     let openRequest: (AgentRequest) -> Void
     var body: some View {
         VStack(spacing: 0) {
             Divider().overlay(Palette.hairline)
-            if let request = model.thread(threadID)?.requests.first {
+            if let request = model.thread(ref)?.requests.first {
                 Button(request.kind == "permission" ? "Review the permission" : "Answer the question") { openRequest(request) }
                     .buttonStyle(ActionStyle(wide: true)).padding(12)
             } else {
                 HStack(alignment: .bottom, spacing: 8) {
-                    TextField("Reply", text: Binding(get: { model.drafts[threadID] ?? "" }, set: { model.drafts[threadID] = $0 }), axis: .vertical)
+                    TextField("Reply", text: Binding(get: { model.drafts[ref.id] ?? "" }, set: { model.drafts[ref.id] = $0 }), axis: .vertical)
                         .lineLimit(1...6).padding(.horizontal, 16).padding(.vertical, 11)
                         .background(Palette.raised, in: RoundedRectangle(cornerRadius: 22))
                         .accessibilityLabel("Reply to this thread")
-                    if model.canInterrupt {
-                        Button { Task { await model.interrupt() } } label: { Image(systemName: "stop.fill").frame(width: 44, height: 44) }
+                    if model.canInterrupt(ref) {
+                        Button { Task { await model.interrupt(ref) } } label: { Image(systemName: "stop.fill").frame(width: 44, height: 44) }
                             .foregroundStyle(Palette.ink).background(Palette.raised, in: Circle())
                             .accessibilityLabel("Stop this turn")
                     } else {
-                        Button { Task { await model.send() } } label: { Image(systemName: "arrow.up").fontWeight(.semibold).frame(width: 44, height: 44) }
+                        Button { Task { await model.send(ref) } } label: { Image(systemName: "arrow.up").fontWeight(.semibold).frame(width: 44, height: 44) }
                             .foregroundStyle(Palette.actionInk).background(canSend ? Palette.action : Palette.raised, in: Circle())
                             .disabled(!canSend).accessibilityLabel("Send reply")
                     }
@@ -249,7 +251,7 @@ private struct ComposerView: View {
             }
         }.background(Palette.canvas)
     }
-    private var canSend: Bool { model.canSend && !(model.drafts[threadID] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    private var canSend: Bool { model.canSend(ref) && !(model.drafts[ref.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 }
 
 // MARK: Question and permission sheet
@@ -259,13 +261,14 @@ private struct ComposerView: View {
 private struct RequestSheet: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.dismiss) var dismiss
-    let threadID: String
+    let ref: ThreadRef
     let request: AgentRequest
     @State private var answers: [String: QuestionAnswer] = [:]
     @State private var choice: String?
     @State private var text = ""
-    private var thread: ThreadSummary? { model.thread(threadID) }
-    /// The request as the host holds it now; nil once it is answered or replaced.
+    private var thread: ThreadSummary? { model.thread(ref) }
+    private var computer: String { model.name(ref.hostID) }
+    /// The request as the computer holds it now; nil once it is answered or replaced.
     private var current: AgentRequest? { thread?.requests.first { $0.id == request.id } }
     var body: some View {
         ScrollView {
@@ -275,14 +278,14 @@ private struct RequestSheet: View {
                     Text(thread.title).font(.subheadline).foregroundStyle(Palette.muted)
                     if let context = current.context {
                         if let command = context.command { CommandBox(command: command) }
-                        if let cwd = context.cwd { Text("in \(cwd) on \(model.hostName)").font(.footnote).foregroundStyle(Palette.muted) }
+                        if let cwd = context.cwd { Text("in \(cwd) on \(computer)").font(.footnote).foregroundStyle(Palette.muted) }
                         if let details = context.details { Text(details).font(.subheadline).textSelection(.enabled) }
                     }
                     if current.kind == "permission" && current.context?.command == nil { Text(current.text).textSelection(.enabled) }
                     if !current.supported {
-                        Text("This request can’t be answered here. Check the thread, or answer it on the desktop.").font(.subheadline).foregroundStyle(Palette.muted)
-                    } else if !model.mayAnswer {
-                        Text("This iPhone can’t answer on \(model.hostName). Answer it on the desktop, or allow this iPhone on the host.").font(.subheadline).foregroundStyle(Palette.muted)
+                        Text("This request can’t be answered here. Check the thread, or answer it on \(computer).").font(.subheadline).foregroundStyle(Palette.muted)
+                    } else if !model.mayAnswer(ref.hostID) {
+                        Text("This iPhone can’t answer on \(computer) yet. Turn on Can answer for it in Sotto on \(computer), or answer there.").font(.subheadline).foregroundStyle(Palette.muted)
                     } else if current.kind == "permission" {
                         permission(current, thread)
                     } else {
@@ -296,7 +299,7 @@ private struct RequestSheet: View {
             }.padding(20)
         }
         .background(Palette.surface)
-        .onChange(of: current == nil && model.pending(for: threadID).isEmpty) { _, gone in if gone { dismiss() } }
+        .onChange(of: current == nil && model.pending(for: ref).isEmpty) { _, gone in if gone { dismiss() } }
     }
     private func title(_ request: AgentRequest, _ thread: ThreadSummary) -> String {
         if request.kind == "permission" {
@@ -306,7 +309,7 @@ private struct RequestSheet: View {
         return request.text
     }
     @ViewBuilder private func permission(_ request: AgentRequest, _ thread: ThreadSummary) -> some View {
-        let enabled = model.canAnswer(request, in: thread)
+        let enabled = model.canAnswer(request, in: ref)
         VStack(spacing: 8) {
             if let choices = request.permissionChoices {
                 let ordered: [PermissionChoice] = choices.sorted { Self.rank($0) < Self.rank($1) }
@@ -324,7 +327,7 @@ private struct RequestSheet: View {
         }.disabled(!enabled)
     }
     @ViewBuilder private func question(_ request: AgentRequest, _ thread: ThreadSummary) -> some View {
-        let enabled = model.canAnswer(request, in: thread)
+        let enabled = model.canAnswer(request, in: ref)
         VStack(alignment: .leading, spacing: 8) {
             Group {
                 if let questions = request.questions, !questions.isEmpty {
@@ -343,9 +346,9 @@ private struct RequestSheet: View {
                 Button("Not now") { dismiss() }.buttonStyle(PlainStyle(wide: true))
                 Button("Send answer") {
                     Task {
-                        if request.questions?.isEmpty == false { await model.answer(request, in: thread.id, answers: answers) }
-                        else if !request.options.isEmpty { await model.answer(request, in: thread.id, choice: choice) }
-                        else { await model.answer(request, in: thread.id, text: text) }
+                        if request.questions?.isEmpty == false { await model.answer(request, in: ref, answers: answers) }
+                        else if !request.options.isEmpty { await model.answer(request, in: ref, choice: choice) }
+                        else { await model.answer(request, in: ref, text: text) }
                     }
                 }.buttonStyle(ActionStyle(wide: true)).disabled(!enabled || !ready(request))
             }.padding(.top, 6)
@@ -364,8 +367,8 @@ private struct RequestSheet: View {
         if !request.options.isEmpty { return choice != nil }
         return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
-    /// Sends against the request as the host holds it now, never the copy the sheet opened with.
-    private func send(_ current: AgentRequest, choice: String, _ thread: ThreadSummary) { Task { await model.answer(current, in: thread.id, choice: choice) } }
+    /// Sends against the request as the computer holds it now, never the copy the sheet opened with.
+    private func send(_ current: AgentRequest, choice: String, _ thread: ThreadSummary) { Task { await model.answer(current, in: ref, choice: choice) } }
     /// Allow once first, then the other allows, then deny and the rest.
     private static func rank(_ choice: PermissionChoice) -> Int {
         if choice.kind == "allow-once" { return 0 }
