@@ -98,12 +98,14 @@ The rest fell partly for the same reason and partly because it holds the thread 
   in Codex's turn identities, and a stable sort that keeps the rest in the order they were recorded. Identities
   are reconciled by the same code in the same order. Every adapter contract case and every Codex history,
   identity, rollback and newest-turn test passes unchanged.
-- **Takeover detection.** The session log's rows are the one place where the old per-turn ordering could differ.
-  Ordering also drops a row that exactly one of Sotto's message identities has since claimed. Ordered after every
-  turn, a row could be dropped partway through a read on a claim that a later turn in the same read made ambiguous;
-  ordered once, the row is judged on what the whole read shows, and an ambiguous row stays visible as input from
-  outside Sotto. That can only keep a row the old way hid, never hide one it kept, so it is the conservative
-  direction. No test reached that case before or after.
+- **Takeover detection.** The Codex session log's entries are the one place where the old per-turn ordering could
+  differ. Ordering also drops an entry that exactly one of Sotto's message identities has since claimed, with the
+  same role and text. Ordered after every turn, an entry could be dropped partway through a read on a claim that a
+  later turn in the same read then made ambiguous, or withdrew by reconciling the claiming message to other text.
+  Ordered once, the entry is judged on what the whole read shows, and an entry no longer claimed by exactly one
+  message stays visible as input from outside Sotto. An entry is dropped only when the last ordering drops it, and
+  the old way made that same last ordering, so the change can only keep an entry the old way hid, never hide one it
+  kept. That is the conservative direction. No test reached that case before or after.
 - **Activity.** `tests/unit/main/codexActivity.test.ts` drives the same 680 turns of started, streamed, completed
   and replayed items, anchors and turns through two projections, one of them forced onto the full merge after
   every call, and checks that both threads' activity is equal after every turn, past the 2,000-record bound.
