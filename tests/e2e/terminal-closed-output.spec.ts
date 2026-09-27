@@ -1,0 +1,55 @@
+import { mkdir } from 'node:fs/promises'
+import { expect, test } from '@playwright/test'
+import { closeSotto, launchSotto, openThreads, resizeWindow } from './support/sottoLaunch'
+
+test('Closed keeps a native terminal row and reopens it with fresh output', async () => {
+  test.skip(process.platform !== 'win32', 'Native Windows ConPTY acceptance')
+  const launched = await launchSotto()
+  const { page } = launched
+  try {
+    await mkdir('artifacts/review-384', { recursive: true })
+    await page.evaluate(async () => {
+      await window.sotto!.updateSettings({ onboardingComplete: true, reducedMotion: 'on' })
+      await window.sotto!.agents!.command({ type: 'configure', patch: { enabled: true, speak: false } })
+      await window.sotto!.agents!.command({ type: 'connect' })
+    })
+    await page.reload(); await openThreads(page)
+    await page.getByRole('radio', { name: 'Terminal', exact: true }).click()
+    const id = await page.evaluate(async () => {
+      const state = await window.sotto!.agents!.get()
+      const opened = await window.sotto!.terminals!.open({ projectId: state.host.projects[0]!.id, title: 'Closed shelf check', workingCopy: 'shared',
+        launch: { provider: null, modelId: null, reasoning: null, permission: null } })
+      if (!opened.ok) throw new Error(opened.error.message)
+      return opened.value.terminal.id
+    })
+    const read = () => page.evaluate(async id => {
+      const result = await window.sotto!.terminals!.read({ id })
+      if (!result.ok) throw new Error(result.error.message)
+      return result.value
+    }, id)
+    await expect.poll(async () => (await read()).terminal.status).toBe('running')
+    await page.getByRole('button', { name: 'Closed shelf check', exact: true }).click()
+    const before = await read()
+    expect(before.output).toContain('Opened by Sotto')
+    await page.getByRole('button', { name: 'Close Closed shelf check', exact: true }).click()
+    await expect.poll(async () => (await read()).output).toBe('')
+    await page.getByRole('button', { name: 'Closed 1 terminal', exact: true }).click()
+    const shelf = page.getByRole('region', { name: 'Closed', exact: true })
+    await expect(shelf.getByRole('button', { name: 'Closed shelf check', exact: true })).toBeDisabled()
+    for (const [width, height] of [[1600, 1000], [1280, 800], [820, 560]] as const) {
+      await resizeWindow(launched, width, height)
+      for (const appearance of ['dark', 'light'] as const) {
+        await page.evaluate(async appearance => window.sotto!.updateSettings({ appearance }), appearance)
+        await expect(shelf.getByRole('button', { name: 'Reopen Closed shelf check', exact: true })).toBeInViewport()
+        await page.screenshot({ path: `artifacts/review-384/closed-${width}-${appearance}.png`, animations: 'disabled' })
+      }
+    }
+    await shelf.getByRole('button', { name: 'Reopen Closed shelf check', exact: true }).click()
+    await expect.poll(async () => (await read()).terminal.status).toBe('running')
+    const reopened = await read()
+    expect(reopened.terminal).toMatchObject({ id, title: before.terminal.title, workingDirectory: before.terminal.workingDirectory, command: before.terminal.command, closedAt: null })
+    expect(reopened.output).toContain('Opened by Sotto')
+    await expect(shelf.getByRole('button', { name: 'Closed shelf check', exact: true })).toHaveCount(0)
+    await page.screenshot({ path: 'artifacts/review-384/reopened.png', animations: 'disabled' })
+  } finally { await closeSotto(launched) }
+})
