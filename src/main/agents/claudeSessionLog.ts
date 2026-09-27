@@ -22,6 +22,19 @@ export function authoredClaudeUser(frame: ClaudeFrame): boolean {
 }
 
 /**
+ * A prompt Claude Code gives itself and then answers: a finished background task, a message from another session,
+ * a continuation after a usage limit. Each is filed with its origin, and a finished task may come as its envelope
+ * alone. Only these are known to be answered, so an origin not named here, or a message filed without asking
+ * for a reply, starts nothing.
+ */
+export function selfStartedClaudeTurn(frame: ClaudeFrame): boolean {
+  if (frame.type !== 'user' || frame.isSidechain === true || frame.parent_tool_use_id || frame.shouldQuery === false) return false
+  const origin = object(frame.origin)?.kind
+  if (origin !== undefined) return ['task-notification', 'peer', 'auto-continuation'].includes(String(origin))
+  return /^<task-notification>/u.test(claudeText(object(frame.message)?.content))
+}
+
+/**
  * Where a transcript had been read to when the reader last stopped, with the identity of the file it
  * was read from. `offset` sits on a line boundary, so resuming from it never splits an entry.
  */

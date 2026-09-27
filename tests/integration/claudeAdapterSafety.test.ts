@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { claudeFixture } from '../fixtures/claudeFixture'
 import { claudeAnswer, claudePending } from '../../src/main/agents/claudeRequests'
-import { authoredClaudeUser } from '../../src/main/agents/claudeSessionLog'
+import { authoredClaudeUser, selfStartedClaudeTurn } from '../../src/main/agents/claudeSessionLog'
 import { SottoThreadHost, ThreadRegistry } from '../../src/main/agents/threads'
 import { AtomicJsonStore } from '../../src/main/storage/atomicJsonStore'
 import { AgentControl } from '../../src/main/agents/control'
@@ -34,6 +34,14 @@ describe('Claude native request mapping', () => {
       // A finished background task is Claude Code's own turn, whether or not the frame carries its origin.
       { ...user, origin: { kind: 'task-notification' } }, { ...user, message: { content: '<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n</task-notification>' } }]) expect(authoredClaudeUser(frame)).toBe(false)
     expect(authoredClaudeUser(user)).toBe(true)
+  })
+  it('knows a prompt Claude Code gives itself and answers from anything else a user entry carries', () => {
+    const user = { type: 'user', message: { content: 'Hello' } }
+    for (const kind of ['task-notification', 'peer', 'auto-continuation']) expect(selfStartedClaudeTurn({ ...user, origin: { kind } })).toBe(true)
+    expect(selfStartedClaudeTurn({ ...user, message: { content: '<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n</task-notification>' } })).toBe(true)
+    for (const frame of [user, ...['user', 'human', 'channel', 'coordinator', 'unclassified', 'observer'].map(kind => ({ ...user, origin: { kind } })), { ...user, origin: { kind: 'peer' }, shouldQuery: false }, { ...user, message: { content: '<session-start-hook>Injected' } },
+      { ...user, message: { content: [{ type: 'tool_result', content: 'Hello' }] } }, { ...user, origin: { kind: 'task-notification' }, isSidechain: true },
+      { ...user, origin: { kind: 'task-notification' }, parent_tool_use_id: 'tool' }, { type: 'assistant', origin: { kind: 'peer' }, message: { content: 'Hello' } }]) expect(selfStartedClaudeTurn(frame)).toBe(false)
   })
 })
 
