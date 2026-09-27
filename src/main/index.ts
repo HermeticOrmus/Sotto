@@ -5,6 +5,11 @@ import { DesktopHostRouter } from './hosts/desktopHostRouter'
 import { DesktopHosts } from './hosts/desktopHosts'
 import { inactiveLocalHost, emptyDesktopState, requireLocalHistoryCleanup } from './hosts/inactiveLocalHost'
 import { registerHostsIpc } from './hosts/ipc'
+import { PhoneAccess, type PhoneAccessEvent } from './phones/phoneAccess'
+import { TailscaleCli } from './phones/tailscale'
+import { registerPhonesIpc } from './phones/ipc'
+import { e2eTailscale } from './e2e/tailscale'
+import { PHONES_CHANGED } from '../shared/phones'
 import { discoverSshHosts } from './hosts/sshSuggestions'
 import { DevinAcpHost } from './agents/devin'
 import { PersonalChatService } from './agents/personalChats'
@@ -226,6 +231,7 @@ type NativeDiagnostic =
   | 'thread-auto-settled'
   | 'thread-auto-settle-skipped'
   | ClaudeSettingsEvent
+  | PhoneAccessEvent
 
 function logOperational(code: NativeDiagnostic): void {
   console.error(`[Sotto] ${code}`)
@@ -652,6 +658,16 @@ async function createRuntime(): Promise<NativeRuntimeController> {
     restart: () => { app.relaunch(); app.quit() },
   })
   await desktopHosts.start()
+  // Phone access serves the local host's own threads to paired phones over the tailnet (ADR-0033). Its
+  // Tailscale checks can take seconds, so they run beside startup rather than in front of the window.
+  const phoneAccess = new PhoneAccess({ directory: userDataPath,
+    service: startupSettings.localHostEnabled ? hostService : undefined,
+    tailscale: e2eConfiguration === null ? new TailscaleCli() : e2eTailscale(userDataPath),
+    settings: () => workingCopySettings, policy: authority,
+    openExternal: async url => { if (e2eConfiguration === null) await shell.openExternal(url) },
+    log: logOperational,
+  })
+  void phoneAccess.start().catch(() => logOperational('phone-access-start-failed'))
   const testPersonalChatHosts = e2eConfiguration ? {
     codex: new E2EPersonalChatHost(userDataPath), claude: new E2EPersonalChatHost(userDataPath, 'claude'), grok: new E2EPersonalChatHost(userDataPath, 'grok'),
   } : undefined
@@ -717,6 +733,8 @@ async function createRuntime(): Promise<NativeRuntimeController> {
     unsubscribePersonalChats(); unsubscribeAgents(); unsubscribeAgentDetail()
     agentStatePublisher.dispose(); agentDetailPublisher.dispose()
     // Closing the local runtime drains a worktree cleanup sweep in progress before its host closes (ADR-0019).
+    // Phones go first: the listener closes and Sotto's Serve setting is removed before the host it serves closes.
+    await phoneAccess.close().catch(() => logOperational('phone-access-close-failed'))
     const results = await Promise.allSettled([desktopHosts.close(), localRuntime.close(), personalChats.close()])
     hostRouter.dispose()
     const failure = results.find(result => result.status === 'rejected')
@@ -915,6 +933,7 @@ async function createRuntime(): Promise<NativeRuntimeController> {
       const grantDefaultChanged = settings.browserWithoutAsking !== workingCopySettings.browserWithoutAsking
       workingCopySettings = settings
       worktreeCleanup?.settingsChanged()
+      phoneAccess.settingsChanged()
       if (grantDefaultChanged) browserService?.settingChanged()
       agentHistoryEnabled = settings.historyEnabled
       agentVoiceCoordinatorEnabled = settings.voiceCoordinatorEnabled
@@ -1076,6 +1095,7 @@ async function createRuntime(): Promise<NativeRuntimeController> {
       // An end-to-end run reads a stand-in SSH folder inside its own profile, never the machine's ~/.ssh.
       const cleanupHosts = registerHostsIpc(ipcMain, desktopHosts, () => windows.getTrustedRenderers(), state => windows.sendToMain(HOSTS_CHANGED, state),
         () => discoverSshHosts(e2eConfiguration ? { home: join(userDataPath, 'e2e-home') } : {}))
+      const cleanupPhones = registerPhonesIpc(ipcMain, phoneAccess, () => windows.getTrustedRenderers(), state => windows.sendToMain(PHONES_CHANGED, state))
       const cleanupAgents = registerAgentIpc(ipcMain, hostRouter, hostRouter, () => windows.getTrustedRenderers(), platform, e2eConfiguration === null ? naturalSpeechModels : {
         status: async () => ({ ready: true, completedBytes: 1, totalBytes: 1 }),
         download: async () => ({ ready: true, completedBytes: 1, totalBytes: 1 }),
@@ -1149,6 +1169,7 @@ async function createRuntime(): Promise<NativeRuntimeController> {
       const cleanupNativeIpc = (): void => {
         cleanupAgents()
         cleanupHosts()
+        cleanupPhones()
         cleanupPersonalChats()
         cleanupChatPrompts()
         checkpointIntegration.dispose()
