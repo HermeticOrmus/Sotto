@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from 'react'
+import { useMemo, useSyncExternalStore } from 'react'
 import type { AgentSkillReference } from '../../../shared/agentSkills'
 import type { AgentFileReference } from '../../../shared/agentFiles'
 import { MAX_DELIVERED_DRAFTS, agentAttachmentHandlesSchema, type AgentAttachmentHandle, type AgentCommand, type AgentDelivery, type AgentState } from '../../../shared/agents'
@@ -22,13 +22,38 @@ export interface ComposerDraft {
 export interface ScreenshotReads {
   /** Reads under way for the draft, whichever composer started them. The thread cannot send until they land. */
   readonly pending: number
-  /** Why screenshots that finished reading after their composer closed were not added, until the next read starts. */
+  /** Why screenshots that finished reading after their composer closed were not added, until the draft next changes. */
   readonly problem: string | null
 }
 const NO_SCREENSHOT_READS: ScreenshotReads = { pending: 0, problem: null }
-const lateScreenshotsLeftOut = (count: number): string => count === 1
-  ? 'A screenshot added before you moved to another thread did not fit in this draft and was not added. Remove an attachment and add it again.'
-  : `${count} screenshots added before you moved to another thread did not fit in this draft and were not added. Remove an attachment and add them again.`
+
+/**
+ * What a composer's screenshot input needs to know and say about reads that may outlive it. A thread's composer
+ * gets one from its draft store (`useScreenshotReadPort`); the coordinator's composer counts its own reads.
+ */
+export interface ScreenshotReadPort {
+  /** Screenshots an earlier composer started reading for this draft are still being read, so nothing more is added yet. */
+  readonly pending: boolean
+  /** What became of screenshots read after an earlier composer closed, shown until the draft next changes. */
+  readonly problem: string | null
+  /** Screenshots start being read. The function returned says they have been handed on, added or not. */
+  begin(): () => void
+  /**
+   * Screenshots that finished after this composer closed, as it does when the user moves to another thread while
+   * they are read, and why the rest were not, when one could not be read. Absent: they are dropped.
+   */
+  addLate?(images: readonly AgentAttachmentHandle[], failure: string | null): void
+}
+
+const counted = (count: number, one: string, many: string): string => count === 1 ? one : many.replace('#', String(count))
+/** Why late screenshots were left out: the draft no longer takes screenshots at all, or had no room for them. */
+function lateScreenshotsLeftOut(count: number, reason: 'answering' | 'unsupported' | 'full'): string {
+  const which = counted(count, 'A screenshot added before you moved to another thread', '# screenshots added before you moved to another thread')
+  const were = counted(count, 'was', 'were')
+  if (reason === 'answering') return `${which} ${were} not added, because this draft now answers a question.`
+  if (reason === 'unsupported') return `${which} ${were} not added, because this thread's model does not read screenshots.`
+  return `${which} did not fit in this draft and ${were} not added. Remove an attachment and add ${counted(count, 'it', 'them')} again.`
+}
 
 export interface ThreadComposerSnapshot {
   readonly draft: ComposerDraft
@@ -222,21 +247,30 @@ export class ThreadDraftStore {
 
   /**
    * Screenshots that finished reading after the composer they were added to closed, as it does when the user
-   * moves to another thread. As many as fit join the draft as it is now, and the thread's screenshot problem
-   * names the rest, so none is lost without a word.
+   * moves to another thread, and `failure` when one of them could not be read. As many as the draft takes, as it
+   * is now, join it; the thread's screenshot problem names the rest, so none is lost without a word. A draft
+   * that now answers a question, or a thread whose model does not read screenshots, takes none.
    */
-  addLateScreenshots(threadId: string, images: readonly AgentAttachmentHandle[]): void {
+  addLateScreenshots(threadId: string, images: readonly AgentAttachmentHandle[], { imagesSupported, failure = null }: { readonly imagesSupported: boolean; readonly failure?: string | null }): void {
     const before = this.draft(threadId).attachments
+    const refusal = this.draft(threadId).requestId !== null ? 'answering' : !imagesSupported ? 'unsupported' : null
     let attachments = before
     let leftOut = 0
     for (const image of images) {
-      const next = agentAttachmentHandlesSchema.safeParse([...attachments, image])
-      if (next.success) attachments = next.data
+      const next = refusal === null ? agentAttachmentHandlesSchema.safeParse([...attachments, image]) : null
+      if (next?.success) attachments = next.data
       else leftOut += 1
     }
     if (attachments !== before) this.revise(threadId, { attachments })
-    if (leftOut > 0) this.reads.set(threadId, { ...this.screenshotReads(threadId), problem: lateScreenshotsLeftOut(leftOut) })
+    const problems = [...(leftOut > 0 ? [lateScreenshotsLeftOut(leftOut, refusal ?? 'full')] : []), ...(failure ? [failure] : [])]
+    if (problems.length > 0) this.reads.set(threadId, { ...this.screenshotReads(threadId), problem: problems.join(' ') })
     this.emit(new Set([threadId]))
+  }
+
+  /** The screenshot problem has been seen through: the user changed the draft or sent it. */
+  private clearScreenshotProblem(threadId: string): void {
+    const reads = this.reads.get(threadId)
+    if (reads?.problem) this.setScreenshotReads(threadId, { ...reads, problem: null })
   }
 
   private setScreenshotReads(threadId: string, reads: ScreenshotReads): void {
@@ -314,6 +348,7 @@ export class ThreadDraftStore {
   /** A new revision of the thread's composer. */
   edit(threadId: string, patch: { readonly text?: string; readonly attachments?: readonly AgentAttachmentHandle[]; readonly skills?: readonly AgentSkillReference[]; readonly files?: readonly AgentFileReference[]; readonly requestId?: string | null }): void {
     this.revise(threadId, patch)
+    this.clearScreenshotProblem(threadId)
     this.emit(new Set([threadId]))
   }
 
@@ -445,6 +480,7 @@ export class ThreadDraftStore {
     }
     this.submissionList = [...this.submissionList.filter(item => key(item.threadId, item.draftId) !== key(threadId, draft.draftId)), submission].slice(-MAX_DELIVERED_DRAFTS)
     this.revise(threadId, { text: '', attachments: [], skills: [], files: [], requestId: null })
+    this.clearScreenshotProblem(threadId)
     this.emit(new Set([threadId]))
     return draft
   }
@@ -554,6 +590,20 @@ export function useThreadComposer(store: ThreadDraftStore, threadId: string): Th
 
 export function useScreenshotReads(store: ThreadDraftStore, threadId: string): ScreenshotReads {
   return useSyncExternalStore(store.subscribe, () => store.screenshotReads(threadId))
+}
+
+/**
+ * The thread's screenshot reads as its composer's screenshot input takes them. `imagesSupported` is whether the
+ * thread's model reads screenshots, which decides whether screenshots that land after the composer closed are added.
+ */
+export function useScreenshotReadPort(store: ThreadDraftStore, threadId: string, imagesSupported: boolean): ScreenshotReadPort {
+  const reads = useScreenshotReads(store, threadId)
+  return useMemo(() => ({
+    pending: reads.pending > 0,
+    problem: reads.problem,
+    begin: () => store.beginScreenshotRead(threadId),
+    addLate: (images, failure) => store.addLateScreenshots(threadId, images, { imagesSupported, failure }),
+  }), [store, threadId, imagesSupported, reads])
 }
 
 export function useSubmissions(store: ThreadDraftStore): readonly Submission[] {

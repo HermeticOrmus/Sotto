@@ -359,12 +359,12 @@ describe('browser feedback', () => {
     const drafts = new ThreadDraftStore(vi.fn(async () => null))
     drafts.edit('visual-gate', { text: 'Keep this thought' })
     const before = drafts.draft('visual-gate')
-    let finish: (value: { dataUrl: string }) => void = () => undefined
-    const prepare = vi.fn(() => new Promise<{ dataUrl: string }>(resolve => { finish = resolve }))
+    let finish: (value: { blob: Blob }) => void = () => undefined
+    const prepare = vi.fn(() => new Promise<{ blob: Blob }>(resolve => { finish = resolve }))
     const controller = new AbortController()
     const added = appendBrowserFeedback(drafts, 'visual-gate', capture, 'Too tight', true, { prepare, signal: controller.signal })
     controller.abort()
-    finish({ dataUrl: image })
+    finish({ blob: new Blob(['abc'], { type: 'image/png' }) })
     expect(await added).toBeNull()
     expect(drafts.draft('visual-gate')).toBe(before)
   })
@@ -392,19 +392,20 @@ describe('browser feedback', () => {
     }) } })
     const drafts = new ThreadDraftStore(vi.fn(async () => null))
     const dimensions = { original: { width: 5120, height: 2880 }, sent: { width: 2576, height: 1449 } }
-    let finish: (value: { dataUrl: string, dimensions: typeof dimensions }) => void = () => undefined
-    const prepare = vi.fn(() => new Promise<{ dataUrl: string, dimensions: typeof dimensions }>(resolve => { finish = resolve }))
+    let finish: (value: { blob: Blob, dimensions: typeof dimensions }) => void = () => undefined
+    const prepare = vi.fn<(image: Blob) => Promise<{ blob: Blob, dimensions: typeof dimensions }>>(() => new Promise(resolve => { finish = resolve }))
     const added = appendBrowserFeedback(drafts, 'visual-gate', { ...capture, width: 5120, height: 2880 }, 'Too tight', true, { prepare })
-    expect(prepare).toHaveBeenCalledWith(capture.image)
+    // The capture is decoded from its data URL once, and those bytes are what is prepared.
+    expect(new Uint8Array(await prepare.mock.calls[0]![0].arrayBuffer())).toEqual(new Uint8Array(Buffer.from('abc')))
     drafts.edit('visual-gate', { text: 'Typed while it was prepared' })
-    finish({ dataUrl: image, dimensions })
+    finish({ blob: new Blob(['scaled'], { type: 'image/png' }), dimensions })
     expect(await added).toBeNull()
     expect(drafts.draft('visual-gate').text).toMatch(/^Typed while it was prepared\n\nBrowser feedback:/)
     // The agent is told the size of the image it receives, not only the size captured.
     expect(drafts.draft('visual-gate').text).toContain('Screenshot size: 5120 x 2880, sent at 2576 x 1449')
     // The handle carries the sizes, and main was told them with the bytes it stages.
     expect(drafts.draft('visual-gate').attachments).toEqual([expect.objectContaining({ name: 'Browser feedback.png', dimensions })])
-    expect(staged).toEqual([expect.objectContaining({ dimensions })])
+    expect(staged).toEqual([expect.objectContaining({ dimensions, bytes: new Uint8Array(Buffer.from('scaled')) })])
     vi.unstubAllGlobals()
   })
 })

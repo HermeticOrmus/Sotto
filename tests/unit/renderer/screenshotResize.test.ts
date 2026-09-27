@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { fitLongEdge, prepareScreenshot, prepareScreenshotDataUrl, readImageHeader, SCREENSHOT_MAX_LONG_EDGE, wasResized, type ScreenshotDecoder } from '../../../src/renderer/src/agents/screenshotResize'
+import { dataUrlBlob, fitLongEdge, prepareScreenshot, readImageHeader, SCREENSHOT_MAX_DECODE_PIXELS, SCREENSHOT_MAX_LONG_EDGE, wasResized, type ScreenshotDecoder } from '../../../src/renderer/src/agents/screenshotResize'
 import type { AgentImageSize } from '../../../src/shared/agents'
 
 /** A decoder that reports `size` and writes a blob of `encodedBytes` bytes in whatever type it is asked for. */
@@ -163,6 +163,14 @@ describe('preparing a screenshot whose first bytes name its size', () => {
     expect(await prepareScreenshot(original, decode)).toEqual({ blob: original, dimensions: { original: { width: 3840, height: 2160 }, sent: { width: 3840, height: 2160 } } })
     expect(decode).not.toHaveBeenCalled()
   })
+  it('never decodes one whose pixels would not fit in a canvas, and hands it on as attached', async () => {
+    const decode = vi.fn(never)
+    // 20000 x 20000 is 400 million pixels, 1.6 GB decoded, and past the largest canvas Chromium draws.
+    const original = new File([png(20_000, 20_000)], 'huge.png', { type: 'image/png' })
+    expect(20_000 * 20_000).toBeGreaterThan(SCREENSHOT_MAX_DECODE_PIXELS)
+    expect(await prepareScreenshot(original, decode)).toEqual({ blob: original, dimensions: { original: { width: 20_000, height: 20_000 }, sent: { width: 20_000, height: 20_000 } } })
+    expect(decode).not.toHaveBeenCalled()
+  })
   it('decodes one past the bound and scales it down', async () => {
     const { decode, encode } = fakeDecoder({ width: 3840, height: 2160 })
     const prepared = await prepareScreenshot(new File([png(3840, 2160), new Uint8Array(1000)], 'big.png', { type: 'image/png' }), decode)
@@ -171,17 +179,17 @@ describe('preparing a screenshot whose first bytes name its size', () => {
   })
 })
 
-describe('preparing a screenshot held as a data URL', () => {
+describe('reading a screenshot held as a data URL', () => {
   const dataUrl = (data: Uint8Array, type = 'image/png') => `data:${type};base64,${btoa(String.fromCharCode(...data))}`
-  it('gives the same data URL back when nothing needs scaling', async () => {
-    const source = dataUrl(png(1280, 800))
-    expect(await prepareScreenshotDataUrl(source)).toEqual({ dataUrl: source, dimensions: { original: { width: 1280, height: 800 }, sent: { width: 1280, height: 800 } } })
-    expect(await prepareScreenshotDataUrl('not a data URL')).toEqual({ dataUrl: 'not a data URL' })
+  it('decodes its bytes once, for the header and for staging', async () => {
+    const data = png(1280, 800)
+    const blob = dataUrlBlob(dataUrl(data), 'image/png')!
+    expect(blob.type).toBe('image/png')
+    expect(new Uint8Array(await blob.arrayBuffer())).toEqual(data)
   })
-  it('scales a capture past the bound down to a data URL of its own type', async () => {
-    const { decode } = fakeDecoder({ width: 5120, height: 2880 })
-    const prepared = await prepareScreenshotDataUrl(dataUrl(bytes(png(5120, 2880), new Uint8Array(1000))), decode)
-    expect(prepared.dataUrl).toBe(`data:image/png;base64,${btoa(String.fromCharCode(...new Uint8Array(10)))}`)
-    expect(prepared.dimensions).toEqual({ original: { width: 5120, height: 2880 }, sent: { width: 2576, height: 1449 } })
+  it('refuses a data URL of another type, or one that is not base64', () => {
+    expect(dataUrlBlob(dataUrl(png(10, 10), 'image/jpeg'), 'image/png')).toBeNull()
+    expect(dataUrlBlob('not a data URL', 'image/png')).toBeNull()
+    expect(dataUrlBlob('data:image/png;base64,***', 'image/png')).toBeNull()
   })
 })

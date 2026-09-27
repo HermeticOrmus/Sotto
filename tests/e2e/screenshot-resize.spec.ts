@@ -21,7 +21,8 @@ test('a screenshot past the bound is scaled down in its own format, and its chip
     expect(large.mimeType).toBe('image/png')
     expect(large.dimensions).toEqual({ original: { width: 3840, height: 2160 }, sent: { width: 2576, height: 1449 } })
     expect(await decodedSize(page, large)).toEqual({ width: 2576, height: 1449 })
-    await expect(previews.getByText('Resized to 2576 x 1449', { exact: true })).toBeVisible()
+    // Both sizes are on the chip, where a keyboard user sees them as well as a pointer user.
+    await expect(previews.getByText('Resized from 3840 x 2160 to 2576 x 1449', { exact: true })).toBeVisible()
     await expect(previews.getByText('Resized from 3840 by 2160 to 2576 by 1449 pixels')).toBeAttached()
 
     await pasteDrawnScreenshot(prompt, { name: 'Small capture.png', type: 'image/png', width: 1200, height: 800, photo: 0.25 })
@@ -45,7 +46,7 @@ test('a screenshot past the bound is scaled down in its own format, and its chip
     expect(await decodedSize(page, flat)).toEqual({ width: 3840, height: 2160 })
 
     // Exactly the two scaled-down images carry the note.
-    await expect(previews.getByText(/^Resized to /u)).toHaveCount(2)
+    await expect(previews.getByText(/^Resized from \d+\sx\s/u)).toHaveCount(2)
 
     await page.emulateMedia({ reducedMotion: 'reduce' })
     for (const [width, height] of [[1600, 1000], [1280, 800], [820, 560]] as const) {
@@ -56,7 +57,7 @@ test('a screenshot past the bound is scaled down in its own format, and its chip
         await page.evaluate(async appearance => window.sotto!.updateSettings({ appearance }), appearance)
         await expect(page.locator('html')).toHaveAttribute('data-theme', appearance)
         await expect(page.getByRole('button', { name: 'Send prompt', exact: true })).toBeInViewport()
-        const note = previews.getByText(/^Resized to /u).first()
+        const note = previews.getByText(/^Resized from \d+\sx\s/u).first()
         await note.scrollIntoViewIfNeeded()
         await expect(note).toBeInViewport()
         // The note sits inside its chip: no wider than the chip and not clipped by it.

@@ -81,6 +81,8 @@ async function drawThumbnail(image: Blob): Promise<string | null> {
 
 /** A screenshot could not be staged and no sentence says why. */
 export const STAGING_FAILED = 'Could not add this screenshot. Nothing was attached. Try again.'
+/** A screenshot's bytes could not be read before staging, as when its file was removed or locked since it was chosen. */
+const READ_FAILED = 'Could not read this screenshot. Nothing was attached. Try adding it again.'
 /**
  * The sentence a failed staging shows. Electron prefixes whatever main threw with the channel it came through, which
  * is not the user's to read; a refusal with no sentence of its own (a sender or schema check) gets the plain one.
@@ -91,6 +93,15 @@ export function stagingError(error: unknown): string {
 }
 
 /**
+ * Why a staging failed, in main's own sentence, or null when it gave none of its own and only the plain failure
+ * (or something that is not a sentence for the user) is left.
+ */
+export function stagingReason(error: unknown): string | null {
+  const message = error instanceof Error ? error.message : ''
+  return message === STAGING_FAILED || message === READ_FAILED || !/^[A-Z].*\.$/u.test(message) ? null : message
+}
+
+/**
  * Hands an image's bytes to main once and answers with its handle (ADR-0031). `threadId` is the thread the draft
  * belongs to, which decides the host that keeps it; null is the coordinator's composer on the selected host. Anything
  * that changes the image before it is sent, such as a downscale, runs before this and hands over its result.
@@ -98,7 +109,8 @@ export function stagingError(error: unknown): string {
 export async function stageImage(threadId: string | null, image: { readonly name: string; readonly mimeType: string; readonly blob: Blob; readonly dimensions?: AgentAttachmentDimensions }): Promise<AgentAttachmentHandle> {
   const bridge = agents()
   if (!bridge?.stageAttachment) throw new Error('Screenshots cannot be attached in this window. Nothing was attached.')
-  const bytes = new Uint8Array(await image.blob.arrayBuffer())
+  // A file removed or locked since it was chosen cannot be read; the browser's own words for that are not the user's.
+  const bytes = new Uint8Array(await image.blob.arrayBuffer().catch((error: unknown) => { throw new Error(READ_FAILED, { cause: error }) }))
   let handle: AgentAttachmentHandle
   try {
     handle = await bridge.stageAttachment({ threadId, name: image.name, mimeType: image.mimeType as AgentAttachmentHandle['mimeType'], bytes,
