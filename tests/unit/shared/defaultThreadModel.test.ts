@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest'
-import { defaultAgentConfiguration, defaultThreadModelId, publicProviderEntityId, type AgentModel, type ProviderId, type SubscriptionAccount } from '../../../src/shared/agents'
+import { defaultAgentConfiguration, defaultNewThreadModelId, defaultThreadModelId, publicProviderEntityId, type AgentModel, type ProviderId, type SubscriptionAccount } from '../../../src/shared/agents'
 
 const model = (provider: ProviderId, id: string, ready = true): AgentModel =>
   ({ id: publicProviderEntityId(provider, 'model', id), provider, providerId: provider, name: id, ready })
@@ -50,5 +50,26 @@ describe('default model for a new thread', () => {
     expect(defaultThreadModelId(config, models)).toBe(models[1]!.id)
     expect(defaultThreadModelId(config, [model('codex', 'gpt-6-astra', false), models[0]!])).toBe(models[0]!.id)
     expect(defaultThreadModelId(config, [model('grok', 'grok-4.6', false)])).toBe('')
+  })
+})
+
+describe('default model for a new thread in a project (issue #347)', () => {
+  it('keeps the reasoning-based default when no new-thread model is chosen, today’s behaviour for an existing install', () => {
+    const config = configuration({ reasoning: 'claude', reasoningModel: 'opus[1m]' })
+    expect(config.newThreadModelId).toBe('')
+    expect(defaultNewThreadModelId(config, models)).toBe(defaultThreadModelId(config, models))
+  })
+
+  it('uses the chosen new-thread model over the reasoning-based default', () => {
+    const config = configuration({ reasoning: 'claude', reasoningModel: 'opus[1m]', newThreadModelId: models[0]!.id })
+    expect(defaultNewThreadModelId(config, models)).toBe(models[0]!.id)
+  })
+
+  it('keeps the chosen new-thread model even while the catalog does not list it, instead of switching providers', () => {
+    // The same as an unavailable reasoning model above: the caller resolves it against the catalog
+    // (`modelCatalog.ts`, e.g. a long-context variant answering from its base model's entry) and explains
+    // what needs to connect, rather than this silently switching to a different provider's default.
+    const config = configuration({ reasoning: 'claude', reasoningModel: 'opus[1m]', newThreadModelId: 'native:grok:model:retired' })
+    expect(defaultNewThreadModelId(config, models)).toBe('native:grok:model:retired')
   })
 })

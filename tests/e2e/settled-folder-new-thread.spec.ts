@@ -19,21 +19,22 @@ test('new work reopens only its folder while older threads remain settled', asyn
     await projects.getByRole('button', { name: 'Settle project Sotto test', exact: true }).click()
     await sidebar.getByRole('button', { name: /^Settled / }).click()
     await expect(settled.getByRole('button', { name: 'Workshop', exact: true })).toBeVisible()
+    // The chooser opens the thread at once, on defaults, once a project is chosen (issue #347): no name to
+    // type and no Create thread press.
     const create = sidebar.getByRole('button', { name: 'New thread', exact: true })
     await create.focus()
     await page.keyboard.press('Enter')
     const dialog = page.getByRole('dialog', { name: 'New thread', exact: true })
     await dialog.getByRole('button', { name: /^Sotto test/ }).click()
-    await dialog.getByRole('textbox', { name: 'Thread name' }).fill('New work')
-    await dialog.getByRole('button', { name: 'Create thread', exact: true }).click()
     await expect(dialog).toHaveCount(0)
+    await expect(page.getByRole('heading', { name: 'New thread', exact: true })).toBeVisible()
     const check = async () => {
       await expect(projects.getByRole('button', { name: 'Sotto test 1 thread', exact: true })).toBeVisible()
-      await expect(projects.getByRole('button', { name: 'New work', exact: true })).toBeVisible()
+      await expect(projects.getByRole('button', { name: 'New thread', exact: true })).toBeVisible()
       await expect(projects.getByRole('button', { name: 'Workshop', exact: true })).toHaveCount(0)
       await expect(settled.getByRole('button', { name: 'Workshop', exact: true })).toBeVisible()
       await expect(settled.getByRole('button', { name: 'Docs', exact: true })).toBeVisible()
-      await expect(settled.getByRole('button', { name: 'New work', exact: true })).toHaveCount(0)
+      await expect(settled.getByRole('button', { name: 'New thread', exact: true })).toHaveCount(0)
     }
     await check()
     for (const appearance of ['dark', 'light'] as const) {

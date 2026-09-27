@@ -7,6 +7,16 @@ import { _electron as electron, expect, type ElectronApplication, type Locator, 
 import { requireOwnedE2EProfile } from '../../../scripts/e2e-profile-policy.mjs'
 import type { E2EScenario } from '../../../src/shared/e2e'
 
+/**
+ * An entity ID without its host qualification. `clientScoped` mode prefixes every thread and project ID with
+ * `host:<hostId>:` once the desktop router takes over from the raw provider snapshot, a transition that can
+ * still be settling immediately after `connect`; a check keyed on the fixture's own bare IDs (`workshop`,
+ * `docs`) reads the same either way instead of racing that transition.
+ */
+export function bareEntityId(id: string | null): string | null {
+  return id?.replace(/^host:[0-9a-f-]+:/iu, '') ?? id
+}
+
 export interface LaunchedSotto {
   readonly app: ElectronApplication
   readonly page: Page

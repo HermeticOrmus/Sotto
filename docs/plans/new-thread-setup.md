@@ -2,6 +2,8 @@
 
 Zach chose prototype A (Direct choices) on September 20, 2026. The reference is `src/renderer/src/agents/new-thread.prototype.html` on the archived `prototype/new-thread-setup` branch; the production change preserves Sotto's Figtree, theme roles and quiet dialog.
 
+Superseded September 26, 2026 by `docs/plans/2026-09-26-new-thread-defaults.md` (issue #347): the dialog this plan built no longer collects thread options at all. A thread in a project opens at once on defaults kept in Settings → Agents, and the New thread dialog is only the project chooser described below.
+
 ## Acceptance
 
 - One Working copy group: Project folder, New worktree, Existing worktree. Preserve saved overrides; reuse never creates a folder.

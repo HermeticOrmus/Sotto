@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Locator, type Page } from '@playwright/test'
 import { closeSotto, launchSotto, openPage, openThreads, userMessageTexts, type LaunchedSotto } from './support/sottoLaunch'
 
 const SHOTS = 'artifacts/new-thread-setup'
@@ -38,7 +38,8 @@ async function resize(launched: LaunchedSotto, width: number, height: number): P
   }, { width, height })
   await expect.poll(() => launched.page.evaluate(() => `${innerWidth}x${innerHeight}`)).toBe(`${width}x${height}`)
 }
-async function captureMatrix(launched: LaunchedSotto): Promise<void> {
+/** The chooser at each size, appearance and motion setting; there is no options form left to check (issue #347). */
+async function captureMatrix(launched: LaunchedSotto, dialog: Locator): Promise<void> {
   await mkdir(SHOTS, { recursive: true })
   for (const [width, height] of [[1600, 1000], [1280, 800], [820, 560]] as const) {
     await resize(launched, width, height)
@@ -48,8 +49,8 @@ async function captureMatrix(launched: LaunchedSotto): Promise<void> {
       for (const reducedMotion of ['no-preference', 'reduce'] as const) {
         await launched.page.emulateMedia({ reducedMotion })
         await expect.poll(() => launched.page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
-        await expect(launched.page.getByRole('button', { name: 'Create thread', exact: true })).toBeInViewport()
-        await expect(launched.page.locator('.new-thread-dialog summary')).toBeInViewport()
+        await expect(dialog.getByRole('searchbox', { name: 'Search projects' })).toBeInViewport()
+        await expect(dialog.getByRole('button', { name: 'Local folder', exact: false })).toBeInViewport()
         await launched.page.screenshot({ path: `${SHOTS}/new-worktree-${width}x${height}-${appearance}-${reducedMotion}.png`, animations: 'disabled' })
       }
     }
@@ -58,7 +59,12 @@ async function captureMatrix(launched: LaunchedSotto): Promise<void> {
   await launched.page.evaluate(async () => window.sotto!.updateSettings({ appearance: 'dark' }))
   await resize(launched, 1280, 800)
 }
-async function openCreation(page: Page, project: string, title: string): Promise<void> {
+/**
+ * The chooser opens a thread at once, on defaults, once a project is chosen (issue #347): there is no name
+ * field to set at creation, so this renames the freshly opened "New thread" the way the old dialog's own
+ * naming field once did, and every caller keeps working with a distinctly titled thread.
+ */
+async function createInstant(page: Page, project: string, title: string): Promise<void> {
   await page.getByRole('button', { name: 'New thread', exact: true }).first().focus()
   await page.keyboard.press('Enter')
   const dialog = page.getByRole('dialog', { name: 'New thread', exact: true })
@@ -66,11 +72,15 @@ async function openCreation(page: Page, project: string, title: string): Promise
   await page.keyboard.type(project)
   await page.keyboard.press('ArrowDown')
   await page.keyboard.press('Enter')
-  await expect(dialog.locator('summary')).toBeFocused()
-  await dialog.locator('summary').click()
-  await dialog.getByRole('textbox', { name: 'Thread name' }).fill(title)
-  await dialog.locator('summary').click()
-  await expect(dialog.getByText('Starts in the project folder. Change it under the composer.')).toBeVisible()
+  await expect(dialog).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: 'New thread', exact: true })).toBeVisible()
+  const projects = page.getByRole('region', { name: 'Projects' })
+  await projects.getByRole('button', { name: 'New thread', exact: true }).hover()
+  await projects.getByRole('button', { name: 'Rename New thread', exact: true }).click()
+  await page.getByLabel('Rename New thread').fill(title)
+  await page.keyboard.press('Enter')
+  await expect(page.getByRole('heading', { name: title, exact: true })).toBeVisible()
+  await expect.poll(async () => (await activeThread(page))?.title).toBe(title)
 }
 /** The composer's branch toolbar for the active pane, T3's row under the prompt (ADR-0027). */
 const toolbar = (page: Page) => page.getByRole('group', { name: 'Branch toolbar', exact: true })
@@ -87,13 +97,7 @@ async function openPicker(page: Page): Promise<void> {
   await expect(page.locator('[role="listbox"][aria-label="Refs"] [role="option"], .branch-toolbar__empty').first()).toBeVisible()
 }
 async function createByKeyboard(page: Page, project: string, title: string, independent = false, repository = true): Promise<void> {
-  await openCreation(page, project, title)
-  const dialog = page.getByRole('dialog', { name: 'New thread', exact: true })
-  await dialog.getByRole('button', { name: 'Create thread', exact: true }).focus()
-  await page.keyboard.press('Enter')
-  await expect(dialog).toHaveCount(0)
-  await expect(page.getByRole('heading', { name: title, exact: true })).toBeVisible()
-  await expect.poll(async () => (await activeThread(page))?.title).toBe(title)
+  await createInstant(page, project, title)
   // The toolbar appears once the host has read the folder; a draft on the shared checkout starts as Current checkout.
   // A folder without Git has no toolbar to show.
   if (repository) await expect(toolbar(page).getByRole('combobox', { name: 'Choose workspace', exact: true })).toHaveText(/Current checkout/)
@@ -196,20 +200,14 @@ test('shared checkout is the default; independent worktrees are lazy, editable a
     expect(git(repo, 'branch', '--format=%(refname)')).toBe(`refs/heads/feat/from-picker
 ${initialBranches}`) // only the picker's own branch was added
 
-    await openCreation(page, 'repo-app', 'Abandoned worktree')
-    await page.screenshot({ path: `${SHOTS}/shared-default-dialog.png`, animations: 'disabled' })
-    const dialog = page.getByRole('dialog', { name: 'New thread', exact: true })
-    await captureMatrix(launched)
-    await resize(launched, 820, 560)
-    // Keyboard creation continues at Thread options at the minimum size; Escape folds it and then closes the dialog.
-    await dialog.locator('summary').focus()
+    // Opening the chooser and abandoning it (Escape, with no project chosen) creates nothing: no thread, no worktree.
+    await page.getByRole('button', { name: 'New thread', exact: true }).first().focus()
     await page.keyboard.press('Enter')
-    await page.keyboard.press('Tab')
-    await expect(dialog.getByRole('textbox', { name: 'Thread name' })).toBeFocused()
-    await page.keyboard.press('Escape')
-    await expect(dialog.locator('summary')).toBeFocused()
-    await expect(dialog.locator('details')).not.toHaveAttribute('open')
-    await dialog.getByRole('button', { name: 'Create thread', exact: true }).focus()
+    const dialog = page.getByRole('dialog', { name: 'New thread', exact: true })
+    await expect(dialog.getByRole('searchbox', { name: 'Search projects' })).toBeFocused()
+    await page.screenshot({ path: `${SHOTS}/shared-default-dialog.png`, animations: 'disabled' })
+    await captureMatrix(launched, dialog)
+    await resize(launched, 820, 560)
     await page.screenshot({ path: `${SHOTS}/new-worktree-820x560-bottom.png`, animations: 'disabled' })
     await page.keyboard.press('Escape')
     await expect(dialog).toHaveCount(0)

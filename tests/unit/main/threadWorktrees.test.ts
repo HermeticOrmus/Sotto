@@ -3,7 +3,7 @@ import { lstat, mkdir, mkdtemp, readFile, rm, symlink, unlink, writeFile } from 
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { runWorktreeGit as git, ThreadWorktrees } from '../../../src/main/agents/threadWorktrees'
+import { existingWorkingDirectory, runWorktreeGit as git, ThreadWorktrees } from '../../../src/main/agents/threadWorktrees'
 import { resolveThreadWorkingDirectory } from '../../../src/shared/threadWorkingDirectory'
 
 const roots: string[] = []
@@ -316,5 +316,12 @@ describe('independent working-copy allocation', () => {
     expect(resolveThreadWorkingDirectory({ workingDirectory: '/actual' }, { path: '/project' })).toBe('/actual')
     expect(resolveThreadWorkingDirectory({}, { path: '/legacy' })).toBe('/legacy')
     expect(() => resolveThreadWorkingDirectory({ worktree: { mode: 'independent', status: 'error', error: 'setup failed' } }, { path: '/project' })).toThrow('setup failed')
+  })
+})
+
+describe('a working folder that is gone', () => {
+  it('says so in plain words, not as the file system error code', async () => {
+    const missing = join(tmpdir(), `sotto-missing-${Date.now()}`)
+    await expect(existingWorkingDirectory(missing)).rejects.toThrow(`The folder ${missing} is not there any more. Move it back, or add the project again from where it is now.`)
   })
 })
