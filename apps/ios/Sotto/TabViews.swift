@@ -13,7 +13,9 @@ struct NeedsYouView: View {
                 ComputerStrip()
                 FeedbackBanner()
                 ForEach(unreachable, id: \.hostID) { computer in UnreachableNote(computer: computer) }
-                if waiting.isEmpty { NothingWaiting(place: place) }
+                if waiting.isEmpty {
+                    if let checking { Checking(place: checking) } else { NothingWaiting(place: place) }
+                }
                 ForEach(waiting) { item in RequestCard(item: item) }
                 if !working.isEmpty {
                     SectionLabel("Working")
@@ -34,6 +36,24 @@ struct NeedsYouView: View {
     private var place: String {
         if case .only(let hostID) = model.show { return model.name(hostID) }
         return model.computers.count == 1 ? model.name(model.computers[0].hostID) : "your computers"
+    }
+    /// The computers the strip admits that are still connecting: "Nothing needs you" would be a guess.
+    private var checking: String? {
+        let names = lists.filter { model.show.admits($0.hostID) && $0.status == .connecting }.map(\.name)
+        if names.isEmpty { return nil }
+        return names.count == 1 ? names[0] : "your computers"
+    }
+}
+
+private struct Checking: View {
+    let place: String
+    var body: some View {
+        HStack(spacing: 10) {
+            ProgressView().controlSize(.small)
+            Text("Checking \(place)…").foregroundStyle(Palette.muted)
+        }
+        .frame(maxWidth: .infinity).padding(.vertical, 26)
+        .accessibilityElement(children: .combine)
     }
 }
 
