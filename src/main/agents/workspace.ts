@@ -1552,7 +1552,10 @@ export class WorkspaceHost implements AgentHost {
    * asked to leave them out instead of copying every held thread's history only for it to be dropped (#368). A
    * host that publishes none is read whole, whatever the caller here asked of the workspace's own result.
    */
+  private hostRead<T extends { historyFromEvents?: boolean }>(purpose: T): T
+  private hostRead<T extends { historyFromEvents?: boolean }>(purpose: T | undefined): T | undefined
   private hostRead<T extends { historyFromEvents?: boolean }>(purpose: T | undefined): T | undefined {
+    // A read with no purpose becomes `{ historyFromEvents: true }`, which is a purpose of its own.
     if (this.eventSourced) return { ...purpose, historyFromEvents: true } as T
     return purpose?.historyFromEvents ? { ...purpose, historyFromEvents: false } : purpose
   }
@@ -1910,8 +1913,9 @@ export class WorkspaceHost implements AgentHost {
       await this.recordSentBranch(thread.id)
     }
     if (command.type === 'send') await this.checkpointHooks?.beforeTurn(thread.id)
-    const result = await this.inner.execute(command.type === 'send' && preparedSkills ? { ...command, skills: preparedSkills }
-      : command.type === 'configure-thread' ? this.hostRead(command) ?? command : command)
+    const dispatched = command.type === 'send' && preparedSkills ? { ...command, skills: preparedSkills }
+      : command.type === 'configure-thread' ? this.hostRead(command) : command
+    const result = await this.inner.execute(dispatched)
     if (command.type === 'send' && firstSend && result.accepted) this.nameBranch(thread.id, command.text)
     if (command.type === 'configure-thread') {
       const [confirmed, snapshot] = confirmedSettingsSnapshot(result)

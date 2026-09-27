@@ -549,6 +549,8 @@ export class GrokAcpHost implements AgentHost {
     const rpc = this.rpc
     /** A settings change Grok confirmed, or one that had nothing to change: its snapshot carries the effective settings. */
     let settled = false
+    /** Whether that snapshot may leave every thread's messages out, because its caller keeps history from events (#368). */
+    const historyFromEvents = command.type === 'configure-thread' && command.historyFromEvents === true
     try {
       if (command.type === 'create-project') {
         if (!isAbsolute(command.path)) throw new Error('Grok projects require an absolute working directory.')
@@ -677,7 +679,7 @@ export class GrokAcpHost implements AgentHost {
       }
       this.emit()
       // What was emitted is the reconciliation of a confirmed settings change.
-      return settled ? { accepted: true, snapshot: this.current(command.type === 'configure-thread' && command.historyFromEvents) } : { accepted: true }
+      return settled ? { accepted: true, snapshot: this.current(historyFromEvents) } : { accepted: true }
     } catch (error) { if (error instanceof GrokUncertain) return { accepted: false, uncertain: true }; throw error }
   }
   private async frame(frame: GrokFrame): Promise<void> {
