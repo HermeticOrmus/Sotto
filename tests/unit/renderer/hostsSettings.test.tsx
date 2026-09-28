@@ -366,6 +366,22 @@ it('says to finish signing in when Tailscale opens its page, and fills in once i
   } finally { vi.useRealTimers() }
 })
 
+it('reads the devices again when Tailscale stops while Add host is open, so the list and the prompt agree', async () => {
+  const user = userEvent.setup()
+  const running = fixture([])
+  settings(running.bridge)
+  const { dialog } = await openAddHost(user)
+  expect(within(dialog).getAllByRole('option')).toHaveLength(DEVICES.length + 1)
+  // Disconnect from the tray, then back to the window.
+  running.setTailscale({ state: 'off' })
+  act(() => { window.dispatchEvent(new Event('focus')) })
+  await waitFor(() => expect(within(dialog).getByText(/Tailscale is off on this computer\./)).toBeTruthy())
+  await waitFor(() => expect(within(dialog).getAllByRole('option').map(option => option.querySelector('b')?.textContent)).toEqual(['forge', 'spark', 'buildbox.example.net', 'Another SSH host…']))
+  expect(running.devices).toHaveBeenCalledTimes(2)
+  expect(within(dialog).getByText('Connect to Tailscale to see the machines on your tailnet here.')).toBeTruthy()
+  expect(within(dialog).queryByText(/Don't see your machine\?/)).toBeNull()
+})
+
 it('says in words when Tailscale does not connect, and offers Get Tailscale when it is not installed', async () => {
   const user = userEvent.setup()
   const failing = fixture([], undefined, { tailscale: { state: 'off' }, connect: async () => 'failed' })
