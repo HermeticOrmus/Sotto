@@ -405,11 +405,8 @@ export class AgentControl {
   useSottoRequests(requests: SottoThreadRequests): void {
     this.unsubscribeSottoRequests?.()
     this.sottoRequests = requests
-    this.unsubscribeSottoRequests = requests.subscribe(() => {
-      if (this.disposed) return
-      this.state.host = this.withSottoRequests(this.state.host)
-      this.publish()
-    })
+    // A change is taken like a new snapshot, so the request reaches the attention queue as a provider's does.
+    this.unsubscribeSottoRequests = requests.subscribe(() => this.acceptSnapshot(this.state.host))
   }
   private withSottoRequests(snapshot: AgentHostSnapshot): AgentHostSnapshot {
     return this.sottoRequests ? withSottoRequests(snapshot, this.sottoRequests.requests()) : snapshot
@@ -2633,10 +2630,13 @@ export class AgentControl {
     if (provider && snapshot.providers?.find(status => status.id === provider)?.connection !== 'connected') return true
     return isLiveAttention(item, snapshot.threads)
   }
-  private acceptSnapshot(snapshot: AgentHostSnapshot): void {
+  private acceptSnapshot(incoming: AgentHostSnapshot): void {
     if (this.disposed) return
     const connecting = this.state.connection === 'connecting'
-    this.state.host = this.withSottoRequests(snapshot)
+    // Sotto's own requests join the provider's before anything below reads the threads, so the attention queue
+    // takes and keeps them the same way (ADR-0035).
+    const snapshot = this.withSottoRequests(incoming)
+    this.state.host = snapshot
     this.scheduleProviderReconnects()
     if (this.state.activeProjectId) this.state.activeProjectId = this.dependencies.host.resolveProjectId?.(this.state.activeProjectId) ?? this.state.activeProjectId
     if (this.state.configuration.defaultModelId) this.state.configuration.defaultModelId = this.dependencies.host.resolveModelId?.(this.state.configuration.defaultModelId) ?? this.state.configuration.defaultModelId
