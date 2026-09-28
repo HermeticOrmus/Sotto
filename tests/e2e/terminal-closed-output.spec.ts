@@ -1,4 +1,4 @@
-import { mkdir } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { expect, test } from '@playwright/test'
 import { closeSotto, launchSotto, openThreads, resizeWindow } from './support/sottoLaunch'
 
@@ -45,7 +45,21 @@ test('Closed keeps a native terminal row and reopens it with fresh output', asyn
         await page.screenshot({ path: `artifacts/review-384/closed-${width}-${appearance}.png`, animations: 'disabled' })
       }
     }
-    await shelf.getByRole('button', { name: 'Reopen Closed shelf check', exact: true }).click()
+    const reopen = shelf.getByRole('button', { name: 'Reopen Closed shelf check', exact: true })
+    await shelf.locator('.thread-nav__row').hover()
+    await expect(reopen).toBeVisible()
+    const hit = await reopen.evaluate(element => {
+      const bounds = element.getBoundingClientRect()
+      return { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height,
+        receivesPointer: element.contains(document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2)),
+        opacity: getComputedStyle(element.parentElement!).opacity }
+    })
+    await writeFile('artifacts/review-384/reopen-hit.json', JSON.stringify(hit, null, 2) + '\n')
+    expect(hit.receivesPointer).toBe(true)
+    expect(hit.opacity).toBe('1')
+    await reopen.focus()
+    await expect(reopen).toBeFocused()
+    await reopen.click()
     await expect.poll(async () => (await read()).terminal.status).toBe('running')
     const reopened = await read()
     expect(reopened.terminal).toMatchObject({ id, title: before.terminal.title, workingDirectory: before.terminal.workingDirectory, command: before.terminal.command, closedAt: null })
