@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | Install dependencies | `npm ci` | Exact `package-lock.json` install, including the native modules (node-pty, sharp, sherpa-onnx). The npm cache is keyed on the lockfile by `actions/setup-node`. |
 | Prepare runtime assets | `npm run runtime:prepare` | Copies the hash-locked ONNX WASM files out of `node_modules/onnxruntime-web` into `resources/runtime`, which the checkout does not carry. No network access, about a second. |
-| Typecheck | `npm run typecheck` | `tsc --noEmit` over the node and web projects. |
+| Typecheck | `npm run typecheck` | `tsc --noEmit` over the node, web and renderer-test projects. |
 | Lint | `npm run lint` | `eslint .`. |
 | Unit and integration tests | `npm test -- --maxWorkers=2` | `vitest run` — the whole suite except the Playwright end-to-end specs, which the vitest config excludes. The worker cap keeps the jsdom and child-process heavy files inside a small runner's memory; unpinned parallelism has produced "Worker exited unexpectedly" crashes on a loaded machine. Main-process and integration files run under node rather than jsdom, declared by a `@vitest-environment node` header on each file; a file in those folders that needs a DOM says `jsdom` instead. |
 | Third-party notices | `npm run notices:verify` | Checks `THIRD_PARTY_NOTICES.md` against the installed dependency tree. |
@@ -16,6 +16,14 @@
 Each gate is its own named step, so a red check names the gate that failed.
 
 `tests/integration/nativeTargetRefresh.test.ts` holds one unrelated thread's actual native history refresh open while another thread receives its prompt acknowledgement and exact persisted receipt. The barrier stays held through both assertions for Codex, Claude and Grok; the normal test deadline bounds failures, with no wall-clock performance budget. A diagnostic that makes the target wait for the held refresh must fail the acknowledgement assertion before cleanup releases the history read.
+
+`tsconfig.tests.json` checks every `tests/**/*.tsx` file, including renderer tests,
+benchmarks and fixture views, with the web project's JSX and DOM assumptions plus
+Node, Vitest and Testing Library types. Vitest executes these files but does not
+replace this semantic check. The node and web projects keep their existing source
+boundaries. Test fixtures must satisfy the current bridge and component contracts;
+an ignored query option or an incomplete mock is an error in the normal typecheck
+gate, even if the test happens to run.
 
 The job cancels a superseded run on the same ref (`concurrency` with `cancel-in-progress`), has a 30-minute safety timeout, and requests only `contents: read`.
 
@@ -285,3 +293,7 @@ The workflow has no path filters, so changes under `apps/ios` and the host proto
 ## Current-session reaper observations
 
 The Claude fixture's stopped check reads its current child ownership marker and probes that PID. Grok records residency after an accepted load or close; a historical or rejected close is not evidence that its current session stopped. `sessionFixtureObservation.test.ts` covers a real resumed Claude child and a Grok close/reload, including a rejected close. The host contracts keep their existing deadlines and assert actual session ownership rather than elapsed time.
+
+## Grok idle history maintenance
+
+`grokIdleMaintenance.test.ts` holds real fake-provider history reads against a controlled clock. Repeated empty polls must not renew idle age, and the first sweep after a read settles must use the existing age. Separate cases check actual durable-only provider events and foreground refreshes. `sessionReaper.test.ts` protects reads without blocking another eligible session and rechecks activity, watched state and working state after settlement. These are structural checks with no new deadlines or stopwatch assertions (#440).
