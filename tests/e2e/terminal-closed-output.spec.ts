@@ -65,6 +65,11 @@ test('Closed keeps a native terminal row and reopens it with fresh output', asyn
     expect(reopened.terminal).toMatchObject({ id, title: before.terminal.title, workingDirectory: before.terminal.workingDirectory, command: before.terminal.command, closedAt: null })
     expect(reopened.output).toContain('Opened by Sotto')
     await expect(shelf.getByRole('button', { name: 'Closed shelf check', exact: true })).toHaveCount(0)
+    const input = page.locator('.terminal-view .xterm-helper-textarea')
+    await input.pressSequentially("Write-Output ('SOTTO_' + 'REOPEN_READY')")
+    await input.press('Enter')
+    await expect.poll(async () => (await read()).output).toContain('SOTTO_REOPEN_READY')
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
     await page.screenshot({ path: 'artifacts/review-384/reopened.png', animations: 'disabled' })
   } finally { await closeSotto(launched) }
 })
