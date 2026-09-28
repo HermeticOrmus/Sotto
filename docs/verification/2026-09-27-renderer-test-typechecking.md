@@ -44,8 +44,10 @@ documented `npm run typecheck` command. The file was then removed.
 - Minimum-size queue captures were visually inspected in light and dark themes.
   Existing design baselines were restored. Selected evidence is
   `artifacts/review-392/queue-820-light.png` and `queue-820-dark.png`.
-- The full two-worker suite and independent review are pending. They must pass
-  before merge.
+- Independent native Astra Standards and Spec reviews of `26145ffa`: zero
+  findings. The post-review evidence commit changes only this note and captures.
+- The integrated renderer semantic check passes after the new Stop regression
+  from main. The full two-worker suite remains queued and must pass before merge.
 - Timing benchmarks use synthetic providers and owned temporary data. Shared-load
   measurements will be reported as such; this test-only change claims no app
   performance improvement.
