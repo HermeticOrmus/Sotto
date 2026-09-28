@@ -27,6 +27,22 @@ export async function existingWorkingDirectory(path: string): Promise<string> {
   return canonical
 }
 function pathKey(path: string): string { const key = resolve(path); return process.platform === 'win32' ? key.toLowerCase() : key }
+
+// A host has separate thread and terminal services. They still share Git's registry,
+// including when their projects start in different linked checkouts of one repository.
+const registryOperations = new Map<string, Promise<void>>()
+interface RegistryIdentity { readonly common: string; readonly key: string }
+interface InspectionReads { readonly root: string; readonly common?: string; readonly listing?: string }
+async function coordinateRegistry(identity: RegistryIdentity, run: () => Promise<string>): Promise<string> {
+  const previous = registryOperations.get(identity.key) ?? Promise.resolve()
+  const operation = previous.then(run)
+  // A rejected command keeps its original error but cannot poison the next operation.
+  const settled = operation.then(() => undefined, () => undefined)
+  registryOperations.set(identity.key, settled)
+  try { return await operation }
+  finally { if (registryOperations.get(identity.key) === settled) registryOperations.delete(identity.key) }
+}
+
 function registeredWorktrees(output: string): Array<{ path: string; branch: string | undefined; locked: boolean; prunable: boolean }> {
   return output.split('\0\0').filter(Boolean).map(record => {
     const fields = record.split('\0')
@@ -69,6 +85,19 @@ const DEPENDENCY_FOLDER = /(^|\/)node_modules\/$/u
 export class ThreadWorktrees {
   constructor(private readonly directory: string, private readonly git: RunGit = runWorktreeGit, private readonly home: WorktreeHome = THREAD_WORKTREE_HOME) {}
 
+  /** Identity belongs to this operation, never to a cached cwd or persisted worktree record. */
+  private async registryIdentity(cwd: string, verifyRef?: string): Promise<RegistryIdentity> {
+    const output = await this.git(cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir', ...(verifyRef ? ['--verify', verifyRef] : [])])
+    // Restore already verifies its saved ref. Git can return common-dir in that same
+    // invocation; only the final fixed-format object ID is removed from its output.
+    const common = (verifyRef ? output.replace(/\r?\n[a-f0-9]{40}(?:[a-f0-9]{24})?\r?\n?$/u, '') : output).trim()
+    return { common, key: pathKey(await realpath(common)) }
+  }
+
+  private async registry(cwd: string, args: string[], identity?: RegistryIdentity): Promise<string> {
+    return coordinateRegistry(identity ?? await this.registryIdentity(cwd), () => this.git(cwd, args))
+  }
+
   /**
    * Start from origin, T3's way (ADR-0014, amended September 24, 2026): fetch the base when origin has it, fall back
    * to the local branch when origin does not, and skip the fetch for a project with no origin at all. Only a fetch
@@ -103,11 +132,12 @@ export class ThreadWorktrees {
     }
     if (selection.existingWorktreePath) {
       const path = await existingWorkingDirectory(selection.existingWorktreePath)
-      const entries = registeredWorktrees(await this.git(repositoryRoot, ['worktree', 'list', '--porcelain', '-z']))
+      const identity = await this.registryIdentity(repositoryRoot)
+      const entries = registeredWorktrees(await this.registry(repositoryRoot, ['worktree', 'list', '--porcelain', '-z'], identity))
       const entry = entries.find(item => pathKey(item.path) === pathKey(path))
       if (!entry || entry.locked || entry.prunable) throw new Error('That folder is not an available worktree of this project. Refresh the worktree list and choose again.')
       const projectRelativePath = relative(await realpath(repositoryRoot), cwd).split(sep).join('/')
-      return this.inspect({ mode, status: 'ready', path, repositoryRoot: await realpath(repositoryRoot), projectRelativePath, reused: true })
+      return (await this.inspectWithin({ mode, status: 'ready', path, repositoryRoot: await realpath(repositoryRoot), projectRelativePath, reused: true }, identity)).worktree
     }
     const checkoutBranch = selection.checkoutBranch
     if (checkoutBranch) {
@@ -140,14 +170,15 @@ export class ThreadWorktrees {
 
   async options(projectPath: string): Promise<AgentWorkingCopyOptions> {
     const cwd = await existingWorkingDirectory(projectPath)
-    try { await this.git(cwd, ['rev-parse', '--show-toplevel']) }
+    let identity: RegistryIdentity
+    try { identity = await this.registryIdentity(cwd) }
     catch (error) {
       if (error instanceof Error && /not a git repository|Git is unavailable/u.test(error.message)) return { isGit: false, currentBranch: null, branches: [], worktrees: [] }
       throw error
     }
     const [branch, branches, entries] = await Promise.all([
       this.git(cwd, ['branch', '--show-current']), this.git(cwd, ['for-each-ref', '--format=%(refname:short)', 'refs/heads']),
-      this.git(cwd, ['worktree', 'list', '--porcelain', '-z']),
+      this.registry(cwd, ['worktree', 'list', '--porcelain', '-z'], identity),
     ])
     return { isGit: true, currentBranch: branch.trim() || null, branches: branches.split(/\r?\n/u).filter(Boolean),
       worktrees: registeredWorktrees(entries).filter(entry => !entry.locked && !entry.prunable).map(entry => ({ path: entry.path, branch: entry.branch?.replace(/^refs\/heads\//u, '') ?? null })) }
@@ -174,23 +205,29 @@ export class ThreadWorktrees {
     }
     let projectRoot: string | undefined
     try { projectRoot = await this.checkoutIdentity(projectPath) } catch { /* The established folder still defines its session. */ }
-    const entries = registeredWorktrees(await this.git(root, ['worktree', 'list', '--porcelain', '-z']))
+    // Equal checkout roots already establish the shared-folder result; no registry scan is needed.
+    if (pathKey(root) === projectRoot) return (await this.inspectWithin({ mode: 'shared', status: 'ready', path }, undefined, { root })).worktree
+    const identity = await this.registryIdentity(root)
+    const listing = await this.registry(root, ['worktree', 'list', '--porcelain', '-z'], identity)
+    const entries = registeredWorktrees(listing)
     const registered = entries.find(entry => pathKey(entry.path) === pathKey(root))
     if (pathKey(root) !== projectRoot && registered && pathKey(entries[0]?.path ?? root) !== pathKey(root)) {
-      return this.inspect({ mode: 'independent', status: 'ready', path: root, repositoryRoot: await existingWorkingDirectory(entries[0]!.path),
-        projectRelativePath: relative(root, path).split(sep).join('/'), reused: true })
+      // Carry this discovery's reads, not a cached binding. Inspection still obtains
+      // the main checkout's common directory independently before allowing status.
+      return (await this.inspectWithin({ mode: 'independent', status: 'ready', path: root, repositoryRoot: await existingWorkingDirectory(entries[0]!.path),
+        projectRelativePath: relative(root, path).split(sep).join('/'), reused: true }, undefined, { root, common: identity.common, listing })).worktree
     }
-    return this.inspect({ mode: 'shared', status: 'ready', path })
+    return (await this.inspectWithin({ mode: 'shared', status: 'ready', path }, undefined, { root })).worktree
   }
 
   async renameTemporaryBranch(metadata: AgentWorktree, name: string): Promise<AgentWorktree> {
     if (!metadata.temporaryBranch || metadata.reused || !metadata.branch) return metadata
-    const inspected = await this.inspect(metadata)
+    const { worktree: inspected, identity } = await this.inspectWithin(metadata)
     if (inspected.branch !== metadata.branch) return { ...inspected, temporaryBranch: false }
     const slug = name.replace(/^sotto\//u, '').toLowerCase().replace(/[^a-z0-9]+/gu, '-').replace(/^-|-$/gu, '').slice(0, 60).replace(/-$/u, '')
     if (!slug) return inspected
     const branch = `sotto/${slug}`
-    await this.git(inspected.path!, ['branch', '-m', metadata.branch, branch])
+    await this.registry(inspected.path!, ['branch', '-m', metadata.branch, branch], identity)
     return { ...inspected, branch, temporaryBranch: false }
   }
 
@@ -214,9 +251,10 @@ export class ThreadWorktrees {
     const allocationRoot = join(await realpath(this.directory), this.home.folder)
     if (pathKey(dirname(metadata.path)) !== pathKey(allocationRoot) || !/^[a-f0-9-]{36}$/u.test(basename(metadata.path))) throw new Error('The working-copy allocation is outside Sotto’s reserved folder.')
     await existingWorkingDirectory(repositoryRoot)
+    const identity = await this.registryIdentity(repositoryRoot)
     // A checkout Sotto already made and then lost is recreated from its recorded branch (ADR-0014).
     if (metadata.status !== 'pending') await this.restore(metadata)
-    const entries = registeredWorktrees(await this.git(repositoryRoot, ['worktree', 'list', '--porcelain', '-z']))
+    const entries = registeredWorktrees(await this.registry(repositoryRoot, ['worktree', 'list', '--porcelain', '-z'], identity))
     const registered = entries.find(entry => pathKey(entry.path) === pathKey(metadata.path!))
     if (registered) {
       if (registered.locked || registered.prunable) throw new Error('Git has locked this worktree or reports an incomplete checkout. Wait for setup to finish or restore the checkout, then retry.')
@@ -224,7 +262,7 @@ export class ThreadWorktrees {
       // A replaced symlink/junction is not the allocated checkout.
       if (pathKey(path) !== pathKey(metadata.path)) throw new Error('The reserved working folder was redirected. Nothing was changed.')
       // An existing checkout is reused on whatever branch it has (ADR-0014); inspect records it.
-      return this.inspect({ ...metadata, status: 'ready', error: undefined })
+      return (await this.inspectWithin({ ...metadata, status: 'ready', error: undefined }, identity)).worktree
     }
     if (!branch) throw new Error('The independent working-copy allocation is incomplete.')
     if (await lstat(metadata.path).then(() => true, (error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return false; throw error })) throw new Error('The reserved working folder already exists but is not this thread’s Git worktree. Nothing was changed.')
@@ -233,9 +271,9 @@ export class ThreadWorktrees {
     // exists already and is checked out as it stands, with no -b.
     await mkdir(allocationRoot, { recursive: true })
     if (pathKey(await realpath(allocationRoot)) !== pathKey(allocationRoot)) throw new Error('The reserved worktree parent folder was redirected. Nothing was changed.')
-    if (metadata.checkoutBranch) await this.git(repositoryRoot, ['worktree', 'add', '--', metadata.path, branch])
-    else await this.git(repositoryRoot, ['worktree', 'add', '-b', branch, '--', metadata.path, baseCommit])
-    return this.inspect({ ...metadata, status: 'ready', error: undefined })
+    if (metadata.checkoutBranch) await this.registry(repositoryRoot, ['worktree', 'add', '--', metadata.path, branch], identity)
+    else await this.registry(repositoryRoot, ['worktree', 'add', '-b', branch, '--', metadata.path, baseCommit], identity)
+    return (await this.inspectWithin({ ...metadata, status: 'ready', error: undefined }, identity)).worktree
   }
 
   /**
@@ -253,21 +291,22 @@ export class ThreadWorktrees {
     try { allocationRoot = join(await realpath(this.directory), this.home.folder); await existingWorkingDirectory(repositoryRoot) }
     catch { return metadata }
     if (pathKey(dirname(path)) !== pathKey(allocationRoot) || !/^[a-f0-9-]{36}$/u.test(basename(path))) return metadata
-    try { await this.git(repositoryRoot, ['rev-parse', '--verify', `refs/heads/${branch}`]) }
+    let identity: RegistryIdentity
+    try { identity = await this.registryIdentity(repositoryRoot, `refs/heads/${branch}`) }
     catch { return metadata }
     const refuseAnotherFolder = async () => {
-      const entries = registeredWorktrees(await this.git(repositoryRoot, ['worktree', 'list', '--porcelain', '-z']))
+      const entries = registeredWorktrees(await this.registry(repositoryRoot, ['worktree', 'list', '--porcelain', '-z'], identity))
       const occupant = entries.find(entry => entry.branch === `refs/heads/${branch}` && pathKey(entry.path) !== pathKey(path))
       if (occupant) throw new Error(`The branch ${branch} is checked out in ${occupant.path}, so this thread’s folder cannot be put back on it. Nothing was lost or changed. Close that folder’s checkout or move it to another branch, then retry.`)
     }
     await refuseAnotherFolder()
     // Prune drops only the registry entry for the folder that is gone; it never touches files or branches.
-    await this.git(repositoryRoot, ['worktree', 'prune'])
+    await this.registry(repositoryRoot, ['worktree', 'prune'], identity)
     await refuseAnotherFolder()
     await mkdir(allocationRoot, { recursive: true })
     if (pathKey(await realpath(allocationRoot)) !== pathKey(allocationRoot)) throw new Error('The reserved worktree parent folder was redirected. Nothing was changed.')
     // No -b and no -B: the recorded branch is checked out as it stands, with its commits.
-    try { await this.git(repositoryRoot, ['worktree', 'add', '--', path, branch]) }
+    try { await this.registry(repositoryRoot, ['worktree', 'add', '--', path, branch], identity) }
     catch (error) { throw new Error(`This thread’s working folder was missing and Sotto could not put it back on ${branch}. Nothing was lost; the branch still has its commits. ${error instanceof Error ? error.message : ''}`.trim(), { cause: error }) }
     return { ...metadata, status: 'ready', error: undefined, reclaimedAt: undefined }
   }
@@ -277,11 +316,15 @@ export class ThreadWorktrees {
    * ignored files other than installed dependencies, and any link that leads out of the folder.
    */
   async reclaimFacts(metadata: AgentWorktree): Promise<WorktreeReclaimFacts> {
-    const inspected = await this.inspect(metadata)
+    return (await this.reclaimFactsWithin(metadata)).facts
+  }
+
+  private async reclaimFactsWithin(metadata: AgentWorktree): Promise<{ facts: WorktreeReclaimFacts; identity?: RegistryIdentity }> {
+    const { worktree: inspected, identity } = await this.inspectWithin(metadata)
     const path = inspected.path!
     const listing = await this.git(path, ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z'])
     const ignored = listing.split('\0').filter(entry => entry && !DEPENDENCY_FOLDER.test(entry))
-    return { path, branch: inspected.branch, dirty: inspected.dirty === true, ignored, outsideLink: await this.outsideLink(path) }
+    return { ...(identity ? { identity } : {}), facts: { path, branch: inspected.branch, dirty: inspected.dirty === true, ignored, outsideLink: await this.outsideLink(path) } }
   }
 
   /**
@@ -295,7 +338,7 @@ export class ThreadWorktrees {
     if (metadata.mode !== 'independent' || metadata.reused) throw new Error('Only a worktree Sotto made for this thread can be removed. A shared or reused folder stays.')
     const allocationRoot = join(await realpath(this.directory), this.home.folder)
     if (!metadata.path || pathKey(dirname(metadata.path)) !== pathKey(allocationRoot) || !/^[a-f0-9-]{36}$/u.test(basename(metadata.path))) throw new Error('This folder is outside Sotto’s reserved worktree folder. Nothing was changed.')
-    const facts = await this.reclaimFacts(metadata)
+    const { facts, identity } = await this.reclaimFactsWithin(metadata)
     if (!facts.branch) throw new Error('This folder has no branch checked out, so Sotto could not put it back. Switch it to a branch first. Nothing was changed.')
     if (facts.outsideLink) throw new Error(`This folder contains a link to another folder (${facts.outsideLink}). Remove the link first so nothing outside the folder is touched. Nothing was changed.`)
     if (options.automatic && facts.ignored.length) throw new Error('This folder holds ignored files besides installed dependencies, so a rule leaves it alone.')
@@ -303,7 +346,7 @@ export class ThreadWorktrees {
     if (facts.dirty && (options.automatic || !options.withUncommittedChanges)) throw new Error(RECLAIM_WORKTREE_NEEDS_CONFIRMATION)
     // A linked worktree's .git is a file; a directory there is a repository of its own and is never removed.
     if (!(await lstat(join(facts.path, '.git'))).isFile()) throw new Error('This folder is a repository of its own, not a worktree. Nothing was changed.')
-    await this.git(metadata.repositoryRoot!, ['worktree', 'remove', ...(facts.dirty ? ['--force'] : []), '--', facts.path])
+    await this.registry(metadata.repositoryRoot!, ['worktree', 'remove', ...(facts.dirty ? ['--force'] : []), '--', facts.path], identity)
     return { ...metadata, branch: facts.branch, status: 'ready', error: undefined, dirty: undefined, reclaimedAt: new Date().toISOString() }
   }
 
@@ -337,45 +380,61 @@ export class ThreadWorktrees {
   async switchBranch(metadata: AgentWorktree, branch: string): Promise<AgentWorktree> {
     // The name came from Git itself; refuse anything that could read as an option or a path.
     if (!/^(?!-)(?!.*\.\.)[^\s:?*~^[\]\\]+$/u.test(branch)) throw new Error('That branch name cannot be restored. Switch it in the folder itself.')
-    const inspected = await this.inspect(metadata)
+    const inspection = await this.inspectWithin(metadata)
+    const inspected = inspection.worktree
+    let identity = inspection.identity
     if (inspected.branch === branch) return inspected
-    try { await this.git(inspected.path!, ['rev-parse', '--verify', `refs/heads/${branch}`]) }
+    try {
+      if (identity) await this.git(inspected.path!, ['rev-parse', '--verify', `refs/heads/${branch}`])
+      else identity = await this.registryIdentity(inspected.path!, `refs/heads/${branch}`)
+    }
     catch { throw new Error(`The branch ${branch} no longer exists in this repository. Nothing was changed.`) }
     // --no-guess never creates a branch from a remote; a conflicting change makes Git refuse and nothing moves.
-    await this.git(inspected.path!, ['switch', '--no-guess', branch])
+    await this.registry(inspected.path!, ['switch', '--no-guess', branch], identity)
     return this.inspect(inspected)
   }
 
   async inspect(metadata: AgentWorktree): Promise<AgentWorktree> {
+    return (await this.inspectWithin(metadata)).worktree
+  }
+
+  private async inspectWithin(metadata: AgentWorktree, identity?: RegistryIdentity, observed?: InspectionReads): Promise<{ worktree: AgentWorktree; identity?: RegistryIdentity }> {
     if (!metadata.path) throw new Error('The working folder is not allocated. Retry setup.')
     const path = await existingWorkingDirectory(metadata.path)
     if (metadata.mode === 'shared') {
-      let repositoryRoot: string
-      try { repositoryRoot = (await this.git(path, ['rev-parse', '--show-toplevel'])).trim() }
+      let repositoryRoot = observed?.root
+      try { repositoryRoot ??= (await this.git(path, ['rev-parse', '--show-toplevel'])).trim() }
       catch (error) {
-        if (error instanceof Error && /not a git repository|Git is unavailable/u.test(error.message)) return { ...metadata, branch: undefined, dirty: false, status: 'ready', error: undefined }
+        if (error instanceof Error && /not a git repository|Git is unavailable/u.test(error.message)) return { worktree: { ...metadata, branch: undefined, dirty: false, status: 'ready', error: undefined } }
         throw error
       }
       const branch = (await this.git(path, ['branch', '--show-current'])).trim() || undefined
-      return { ...metadata, repositoryRoot, branch, dirty: (await this.git(path, ['status', '--porcelain', '--untracked-files=normal'])).length > 0, status: 'ready', error: undefined }
+      return { worktree: { ...metadata, repositoryRoot, branch, dirty: (await this.git(path, ['status', '--porcelain', '--untracked-files=normal'])).length > 0, status: 'ready', error: undefined } }
     }
     // Inspection never creates a replacement for a deleted checkout.
     if (!metadata.repositoryRoot) throw new Error('The worktree binding is incomplete.')
-    const entries = registeredWorktrees(await this.git(metadata.repositoryRoot, ['worktree', 'list', '--porcelain', '-z']))
+    identity ??= await this.registryIdentity(metadata.repositoryRoot)
+    // These were already inspection's ownership reads. Run them beside the registry
+    // read so moving expected-common discovery earlier adds no subprocess or Git phase.
+    const [rootResult, commonResult, listing] = await Promise.allSettled([
+      observed ? Promise.resolve(observed.root) : this.git(path, ['rev-parse', '--show-toplevel']),
+      observed?.common === undefined ? this.git(path, ['rev-parse', '--path-format=absolute', '--git-common-dir']) : Promise.resolve(observed.common),
+      observed?.listing === undefined ? this.registry(metadata.repositoryRoot, ['worktree', 'list', '--porcelain', '-z'], identity) : Promise.resolve(observed.listing),
+    ])
+    if (listing.status === 'rejected') throw listing.reason
+    const entries = registeredWorktrees(listing.value)
     const registered = entries.find(entry => pathKey(entry.path) === pathKey(path))
     if (registered?.locked || registered?.prunable) throw new Error('Git has locked this worktree or reports an incomplete checkout. Restore the checkout before continuing.')
     if (pathKey(path) !== pathKey(metadata.path) || !registered) throw new Error('The working folder is no longer this thread’s Git worktree. Restore its checkout before continuing.')
     // The thread follows whatever its worktree has checked out (ADR-0014): Sotto records the branch it
     // sees, none for a detached HEAD, and never switches one itself.
     const branch = registered.branch?.startsWith('refs/heads/') ? registered.branch.slice('refs/heads/'.length) : undefined
-    const [root, common, expectedCommon] = await Promise.all([
-      this.git(path, ['rev-parse', '--show-toplevel']),
-      this.git(path, ['rev-parse', '--path-format=absolute', '--git-common-dir']),
-      this.git(metadata.repositoryRoot, ['rev-parse', '--path-format=absolute', '--git-common-dir']),
-    ])
-    if (pathKey(root.trim()) !== pathKey(path) || pathKey(common.trim()) !== pathKey(expectedCommon.trim())) throw new Error('The working folder no longer belongs to the original repository.')
+    if (rootResult.status === 'rejected') throw rootResult.reason
+    if (commonResult.status === 'rejected') throw commonResult.reason
+    const root = rootResult.value, common = commonResult.value
+    if (pathKey(root.trim()) !== pathKey(path) || pathKey(common.trim()) !== pathKey(identity.common)) throw new Error('The working folder no longer belongs to the original repository.')
     await this.workingDirectory(metadata)
     // A folder that is there was not reclaimed, whatever the record last said.
-    return { ...metadata, branch, ...(metadata.temporaryBranch && branch !== metadata.branch ? { temporaryBranch: false } : {}), status: 'ready', error: undefined, reclaimedAt: undefined, dirty: (await this.git(path, ['status', '--porcelain', '--untracked-files=normal'])).length > 0 }
+    return { identity, worktree: { ...metadata, branch, ...(metadata.temporaryBranch && branch !== metadata.branch ? { temporaryBranch: false } : {}), status: 'ready', error: undefined, reclaimedAt: undefined, dirty: (await this.git(path, ['status', '--porcelain', '--untracked-files=normal'])).length > 0 } }
   }
 }

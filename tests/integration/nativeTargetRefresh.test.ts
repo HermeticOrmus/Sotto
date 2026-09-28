@@ -17,6 +17,7 @@ it.each(['codex', 'claude', 'grok'] as const)('%s sends and confirms while anoth
   const reading = new Promise<void>(resolve => { entered = resolve })
   let sending: Promise<AgentHostResult> | undefined
   let background: ReturnType<AgentHost['snapshot']> | undefined
+  let backgroundSettled = false
   try {
     await f.host.connect()
     await f.host.execute({ type: 'create-project', commandId: randomUUID(), projectId: f.projectId, title: 'Project', path: f.root })
@@ -36,15 +37,33 @@ it.each(['codex', 'claude', 'grok'] as const)('%s sends and confirms while anoth
       const request = rpc.request.bind(rpc)
       vi.spyOn(rpc, 'request').mockImplementation(async (method, params, ...args) => { if (method === '_x.ai/session/updates' && params.sessionId === nativeId) { entered(); await gate }; return request(method, params, ...args) })
     }
-    background = f.host.snapshot()
+    background = f.host.refreshThread!(unrelated).finally(() => { backgroundSettled = true })
     await reading
+    expect(backgroundSettled).toBe(false)
     sending = f.host.execute({ type: 'send', commandId: 'target-command', threadId: target, messageId: 'target-message', text: 'Synthetic selected-thread prompt', expectedLastUserMessageId: null })
-    expect(await Promise.race([sending, new Promise<'blocked'>(resolve => setTimeout(() => resolve('blocked'), 250))]), 'unrelated history must not gate target prompt acknowledgement').toEqual({ accepted: true })
+    let completion: { result: AgentHostResult } | { error: unknown } | undefined
+    void sending.then(result => { completion = { result } }, error => { completion = { error } })
+    // The history barrier stays closed through acknowledgement and exact native receipt. The normal
+    // test deadline bounds a broken implementation; no short stopwatch stands in for independence.
+    await expect.poll(() => completion, { message: 'Target prompt must finish while unrelated history remains held' }).toBeDefined()
+    expect(completion).toEqual({ result: { accepted: true } })
+    expect(backgroundSettled).toBe(false)
+    const promptMethod = provider === 'codex' ? 'turn/start' : provider === 'claude' ? 'user' : 'session/prompt'
+    const receipts = (await f.driver.requests()).filter(record => record.method === promptMethod)
+    expect(receipts).toHaveLength(1)
+    const targetNativeId = await f.realId(target)
+    if (provider === 'codex') expect(receipts[0]!.params).toMatchObject({ threadId: targetNativeId,
+      clientUserMessageId: 'target-message', input: [{ type: 'text', text: 'Synthetic selected-thread prompt' }] })
+    else if (provider === 'claude') expect(receipts[0]!.params).toMatchObject({ frame: { session_id: targetNativeId,
+      message: { role: 'user', content: 'Synthetic selected-thread prompt' } } })
+    else expect(receipts[0]!.params).toMatchObject({ sessionId: targetNativeId,
+      prompt: [{ type: 'text', text: 'Synthetic selected-thread prompt' }] })
     const host = f.host as AgentHost & { refreshThread?(id: string): ReturnType<AgentHost['snapshot']> }
     const snapshot = await (host.refreshThread?.(target) ?? host.snapshot())
-    expect(snapshot.threads.find(thread => thread.id === target)?.messages).toContainEqual(expect.objectContaining({ id: 'target-message', commandId: 'target-command' }))
+    expect(snapshot.threads.find(thread => thread.id === target)?.messages).toContainEqual(expect.objectContaining({ id: 'target-message', commandId: 'target-command', text: 'Synthetic selected-thread prompt' }))
     expect(snapshot.threads).toHaveLength(2)
-  } finally { release(); await sending; await background; vi.restoreAllMocks(); await f.cleanup() }
+    expect(backgroundSettled).toBe(false)
+  } finally { release(); await Promise.allSettled([sending, background]); vi.restoreAllMocks(); await f.cleanup() }
 })
 
 it.each(['codex', 'claude', 'grok'] as const)('%s rechecks a permission arriving during its durable origin write', async provider => {

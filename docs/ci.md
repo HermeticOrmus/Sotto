@@ -15,6 +15,8 @@
 
 Each gate is its own named step, so a red check names the gate that failed.
 
+`tests/integration/nativeTargetRefresh.test.ts` holds one unrelated thread's actual native history refresh open while another thread receives its prompt acknowledgement and exact persisted receipt. The barrier stays held through both assertions for Codex, Claude and Grok; the normal test deadline bounds failures, with no wall-clock performance budget. A diagnostic that makes the target wait for the held refresh must fail the acknowledgement assertion before cleanup releases the history read.
+
 `tsconfig.tests.json` checks every `tests/**/*.tsx` file, including renderer tests,
 benchmarks and fixture views, with the web project's JSX and DOM assumptions plus
 Node, Vitest and Testing Library types. Vitest executes these files but does not
