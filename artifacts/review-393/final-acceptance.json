@@ -1,14 +1,14 @@
 {
-  "runtimeHead": "1698b1713789f4c329d84e8fd6621de55b07e302",
+  "runtimeHead": "c896d3167d35c614be60f373cfb4f7653dee98d7",
   "smoke": {
     "focusedPassed": 202,
-    "focusedSeconds": 11.98,
+    "focusedSeconds": 10.84,
     "builds": 1,
     "recoveryJourneysPassed": 3,
-    "recoverySeconds": 15.6,
+    "recoverySeconds": 14.8,
     "workspaceSettingsJourneysPassed": 3,
-    "workspaceSettingsSeconds": 45.4,
-    "totalSeconds": 97.642,
+    "workspaceSettingsSeconds": 44.9,
+    "totalSeconds": 92.133,
     "trackedBefore": "clean",
     "trackedAfter": "clean"
   },
@@ -27,5 +27,36 @@
     "No physical microphone or native macOS desktop verification",
     "No universal whole-application latency claim"
   ],
-  "captureRestorationCount": 14
+  "captureRestorationCount": 14,
+  "earlierRuntimeHead": "1698b1713789f4c329d84e8fd6621de55b07e302",
+  "earlierSmoke": {
+    "focusedPassed": 202,
+    "focusedSeconds": 11.98,
+    "builds": 1,
+    "recoveryJourneysPassed": 3,
+    "recoverySeconds": 15.6,
+    "workspaceSettingsJourneysPassed": 3,
+    "workspaceSettingsSeconds": 45.4,
+    "totalSeconds": 97.642,
+    "trackedBefore": "clean",
+    "trackedAfter": "clean"
+  },
+  "staticGates": {
+    "typecheck": "passed",
+    "lint": "passed",
+    "noticesComponents": 174
+  },
+  "laterFailure": {
+    "head": "fd8f4beb",
+    "passedJourneys": 2,
+    "failedJourney": "command-receipt model picker",
+    "correction": "#455 actual Settings readiness and exact create receipt guard; no product/deadline change",
+    "controlledReadCounts": {
+      "typing": 0,
+      "reconnecting": 1,
+      "picking": 0
+    }
+  },
+  "finalVisualInspection": "Minimum light restart, minimum dark Settings and reconnected model picker; original eight broader views also inspected",
+  "productionDifferenceFromEarlier": "#453 queue admission only, covered by110focused checks and final native queue/smoke"
 }
