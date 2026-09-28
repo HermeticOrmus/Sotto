@@ -182,6 +182,10 @@ export function SettingsView({
   const successDurationEditVersionRef = useRef(0)
   const successDurationSubmissionRef = useRef<DraftSubmission<number> | null>(null)
   const successDurationTokenRef = useRef(0)
+  const llmDictionaryDraftRef = useRef(llmDictionaryDraft)
+  const llmDictionaryEditVersionRef = useRef(0)
+  const llmDictionaryTokenRef = useRef(0)
+  const llmDictionarySubmissionsRef = useRef<DraftSubmission<string>[]>([])
 
   settingsRef.current = settings
 
@@ -234,6 +238,16 @@ export function SettingsView({
   }, [settings.successDisplayMs])
 
   useEffect(() => {
+    // Settings saves are ordered, but several blurs can be queued before the first acknowledgement.
+    const submission = llmDictionarySubmissionsRef.current.find(value => value.submitted === settings.llmDictionary)
+    if (submission) {
+      llmDictionarySubmissionsRef.current = llmDictionarySubmissionsRef.current.filter(value => value.token > submission.token)
+      if (llmDictionaryEditVersionRef.current !== submission.editVersion) return
+    } else {
+      // An external update remains authoritative, including over older saves still awaiting a reply.
+      llmDictionaryEditVersionRef.current += 1
+    }
+    llmDictionaryDraftRef.current = settings.llmDictionary
     setLlmDictionaryDraft(settings.llmDictionary)
   }, [settings.llmDictionary])
   useEffect(() => {
@@ -314,6 +328,22 @@ export function SettingsView({
       return
     }
     if (settingsRef.current.microphoneSkipped) await onUpdateSettings({ microphoneSkipped: false }).catch(() => false)
+  }
+
+  const saveDictionary = async (): Promise<void> => {
+    const value = llmDictionaryDraftRef.current
+    if (value === settingsRef.current.llmDictionary && !llmDictionarySubmissionsRef.current.some(submission => submission.submitted !== value)) return
+    if (llmDictionarySubmissionsRef.current.some(submission => submission.editVersion === llmDictionaryEditVersionRef.current)) return
+    const submission: DraftSubmission<string> = {
+      token: ++llmDictionaryTokenRef.current,
+      submitted: value,
+      authoritativeAtSubmit: settingsRef.current.llmDictionary,
+      editVersion: llmDictionaryEditVersionRef.current,
+    }
+    llmDictionarySubmissionsRef.current.push(submission)
+    if (!await save({ llmDictionary: value }, 'Dictionary saved.')) {
+      llmDictionarySubmissionsRef.current = llmDictionarySubmissionsRef.current.filter(value => value.token !== submission.token)
+    }
   }
 
   const savePasteDelay = async (): Promise<void> => {
@@ -553,7 +583,12 @@ export function SettingsView({
                   <Field label="Formatting quality" description="Low is near-instant; higher tiers format better but add up to a couple seconds."><Select disabled={!settings.llmFormatting} value={settings.llmQuality} onChange={(event) => void save({ llmQuality: event.currentTarget.value as LlmQuality })}><option value="low">Low — fastest (Mercury 2)</option><option value="medium">Medium (Nova 2 Lite)</option><option value="value">Value — cheap, near-High (GLM-5.3 Flash)</option><option value="high">High — best formatting (Claude Haiku 4.5)</option></Select></Field>
                   <div className="settings-input-action">
                     <Field label="Personal dictionary" description="One word or name per line. Sent as spelling hints with your audio and used during cleanup.">
-                      <textarea className="tt-input" rows={5} value={llmDictionaryDraft} onBlur={() => { if (llmDictionaryDraft !== settings.llmDictionary) void save({ llmDictionary: llmDictionaryDraft }, 'Dictionary saved.') }} onChange={(event) => setLlmDictionaryDraft(event.currentTarget.value)} />
+                      <textarea className="tt-input" rows={5} value={llmDictionaryDraft} onBlur={() => void saveDictionary()} onChange={(event) => {
+                        const value = event.currentTarget.value
+                        llmDictionaryDraftRef.current = value
+                        llmDictionaryEditVersionRef.current += 1
+                        setLlmDictionaryDraft(value)
+                      }} />
                     </Field>
 
                   </div>
