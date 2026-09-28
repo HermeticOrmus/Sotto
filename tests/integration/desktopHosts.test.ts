@@ -44,12 +44,17 @@ const stops: string[] = []
 let askOnConnect: 'passphrase' | undefined
 /** Every answer given to an SSH question, to prove where the dialog's answer went. */
 const answers: string[] = []
+/** When set, the next connect runs this first, the way the launcher reports steps and Tailscale's approval. */
+let onConnect: ((callbacks: SshCallbacks) => Promise<void>) | undefined
+/** Every page the manager opened in the browser. */
+const opened: string[] = []
 class FixtureSsh extends SshHostLauncher {
   callbacks?: SshCallbacks
   configuration?: SshHostConfiguration
   private waiting?: { resolve: () => void; reject: (error: Error) => void }
   override async connect(configuration: SshHostConfiguration, callbacks: SshCallbacks = {}): Promise<SshHostConnection> {
     this.callbacks = callbacks; this.configuration = configuration
+    if (onConnect) { const script = onConnect; onConnect = undefined; await script(callbacks) }
     if (askOnConnect) {
       askOnConnect = undefined
       callbacks.onPrompt?.({ id: 'prompt-1', kind: 'passphrase', text: 'Enter passphrase for key' })
@@ -76,12 +81,13 @@ beforeEach(async () => {
   reportedHostId = host.descriptor!.hostId
   credentials = new AgentCredentials(join(root, 'desktop'), new HostCredentialEncryption('synthetic-desktop-credential-key')); await credentials.load()
   router = new DesktopHostRouter(emptyDesktopState)
-  launchers.length = 0; failures.length = 0; stops.length = 0; answers.length = 0; askOnConnect = undefined; scheduled.length = 0; retryDelay = () => 0; owned = true; stopResult = true; beforeStopReply = async () => undefined; tunnelUrl = undefined
+  launchers.length = 0; failures.length = 0; stops.length = 0; answers.length = 0; askOnConnect = undefined; onConnect = undefined; opened.length = 0; scheduled.length = 0; retryDelay = () => 0; owned = true; stopResult = true; beforeStopReply = async () => undefined; tunnelUrl = undefined
   manager = newManager()
   await manager.start()
 })
 function newManager(): DesktopHosts {
-  return new DesktopHosts({ directory: join(root, 'desktop'), credentials, router, localHostRunning: false, localHostEnabled: () => false, restart: () => undefined, retryDelayMs: attempt => { scheduled.push(attempt); return retryDelay(attempt) }, launcher: () => { const launcher = new FixtureSsh(); launchers.push(launcher); return launcher } })
+  return new DesktopHosts({ directory: join(root, 'desktop'), credentials, router, localHostRunning: false, localHostEnabled: () => false, restart: () => undefined, retryDelayMs: attempt => { scheduled.push(attempt); return retryDelay(attempt) }, launcher: () => { const launcher = new FixtureSsh(); launchers.push(launcher); return launcher },
+    openExternal: async url => { opened.push(url) } })
 }
 /** Quits and starts Sotto again over the same saved hosts, the way a relaunch does; `saved` replaces the file first when given. */
 async function relaunch(saved?: object[]): Promise<void> {
@@ -399,7 +405,8 @@ describe('Add host, the switch and reconnect on launch', () => {
     const refuse = vi.spyOn(SocketHostService.prototype, 'connect').mockRejectedValueOnce(new Error('The host closed the connection. Try again.'))
     try { await manager.command({ type: 'add', host: remote }) } finally { refuse.mockRestore() }
     expect(manager.get().hosts).toEqual([])
-    expect(manager.get().adding).toMatchObject({ phase: 'error', error: expect.stringContaining('Nothing was saved.') })
+    // Past the tunnel, a failure is the pairing's.
+    expect(manager.get().adding).toMatchObject({ phase: 'error', step: 'pair', error: expect.stringContaining('Nothing was saved.') })
     expect(credentials.has('remote-host:' + remote.id)).toBe(false)
     expect(host.pairing.list()).toEqual([])
   })
@@ -450,6 +457,68 @@ describe('Add host, the switch and reconnect on launch', () => {
     expect(answers).toEqual(['synthetic passphrase'])
     expect(manager.get().hosts).toEqual([expect.objectContaining({ id: second.id, phase: 'connected' })])
     expect(JSON.stringify(await savedFile())).not.toContain('synthetic passphrase')
+  })
+  it('reports each step and Tailscale\'s approval page, opens the page only while it waits, and saves the host once approved', async () => {
+    const url = 'https://login.tailscale.com/a/l1a2b3c4'
+    const approved = Promise.withResolvers<void>()
+    onConnect = async callbacks => {
+      callbacks.onStep?.('reach'); callbacks.onStep?.('tailscale'); callbacks.onApproval?.({ url })
+      await approved.promise
+      callbacks.onApproval?.(null); callbacks.onStep?.('install'); callbacks.onStep?.('start')
+    }
+    const remote = connection()
+    const pending = manager.command({ type: 'add', host: remote })
+    await vi.waitFor(() => expect(manager.get().adding).toMatchObject({ phase: 'connecting', step: 'tailscale', tailscale: { waiting: true, url } }))
+    expect(opened).toEqual([])
+    await manager.command({ type: 'open-approval', id: remote.id })
+    expect(opened).toEqual([url])
+    approved.resolve()
+    await pending
+    // The pairing is Sotto's own step, after the launcher's.
+    expect(manager.get().hosts).toEqual([expect.objectContaining({ id: remote.id, phase: 'connected', step: 'pair', tailscale: { waiting: false } })])
+    await expect(manager.command({ type: 'open-approval', id: remote.id })).rejects.toThrow('Tailscale is no longer waiting for this approval. Nothing was opened.')
+    expect(opened).toHaveLength(1)
+    expect(JSON.stringify(await savedFile())).not.toContain('tailscale.com')
+  })
+  it('opens no page but Tailscale\'s own, whatever reached the state', async () => {
+    const held = Promise.withResolvers<void>()
+    onConnect = async callbacks => { callbacks.onApproval?.({ url: 'https://login.tailscale.com.example.net/a/l1' }); await held.promise }
+    const remote = connection()
+    const pending = manager.command({ type: 'add', host: remote })
+    await vi.waitFor(() => expect(manager.get().adding?.tailscale?.waiting).toBe(true))
+    await expect(manager.command({ type: 'open-approval', id: remote.id })).rejects.toThrow('Nothing was opened.')
+    expect(opened).toEqual([])
+    held.resolve(); await pending
+  })
+  it('puts a failure on the step it belongs to, with its fix, and a Tailscale approval that never came stops the retries', async () => {
+    const changed = new SshFailure('host-key-changed')
+    changed.fix = { text: 'Remove the old key:', command: 'ssh-keygen -R forge.example.net' }
+    failures.push(changed)
+    onConnect = async callbacks => { callbacks.onStep?.('reach') }
+    const remote = connection()
+    await manager.command({ type: 'add', host: remote })
+    expect(manager.get().adding).toMatchObject({ phase: 'error', step: 'sign-in', fix: { text: 'Remove the old key:', command: 'ssh-keygen -R forge.example.net' },
+      error: 'The SSH host key changed. Nothing was saved. Verify the host identity and update your SSH known hosts before adding the host again.' })
+    // A failure with no step of its own stays where the connect had reached.
+    failures.push(new SshFailure('connect-timeout'))
+    onConnect = async callbacks => { callbacks.onStep?.('reach'); callbacks.onStep?.('sign-in') }
+    await manager.command({ type: 'add', host: connection() })
+    expect(manager.get().adding).toMatchObject({ phase: 'error', step: 'sign-in' })
+    await manager.command({ type: 'cancel-add', id: manager.get().adding!.id })
+    await add()
+    const unapproved = new SshFailure('tailscale-unapproved')
+    failures.push(unapproved)
+    await relaunch()
+    await vi.waitFor(() => expect(manager.get().hosts[0]).toMatchObject({ phase: 'error', reconnecting: false, step: 'tailscale',
+      error: 'Tailscale SSH asked you to approve this connection, and no approval came within 5 minutes, so Sotto stopped connecting. Approve it in your browser when Sotto asks, then reconnect.' }))
+    expect(scheduled).toEqual([])
+  })
+  it('says in the dialog that nothing was saved when Tailscale\'s approval never came', async () => {
+    failures.push(new SshFailure('tailscale-unapproved'))
+    onConnect = async callbacks => { callbacks.onStep?.('reach'); callbacks.onStep?.('tailscale'); callbacks.onApproval?.({ url: 'https://login.tailscale.com/a/l1' }); callbacks.onApproval?.(null) }
+    await manager.command({ type: 'add', host: connection() })
+    expect(manager.get().adding).toMatchObject({ phase: 'error', step: 'tailscale', tailscale: { waiting: false },
+      error: 'Tailscale SSH asked you to approve this connection, and no approval came within 5 minutes, so Sotto stopped connecting. Nothing was saved. Approve it in your browser when Sotto asks, then add the host again.' })
   })
   it('renames a host everywhere its name shows', async () => {
     const remote = await add()

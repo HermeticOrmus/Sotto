@@ -164,9 +164,11 @@ process.exitCode = code; process.stdout.write(v);
  * the places nvm, fnm, mise, asdf, Volta and Homebrew keep Node, and runs the launch script (read from
  * its stdin, which no probe touches) on the first that satisfies the range. When none does, it prints
  * the typed reason itself: `node-missing`, or the first version it found as too old or too new.
- * `$1` is the configuration JSON and `$2` the version check.
+ * `$1` is the configuration JSON and `$2` the version check. Its first line says SSH has signed in, which
+ * moves the Add host checklist on before the probe, which can take a while, has found Node.
  */
-export const NODE_PROBE_SOURCE = String.raw`cfg=$1
+export const NODE_PROBE_SOURCE = String.raw`printf '{"type":"signed-in"}\n'
+cfg=$1
 check=$2
 seen=
 seen_rc=

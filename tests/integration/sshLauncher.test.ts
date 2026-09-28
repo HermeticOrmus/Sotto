@@ -5,7 +5,7 @@ import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promi
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
-import { SshFailure, SshHostLauncher, type SshPrompt } from '../../src/main/hosts/sshLauncher'
+import { SshFailure, SshHostLauncher, type SshApproval, type SshPrompt } from '../../src/main/hosts/sshLauncher'
 import { CONTROL_OPTIONS, type SpawnSsh } from '../../src/main/hosts/sshProcess'
 import { LAUNCH_SCRIPT_SOURCE } from '../../src/main/hosts/launchScript'
 
@@ -18,13 +18,14 @@ afterEach(async () => {
 const configuration = { target: 'user@forge', installPath: '/opt/sotto release', dataDirectory: '/data/sotto' }
 const SCRIPT_SHA = createHash('sha256').update(LAUNCH_SCRIPT_SOURCE).digest('hex')
 interface Spawned { type: string; args: string[]; tunnel: boolean; resolve: boolean; op?: string; stdinSha256: string; askpass: boolean }
-async function fixture(mode = 'started', options: { authenticationTimeoutMs?: number; startMs?: number; version?: string; platform?: NodeJS.Platform } = {}) {
+async function fixture(mode = 'started', options: { authenticationTimeoutMs?: number; approvalTimeoutMs?: number; startMs?: number; version?: string; platform?: NodeJS.Platform } = {}) {
   const path = await mkdtemp(join(tmpdir(), 'sotto-ssh-')); directories.push(path)
   const record = join(path, 'ssh.jsonl')
   const spawner: SpawnSsh = (_file, args, spawnOptions) => spawn(process.execPath, [resolve('tests/fixtures/fakeSsh.mjs'), ...args],
     { shell: false, windowsHide: true, stdio: [spawnOptions.stdin, 'pipe', 'pipe'],
       env: { ...spawnOptions.env, FAKE_SSH_MODE: mode, FAKE_SSH_RECORD: record, FAKE_SSH_ROOT: path, FAKE_SSH_START_MS: String(options.startMs ?? 0), FAKE_SSH_VERSION: options.version ?? '' } })
   const launcher = new SshHostLauncher({ spawn: spawner, authenticationTimeoutMs: options.authenticationTimeoutMs ?? 10_000, readyTimeoutMs: 5000,
+    ...(options.approvalTimeoutMs ? { approvalTimeoutMs: options.approvalTimeoutMs } : {}),
     ...(options.platform ? { platform: options.platform } : {}) })
   launchers.push(launcher)
   const events = async () => (await readFile(record, 'utf8')).trim().split('\n').map(line => JSON.parse(line) as Spawned & { kind?: string; accepted?: boolean; owned?: boolean })
@@ -141,7 +142,7 @@ it('shows a host key with its fingerprint and trusts it once', async () => {
   expect(prompts[0]!.text).toContain("The authenticity of host 'forge (192.0.2.1)' can't be established.")
   // Windows' cmd.exe keeps only the first line of the question; the fingerprint comes back from ssh's own debug output.
   expect(prompts[0]!.text).toMatch(/key fingerprint is SHA256:fixtureKey\./u)
-  expect((await spawns())[0]!.args).toContain(process.platform === 'win32' ? 'LogLevel=DEBUG1' : 'LogLevel=ERROR')
+  expect((await spawns())[0]!.args).toContain(process.platform === 'win32' ? 'LogLevel=DEBUG1' : 'LogLevel=INFO')
   await connection.close()
 })
 it('declining a host key never completes a connection and stops there', async () => {
@@ -255,4 +256,65 @@ it('keeps a host it started owned across a reconnect, so Stop host still stops i
   expect(second).toMatchObject({ owned: true, hostId: first.hostId })
   expect(await second.stopHost()).toBe(true)
   expect(() => process.kill(descriptor.pid, 0)).toThrow()
+})
+
+// The host setup checklist and Tailscale SSH's `check` mode (#429).
+const keepalives = (args: string[]): string | undefined => args.find(value => value.startsWith('ServerAliveCountMax='))
+it('reports each checklist step it reaches: a question means SSH reached the host, and the first output that it signed in', async () => {
+  const { launcher } = await fixture('password')
+  const steps: string[] = []
+  const connection = await launcher.connect(configuration, { onStep: step => steps.push(step), onPrompt: prompt => { if (prompt) launcher.answerPrompt(prompt.id, 'test-secret') } })
+  expect(steps).toEqual(['reach', 'sign-in', 'install', 'start'])
+  await connection.close()
+})
+it('waits while Tailscale SSH holds the connection for approval, hands over the approval page, and carries on once approved', async () => {
+  const { launcher, path, spawns, events } = await fixture('started+tailscale')
+  const steps: string[] = [], approvals: (SshApproval | null)[] = []
+  const connection = await launcher.connect(configuration, { onStep: step => steps.push(step), onApproval: approval => {
+    approvals.push(approval)
+    // The user approves in the browser a moment after the page opens.
+    if (approval?.url) setTimeout(() => void writeFile(join(path, 'approved'), ''), 300)
+  } })
+  expect(steps).toEqual(['reach', 'tailscale', 'install', 'start'])
+  expect(approvals.at(-2)).toEqual({ url: 'https://login.tailscale.com/a/l1fixture2b3c' })
+  expect(approvals.at(-1)).toBeNull()
+  expect((await events()).filter(item => item.type.startsWith('tailscale-')).map(item => item.type)).toEqual(['tailscale-held', 'tailscale-approved'])
+  // A command that signs in may wait out an approval; the port forward, the live connection, keeps 30 seconds.
+  const spawned = await spawns()
+  expect(keepalives(spawned.find(item => item.op === 'launch')!.args)).toBe('ServerAliveCountMax=21')
+  expect(keepalives(spawned.find(item => item.tunnel)!.args)).toBe('ServerAliveCountMax=2')
+  expect(spawned.find(item => item.op === 'launch')!.args).toContain('ServerAliveInterval=15')
+  await connection.close()
+})
+it('stops with tailscale-unapproved when nobody approves within the approval budget', async () => {
+  const { launcher } = await fixture('started+tailscale', { approvalTimeoutMs: 2500, authenticationTimeoutMs: 1500 })
+  const steps: string[] = [], approvals: (SshApproval | null)[] = []
+  const started = Date.now()
+  let heldAt = 0
+  const error = await failure(launcher.connect(configuration, { onStep: step => steps.push(step), onApproval: approval => { approvals.push(approval); if (approval && !heldAt) heldAt = Date.now() } }))
+  // The approval budget, counted from Tailscale's request, replaced the shorter sign-in budget.
+  expect(Date.now() - heldAt).toBeGreaterThanOrEqual(2400)
+  expect(Date.now() - started).toBeGreaterThan(1500)
+  expect(error.code).toBe('tailscale-unapproved')
+  expect(error.message).toBe('Tailscale SSH asked you to approve this connection, and no approval came within 5 minutes, so Sotto stopped connecting. Approve it in your browser when Sotto asks, then reconnect.')
+  expect(steps).toEqual(['reach', 'tailscale'])
+  expect(approvals.at(-1)).toBeNull()
+})
+it("reads OpenSSH's own timeout on a connection Tailscale held as the approval not coming", async () => {
+  const { launcher } = await fixture('started+tailscale-timeout')
+  expect((await failure(launcher.connect(configuration))).code).toBe('tailscale-unapproved')
+})
+it('reads "Connection to <host> port <n> timed out" as a timeout, with the command that shows SSH\'s own words', async () => {
+  const { launcher } = await fixture('port-timeout')
+  const error = await failure(launcher.connect(configuration))
+  expect(error.code).toBe('connect-timeout')
+  expect(error.fix).toEqual({ text: 'To see what SSH itself says, run this in a terminal on this computer:', command: 'ssh user@forge' })
+})
+it('reports a Node too new on the installation step, after SSH signed in', async () => {
+  const { launcher } = await fixture('node-new')
+  const steps: string[] = []
+  const error = await failure(launcher.connect(configuration, { onStep: step => steps.push(step) }))
+  expect(error.code).toBe('node-too-new')
+  expect(error.message).toBe('The SSH host runs Node 26.1.0, which is newer than this host release supports. Install Node 24 for that SSH account, then reconnect.')
+  expect(steps).toEqual(['reach', 'install'])
 })

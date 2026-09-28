@@ -43,6 +43,8 @@ export const e2eScenarioSchema = z.enum([
 
 export const e2eSnapshotSchema = z.object({
   openedThreadFolder: z.string().nullable().optional(),
+  /** The page Open approval page would have opened in the browser; an end-to-end run opens none. */
+  openedExternalLink: z.string().nullable().optional(),
   clipboardText: z.string(),
   pasteAttempts: z.number().int().nonnegative(),
   mainVisible: z.boolean(),

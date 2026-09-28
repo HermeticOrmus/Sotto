@@ -14,7 +14,8 @@ it('quotes remote paths as data including single quotes and shell metacharacters
   const validated = validateSshHost({ ...config, installPath: "/opt/it's $(literal)" })
   const command = launchScriptCommand(validated, { op: 'launch' }, 30000)
   expect(command).toContain("it'\\''s $(literal)")
-  expect(command.startsWith("'sh' '-c' 'cfg=$1")).toBe(true)
+  // The probe says SSH signed in before anything else, its own single quotes quoted like any other.
+  expect(command.startsWith(`'sh' '-c' 'printf '\\''{"type":"signed-in"}\\n'\\''\ncfg=$1`)).toBe(true)
   expect(command).toContain("'sotto-launch' '{\"op\":\"launch\"")
 })
 it('sends the launch script on stdin only and names the Node range the host archive needs', () => {

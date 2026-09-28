@@ -1,11 +1,13 @@
 import { join } from 'node:path'
 import { z } from 'zod'
-import { remoteHostSchema, type HostsCommand, type HostsState, type HostStatus, type RemoteHost } from '../../shared/hosts'
+import { remoteHostSchema, type HostSetupStep, type HostsCommand, type HostsState, type HostStatus, type RemoteHost } from '../../shared/hosts'
 import { AtomicJsonStore } from '../storage/atomicJsonStore'
 import type { AgentCredentials } from '../agents/credentials'
 import { HostConnectionError, SocketHostService } from '../agents/socketHostService'
 import { validateSshHost } from './sshConfiguration'
 import { SshFailure, SshHostLauncher, type SshFailureCode, type SshHostConnection } from './sshLauncher'
+import { failureStep } from './sshFailure'
+import { isTailscaleApprovalUrl } from './tailscaleApproval'
 import type { DesktopHostRouter } from './desktopHostRouter'
 
 /** Files from before the switch have no `sshPort` or `enabled` and still read: both are optional, and no `enabled` means on. */
@@ -30,7 +32,7 @@ interface Retry { timer: ReturnType<typeof setTimeout> | undefined; attempt: num
  * decides, never the message.
  */
 const FINAL_SSH_FAILURES: ReadonlySet<SshFailureCode> = new Set<SshFailureCode>(['ssh-missing', 'ssh-too-old', 'auth-failed', 'host-key-changed', 'host-key-rejected',
-  'identity-file-unreadable', 'prompt-unanswered', 'node-missing', 'node-too-old', 'node-too-new', 'archive-missing', 'descriptor-invalid'])
+  'identity-file-unreadable', 'prompt-unanswered', 'tailscale-unapproved', 'node-missing', 'node-too-old', 'node-too-new', 'archive-missing', 'descriptor-invalid'])
 /** A failure on this side of the connection that no retry can fix: the host is not the one saved, or pairing was lost for good. */
 class FinalHostError extends Error {}
 /** T3 Code's reconnect backoff: 3, 4, 8 and then every 16 seconds, until the user stops it. */
@@ -79,6 +81,8 @@ export class DesktopHosts {
     localHostRunning: boolean; localHostEnabled: () => boolean; restart: () => void;
     launcher?: () => SshHostLauncher;
     retryDelayMs?: (attempt: number) => number;
+    /** Opens a Tailscale approval page in the default browser, on the user's press. */
+    openExternal?: (url: string) => Promise<void>;
   }) {
     this.store = new AtomicJsonStore(join(options.directory, 'remote-hosts.json'), z.array(savedHostSchema).max(20).parse, () => [])
   }
@@ -119,6 +123,7 @@ export class DesktopHosts {
     if (command.type === 'restart') { this.options.restart(); return this.get() }
     if (command.type === 'add') return this.add(command.host)
     if (command.type === 'cancel-add') { await this.cancelAdd(command.id); return this.get() }
+    if (command.type === 'open-approval') { await this.openApproval(command.id); return this.get() }
     if (this.adding !== undefined && this.adding.id === ('id' in command ? command.id : command.host.id)) {
       // Add host's own questions are answered in its dialog, and its Cancel ends the attempt.
       if (command.type === 'ssh-answer') { this.live.get(command.id)?.launcher.answerPrompt(command.promptId, command.answer); return this.get() }
@@ -224,6 +229,17 @@ export class DesktopHosts {
     await this.forgetCredential(id)
     this.emit()
   }
+  /**
+   * Opens the approval page Tailscale SSH gave for a connect it is holding, in the default browser. Main holds
+   * the URL and opens only Tailscale's own page, only while the connect still waits for it.
+   */
+  private async openApproval(id: string): Promise<void> {
+    const url = this.status.get(id)?.tailscale?.url
+    if (!this.status.get(id)?.tailscale?.waiting || !url || !isTailscaleApprovalUrl(url)) throw new Error('Tailscale is no longer waiting for this approval. Nothing was opened.')
+    if (!this.options.openExternal) throw new Error('The approval page could not be opened from this window. Approve the connection in Tailscale on this computer.')
+    try { await this.options.openExternal(url) }
+    catch { throw new Error('The approval page could not open in your browser. Nothing was changed. Try Open approval page again.') }
+  }
   /** Removes a credential a failed or cancelled add left behind; the desktop keeps nothing for a host it did not save. */
   private async forgetCredential(id: string): Promise<void> {
     if (this.options.credentials.has(`remote-host:${id}`)) await this.options.credentials.set(`remote-host:${id}`, '')
@@ -276,14 +292,19 @@ export class DesktopHosts {
     if (this.closed || (adding ? this.adding !== host : !this.saved.includes(host)) || (wasOn && host.enabled === false)) return
     const active: LiveHost = { launcher: this.options.launcher?.() ?? new SshHostLauncher(), generation: ++this.generation }
     this.live.set(host.id, active)
-    this.status.set(host.id, { ...this.status.get(host.id), ...this.fields(host), phase: 'connecting', reconnecting: this.retries.has(host.id) && !this.retries.get(host.id)!.first, error: undefined }); this.emit()
+    this.status.set(host.id, { ...this.status.get(host.id), ...this.fields(host), phase: 'connecting', reconnecting: this.retries.has(host.id) && !this.retries.get(host.id)!.first, error: undefined,
+      step: 'reach', tailscale: undefined, fix: undefined }); this.emit()
     try {
       active.tunnel = await active.launcher.connect({ target: host.target, installPath: host.installPath, dataDirectory: host.dataDirectory,
         ...(host.sshPort ? { sshPort: host.sshPort } : {}), ...(host.identityFile ? { identityFile: host.identityFile } : {}) }, {
         onPrompt: prompt => { if (this.live.get(host.id) !== active) return; const state = this.status.get(host.id); if (state) { if (prompt) state.prompt = prompt; else delete state.prompt; this.emit() } },
+        onStep: step => { if (this.live.get(host.id) === active) this.update(host.id, { step }) },
+        // The approval page reaches the window's state and the browser on a press, and nowhere else.
+        onApproval: approval => { if (this.live.get(host.id) === active) this.update(host.id, { tailscale: approval ? { waiting: true, ...(approval.url ? { url: approval.url } : {}) } : this.status.get(host.id)?.tailscale ? { waiting: false } : undefined }) },
         onDisconnected: () => { if (this.live.get(host.id) === active && !active.closing) this.dropped(host, active) },
       })
       if (this.live.get(host.id) !== active) { await active.tunnel.close(); return }
+      this.update(host.id, { step: 'pair' })
       if (host.hostId && host.hostId !== active.tunnel.hostId) throw new FinalHostError('The host identity changed. Check its data folder before connecting again.')
       const same = adding ? this.saved.find(item => item.hostId === active.tunnel!.hostId) : undefined
       if (same) throw new FinalHostError(`This is the same host as ${same.name}, which is already saved. Switch ${same.name} on in the list instead.`)
@@ -327,6 +348,11 @@ export class DesktopHosts {
           failure = repair instanceof HostConnectionError && repair.code === 'busy' ? repair : new FinalHostError('This device is no longer paired and could not pair again. Check the host, then connect again.')
         }
       }
+      // The checklist step the failure belongs to, and the command that fixes it where there is one.
+      const reached = this.status.get(host.id)?.step
+      const step: HostSetupStep = failure instanceof SshFailure ? failureStep(failure.code) ?? reached ?? 'reach' : active.tunnel ? 'pair' : reached ?? 'reach'
+      const fix = failure instanceof SshFailure && failure.fix ? { text: failure.fix.text, command: failure.fix.command } : undefined
+      const waited = this.status.get(host.id)?.tailscale ? { waiting: false } : undefined
       const unsaved = adding && !this.saved.includes(host)
       if (unsaved && host.clientId && active.tunnel && this.live.get(host.id) === active) {
         // Pairing finished before the failure, so the host holds a record of this computer that nothing will
@@ -343,7 +369,7 @@ export class DesktopHosts {
         delete host.hostId; delete host.clientId
         await this.forgetCredential(host.id)
         // A cancelled add has no dialog left to tell.
-        if (this.adding === host) this.update(host.id, { phase: 'error', reconnecting: false, error: unsavedMessage(failure.message) })
+        if (this.adding === host) this.update(host.id, { phase: 'error', reconnecting: false, error: unsavedMessage(failure.message), step, fix, tailscale: waited })
         return
       }
       // A host forgotten or edited while it connected has no row left for this attempt to report to.
@@ -353,7 +379,7 @@ export class DesktopHosts {
         this.scheduleReconnect(host, undefined)
       } else {
         this.clearRetry(host.id)
-        this.update(host.id, { phase: 'error', reconnecting: false, error: failure.message })
+        this.update(host.id, { phase: 'error', reconnecting: false, error: failure.message, step, fix, tailscale: waited })
       }
     }
   }
@@ -450,7 +476,7 @@ export class DesktopHosts {
     await active?.socket?.close()
     await active?.launcher.disconnect()
     const status = this.status.get(id)
-    if (status) { delete status.prompt; delete status.error; delete status.reconnecting; delete status.owned; status.phase = 'disconnected'; this.emit() }
+    if (status) { delete status.prompt; delete status.error; delete status.reconnecting; delete status.owned; delete status.step; delete status.tailscale; delete status.fix; status.phase = 'disconnected'; this.emit() }
   }
   /**
    * Clears every pending retry first, including those for hosts whose connect failed and so are no longer

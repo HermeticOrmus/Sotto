@@ -1,15 +1,20 @@
 // A stand-in for OpenSSH that the launcher spawns with plain pipes. It asks its questions through
 // SSH_ASKPASS the way OpenSSH does, and either scripts the remote side by mode or, in `run` mode, runs
 // the remote command on this machine against a fake host installation under FAKE_SSH_ROOT.
+// A mode may end in `+tailscale`: the launch command is then held the way Tailscale SSH's `check` mode
+// holds it, with Tailscale's banner on stderr, until a file named `approved` appears under FAKE_SSH_ROOT;
+// `+tailscale-timeout` ends the held connection the way OpenSSH's own read timeout does. FAKE_SSH_MODE_FILE,
+// when set, names a file holding the mode, read by every ssh, so one app run can meet several.
 import { createServer as createHttpServer } from 'node:http'
 import { connect, createServer as createNetServer } from 'node:net'
-import { appendFileSync, existsSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { dirname, join } from 'node:path'
 
 const args = process.argv.slice(2)
-const mode = process.env.FAKE_SSH_MODE ?? 'started'
+const [mode, tailscale] = (process.env.FAKE_SSH_MODE_FILE && existsSync(process.env.FAKE_SSH_MODE_FILE)
+  ? readFileSync(process.env.FAKE_SSH_MODE_FILE, 'utf8').trim() : process.env.FAKE_SSH_MODE ?? 'started').split('+')
 const recordPath = process.env.FAKE_SSH_RECORD
 const record = event => { if (recordPath) appendFileSync(recordPath, JSON.stringify(event) + '\n') }
 const hostId = '11111111-1111-4111-8111-111111111111'
@@ -78,7 +83,27 @@ function abandonedQuestion(prompt) {
   })
 }
 
+/**
+ * Tailscale SSH in `check` mode: its banner, then nothing until the user approves in a browser. Once
+ * approved, later connections pass, as they do within Tailscale's check period.
+ */
+async function tailscaleCheck() {
+  const approved = join(process.env.FAKE_SSH_ROOT ?? dirname(recordPath ?? '.'), 'approved')
+  if (!tailscale || configuration?.op !== 'launch' || existsSync(approved)) return true
+  record({ type: 'tailscale-held' })
+  process.stderr.write('# Tailscale SSH requires an additional check.\r\n# To authenticate, visit: https://login.tailscale.com/a/l1fixture2b3c\r\n')
+  if (tailscale === 'tailscale-timeout') {
+    await new Promise(resolve => setTimeout(resolve, Number(process.env.FAKE_SSH_HOLD_MS ?? 200)))
+    process.stderr.write('Connection to 100.106.126.4 port 22 timed out\r\n'); exit(255); return false
+  }
+  while (!existsSync(approved)) await new Promise(resolve => setTimeout(resolve, 50))
+  record({ type: 'tailscale-approved' })
+  process.stderr.write('# Authentication checked with Tailscale SSH.\r\n')
+  return true
+}
+
 async function authenticate() {
+  if (mode === 'port-timeout') { process.stderr.write('Connection to 100.106.126.4 port 22 timed out\r\n'); exit(255); return false }
   const knownHosts = recordPath ? join(dirname(recordPath), 'known_hosts') : undefined
   if (mode === 'host-key' && knownHosts && !existsSync(knownHosts)) {
     if (option('LogLevel') === 'DEBUG1') process.stderr.write('debug1: Server host key: ssh-ed25519 SHA256:fixtureKey\n')
@@ -106,7 +131,7 @@ async function authenticate() {
   }
   if (mode === 'refused') { process.stderr.write('user@forge: Permission denied (publickey).\n'); exit(255); return false }
   if (mode === 'unreachable') { process.stderr.write('ssh: connect to host forge port 22: Connection refused\n'); exit(255); return false }
-  return true
+  return tailscaleCheck()
 }
 
 const health = () => ({ v: 1, status: 'ready', hostId: mode === 'wrong-host' && tunnel ? randomUUID() : hostId, pid: hostPid, port: remotePort })
@@ -139,6 +164,7 @@ async function control(script) {
   if (mode === 'timeout') { setInterval(() => undefined, 1000); return }
   if (mode === 'node-missing') { process.stderr.write('sh: 1: exec: node: not found\n'); exit(127); return }
   if (mode === 'node-old') { say({ type: 'error', reason: 'node-too-old', version: '18.19.0' }); return }
+  if (mode === 'node-new') { say({ type: 'signed-in' }); say({ type: 'error', reason: 'node-too-new', version: '26.1.0' }); return }
   if (mode === 'missing') { say({ type: 'error', reason: 'archive-missing' }); return }
   if (mode === 'run') { await runRemotely(script); return }
   const operation = configuration?.op
