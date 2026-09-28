@@ -100,6 +100,21 @@ describe('terminal workspace service', () => {
     expect(results.filter(item => !item.ok)).toHaveLength(1)
     expect(unwrap(await f.service.list()).terminals).toHaveLength(64)
   })
+
+  it('admits only one of two different Closed rows when one active slot remains', async () => {
+    const f = await fixture()
+    const request = { projectId: 'p1', title: 'Build', workingCopy: 'shared', launch: shellLaunch }
+    const closed = [await started(f.service, request), await started(f.service, request)]
+    for (const item of closed) unwrap(await f.service.close({ id: item.terminal.id }))
+    for (let i = 0; i < 63; i++) unwrap(await f.service.open(request))
+    const results = await Promise.all(closed.map(item => f.service.restart({ id: item.terminal.id })))
+    expect(results.filter(item => item.ok)).toHaveLength(1)
+    expect(results.filter(item => !item.ok)).toEqual([{ ok: false, error: expect.objectContaining({ code: 'busy' }) }])
+    const listing = unwrap(await f.service.list()).terminals
+    expect(listing.filter(item => item.closedAt === null)).toHaveLength(64)
+    expect(listing.filter(item => item.closedAt !== null)).toHaveLength(1)
+    expect(f.spawn).toHaveBeenCalledTimes(66)
+  })
   it('publishes the terminal before its process exists, then its process and its branch', async () => {
     const f = await fixture()
     const opened = unwrap(await f.service.open({ projectId: 'p1', title: 'Build', workingCopy: 'shared', launch: shellLaunch }))
