@@ -326,6 +326,12 @@ describe('follow-up queue in the Threads composer', () => {
     expect(screen.getByText('Waiting for your last prompt to be confirmed.')).toBeInTheDocument()
     fireEvent.keyDown(second.prompt(), { key: 'Enter' })
     expect(requests(second.live, 'queue-followup')).toEqual([])
+    // Stop remains independent of the unresolved prompt, and never resubmits its text.
+    const stop = screen.getByRole('button', { name: 'Stop agent' })
+    expect(stop).toBeEnabled()
+    fireEvent.click(stop)
+    expect(requests(second.live, 'interrupt')).toEqual([{ type: 'interrupt', threadId: THREAD }])
+    expect(requests(second.live, 'manual-send')).toEqual([])
   })
 })
 
