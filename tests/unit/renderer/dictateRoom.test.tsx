@@ -133,7 +133,7 @@ describe('DictateRoom', () => {
   })
 
   it('locks the pill and drops the clock while transcribing, then reports the outcome', () => {
-    const rendered = render(<DictateRoom {...baseProps} dictation={{ status: 'processing', sessionId: 'one' }} />)
+    const rendered = render(<DictateRoom {...baseProps} dictation={{ status: 'processing', sessionId: 'one', startedAt: Date.now() }} />)
     expect(screen.getByRole('heading', { level: 1, name: 'Turning speech into text.' })).toBeVisible()
     expect(screen.getByRole('button', { name: 'Transcribing...' })).toBeDisabled()
     expect(rendered.container.querySelector('.voice-wave')).toHaveAttribute('data-stage', 'processing')

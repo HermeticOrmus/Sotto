@@ -49,7 +49,7 @@ export function NewThreadDialog({ state, command, onClose, onCreated, onCreating
   const chosenHost = hosts.find(item => item.hostId === (hostIdOf(project ?? undefined) ?? hostId ?? state.hostId))
   // A new folder becomes a project on the host chosen above, since it is added there rather than on any thread's host.
   const projectHost = hostForThread(state.host, { hostId: project?.hostId ?? parseHostEntityKey(project?.id ?? '')?.hostId ?? chosenHost?.hostId ?? state.hostId })
-  const [modelId, setModelId] = useState(() => defaultThreadModelId(state.configuration, projectHost.models, state.reasoningAccounts))
+  const [modelId, setModelId] = useState(() => defaultNewThreadModelId(state.configuration, projectHost.models, state.reasoningAccounts))
   // Choices carried back from a refused creation are the user's own; the default must not move under them.
   const modelChosen = useRef(false)
   const [reasoningEffort, setReasoningEffort] = useState<string | undefined>(undefined)
@@ -128,7 +128,7 @@ export function NewThreadDialog({ state, command, onClose, onCreated, onCreating
     }
   }, [])
   // Providers connect one at a time; follow the default as models become ready until a model is picked here.
-  useEffect(() => { if (managed && !modelChosen.current) setModelId(defaultThreadModelId(state.configuration, projectHost.models, state.reasoningAccounts)) }, [managed, state.configuration, projectHost.models, state.reasoningAccounts])
+  useEffect(() => { if (managed && !modelChosen.current) setModelId(defaultNewThreadModelId(state.configuration, projectHost.models, state.reasoningAccounts)) }, [managed, state.configuration, projectHost.models, state.reasoningAccounts])
   const createManaged = async (): Promise<void> => {
     if (creating || completed.current || state.globalLaneBusy || !connected || !canCreateThread || !selectedFolder || !modelId) return
     setCreating(true)

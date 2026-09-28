@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { defaultAgentConfiguration, type AgentState } from '../../../src/shared/agents'
 import { useOptionalAgents } from '../../../src/renderer/src/agents/AgentContext'
 import { AgentSetupFields } from '../../../src/renderer/src/agents/AgentAccountSettings'
+import { agentContextFixture } from '../../fixtures/agentContext'
 
 vi.mock('../../../src/renderer/src/agents/AgentContext', async importOriginal => ({ ...await importOriginal<typeof import('../../../src/renderer/src/agents/AgentContext')>(), useOptionalAgents: vi.fn() }))
 
@@ -27,7 +28,7 @@ function fixture(configuration: Partial<AgentState['configuration']> = {}): Agen
 }
 function provide(state: AgentState) {
   const command = vi.fn(async (): Promise<AgentState> => state)
-  vi.mocked(useOptionalAgents).mockReturnValue({ state, command, error: null, voice: { status: 'off' }, muteVoice: vi.fn(), stopSpeech: vi.fn(), retryVoice: vi.fn(), attention: { items: [], show: false, dismiss: vi.fn(), reopen: vi.fn(), next: vi.fn(async () => undefined) } })
+  vi.mocked(useOptionalAgents).mockReturnValue(agentContextFixture(state, command))
   return { state, command }
 }
 afterEach(() => { cleanup(); vi.clearAllMocks() })

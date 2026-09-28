@@ -47,9 +47,9 @@ describe('the large-turn watch behind Proactive panels', () => {
   })
   it('lets a small turn go at the first read after it, or after a minute with none, and ignores a paired host', () => {
     const watch = new ProactiveChangesWatch()
-    watch.observe([thread('a', 'running', git(0, 0, 't0')), thread('remote', 'running', git(0, 0, 't0'), { remoteHost: { hostId: '00000000-0000-4000-8000-000000000001', name: 'Build box' } } as Partial<AgentThread>)], 0)
+    watch.observe([thread('a', 'running', git(0, 0, 't0')), thread('remote', 'running', git(0, 0, 't0'), { remoteHost: true, hostId: '00000000-0000-4000-8000-000000000001' })], 0)
     // The turn ends on the status read before it did; the host reads the folder again just after.
-    expect(watch.observe([thread('a', 'idle', git(0, 0, 't0')), thread('remote', 'idle', git(10, 500, 't1'), { remoteHost: { hostId: '00000000-0000-4000-8000-000000000001', name: 'Build box' } } as Partial<AgentThread>)], 10)).toEqual([])
+    expect(watch.observe([thread('a', 'idle', git(0, 0, 't0')), thread('remote', 'idle', git(10, 500, 't1'), { remoteHost: true, hostId: '00000000-0000-4000-8000-000000000001' })], 10)).toEqual([])
     expect(watch.observe([thread('a', 'idle', git(1, 5, 't1'))], 15)).toEqual([])
     // The small turn's read has come and gone; a later edit by hand opens nothing.
     expect(watch.observe([thread('a', 'idle', git(8, 5, 't2'))], 20)).toEqual([])
