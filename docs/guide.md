@@ -70,6 +70,8 @@ A screenshot is kept once, as a file on the computer that runs the thread (the h
 
 You can create a thread from the Threads page while another thread has a saved coordinator draft. The draft stays with its original thread, including while the voice coordinator is hidden for the beta.
 
+Stop can cancel running work even when the provider has not confirmed the last prompt. That prompt stays unconfirmed until the provider reports receiving it; stopping does not resend it or discard its saved identity.
+
 ### History and copying
 
 A thread's messages and retained activity are Sotto's own record, kept in `threads.sqlite` in the app's data folder rather than rebuilt from the provider each time Sotto starts. A thread pane opens on its newest ten turns; press **Show earlier messages** above the oldest one to read further back. A provider session starts when you open or send to a thread, not at connect, and one left idle for thirty minutes is stopped until the next time it is needed. With **Keep local history** off, no message text or activity output is written to disk; turning it off removes the text already written, and what was not kept cannot be recovered. See [ADR-0016](adr/0016-sotto-owned-history-on-an-event-store.md).
