@@ -24,7 +24,7 @@ const SESSION = z.object({ sessionId: z.string().min(1).max(300), models: z.obje
   }).optional() })).min(1).max(300),
 }), _meta: z.object({ 'x.ai/sessionConfig': z.object({ options: z.array(z.object({ id: z.string(), category: z.string(), selected: z.boolean().optional() })) }).optional() }).optional() })
 const SAFE_ENVIRONMENT = new Set(['path', 'pathext', 'systemroot', 'windir', 'temp', 'tmp', 'home', 'userprofile', 'homedrive', 'homepath',
-  'appdata', 'localappdata', 'lang', 'lc_all', 'lc_ctype', 'tz', 'https_proxy', 'http_proxy', 'no_proxy', 'ssl_cert_file', 'ssl_cert_dir'])
+  'appdata', 'localappdata', 'programdata', 'allusersprofile', 'lang', 'lc_all', 'lc_ctype', 'tz', 'https_proxy', 'http_proxy', 'no_proxy', 'ssl_cert_file', 'ssl_cert_dir'])
 const CONNECTION_ERROR = 'Could not verify the Grok subscription. Open Grok and check its sign-in, then check the connection in Sotto. Sotto will not switch to API billing.'
 async function removeSession(directory: string, parent: string): Promise<void> {
   if (dirname(resolve(directory)) !== resolve(parent)) throw new Error('Unexpected temporary Grok session directory.')

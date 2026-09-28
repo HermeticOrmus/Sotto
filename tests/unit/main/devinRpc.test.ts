@@ -10,6 +10,10 @@ describe('Devin stdio boundary', () => {
     expect(devinEnvironment({ PATH: 'bin', APPDATA: 'data', HOME: 'home', DEVIN_API_KEY: 'secret', OPENAI_API_KEY: 'secret', DEVIN_BASE_URL: 'elsewhere', NODE_OPTIONS: '--inspect', HTTPS_PROXY: 'proxy' }))
       .toEqual({ PATH: 'bin', APPDATA: 'data', HOME: 'home', HTTPS_PROXY: 'proxy' })
   })
+  it('passes the Windows machine-wide data folder so tools like OpenSSH find their system configuration', () => {
+    expect(devinEnvironment({ ProgramData: 'C:\\ProgramData', ALLUSERSPROFILE: 'C:\\ProgramData', DEVIN_API_KEY: 'secret' }))
+      .toEqual({ ProgramData: 'C:\\ProgramData', ALLUSERSPROFILE: 'C:\\ProgramData' })
+  })
   it('checks the CLI version banner rather than the unversioned ACP identity', async () => {
     expect(await readDevinVersion(process.execPath, ['-e', "process.stdout.write('devin 3000.10.31 (b98cc431)\\n')", '--'])).toBe('3000.10.31')
     await expect(readDevinVersion(process.execPath, ['-e', "process.stdout.write('PRIVATE INVALID BANNER')", '--'])).rejects.not.toThrow('PRIVATE INVALID BANNER')
