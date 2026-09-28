@@ -95,7 +95,14 @@ test('the project pen rejects settled and stale empty threads', async () => {
     await pen.click()
     await expect.poll(async () => (await active())?.modelId).toBe('claude:sonnet')
     const first = (await active())!
-    await page.evaluate(async () => window.sotto!.agents!.command({ type: 'configure', patch: { newThreadModelId: 'codex:gpt' } }))
+    await openPage(page, 'Settings')
+    await page.getByRole('tab', { name: 'Agents', exact: true }).click()
+    const model = page.getByRole('combobox', { name: 'Thread model', exact: true })
+    await model.click()
+    await page.getByRole('tab', { name: 'Codex', exact: true }).click()
+    await page.getByRole('option', { name: 'GPT-5.4', exact: true }).click()
+    await expect(model).toHaveText(/GPT-5.4/)
+    await openThreads(page)
     await pen.click()
     await expect.poll(async () => (await active())?.modelId).toBe('codex:gpt')
     const second = (await active())!
