@@ -11,7 +11,7 @@ The additional regression replaces the coordinator, workspace host, thread regis
 - Source and built app came from `review-395`, based on the approved dictation recovery integration `9965452a`. No alternate main-entry path was used. The daily workspace journey is owned separately by #391 and the broader release check by #393.
 - The minimum dark queued-steering view, minimum light dictation recovery and reconnect model picker were inspected. Controls and recovered words were visible. The existing journeys also generated dark/light captures at their defined sizes and retained their keyboard assertions. No design baseline changed; pre-existing command-receipt and queued-steering captures were restored.
 - `SOTTO_PERF_DATA` pointed to a verified absent owned artifact path. No paid turn, production profile or real microphone input was used.
-- Full two-worker suite and independent review remain queued. This proof is Windows-local; macOS was not exercised.
+- Independent native Astra Standards and Spec reviews and the parent source/minimum-capture review reported no findings. The full two-worker suite remains queued. This proof is Windows-local; macOS was not exercised.
 
 The temporary Grok read-error diagnostic discovered while preparing these checks was moved to ignored `.probe.txt` evidence and then implemented separately in #420. It is not part of this recovery test change.
 
