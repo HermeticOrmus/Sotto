@@ -273,3 +273,12 @@ describe('Claude native subscription client', () => {
     await expect(f.client.complete('JSON only', {}, '--dangerously-skip-permissions')).rejects.toThrow(/model/iu)
   })
 })
+
+describe('Claude thread environment', () => {
+  it('passes the Windows machine-wide data folder so tools like OpenSSH find their system configuration', () => {
+    const client = new ClaudeSubscriptionClient(tmpdir(), { environment: {
+      Path: 'bin', ProgramData: 'C:\\ProgramData', ALLUSERSPROFILE: 'C:\\ProgramData', ANTHROPIC_API_KEY: 'fixture-secret',
+    } })
+    expect(client.environment()).toEqual({ Path: 'bin', ProgramData: 'C:\\ProgramData', ALLUSERSPROFILE: 'C:\\ProgramData', NO_COLOR: '1' })
+  })
+})

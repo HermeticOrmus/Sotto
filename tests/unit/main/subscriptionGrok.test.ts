@@ -24,7 +24,7 @@ const scenario = JSON.parse(fs.readFileSync(${JSON.stringify(scenarioPath)}, 'ut
 const reply = (id, result) => process.stdout.write(JSON.stringify({jsonrpc:'2.0',id,result})+'\\n');
 rl.createInterface({input:process.stdin}).on('line', line => {
  const request = JSON.parse(line);
- fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({pid:process.pid,method:request.method,params:request.params,args:process.argv.slice(2),env:Object.fromEntries(Object.entries(process.env).filter(([k])=>/^(GROK_|XAI_|NODE_OPTIONS)/i.test(k))),cwd:process.cwd(),policy:fs.readFileSync(require('node:path').join(process.env.GROK_HOME,'requirements.toml'),'utf8')})+'\\n');
+ fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({pid:process.pid,method:request.method,params:request.params,args:process.argv.slice(2),env:Object.fromEntries(Object.entries(process.env).filter(([k])=>/^(GROK_|XAI_|NODE_OPTIONS|PROGRAMDATA$|ALLUSERSPROFILE$)/i.test(k))),cwd:process.cwd(),policy:fs.readFileSync(require('node:path').join(process.env.GROK_HOME,'requirements.toml'),'utf8')})+'\\n');
  if(request.method==='initialize') return reply(request.id,{protocolVersion:1,authMethods:[{id:'cached_token'},{id:'grok.com'}]});
  if(request.method==='authenticate') return scenario.auth ? reply(request.id,{}) : process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:request.id,error:{code:-32000,message:'fixture-private-auth-error'}})+'\\n');
  if(request.method==='session/new') {
@@ -48,7 +48,8 @@ rl.createInterface({input:process.stdin}).on('line', line => {
 });
 `)
   const nativeHome = join(root, 'user-native-home')
-  const environment = { ...process.env, GROK_HOME: nativeHome, XAI_API_KEY: 'fixture-key', GROK_CONFIG: 'fixture-routing', GROK_AUTH: 'fixture-auth', GROK_XAI_API_BASE_URL: 'https://wrong.example', NODE_OPTIONS: '--fixture' }
+  const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(programdata|allusersprofile)$/iu.test(key)))
+  const environment = { ...inherited, ProgramData: 'fixture-program-data', ALLUSERSPROFILE: 'fixture-all-users', GROK_HOME: nativeHome, XAI_API_KEY: 'fixture-key', GROK_CONFIG: 'fixture-routing', GROK_AUTH: 'fixture-auth', GROK_XAI_API_BASE_URL: 'https://wrong.example', NODE_OPTIONS: '--fixture' }
   const client = new GrokSubscriptionClient(join(root, 'isolated'), { executable: process.execPath, prefixArgs: [script], environment, completionTimeoutMs: timeoutMs, statusTimeoutMs: timeoutMs, outputLimitBytes: 40_000 })
   return { root, nativeHome, client, configure, async calls(): Promise<Call[]> { return (await readFile(log, 'utf8')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line) as Call) } }
 }
@@ -88,6 +89,8 @@ describe('Grok native subscription client', () => {
     expect(calls[0]!.env.GROK_HOME).not.toBe(f.nativeHome)
     expect(calls[0]!.env).toMatchObject({ GROK_DISABLE_API_KEY_AUTH: '1', GROK_DISABLE_AUTOUPDATER: '1' })
     for (const key of ['XAI_API_KEY', 'GROK_AUTH', 'NODE_OPTIONS']) expect(calls[0]!.env).not.toHaveProperty(key)
+    // Windows' OpenSSH quits silently without ProgramData, so a thread could not run ssh.
+    expect(calls[0]!.env).toMatchObject({ ProgramData: 'fixture-program-data', ALLUSERSPROFILE: 'fixture-all-users' })
     expect(calls[0]!.args).toEqual(expect.arrayContaining(['--tools', '', '--no-subagents', '--disable-web-search', '--no-leader']))
     expect(calls[0]!.args).toEqual(expect.arrayContaining(['--deny', '*']))
     expect(calls.every(call => call.policy === '[permission]\nrules = [{ action = "deny", tool = "any" }]\n')).toBe(true)
