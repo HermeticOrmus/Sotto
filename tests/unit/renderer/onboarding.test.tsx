@@ -25,6 +25,26 @@ function deferred<Value>() {
 }
 
 describe('first-run onboarding', () => {
+  it.each(['idle', 'requesting', 'denied', 'missing', 'error'] as const)('keeps %s at the microphone step until the user explicitly skips', async microphoneState => {
+    const complete = vi.fn()
+    const user = userEvent.setup()
+    render(<Onboarding {...keyProps} microphoneState={microphoneState} shortcut="Ctrl+Shift+Space" platform="win32" onRequestMicrophone={vi.fn()} onComplete={complete} />)
+    await goToStep(user, 2)
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled()
+    expect(screen.getByText(/Test your microphone or choose Skip for now to continue/)).toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'Continue' }))
+    expect(screen.getByRole('heading', { name: 'Check your microphone' })).toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'Back' }))
+    await user.click(screen.getByRole('button', { name: 'Continue' }))
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled()
+    await user.click(screen.getByRole('button', { name: 'Skip for now' }))
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled()
+    await user.click(screen.getByRole('button', { name: 'Continue' }))
+    await user.click(screen.getByRole('button', { name: 'Continue' }))
+    await user.click(screen.getByRole('button', { name: 'Finish setup' }))
+    expect(complete).toHaveBeenCalledWith({ microphoneSkipped: true })
+  })
+
   it('states the hosted transcription privacy boundary', () => {
     render(
       <Onboarding {...keyProps}
@@ -114,12 +134,12 @@ describe('first-run onboarding', () => {
     expect(screen.getByLabelText('Ctrl+Shift+Space')).toBeVisible()
   })
 
-  it('disables Finish until the microphone is ready', async () => {
+  it('still guards Finish if a previously ready microphone becomes unavailable', async () => {
     const user = userEvent.setup()
     const complete = vi.fn()
     const { rerender } = render(
       <Onboarding {...keyProps}
-        microphoneState="denied"
+        microphoneState="ready"
         shortcut="Ctrl+Shift+Space"
         platform="win32"
         onRequestMicrophone={vi.fn()}
@@ -127,6 +147,7 @@ describe('first-run onboarding', () => {
       />,
     )
     await goToStep(user, 4)
+    rerender(<Onboarding {...keyProps} microphoneState="denied" shortcut="Ctrl+Shift+Space" platform="win32" onRequestMicrophone={vi.fn()} onComplete={complete} />)
     expect(screen.getByRole('button', { name: /finish setup/i })).toBeDisabled()
 
     rerender(
@@ -253,6 +274,7 @@ describe('first-run onboarding', () => {
       microphoneState === 'denied' ? copy.onboardingMicrophoneDenied : copy.onboardingMicrophoneMissing,
     )).toBeVisible()
 
+    await user.click(screen.getByRole('button', { name: /skip for now/i }))
     await user.click(screen.getByRole('button', { name: /continue/i }))
     await user.click(screen.getByRole('button', { name: /continue/i }))
     expect(screen.getByLabelText('Control+Shift+Space')).toBeVisible()
