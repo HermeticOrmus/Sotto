@@ -80,7 +80,10 @@ export class TerminalWorkspaceStore {
     const result = await settle(bridge.list())
     if (token !== this.listToken) return
     if (!result.ok) { this.set({ ...this.state, status: 'error', error: result.error }); return }
-    for (const terminal of result.value.terminals) this.ensureRecord(terminal.id)
+    for (const terminal of result.value.terminals) {
+      this.ensureRecord(terminal.id)
+      if (terminal.closedAt !== null) this.release(terminal.id)
+    }
     this.set({ ...this.state, status: 'ready', error: null, terminals: result.value.terminals, shell: result.value.shell })
   }
 
@@ -227,6 +230,7 @@ export class TerminalWorkspaceStore {
 
   private replay(record: TerminalRecord, snapshot: WorkspaceTerminalSnapshot): void {
     this.upsert(snapshot.terminal)
+    if (snapshot.terminal.closedAt !== null) { this.release(snapshot.terminal.id); return }
     record.loaded = true
     if (!record.view) {
       record.pending = snapshot
@@ -262,6 +266,7 @@ export class TerminalWorkspaceStore {
 
   private receive(event: WorkspaceTerminalEvent): void {
     if (event.type === 'output') {
+      if (this.terminal(event.id)?.closedAt != null) return
       const record = this.records.get(event.id)
       if (!record) {
         const queue = this.orphans.get(event.id) ?? []
@@ -279,6 +284,7 @@ export class TerminalWorkspaceStore {
     }
     this.ensureRecord(event.terminal.id)
     this.upsert(event.terminal)
+    if (event.terminal.closedAt !== null) { this.release(event.terminal.id); return }
     const record = this.records.get(event.terminal.id)
     if (record && !record.replaying) record.view?.setInputEnabled(event.terminal.status === 'running')
   }
@@ -292,8 +298,11 @@ export class TerminalWorkspaceStore {
   private release(id: string): void {
     const record = this.records.get(id)
     record?.view?.dispose()
-    if (record) record.view = null
-    // The record stays for the Closed shelf; only its screen goes.
+    if (record) { record.view = null; record.buffer = []; record.pending = null }
+    this.records.delete(id)
+    this.orphans.delete(id)
+    // Metadata stays in the listing; dropping this record releases output and invalidates any pending read.
+    this.ensureRecord(id).lastOutputAt = record?.lastOutputAt ?? Number.NEGATIVE_INFINITY
   }
 
   private ensureRecord(id: string): TerminalRecord {
