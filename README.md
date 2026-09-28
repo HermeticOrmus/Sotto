@@ -20,7 +20,7 @@ Sotto runs the Claude Code, Codex, Grok Build and Devin clients you already have
 
 ## What it does
 
-- **One sidebar for every agent.** Each provider keeps its own sign-in and models. Sotto keeps the threads.
+- **One sidebar for every agent.** Each provider keeps its own sign-in and models. Sotto keeps the threads. Stop still reaches running work when its last prompt is unconfirmed.
 - **You answer every request.** Anything a thread's permissions don't already allow waits for you. A paired device needs your permission to answer requests or create threads with permissions that allow actions without asking, even when those permissions come from the host's defaults.
 - **Tools beside each thread.** A browser, a terminal, the thread's files and its changes.
 - **Codex's Computer Use.** In a Codex thread set to Full access, with the Codex app open, Codex can operate the apps on your computer.
@@ -29,6 +29,8 @@ Sotto runs the Claude Code, Codex, Grok Build and Devin clients you already have
 - **Dictation anywhere.** Press `Ctrl+Shift+Space` (`⌃⇧Space` on a Mac), speak, and press it again. The text is copied and can be pasted at your cursor.
 
 Thread drafts save automatically while you type, including while other threads are working.
+
+Terminal mode keeps closed terminals on its Closed shelf until you quit. Reopen starts the same command with fresh output; Stop keeps the output readable.
 
 ## Install
 
@@ -59,6 +61,8 @@ Sotto has no account of its own and collects nothing about you: no analytics, no
 - **Only if you use them:** `api.openai.com` and `api.x.ai` for optional reasoning and reply voices, `open-vsx.org` (with `openvsxorg.blob.core.windows.net` and `openvsx.eclipsecontent.org`) for themes, `huggingface.co` for the natural voice download, SSH hosts you add, and pages you open in Sotto's browser.
 
 Dictation history stays on your computer, and you can turn it off. Screenshots you attach to a thread are kept as files on the computer that runs the thread, only while an unsent draft, a queued message or a recent message's preview needs them and for an hour after; with history off, new ones stay in memory and are not written to disk. Keys are kept in your operating system's credential store.
+
+If thread messages cannot be saved, Sotto keeps them in memory and retries while it is open. The warning stays until they are saved. Restore storage access before quitting; unsaved messages cannot survive a restart.
 
 The iPhone app, in development, talks only to your own Sotto host, through your private Tailscale address. It looks the host's name up through Tailscale's own name service on the phone, pairs with a code the host prints, and never answers a permission unless you have allowed it on the host.
 

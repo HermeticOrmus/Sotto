@@ -73,6 +73,9 @@ export class TerminalWorkspaceService extends ToolOperations {
   private now(): number { return this.dependencies.now?.() ?? Date.now() }
   private publish(record: LiveTerminal): void { this.dependencies.emit({ type: 'terminal', terminal: { ...record.terminal } }) }
   private snapshot(record: LiveTerminal): WorkspaceTerminalSnapshot { return { terminal: { ...record.terminal }, output: record.output, sequence: record.sequence } }
+  private requireCapacity(): void {
+    if ([...this.terminals.values()].filter(record => record.terminal.closedAt === null).length >= TERMINALS_MAX) return fail('busy', `Close a terminal before opening another (${TERMINALS_MAX} maximum).`)
+  }
   /** The terminal, once its startup has landed: an operation on a starting terminal waits for its process. */
   private async owned(id: string, wait = true): Promise<LiveTerminal> {
     const record = this.terminals.get(id)
@@ -89,7 +92,7 @@ export class TerminalWorkspaceService extends ToolOperations {
   open(payload: unknown) { return this.run(async () => {
     const request = parse(terminalOpenSchema, payload)
     if (this.disposed) return fail('unavailable', 'Terminal is shutting down.')
-    if ([...this.terminals.values()].filter(record => record.terminal.closedAt === null).length >= TERMINALS_MAX) return fail('busy', `Close a terminal before opening another (${TERMINALS_MAX} maximum).`)
+    this.requireCapacity()
     const project = this.dependencies.projects().find(item => item.id === request.projectId)
     if (!project) return fail('workspace-unavailable', 'This project is no longer available.')
     let worktree: AgentWorktree | undefined
@@ -105,6 +108,8 @@ export class TerminalWorkspaceService extends ToolOperations {
     }
     const launcher = await this.launcher(request.launch)
     if (this.disposed) return fail('unavailable', 'Terminal is shutting down.')
+    // Other opens may have filled the last slot while the folder or launcher was being prepared.
+    this.requireCapacity()
     const record: LiveTerminal = {
       terminal: {
         id: randomUUID(), projectId: project.id, title: request.title, launch: request.launch, workingCopy: worktree?.mode ?? 'shared', ...(worktree ? { worktree } : {}),
@@ -235,6 +240,8 @@ export class TerminalWorkspaceService extends ToolOperations {
       const spawn = await this.spawner()
       if (this.disposed) return fail('unavailable', 'Terminal is shutting down.')
       if (generation !== record.generation) return fail('session-unavailable', 'This terminal was closed before it could start.')
+      // A closed row rejoins the active set only here, without an await between the check and the change.
+      if (record.terminal.closedAt !== null) this.requireCapacity()
       record.output = ''
       record.sequence = 0
       // The size is read here, not before the await: a pane that measured itself while the terminal started already said so.
@@ -260,6 +267,7 @@ export class TerminalWorkspaceService extends ToolOperations {
       this.publish(record)
     } catch (error) {
       if (this.disposed || generation !== record.generation) throw error
+      if (record.terminal.closedAt !== null && error instanceof Error && 'code' in error && error.code === 'busy') throw error
       this.kill(record)
       record.terminal = { ...record.terminal, status: 'unavailable', exitCode: null }
       this.publish(record)
@@ -317,6 +325,7 @@ export class TerminalWorkspaceService extends ToolOperations {
         void this.track(record, generation)
         return this.snapshot(record)
       } catch (error) {
+        if (record.terminal.closedAt !== null && error instanceof Error && 'code' in error && error.code === 'busy') throw error
         // Launcher failures happen before start() can publish them. A superseded lifecycle owns no state.
         if (!this.disposed && generation === record.generation && record.terminal.status !== 'unavailable') {
           this.kill(record)
@@ -336,6 +345,7 @@ export class TerminalWorkspaceService extends ToolOperations {
     record.ready = undefined
     this.end(record)
     record.terminal = { ...record.terminal, closedAt: this.now(), status: record.terminal.status === 'starting' ? 'exited' : record.terminal.status }
+    record.output = ''
     this.publish(record)
   }) }
   pasteImage(payload: unknown) { return this.run(async () => {

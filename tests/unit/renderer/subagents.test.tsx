@@ -180,6 +180,9 @@ describe('a workflow in the roster', () => {
 
   it('shows the workflow as one row with a strip, and opens its page with its agents under "All agents"', async () => {
     const { bridge } = fixture(rows())
+    const loadAssignments = vi.mocked(bridge.assignments).getMockImplementation()!
+    let resolveAssignments!: (value: Awaited<ReturnType<SubagentsBridge['assignments']>>) => void
+    vi.mocked(bridge.assignments).mockImplementationOnce(() => new Promise(resolve => { resolveAssignments = resolve }))
     render(<AgentsSurface threadId="thread" store={store()} bridge={bridge} />)
     const open = await screen.findByRole('button', { name: 'Open the workflow Implement the phase 1 perf issues: 1 of 3 finished, 1 failed, Working' })
     const roster = screen.getByRole('list', { name: 'Spawned agents' })
@@ -191,10 +194,19 @@ describe('a workflow in the roster', () => {
     const back = screen.getByRole('button', { name: 'Back to all agents' })
     await waitFor(() => expect(back).toHaveFocus())
     expect(screen.getByText('Implement the phase 1 perf issues', { selector: '.tools-chrome__title' })).toBeInTheDocument()
-    expect(screen.getByText('phase-1-perf')).toBeInTheDocument()
+    // The summary and pending detail both retain the description until assignments arrive.
+    expect(screen.getByText('phase-1-perf', { selector: '.subagent-workflow__facts > span' })).toBeVisible()
+    expect(screen.getByText('phase-1-perf', { selector: '.subagent-workflow__details p' })).toBeVisible()
+    expect(await screen.findByText('Loading assignments…')).toHaveAttribute('role', 'status')
+    expect(bridge.assignments).toHaveBeenCalledWith({ threadId: 'thread', agentId: 'flow' })
+    expect(screen.queryByText('Full task instructions')).not.toBeInTheDocument()
     // One model, named once: the alias goes once a resolved name of the same family is there.
     expect(screen.getByText('claude-opus-5-5[1m], claude-sonnet-5')).toBeInTheDocument()
+    await act(async () => resolveAssignments(await loadAssignments({ threadId: 'thread', agentId: 'flow' })))
     expect(await screen.findByText('Full task instructions')).toBeInTheDocument()
+    expect(screen.getByText('phase-1-perf')).toBeInTheDocument()
+    expect(screen.queryByText('Loading assignments…')).not.toBeInTheDocument()
+    expect(back).toHaveFocus()
     const agents = screen.getByRole('list', { name: 'Agents' })
     expect([...agents.querySelectorAll('.subagent-title')].map(title => [title.textContent, title.getAttribute('title')])).toEqual([
       ['#311 311-thread-command-lanes', '#311 311-thread-command-lanes'], ['#312 312-history-recency-on-view', '#312 312-history-recency-on-view'], ['#313 313-command-reply-shell', '#313 313-command-reply-shell']])
