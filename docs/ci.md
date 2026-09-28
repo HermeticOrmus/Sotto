@@ -270,6 +270,10 @@ npx vitest run tests/integration/codexComputerUseLive.test.ts --maxWorkers=1
 
 Build and run `npx playwright test tests/e2e/agent-browser.spec.ts tests/e2e/tools-sidecar.spec.ts tests/e2e/phase-three-tools-bridge.spec.ts` to exercise the real Electron browser, permission continuation, feedback drafts and the Tools pane. The agent test uses a local page and test-only provider entry point; it needs no provider account. Screenshots and a geometry report are written to ignored `artifacts/agent-browser/`. Native-provider compatibility and actual desktop results are recorded separately in `docs/verification/`.
 
+## Grok request-log observations
+
+`tests/integration/grokFixtureReadErrors.test.ts` requires the fake Grok request and violation observers to distinguish absent initial logs from unreadable logs. A known start remains a known start after a temporary fault is removed; EACCES and EBUSY surface as read errors, while malformed JSON remains a parse error. An unreadable violation log cannot silently pass its protocol check. The fixture does not turn these failures into missing provider work or evidence (#420).
+
 ## Recovery through application boundaries
 
 `npm run test:recovery` is the compact recovery check (#395). It runs seven focused test files with two Vitest workers, builds the app, then runs the dictation recovery, command receipt and queued steering journeys in one Electron worker. Run it from an installed checkout on the desktop being verified, with no other Electron journey running. Every case uses isolated temporary storage and scripted effects; it needs no provider account or paid turn and does not regenerate design baselines.

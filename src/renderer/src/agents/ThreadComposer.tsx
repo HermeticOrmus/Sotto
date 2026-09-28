@@ -74,7 +74,10 @@ export async function sendThreadRevision(store: ThreadDraftStore, row: ThreadRow
       ...(draft.files?.length ? { files: [...draft.files] } : {}),
     }
     const result = await command(mode === 'queue' ? { type: 'queue-followup', ...payload } : mode === 'steer' ? { type: 'steer', ...payload } : { type: 'manual-send', ...payload })
-    store.resolve(threadId, draft.draftId, result === null ? UNCONFIRMED_SUBMISSION[mode] : result.error)
+    // Exact queue ownership wins an unrelated shell error, even before its publication reaches the draft store.
+    const error = result === null ? UNCONFIRMED_SUBMISSION[mode]
+      : mode === 'queue' && queuedRevision(result, threadId, draft.draftId) ? null : result.error
+    store.resolve(threadId, draft.draftId, error)
   } catch {
     store.resolve(threadId, draft.draftId, attempted ? UNCONFIRMED_SUBMISSION[mode] : 'Could not release this thread from management.', !attempted)
   }
