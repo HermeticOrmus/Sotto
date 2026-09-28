@@ -45,7 +45,7 @@ describe('revision-aware settings drafts', () => {
   })
 
   it('restores a failed numeric edit only while it still owns the draft', () => {
-    const { result } = renderHook(() => useRevisionDraft(200, '200'))
+    const { result } = renderHook(() => useRevisionDraft<number>(200, '200'))
     act(() => { result.current.edit('300') })
     const first = result.current.begin(300)!
     act(() => { result.current.edit('400') })
@@ -80,7 +80,7 @@ describe('revision-aware settings drafts', () => {
 
   it('renders once per edit and adds no render when a submission is recorded or a retained draft fails', () => {
     let renders = 0
-    const { result } = renderHook(() => { renders += 1; return useRevisionDraft('', '') })
+    const { result } = renderHook(() => { renders += 1; return useRevisionDraft<string>('', '') })
     const initial = renders
     act(() => { result.current.edit('Sotto') })
     expect(renders - initial).toBe(1)
