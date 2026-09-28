@@ -23,6 +23,8 @@ boundaries. Test fixtures must satisfy the current bridge and component contract
 an ignored query option or an incomplete mock is an error in the normal typecheck
 gate, even if the test happens to run.
 
+`tests/integration/nativeTargetRefresh.test.ts` holds one unrelated thread's actual native history refresh open while another thread receives its prompt acknowledgement and exact persisted receipt. The barrier stays held through both assertions for Codex, Claude and Grok; the normal test deadline bounds failures, with no wall-clock performance budget. A diagnostic that makes the target wait for the held refresh must fail the acknowledgement assertion before cleanup releases the history read.
+
 The job cancels a superseded run on the same ref (`concurrency` with `cancel-in-progress`), has a 30-minute safety timeout, and requests only `contents: read`.
 
 ## What CI deliberately does not run
@@ -268,6 +270,32 @@ npx vitest run tests/integration/codexComputerUseLive.test.ts --maxWorkers=1
 
 Build and run `npx playwright test tests/e2e/agent-browser.spec.ts tests/e2e/tools-sidecar.spec.ts tests/e2e/phase-three-tools-bridge.spec.ts` to exercise the real Electron browser, permission continuation, feedback drafts and the Tools pane. The agent test uses a local page and test-only provider entry point; it needs no provider account. Screenshots and a geometry report are written to ignored `artifacts/agent-browser/`. Native-provider compatibility and actual desktop results are recorded separately in `docs/verification/`.
 
+## Manual Windows desktop check
+
+After `npm ci`, run `npm run test:desktop-smoke` from the release checkout on an interactive Windows desktop. This is an explicit prerequisite in the [release procedure](release/releasing.md), and can also be run manually while developing. Normal CI continues to exclude Electron; no scheduled job, secret, publishing action or design-baseline regeneration is added.
+
+The command runs `test:recovery`, which checks focused real application boundaries, builds once and drives receipt, queued-steering and completed-dictation recovery. It then uses that same build for both daily-workspace cases and the Settings index journey. The daily check drives actual keyboard input through a Windows shell, verifies the changed file, reads its diff, commits and pushes only to an owned temporary bare repository; its GitHub client is scripted. The restart case checks drafts and queues, while Settings checks real saves, failure feedback, keyboard navigation, themes and persistence.
+
+Electron journeys run serially with one worker. Do not run another Electron journey on the same desktop concurrently. The wrapper refuses other platforms, clears live-provider and timing-benchmark flags and any alternate Electron entry point, and supplies a verified absent owned performance-data path. Fixtures create and remove only their owned temporary profiles. `SOTTO_E2E_ARTIFACT_ROOT` routes the selected journeys' screenshots and proof files into ignored `artifacts/review-393/desktop-run/`, each in its own named subdirectory; the runner does not modify or restore committed captures. Standalone spec runs keep their usual evidence paths unless that option is supplied. Inspect the emitted screenshots after a UI change and keep only selected evidence. A failed stage stops the command and blocks the release check; investigate its assertion before rerunning. Record the source commit, actual test counts and platform in the release evidence. A local Windows pass does not establish macOS execution.
+
+## Recovery through application boundaries
+
+`npm run test:recovery` is the compact recovery check (#395). It runs seven focused test files with two Vitest workers, builds the app, then runs the dictation recovery, command receipt and queued steering journeys in one Electron worker. Run it from an installed checkout on the desktop being verified, with no other Electron journey running. Every case uses isolated temporary storage and scripted effects; it needs no provider account or paid turn and does not regenerate design baselines.
+
+| Boundary | Assertions |
+| --- | --- |
+| Coordinator → workspace → provider | Held and uncertain sends remain stoppable; the original durable intent is neither replaced nor replayed; rejected Stop releases its lane. |
+| Fresh coordinator and workspace over the same disk | An uncertain send survives reopening; unrelated identical words do not reconcile it; only the exact late provider receipt settles it, without another send. |
+| Workspace → event store | Failed writes retain events and activity, retry in order, survive reopening, respect history off, and drain before shutdown. |
+| Renderer → controller → output | Actual completed text survives navigation and later dictation after clipboard failure; Copy retries neither transcribe nor paste; ordinary paste refusal keeps its existing fallback. |
+| Real Electron renderer and preload | Receipt feedback, queued steering and selectable dictation recovery use the built app and test-only provider or clipboard effects. |
+
+This command complements the full suite. Its fake provider boundary proves Sotto's recovery contract, not a paid provider's availability. The broader repeatable desktop workflow is tracked separately in #393.
+
+## Grok request-log observations
+
+`tests/integration/grokFixtureReadErrors.test.ts` requires the fake Grok request and violation observers to distinguish absent initial logs from unreadable logs. A known start remains a known start after a temporary fault is removed; EACCES and EBUSY surface as read errors, while malformed JSON remains a parse error. An unreadable violation log cannot silently pass its protocol check. The fixture does not turn these failures into missing provider work or evidence (#420).
+
 ## Stale host-lock test processes
 
 `hostLock.test.ts` waits for its synthetic holder process to exit, then fixes only that PID's zero-signal liveness probe to `ESRCH` for the test. Windows may reuse a PID during repeated acquisition rounds; a newly live PID would correctly make every contender refuse the supposedly crashed lease. Other PID/signal probes still use the real process API. Filesystem contention, exact single-owner and winner-lock checks, cleanup, live-owner refusals and the separate `ESRCH`/`EPERM` policy tests remain real and unchanged (#406). No production lock rule or deadline is relaxed.
@@ -291,3 +319,7 @@ The workflow has no path filters, so changes under `apps/ios` and the host proto
 ## Current-session reaper observations
 
 The Claude fixture's stopped check reads its current child ownership marker and probes that PID. Grok records residency after an accepted load or close; a historical or rejected close is not evidence that its current session stopped. `sessionFixtureObservation.test.ts` covers a real resumed Claude child and a Grok close/reload, including a rejected close. The host contracts keep their existing deadlines and assert actual session ownership rather than elapsed time.
+
+## Grok idle history maintenance
+
+`grokIdleMaintenance.test.ts` holds real fake-provider history reads against a controlled clock. Repeated empty polls must not renew idle age, and the first sweep after a read settles must use the existing age. Separate cases check actual durable-only provider events and foreground refreshes. `sessionReaper.test.ts` protects reads without blocking another eligible session and rechecks activity, watched state and working state after settlement. These are structural checks with no new deadlines or stopwatch assertions (#440).

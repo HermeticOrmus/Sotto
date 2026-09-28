@@ -1,9 +1,10 @@
 import { mkdir, writeFile } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
 import { expect, test, type Page } from '@playwright/test'
 import { closeSotto, launchSottoWithVoice, type LaunchedSotto } from './support/sottoLaunch'
+import { evidenceDirectory } from './support/evidence'
 
-const evidence = resolve('artifacts/settings-index')
+const evidence = evidenceDirectory('artifacts/settings-index')
 const categories = ['Dictation', 'Transcription', 'Cleanup', 'Providers', 'Hosts', 'Agents', 'Output', 'Appearance', 'Application', 'Git'] as const
 const sizes = [[1280, 800], [1600, 1000], [820, 560]] as const
 

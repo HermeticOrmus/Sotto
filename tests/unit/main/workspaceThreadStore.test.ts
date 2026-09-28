@@ -2,7 +2,7 @@
 import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { EMPTY_AGENT_HOST, type AgentHostSnapshot, type AgentMessage, type AgentThread } from '../../../src/shared/agents'
 import type { RestoredThreadHistory, ThreadHostEvent } from '../../../src/main/agents/host'
 import type { ThreadEvent } from '../../../src/shared/threadEvents'
@@ -240,6 +240,46 @@ class EventProviderHost extends FakeProviderHost {
 }
 
 describe('a provider host that appends events instead of rebuilding a history', () => {
+  it('restores archive summaries and pending requests without reading unwatched message windows', async () => {
+    const directory = await root()
+    const threads: AgentThread[] = Array.from({ length: 8 }, (_, index) => ({
+      id: `archive-${index}`, projectId: 'project', title: `Archive ${index}`, modelId: 'fake:model', status: 'idle',
+      messages: [], requests: index === 0 ? [{ id: 'pending', kind: 'permission', text: 'Allow the synthetic command?', options: [] }] : [],
+      historyEpoch: 'saved-generation',
+    }))
+    const store = new ThreadStore(join(directory, 'threads.sqlite'))
+    store.open()
+    for (const thread of threads) {
+      store.replaceThreadMessages(thread.id, conversation(thread.id, 30), thread.historyEpoch)
+      store.syncActivities(thread.id, [{ id: 'prior-command', turnId: 'prior-turn', sequence: 0, kind: 'command', status: 'completed', title: 'Prior command' }], thread.historyEpoch)
+    }
+    store.close()
+    await writeFile(join(directory, 'workspace.json'), JSON.stringify({ snapshot: { ...EMPTY_AGENT_HOST, threads }, creations: [], projectAliases: [] }))
+    const reads = vi.spyOn(ThreadStore.prototype, 'readMessages')
+    try {
+      const adapter = new EventProviderHost({ ...EMPTY_AGENT_HOST, threads: [] })
+      const host = await opened(directory, adapter)
+      const restored = host.workspaceSnapshot()
+      expect(reads).not.toHaveBeenCalled()
+      expect(restored.threads.every(thread => thread.messages.length === 0)).toBe(true)
+      expect(restored.threads[0]!.requests).toEqual(threads[0]!.requests)
+      for (const thread of restored.threads) {
+        expect(thread.summary).toMatchObject({ messageCount: 60, activityCount: 1, lastUser: { id: `${thread.id}-u29` }, lastAssistant: { id: `${thread.id}-a29` } })
+        expect(thread.historyEpoch).toBe('saved-generation')
+        expect(host.activities(thread.id, 'saved-generation')).toMatchObject([{ id: 'prior-command' }])
+      }
+      host.observeThreads(['archive-3'])
+      expect(reads).toHaveBeenCalledExactlyOnceWith('archive-3', { turns: 10 })
+      const openedThread = host.workspaceSnapshot().threads.find(thread => thread.id === 'archive-3')!
+      expect(openedThread.messages).toEqual(conversation('archive-3', 30).slice(-20))
+      expect(openedThread.earlierAvailable).toBe(true)
+      await host.loadEarlierMessages('archive-3')
+      expect(host.workspaceSnapshot().threads.find(thread => thread.id === 'archive-3')!.messages).toHaveLength(60)
+      host.observeThreads([])
+      expect(host.workspaceSnapshot().threads.every(thread => thread.messages.length === 0)).toBe(true)
+    } finally { reads.mockRestore() }
+  })
+
   it('writes what the events said, serves the window from the store, and ignores the published arrays', async () => {
     const directory = await root()
     const adapter = new EventProviderHost()
