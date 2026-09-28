@@ -41,7 +41,7 @@ test('steers a queued message from the keyboard without consuming the newer draf
         if (await toggle.getAttribute('aria-expanded') === 'false') await toggle.click()
         await expect(queue.getByRole('button', { name: 'Steer now' }).last()).toBeVisible()
         expect(await queue.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
-        await page.screenshot({ path: `artifacts/queued-steering/${appearance}-${width}.png`, animations: 'disabled' })
+        await page.screenshot({ path: `${evidenceDirectory('artifacts/queued-steering')}/${appearance}-${width}.png`, animations: 'disabled' })
       }
     }
     await page.emulateMedia({ reducedMotion: 'reduce' })
@@ -66,3 +66,4 @@ test('steers a queued message from the keyboard without consuming the newer draf
     expect(await userMessageTexts(page, 'docs')).toEqual(['Start the work', 'Use the simpler approach', 'Keep this queued'])
   } finally { await closeSotto(launched) }
 })
+import { evidenceDirectory } from './support/evidence'

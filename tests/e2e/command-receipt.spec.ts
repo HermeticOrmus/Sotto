@@ -1,8 +1,9 @@
 import { mkdir } from 'node:fs/promises'
 import { expect, test, type Page } from '@playwright/test'
 import { closeSotto, launchSotto, openPage, openThreads, paneMenuAction, type LaunchedSotto } from './support/sottoLaunch'
+import { evidenceDirectory } from './support/evidence'
 
-const ARTIFACTS = 'artifacts/command-receipt'
+const ARTIFACTS = evidenceDirectory('artifacts/command-receipt')
 
 /** What main's agent handlers have seen since `watchAgentTraffic`, as counts and sizes only. */
 interface AgentTraffic {
