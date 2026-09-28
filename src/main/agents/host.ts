@@ -1,4 +1,5 @@
 import type { BrowserAgentTools } from './browserAgentServer'
+import type { ScopedThreadTools } from './threadToolServer'
 import type { AgentActivity } from '../../shared/agentActivity'
 import type { AgentSkillCatalog, AgentSkillReference } from '../../shared/agentSkills'
 import type { AgentFileReference } from '../../shared/agentFiles'
@@ -114,6 +115,8 @@ export interface ActivitySubscriptionOptions {
 export interface AgentHost {
   /** Inject shared browser tools before connecting the native providers. */
   useBrowserTools?(tools: BrowserAgentTools): void
+  /** Inject the host setup tools, which only a host setup thread is given (ADR-0035), before connecting. */
+  useHostSetupTools?(tools: ScopedThreadTools): void
   rollbackCapability?(threadId: string): { supported: boolean; reason?: string }
   /** Explicit checkpoint rewind; compare exact authored history before any native mutation.
    * Throws only for definitive rejection; possible unconfirmed native writes return uncertain. */

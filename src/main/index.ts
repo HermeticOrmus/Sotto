@@ -3,6 +3,9 @@ import { HOSTS_CHANGED } from '../shared/hosts'
 import { parseHostEntityKey } from '../shared/clientIdentity'
 import { DesktopHostRouter } from './hosts/desktopHostRouter'
 import { DesktopHosts } from './hosts/desktopHosts'
+import { HostSetup, hostSetupRequests } from './hosts/hostSetup'
+import { HostSetupToolServer } from './hosts/hostSetupTools'
+import { coordinatorSetupThreads } from './hosts/hostSetupThreads'
 import { inactiveLocalHost, emptyDesktopState, requireLocalHistoryCleanup } from './hosts/inactiveLocalHost'
 import { registerHostsIpc } from './hosts/ipc'
 import { PhoneAccess, type PhoneAccessEvent } from './phones/phoneAccess'
@@ -146,7 +149,7 @@ import {
   isTrustedMainE2ESender,
   snapshotE2EState,
 } from './e2e/e2eBoundary'
-import { E2E_SNAPSHOT_CHANNEL, E2E_TRIGGER_SHORTCUT_CHANNEL, E2E_BROWSER_AGENT_CHANNEL, e2eBrowserAgentSchema, e2eAgentEventSchema } from '../shared/e2e'
+import { E2E_SNAPSHOT_CHANNEL, E2E_TRIGGER_SHORTCUT_CHANNEL, E2E_BROWSER_AGENT_CHANNEL, E2E_HOST_SETUP_TOOL_CHANNEL, e2eBrowserAgentSchema, e2eHostSetupToolSchema, e2eAgentEventSchema } from '../shared/e2e'
 import { AGENT_STATE, AGENT_E2E, AGENT_THREAD_DETAIL } from '../shared/agents'
 import { AgentCredentials } from './agents/credentials'
 import { SecureSettings } from './agents/secureSettings'
@@ -671,6 +674,17 @@ async function createRuntime(): Promise<NativeRuntimeController> {
     openExternal: async url => { if (e2eConfiguration === null) await shell.openExternal(url); else openedExternalLink = url },
   })
   await desktopHosts.start()
+  // Have my agent set this up (ADR-0035): a host setup thread on this computer, with the host setup tools while it
+  // runs. The thread reaches the device through this computer's SSH setup, so it needs the local host.
+  const hostSetup = new HostSetup({ version: appVersion,
+    hosts: { check: connection => desktopHosts.check(connection), add: connection => desktopHosts.setupAdd(connection), forget: id => desktopHosts.forgetSaved(id),
+      attempt: id => desktopHosts.attempt(id), cancelAttempt: id => desktopHosts.cancelAttempt(id), savedAs: (target, port) => desktopHosts.savedAs(target, port) },
+    threads: coordinatorSetupThreads({ coordinator: agentControl, folder: join(userDataPath, 'host-setup'), localHostRunning: startupSettings.localHostEnabled }) })
+  const hostSetupTools = new HostSetupToolServer(hostSetup)
+  hostSetup.useTools(threadId => hostSetupTools.revoke(threadId))
+  agentHost.useHostSetupTools(hostSetupTools)
+  agentControl.useSottoRequests(hostSetupRequests(hostSetup))
+  desktopHosts.useSetup(hostSetup)
   // Phone access serves the local host's own threads to paired phones over the tailnet (ADR-0033). Its
   // Tailscale checks can take seconds, so they run beside startup rather than in front of the window.
   const phoneAccess = new PhoneAccess({ directory: userDataPath,
@@ -748,7 +762,9 @@ async function createRuntime(): Promise<NativeRuntimeController> {
     // Closing the local runtime drains a worktree cleanup sweep in progress before its host closes (ADR-0019).
     // Phones go first: the listener closes and Sotto's Serve setting is removed before the host it serves closes.
     await phoneAccess.close().catch(() => logOperational('phone-access-close-failed'))
-    const results = await Promise.allSettled([desktopHosts.close(), localRuntime.close(), personalChats.close()])
+    // A setup running now ends as Stop setup would, before the hosts it checks and adds close.
+    await hostSetup.close().catch(() => undefined)
+    const results = await Promise.allSettled([desktopHosts.close(), localRuntime.close(), personalChats.close(), hostSetupTools.close()])
     hostRouter.dispose()
     const failure = results.find(result => result.status === 'rejected')
     if (failure?.status === 'rejected') throw failure.reason
@@ -1213,6 +1229,11 @@ async function createRuntime(): Promise<NativeRuntimeController> {
         const request = e2eBrowserAgentSchema.parse(payload)
         return browserAgentServer.call(request.threadId, request.name, request.arguments)
       })
+      ipcMain.handle(E2E_HOST_SETUP_TOOL_CHANNEL, (event, payload: unknown) => {
+        if (!isAuthorizedIpcSender(event, windows.getTrustedRenderers(), ['main'])) throw new Error('E2E_SENDER_REJECTED')
+        const request = e2eHostSetupToolSchema.parse(payload)
+        return hostSetupTools.call(hostSetup.threadId() ?? '', request.name, {})
+      })
       ipcMain.handle(AGENT_E2E, (event, payload: unknown) => {
         if (!isTrustedMainE2ESender(event.sender, windows.getTrustedRenderers())) throw new Error('E2E_SENDER_REJECTED')
         const parsed = e2eAgentEventSchema.parse(payload)
@@ -1243,6 +1264,7 @@ async function createRuntime(): Promise<NativeRuntimeController> {
       })
       return () => {
         ipcMain.removeHandler(E2E_BROWSER_AGENT_CHANNEL)
+        ipcMain.removeHandler(E2E_HOST_SETUP_TOOL_CHANNEL)
         ipcMain.removeHandler(AGENT_E2E)
         ipcMain.removeHandler(E2E_SNAPSHOT_CHANNEL)
         ipcMain.removeHandler(E2E_TRIGGER_SHORTCUT_CHANNEL)

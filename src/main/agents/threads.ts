@@ -1,4 +1,5 @@
 import type { BrowserAgentTools } from './browserAgentServer'
+import type { ScopedThreadTools } from './threadToolServer'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { z } from 'zod'
@@ -130,6 +131,15 @@ export class SottoThreadHost implements AgentHost {
     this.inner.useBrowserTools?.({ definitions: tools.definitions,
       call: (id, name, args) => tools.call(thread(id), name, args),
       mcpServer: id => tools.mcpServer(thread(id)),
+    })
+  }
+  /** A native session asks for the host setup tools by its own ID; only its Sotto thread's setup can be given them. */
+  useHostSetupTools(tools: ScopedThreadTools): void {
+    this.inner.useHostSetupTools?.({ name: tools.name, definitions: tools.definitions,
+      mcpServer: async id => {
+        const binding = this.registry.bySession(this.provider, id)
+        return binding ? tools.mcpServer(binding.threadId) : undefined
+      },
     })
   }
   async connect(): Promise<AgentHostSnapshot> {

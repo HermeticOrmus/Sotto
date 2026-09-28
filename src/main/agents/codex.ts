@@ -1,4 +1,5 @@
 import { browserCodexConfig, type BrowserAgentTools } from './browserAgentServer'
+import type { ScopedThreadTools } from './threadToolServer'
 import { existingWorkingDirectory } from './threadWorktrees'
 import { ProviderSnapshotPublisher } from './providerSnapshotPublisher'
 import { randomUUID } from 'node:crypto'
@@ -48,9 +49,15 @@ const configArguments = Object.entries({ model_provider: 'openai', approval_poli
   approvals_reviewer: threadPolicy.approvalsReviewer, sandbox_mode: threadPolicy.sandbox }).flatMap(([key, value]) => ['-c', `${key}=${JSON.stringify(value)}`])
 // Codex 0.156.1 keeps request_user_input in Default mode behind this feature.
 // Set it on creation and resume, without changing the user's global Codex config.
-async function threadConfig(tools: BrowserAgentTools | undefined, threadId: string, reasoningEffort?: string): Promise<{ config: Record<string, unknown> }> {
+async function threadConfig(tools: BrowserAgentTools | undefined, threadId: string, reasoningEffort?: string, setupTools?: ScopedThreadTools): Promise<{ config: Record<string, unknown> }> {
   const browser = await browserCodexConfig(tools, threadId, reasoningEffort)
-  return { config: { ...(browser.config as Record<string, unknown> | undefined), 'features.default_mode_request_user_input': true } }
+  const config: Record<string, unknown> = { ...(browser.config as Record<string, unknown> | undefined), 'features.default_mode_request_user_input': true }
+  // A host setup thread also gets the host setup tools while its setup runs (ADR-0035). Like the browser's, they carry
+  // no native prompt: adding asks the user in the thread itself. A check or add can wait 5 minutes for Tailscale.
+  const setup = await setupTools?.mcpServer(threadId)
+  if (setup) config.mcp_servers = { ...(config.mcp_servers as Record<string, unknown> | undefined), [setup.name]: { url: setup.url, tool_timeout_sec: 600, default_tools_approval_mode: 'approve',
+    http_headers: Object.fromEntries(setup.headers.map(header => [header.name, header.value])) } }
+  return { config }
 }
 const questionInstructions = 'Ask actionable clarification questions through request_user_input so Sotto can show its question panel. Use it for questions with choices and free-text questions, including while continuing independent work. Do not leave questions that need a user answer only in commentary or a final message. A suggested choice is not an answer. If an answer is required before an action, wait for the user before that action. Permission requests still use the native approval flow.'
 const originSchema = z.object({ messageId: z.string(), commandId: z.string(), digest: z.string(), createdAt: z.string(), itemId: z.string().optional(), turnId: z.string().optional(), clientIdentity: z.boolean().optional(), attachments: z.array(agentAttachmentReferenceSchema).optional() })
@@ -130,6 +137,8 @@ export interface CodexAppServerHostOptions {
 export class CodexAppServerHost implements AgentHost {
   private browserTools: BrowserAgentTools | undefined
   useBrowserTools(tools: BrowserAgentTools): void { this.browserTools = tools }
+  private hostSetupTools: ScopedThreadTools | undefined
+  useHostSetupTools(tools: ScopedThreadTools): void { this.hostSetupTools = tools }
   private readonly usage: NativeUsage
   private readonly aliasStore: AtomicJsonStore<Record<string, Alias>>
   private readonly projectStore: AtomicJsonStore<AgentHostSnapshot['projects']>
@@ -613,7 +622,7 @@ export class CodexAppServerHost implements AgentHost {
       // thread is opened, so resuming costs the same for a long thread and a short one.
       await this.rpc('thread/resume', { threadId: alias.codexThreadId, cwd: alias.cwd, excludeTurns: true,
         ...(!alias.pendingSettings ? { model: alias.modelId, modelProvider: 'openai', ...runtimePolicy(alias.runtimeMode) } : {}),
-        ...await threadConfig(alias.kind === 'personal' ? undefined : this.browserTools, id, alias.pendingSettings ? undefined : alias.reasoningEffort),
+        ...await threadConfig(alias.kind === 'personal' ? undefined : this.browserTools, id, alias.pendingSettings ? undefined : alias.reasoningEffort, alias.kind === 'personal' ? undefined : this.hostSetupTools),
         ...(alias.kind === 'personal' ? {} : { developerInstructions: await this.projectInstructions(alias.cwd) }) }, async value => {
       if (alias.pendingSettings) return this.applySettings(id, value)
       this.applyThread(id, threadResponse.parse(value).thread); await this.persist(); this.live.add(id); this.log.pin(id)
@@ -896,7 +905,7 @@ export class CodexAppServerHost implements AgentHost {
         catch (error) { this.creating.delete(command.threadId); throw error }
         await this.rpc('thread/start', { cwd, model: command.modelId, modelProvider: 'openai', allowProviderModelFallback: false,
           developerInstructions,
-          ...runtimePolicy(command.runtimeMode), ...await threadConfig(command.type === 'create-personal' ? undefined : this.browserTools, command.threadId, command.reasoningEffort), ephemeral: false, historyMode: 'legacy' }, async value => {
+          ...runtimePolicy(command.runtimeMode), ...await threadConfig(command.type === 'create-personal' ? undefined : this.browserTools, command.threadId, command.reasoningEffort, command.type === 'create-personal' ? undefined : this.hostSetupTools), ephemeral: false, historyMode: 'legacy' }, async value => {
           const response = settingsResponse.parse(value)
           const policy = runtimePolicy(command.runtimeMode)
           const sandboxType = policy.sandbox === 'read-only' ? 'readOnly' : policy.sandbox === 'workspace-write' ? 'workspaceWrite' : 'dangerFullAccess'

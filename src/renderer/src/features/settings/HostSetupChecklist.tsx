@@ -71,12 +71,28 @@ function FixCommand({ fix }: { readonly fix: NonNullable<HostStatus['fix']> }): 
 }
 
 /**
+ * The checklist as a host setup thread works through it (ADR-0035). A step that stopped the last check is where
+ * the agent is working, so it shows the reason quietly rather than as a failure to act on; a step that passed
+ * after an earlier check stopped there reads "by the agent"; and `waiting`, the thread's own wait for the user,
+ * sits on the step the setup has reached.
+ */
+export interface AgentSetupView {
+  readonly byAgent: readonly HostSetupStep[]
+  /** A card for the step the setup has reached: the thread is waiting for an answer. */
+  readonly waiting?: ReactNode
+  /** No check has run yet: every step is still to come. */
+  readonly idle: boolean
+  /** Who is working in which thread, under the line saying what is being set up. */
+  readonly line?: ReactNode
+}
+
+/**
  * Add host once pressed: the host setup checklist. The form shrinks to a line saying what is being added,
  * and each step says whether it is done, under way, waiting for the user, failed or still to come. A failure
  * shows on its own step with main's sentence (what happened, that nothing was saved, what to do) and a
  * command to copy where there is one. SSH's own questions sit on the step that asked them.
  */
-export function HostSetupChecklist({ name, summary, host, outcome, error, approvalError, question, onChange, onOpenApproval, onOpenGuide }: {
+export function HostSetupChecklist({ name, summary, host, outcome, error, approvalError, question, onChange, onOpenApproval, onOpenGuide, agent, offer }: {
   /** The host part of the target, which names the host until it is renamed. */
   readonly name: string
   /** What was asked for besides the host: `hostSetupSummary()`. */
@@ -94,22 +110,30 @@ export function HostSetupChecklist({ name, summary, host, outcome, error, approv
   readonly onChange?: (() => void) | undefined
   readonly onOpenApproval: () => void
   readonly onOpenGuide: () => void
+  /** Set while a host setup thread works through the checklist rather than Add host itself. */
+  readonly agent?: AgentSetupView | undefined
+  /** Under a failed step's sentence and command: Have my agent fix this, with its model picker. */
+  readonly offer?: ReactNode
 }): ReactNode {
   const approval = useRef<HTMLButtonElement>(null)
   const approvalUrl = host?.tailscale?.waiting ? host.tailscale.url : undefined
   // Tailscale's approval is the one thing to do while it waits, so focus goes to it when it arrives.
   useEffect(() => { if (approvalUrl) approval.current?.focus() }, [approvalUrl])
-  const current: HostSetupStep | undefined = outcome === 'connected' ? undefined : host?.step ?? 'reach'
+  const current: HostSetupStep | undefined = outcome === 'connected' ? undefined : agent?.idle ? 'reach' : host?.step ?? 'reach'
   const steps = HOST_SETUP_STEPS.filter(step => step !== 'tailscale' || host?.tailscale !== undefined || current === 'tailscale')
   const at = current === undefined ? steps.length : steps.indexOf(current)
   const waiting = outcome === 'connecting' && host?.tailscale?.waiting === true
   // Tailscale can hold the port forward too, after the host started; its approval shows on the Tailscale step,
   // with the 30 seconds the forward's keepalive gives it rather than the 5 minutes a sign-in gets.
   const forwardHeld = waiting && current !== 'tailscale'
+  // For the agent, a check that got as far as starting the host leaves Pair still to come, and nothing runs until
+  // it adds the host; a check that stopped leaves its step with the agent, which works on it.
+  const agentPaused = agent !== undefined && (agent.idle || host?.checked === true || host?.phase === 'error')
   const stateOf = (index: number, step: HostSetupStep): StepState => {
     if (step === 'tailscale' && waiting) return 'waiting'
     if (index < at) return 'done'
     if (index > at) return 'todo'
+    if (agentPaused) return 'todo'
     if (outcome === 'failed') return 'failed'
     return 'active'
   }
@@ -121,13 +145,17 @@ export function HostSetupChecklist({ name, summary, host, outcome, error, approv
       <p><b>{name}</b> <span>· {summary}</span></p>
       {onChange ? <Button variant="ghost" onClick={onChange} aria-label={outcome === 'connecting' ? 'Change the host to add, and stop connecting' : 'Change the host to add'}>Change</Button> : null}
     </div>
+    {agent?.line}
     <ol className="host-setup__steps" aria-label="Connection steps">
       {steps.map((step, index) => {
         const state = stateOf(index, step)
         // While Tailscale waits, that is where the user is, whichever step the connect is on.
-        return <li key={step} data-state={state} aria-current={state === 'waiting' || (state === 'active' && !waiting) ? 'step' : undefined}>
+        const reached = agent !== undefined && index === at
+        return <li key={step} data-state={state} aria-current={state === 'waiting' || (state === 'active' && !waiting) || (reached && agent.waiting) ? 'step' : undefined}>
           <StepMark state={state} />
-          <span className="host-setup__title">{stepTitle(step, state, name)}</span>
+          <span className="host-setup__title">{stepTitle(step, state, name)}{state === 'done' && agent?.byAgent.includes(step) ? <span className="host-setup__by"> by the agent</span> : null}</span>
+          {reached && host?.phase === 'error' && error ? <div className="host-setup__detail"><p className="host-setup__note">The last check stopped here. {error}</p></div> : null}
+          {reached && agent.waiting ? <div className="host-setup__detail">{agent.waiting}</div> : null}
           {state === 'waiting' ? <div className="host-setup__detail"><div className="hosts-notice host-setup__card" role="status">
             <p>{forwardHeld
               ? `${name} uses Tailscale SSH, which asks you to approve the port forward as well. Approve it in your browser within 30 seconds and Sotto carries on.`
@@ -142,12 +170,13 @@ export function HostSetupChecklist({ name, summary, host, outcome, error, approv
           {state === 'failed' && error ? <div className="host-setup__detail"><div className="hosts-notice hosts-notice--error host-setup__card" role="alert">
             <p>{error}</p>
             {host?.fix ? <FixCommand fix={host.fix} /> : null}
+            {offer}
           </div></div> : null}
         </li>
       })}
     </ol>
-    {outcome === 'connecting' && error ? <div className="hosts-notice hosts-notice--error host-setup__card" role="alert"><p>{error}</p></div> : null}
-    {outcome === 'connected' ? <div className="hosts-notice host-setup__card host-setup__card--done" role="status">
+    {outcome === 'connecting' && error && !agent ? <div className="hosts-notice hosts-notice--error host-setup__card" role="alert"><p>{error}</p></div> : null}
+    {outcome === 'connected' && !agent ? <div className="hosts-notice host-setup__card host-setup__card--done" role="status">
       <p>{host?.name ?? name} is added and connected. Its projects and threads show in the Threads sidebar with a {host?.name ?? name} badge.</p>
     </div> : null}
   </div>
