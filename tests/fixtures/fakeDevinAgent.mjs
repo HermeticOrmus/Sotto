@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { clearInterval } from 'node:timers'
-import { appendFileSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 
@@ -57,6 +57,7 @@ function applyScriptedPolicyChange(script, operation) {
 function sessionInfo(session) {
  return { modes: { currentModeId: session.mode ?? 'accept-edits', availableModes: MODES.map(mode => ({ id: mode.value, name: mode.name })) }, configOptions: configOptions(session) }
 }
+const released = name => new Promise(resolve => { const timer = setInterval(() => { if (existsSync(path(name))) { clearInterval(timer); resolve() } }, 10) })
 function update(sessionId, value) { send({ method: 'session/update', params: { sessionId, update: value } }) }
 function saveMessage(sessionId, message) {
  const session = read(nativePath(sessionId), null)
@@ -129,20 +130,27 @@ createInterface({ input: process.stdin }).on('line', line => {
   if (script.delayCreate) setTimeout(() => result(frame.id, { sessionId, ...sessionInfo(session) }), script.delayCreate)
   else result(frame.id, { sessionId, ...sessionInfo(session) })
  } else if (frame.method === 'session/load') {
-  const session = read(nativePath(p.sessionId), null)
-  if (!session || script.rejectLoad) { reject(frame.id, -32016); return }
-  // Native Devin first persists a session when it receives its first prompt.
-  if (session.messages.length === 0) { reject(frame.id, -32016); return }
-  if (script.rejectLoadAfterPrompt && session.messages.some(message => message.role === 'user')) { reject(frame.id); return }
-  applyScriptedPolicyChange(script, 'load')
-  // Synthetic: a restored session announces the mode it was left on, which may no longer be the thread's.
-  update(p.sessionId, { sessionUpdate: 'current_mode_update', currentModeId: session.mode ?? 'accept-edits' })
-  if (script.replayModel) update(p.sessionId, { sessionUpdate: 'config_option_update', configOptions: configOptions({ ...session, model: script.replayModel }) })
-  replay(p.sessionId)
-  if (!acquire(p.sessionId)) { reject(frame.id, -32015); return }
-  const loaded = () => result(frame.id, sessionInfo(script.loadModel ? { ...session, model: script.loadModel } : session))
-  // A slow reply holds the session open but not yet confirmed, as a reopen is while Sotto waits on it.
-  if (script.delayLoad) setTimeout(loaded, script.delayLoad); else loaded()
+  // A held load waits twice for the test: before it takes the session, and again before it answers.
+  const held = script.holdLoad === true
+  if (held) write('script.json', { ...script, holdLoad: false })
+  void (async () => {
+   if (held) await released('release-load')
+   const session = read(nativePath(p.sessionId), null)
+   if (!session || script.rejectLoad) { reject(frame.id, -32016); return }
+   // Native Devin first persists a session when it receives its first prompt.
+   if (session.messages.length === 0) { reject(frame.id, -32016); return }
+   if (script.rejectLoadAfterPrompt && session.messages.some(message => message.role === 'user')) { reject(frame.id); return }
+   applyScriptedPolicyChange(script, 'load')
+   // Synthetic: a restored session announces the mode it was left on, which may no longer be the thread's.
+   update(p.sessionId, { sessionUpdate: 'current_mode_update', currentModeId: session.mode ?? 'accept-edits' })
+   if (script.replayModel) update(p.sessionId, { sessionUpdate: 'config_option_update', configOptions: configOptions({ ...session, model: script.replayModel }) })
+   replay(p.sessionId)
+   if (!acquire(p.sessionId)) { reject(frame.id, -32015); return }
+   if (held) await released('release-reply')
+   const loaded = () => result(frame.id, sessionInfo(script.loadModel ? { ...session, model: script.loadModel } : session))
+   // A slow reply holds the session open but not yet confirmed, as a reopen is while Sotto waits on it.
+   if (script.delayLoad) setTimeout(loaded, script.delayLoad); else loaded()
+  })()
  } else if (frame.method === 'session/set_config_option') {
   const session = read(nativePath(p.sessionId), null)
   const known = p.configId === 'model' ? p.value === 'fixture-model' : p.configId === 'mode' && MODES.some(mode => mode.value === p.value)

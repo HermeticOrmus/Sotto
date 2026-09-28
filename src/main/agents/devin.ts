@@ -401,6 +401,10 @@ export class DevinAcpHost implements AgentHost {
     const alias = this.aliases[id]!
     if (!alias?.devinSessionId) throw new Error('Devin did not confirm this thread’s creation. Your thread is kept; do not repeat the creation automatically.')
     const mode = modeOf(alias.providerMode)
+    // A history read loads the session in a process of its own, and Devin lets one process hold a session at a
+    // time. Opening alongside a read in flight would find the session taken by Sotto itself, so the open waits.
+    await this.reading.get(id)?.catch(() => undefined)
+    if (generation !== this.generation) throw new DevinUncertain('Devin connection changed.')
     const connection = await this.start(await existingWorkingDirectory(alias.cwd), mode.allows, id, false)
     if (generation !== this.generation) { connection.intentionalClose = true; connection.rpc.close(); throw new DevinUncertain('Devin connection changed.') }
     connection.replaying = true
@@ -482,6 +486,8 @@ export class DevinAcpHost implements AgentHost {
     if (this.polling) return this.polling
     const now = Date.now()
     const ids = [...this.connections.keys()].filter(id => {
+      // A session still opening is read once its open settles, not on this tick.
+      if (this.loading.has(id)) return false
       const busy = this.active.has(id) || this.thread(id).requests.length > 0
       const interval = this.options.pollIntervalMs ?? (busy ? 1_500 : 15_000)
       return (this.observed.has(id) || busy) && now - (this.lastReadAt.get(id) ?? 0) >= interval
@@ -497,6 +503,10 @@ export class DevinAcpHost implements AgentHost {
   private readHistory(id: string): Promise<void> {
     const previous = this.reading.get(id)
     if (previous) return previous
+    // A read loads the session in a process of its own and would take it from an open in progress, so it
+    // starts once the open settles. The open waits only for a read already running, so neither waits on the other.
+    const opening = this.loading.get(id)
+    if (opening) return opening.then(() => this.readHistory(id), () => this.readHistory(id))
     this.lastReadAt.set(id, Date.now())
     const reading = this.read(id).finally(() => { if (this.reading.get(id) === reading) this.reading.delete(id) })
     this.reading.set(id, reading); return reading
