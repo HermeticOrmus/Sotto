@@ -1198,6 +1198,15 @@ describe('Personal dictionary draft acknowledgements', () => {
     expect(f.update).toHaveBeenLastCalledWith({ llmDictionary: 'External' })
   })
 
+  it('commits an explicit dictionary return to the value of an ignored older receipt', async () => {
+    const f = await dictionary()
+    f.edit('A'); fireEvent.blur(f.input)
+    f.publish('External')
+    f.publish('A'); await act(async () => f.answers[0]!.resolve(true))
+    expect(f.input).toHaveValue('External')
+    f.edit('A'); fireEvent.blur(f.input)
+    expect(f.update.mock.calls).toEqual([[{ llmDictionary: 'A' }], [{ llmDictionary: 'A' }]])
+  })
   it('retains the draft when the update rejects and retries it on the next blur', async () => {
     const f = await dictionary()
     f.update.mockRejectedValueOnce(new Error('Synthetic save rejection'))
@@ -1252,4 +1261,75 @@ describe('Personal dictionary draft acknowledgements', () => {
     expect(f.update).toHaveBeenCalledOnce()
     expect(f.input).toHaveValue('  Sotto\nZach  ')
   })
+})
+
+describe('Settings draft editing work', () => {
+  it.each([
+    { category: 'Cleanup', label: 'Personal dictionary', field: 'llmDictionary', text: 'Sotto', saved: 'Sotto', blurCommits: 0 },
+    { category: 'Output', label: 'Paste delay', field: 'pasteDelayMs', text: '300', saved: 300, blurCommits: 1 },
+  ])('does no extra render or request while editing $label', async ({ category, label, field, text, saved, blurCommits }) => {
+    const pending = deferred<boolean>()
+    const update = vi.fn(() => pending.promise)
+    const props = baseProps({ onUpdateSettings: update })
+    let commits = 0
+    const count = () => { commits += 1 }
+    const view = render(<React.Profiler id="settings-drafts" onRender={count}><SettingsView {...props} /></React.Profiler>)
+    await selectCategory(category)
+    await act(async () => undefined)
+    const input = screen.getByRole('textbox', { name: label })
+    const before = commits
+    for (let end = 1; end <= text.length; end += 1) fireEvent.change(input, { target: { value: text.slice(0, end) } })
+    expect(commits - before).toBe(text.length)
+    expect(update).not.toHaveBeenCalled()
+    fireEvent.blur(input)
+    expect(update).toHaveBeenCalledExactlyOnceWith({ [field]: saved })
+    expect(commits - before).toBe(text.length + blurCommits)
+    await act(async () => { pending.resolve(true) })
+    expect(commits - before).toBe(text.length + blurCommits + 1)
+    const afterSave = commits
+    view.rerender(<React.Profiler id="settings-drafts" onRender={count}><SettingsView {...props} settings={{ ...props.settings, [field]: saved }} /></React.Profiler>)
+    expect(commits - afterSave).toBe(1)
+    expect(input).toHaveValue(text)
+    expect(update).toHaveBeenCalledTimes(1)
+  })
+})
+it('keeps external numeric authority after an ignored old receipt and a later failed edit', async () => {
+  const answers: ReturnType<typeof deferred<boolean>>[] = []
+  const update = vi.fn(() => { const pending = deferred<boolean>(); answers.push(pending); return pending.promise })
+  const props = baseProps({ onUpdateSettings: update })
+  const view = render(<SettingsView {...props} />)
+  await selectCategory('Output')
+  const input = screen.getByRole('textbox', { name: 'Paste delay' })
+  fireEvent.change(input, { target: { value: '300' } })
+  fireEvent.blur(input)
+  view.rerender(<SettingsView {...props} settings={{ ...props.settings, pasteDelayMs: 625 }} />)
+  expect(input).toHaveValue('625')
+  view.rerender(<SettingsView {...props} settings={{ ...props.settings, pasteDelayMs: 300 }} />)
+  await act(async () => { answers[0]!.resolve(true) })
+  expect(input).toHaveValue('625')
+  fireEvent.change(input, { target: { value: '450' } })
+  fireEvent.blur(input)
+  await act(async () => { answers[1]!.resolve(false) })
+  expect(input).toHaveValue('625')
+  expect(update.mock.calls).toEqual([[{ pasteDelayMs: 300 }], [{ pasteDelayMs: 450 }]])
+})
+it('rolls back to a successful explicit numeric return even when its setting value did not change', async () => {
+  const answers: ReturnType<typeof deferred<boolean>>[] = []
+  const update = vi.fn(() => { const pending = deferred<boolean>(); answers.push(pending); return pending.promise })
+  const props = baseProps({ onUpdateSettings: update })
+  const view = render(<SettingsView {...props} />)
+  await selectCategory('Output')
+  const input = screen.getByRole('textbox', { name: 'Paste delay' })
+  fireEvent.change(input, { target: { value: '300' } }); fireEvent.blur(input)
+  view.rerender(<SettingsView {...props} settings={{ ...props.settings, pasteDelayMs: 625 }} />)
+  view.rerender(<SettingsView {...props} settings={{ ...props.settings, pasteDelayMs: 300 }} />)
+  await act(async () => { answers[0]!.resolve(true) })
+  expect(input).toHaveValue('625')
+  fireEvent.change(input, { target: { value: '300' } }); fireEvent.blur(input)
+  await act(async () => { answers[1]!.resolve(true) })
+  expect(input).toHaveValue('300')
+  fireEvent.change(input, { target: { value: '450' } }); fireEvent.blur(input)
+  await act(async () => { answers[2]!.resolve(false) })
+  expect(input).toHaveValue('300')
+  expect(update.mock.calls).toEqual([[{ pasteDelayMs: 300 }], [{ pasteDelayMs: 300 }], [{ pasteDelayMs: 450 }]])
 })
