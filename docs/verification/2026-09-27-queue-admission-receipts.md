@@ -16,7 +16,10 @@ The regression repeats the original journey with and without held observation an
 
 - On unchanged production source at `aa8aaac2`, the new cases produced five desired failures and five passes (38 unrelated cases skipped; 11.70 seconds).
 - After the fix, all 110 tests in the four composer, queue, draft-store and real-connection files passed (12.43 seconds, two workers).
-- Static gates, independent Standards/Spec review, the actual queued-steering desktop journey and the exact hosted full remain pending at this checkpoint. No new local full pass is claimed.
+- Actual main `f60ed884` integrated automatically at `b5b2e22b`, with no change to the reviewed composer or regression files. All three TypeScript projects, lint and notices (174 components) passed on this composition.
+- Runtime preparation/verification and the production build passed. The existing queued-steering Electron journey passed with one worker (15.8 seconds; 16.4 seconds including runner setup). It exercised real keyboard queueing/steering and newer-draft preservation, light and dark at 1600x1000, 1280x800 and 820x560, and reduced motion. The [minimum dark](../../artifacts/review-453/queue-minimum-dark.png) and [minimum light](../../artifacts/review-453/queue-minimum-light.png) captures were inspected: both queued rows, actions and the newer draft remain visible without clipping. Historical captures were hash-verified restored, as were generated runtime files; no baseline was regenerated.
+- Independent native Astra Standards and Spec reviews and the coordinating source/visual review reported zero findings. This is a behavior correction on the existing surface; no layout or new interaction was introduced.
+- The exact hosted full remains required before merge. No new local full pass is claimed.
 - All data is synthetic and stored in owned temporary directories. Performance-data paths are verified absent; live providers and timing assertions are disabled.
 
 Raw proof and diagnostic source are retained in the ignored `artifacts/review-453/` folder. Diagnostic sources end in `.probe.txt`, outside test discovery. Earlier diagnostic setup mistakes remain in the original #408 evidence and are not causal proof.
