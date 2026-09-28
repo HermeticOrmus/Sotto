@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { AgentCommand, AgentState } from '../../../src/shared/agents'
 import { E2E_THREADS_NOW } from '../../../src/shared/e2e'
-import type { TerminalOpenRequest, TerminalWorkspaceBridge, WorkspaceTerminal, WorkspaceTerminalEvent } from '../../../src/shared/terminalWorkspace'
+import type { TerminalOpenRequest, TerminalWorkspaceBridge, WorkspaceTerminal, WorkspaceTerminalEvent, WorkspaceTerminalSnapshot } from '../../../src/shared/terminalWorkspace'
 import type { ToolsResult } from '../../../src/shared/tools'
 import { useAgents } from '../../../src/renderer/src/agents/AgentContext'
 import { SIDEBAR_MODE_KEY } from '../../../src/renderer/src/agents/SidebarFrame'
@@ -187,6 +187,47 @@ beforeEach(() => { vi.mocked(useAgents).mockReset(); localStorage.clear() })
 afterEach(() => { cleanup(); localStorage.clear() })
 
 describe('Terminal mode', () => {
+  it('forgets closed output and ignores an old pending read after the same terminal reopens', async () => {
+    const store = new TerminalWorkspaceStore()
+    const fake = fakeBridge([terminal(ID_1)])
+    const pending = Promise.withResolvers<ToolsResult<WorkspaceTerminalSnapshot>>()
+    vi.mocked(fake.bridge.read).mockReturnValueOnce(pending.promise)
+    await store.activate(fake.bridge)
+    const { factory, views } = fakeViews()
+    store.attach(fake.bridge, ID_1, document.createElement('div'), factory)
+    fake.emit({ type: 'output', id: ID_1, data: 'Old buffered output\r\n', sequence: 2 })
+    expect(store.lastLine(ID_1)).toContain('Old buffered output')
+    await store.close(fake.bridge, ID_1)
+    expect(store.lastLine(ID_1)).toBe('')
+    expect(store.terminal(ID_1)?.closedAt).toBe(NOW)
+    fake.emit({ type: 'output', id: ID_1, data: 'Late closed output', sequence: 3 })
+    expect(store.lastLine(ID_1)).toBe('')
+    await store.restart(fake.bridge, ID_1)
+    store.attach(fake.bridge, ID_1, document.createElement('div'), factory)
+    pending.resolve(ok({ terminal: terminal(ID_1), output: 'Old snapshot output', sequence: 1 }))
+    await pending.promise
+    await Promise.resolve()
+    expect(views[1]!.written.join('')).not.toContain('Old')
+    expect(store.terminal(ID_1)?.closedAt).toBeNull()
+    expect(store.lastLine(ID_1)).toBe('')
+  })
+
+  it('retains output when a pane hides or a terminal exits without Close', async () => {
+    const store = new TerminalWorkspaceStore()
+    const fake = fakeBridge([terminal(ID_1)])
+    await store.activate(fake.bridge)
+    const { factory, views } = fakeViews()
+    store.attach(fake.bridge, ID_1, document.createElement('div'), factory)
+    await Promise.resolve()
+    await Promise.resolve()
+    fake.emit({ type: 'output', id: ID_1, data: 'Readable output\r\n', sequence: 1 })
+    store.detach(ID_1)
+    fake.emit({ type: 'terminal', terminal: terminal(ID_1, { status: 'exited', exitCode: 0 }) })
+    expect(store.lastLine(ID_1)).toContain('Readable output')
+    store.attach(fake.bridge, ID_1, document.createElement('div'), factory)
+    expect(views).toHaveLength(1)
+    expect(views[0]!.written.join('')).toContain('Readable output')
+  })
   it('reports a failed terminal view without restarting the running terminal', async () => {
     const view = mount([terminal(ID_1)], { lazy: true })
     fireEvent.click(await within(sidebar()).findByRole('button', { name: 'Build' }))
