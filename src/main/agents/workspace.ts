@@ -832,12 +832,10 @@ export class WorkspaceHost implements AgentHost {
       catch { this.saveError = HISTORY_SAVE_ERROR; return }
       this.dirty = true
     }
-    // Nothing has said what it is looking at yet, so every thread starts with the window the store holds;
-    // the first observation puts away the ones no pane wants. A host that publishes no events is compared
-    // against its own arrays instead, and starts from its summary alone until one arrives.
+    // Startup needs the sidebar's facts, not a message window for every saved thread. Observation loads
+    // the windows a pane wants. Legacy hosts still need message marks to compare their next arrays.
     for (const thread of snapshot.threads) {
-      if (this.eventSourced) { this.loadWindow(thread.id); continue }
-      this.known.set(thread.id, { epoch: thread.historyEpoch, messages: this.readWindow(thread.id)?.messages.map(markOf) ?? [] })
+      if (!this.eventSourced) this.known.set(thread.id, { epoch: thread.historyEpoch, messages: this.readWindow(thread.id)?.messages.map(markOf) ?? [] })
       thread.messages = []
       delete thread.earlierAvailable
       thread.summary = this.threadSummary(thread)
