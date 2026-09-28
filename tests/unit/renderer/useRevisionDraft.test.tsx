@@ -90,3 +90,25 @@ describe('revision-aware settings drafts', () => {
     expect(renders - initial).toBe(1)
   })
 })
+it('does not resurrect an ignored acknowledgement when a later edit fails', () => {
+  const { result, rerender } = draft()
+  act(() => { result.current.edit('A'); result.current.begin('A') })
+  rerender({ authoritative: 'External' })
+  rerender({ authoritative: 'A' })
+  expect(result.current.value).toBe('External')
+  act(() => { result.current.edit('B') })
+  const next = result.current.begin('B')!
+  act(() => { result.current.fail(next, true) })
+  expect(result.current.value).toBe('External')
+})
+
+it('uses an accepted receipt as the rollback target while a newer edit is still unsaved', () => {
+  const { result, rerender } = draft()
+  act(() => { result.current.edit('A'); result.current.begin('A') })
+  act(() => { result.current.edit('B') })
+  rerender({ authoritative: 'A' })
+  expect(result.current.value).toBe('B')
+  const next = result.current.begin('B')!
+  act(() => { result.current.fail(next, true) })
+  expect(result.current.value).toBe('A')
+})
