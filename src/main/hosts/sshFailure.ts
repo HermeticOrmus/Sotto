@@ -159,18 +159,31 @@ function shellFolder(path: string): string | undefined {
   return path.startsWith('~/') ? `"$HOME/${path.slice(2)}"` : `"${path}"`
 }
 /**
+ * An identity file on this computer written so a POSIX shell, PowerShell and cmd.exe all read it as one word,
+ * or undefined when it needs more care. It is already absolute: `validateSshHost()` expanded `~`.
+ */
+function localPath(path: string): string | undefined {
+  if (!/^[A-Za-z0-9._:/\\ -]{1,1024}$/u.test(path)) return undefined
+  return path.includes(' ') ? `"${path}"` : path
+}
+/**
  * The exact command that fixes a failure, where there is one: SSH's own words for a sign-in or reach
  * failure, the stale known-hosts entry for a changed key, and the archive for a missing installation.
  */
 export function failureFix(code: SshFailureCode, context: {
   readonly target: string; readonly sshPort?: number | undefined; readonly installPath: string
+  /** An identity file saved with the host, which Sotto passes with `IdentitiesOnly`; the command signs in the same way. */
+  readonly identityFile?: string | undefined
   /** Where the SSH configuration sent the target, from `ssh -G`, when it was read. */
   readonly hostname?: string | undefined; readonly port?: number | undefined; readonly version: string
 }): SshFix | undefined {
   const port = context.sshPort ?? context.port
   if (code === 'ssh-failed' || code === 'ssh-unreachable' || code === 'auth-failed' || code === 'connect-timeout') {
     if (!plainWord(context.target)) return undefined
-    return { text: 'To see what SSH itself says, run this in a terminal on this computer:', command: `ssh ${context.sshPort ? `-p ${context.sshPort} ` : ''}${context.target}` }
+    const identity = context.identityFile ? localPath(context.identityFile) : ''
+    if (identity === undefined) return undefined
+    return { text: 'To see what SSH itself says, run this in a terminal on this computer:',
+      command: `ssh ${identity ? `-i ${identity} -o IdentitiesOnly=yes ` : ''}${context.sshPort ? `-p ${context.sshPort} ` : ''}${context.target}` }
   }
   if (code === 'host-key-changed') {
     const host = context.hostname ?? context.target.split('@').at(-1) ?? ''

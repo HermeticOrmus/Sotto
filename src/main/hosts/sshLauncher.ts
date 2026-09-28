@@ -247,7 +247,7 @@ export class SshHostLauncher {
       await this.closeAttempt(attempt)
       const failure = attempt.failure ?? (error instanceof Error ? error : new SshFailure('ssh-failed'))
       if (failure instanceof SshFailure && !failure.fix) {
-        const fix = failureFix(failure.code, { target: validated.target, sshPort: validated.sshPort, installPath: validated.installPath,
+        const fix = failureFix(failure.code, { target: validated.target, sshPort: validated.sshPort, installPath: validated.installPath, identityFile: validated.identityFile,
           hostname: attempt.route?.hostname, port: attempt.route?.port, version: desktopVersion })
         if (fix) failure.fix = fix
       }

@@ -91,6 +91,12 @@ describe('failureFix', () => {
     expect(failureFix('ssh-failed', context)?.command).toBe('ssh zach@forge')
     expect(failureFix('auth-failed', { ...context, sshPort: 2222 })?.command).toBe('ssh -p 2222 zach@forge')
   })
+  it('signs in with the identity file Sotto used, quoted where it has a space, and offers nothing for one a shell would misread', () => {
+    expect(failureFix('auth-failed', { ...context, identityFile: '/home/zach/.ssh/forge_ed25519' })?.command).toBe('ssh -i /home/zach/.ssh/forge_ed25519 -o IdentitiesOnly=yes zach@forge')
+    expect(failureFix('connect-timeout', { ...context, sshPort: 2222, identityFile: 'C:\\Users\\Zach Miller\\.ssh\\forge' })?.command)
+      .toBe('ssh -i "C:\\Users\\Zach Miller\\.ssh\\forge" -o IdentitiesOnly=yes -p 2222 zach@forge')
+    expect(failureFix('ssh-failed', { ...context, identityFile: '/home/zach/$(key)' })).toBeUndefined()
+  })
   it('removes the stale known-hosts entry under the name SSH recorded it by', () => {
     expect(failureFix('host-key-changed', context)?.command).toBe('ssh-keygen -R forge.tail5728ca.ts.net')
     expect(failureFix('host-key-changed', { ...context, port: 2222 })?.command).toBe("ssh-keygen -R '[forge.tail5728ca.ts.net]:2222'")
