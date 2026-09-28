@@ -135,6 +135,8 @@ createInterface({ input: process.stdin }).on('line', line => {
   if (session.messages.length === 0) { reject(frame.id, -32016); return }
   if (script.rejectLoadAfterPrompt && session.messages.some(message => message.role === 'user')) { reject(frame.id); return }
   applyScriptedPolicyChange(script, 'load')
+  // Synthetic: a restored session announces the mode it was left on, which may no longer be the thread's.
+  update(p.sessionId, { sessionUpdate: 'current_mode_update', currentModeId: session.mode ?? 'accept-edits' })
   if (script.replayModel) update(p.sessionId, { sessionUpdate: 'config_option_update', configOptions: configOptions({ ...session, model: script.replayModel }) })
   replay(p.sessionId)
   if (!acquire(p.sessionId)) reject(frame.id, -32015)

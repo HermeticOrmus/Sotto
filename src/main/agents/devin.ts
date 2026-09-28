@@ -117,6 +117,8 @@ interface Connection {
   toolBytes: number
   transcript: Transcript
   replaying: boolean
+  /** Devin has confirmed the thread's mode on this process; any mode it announces after that is its own change. */
+  modeSet: boolean
   intentionalClose: boolean
 }
 interface ActiveTurn {
@@ -232,7 +234,7 @@ export class DevinAcpHost implements AgentHost {
     if (generation !== this.generation) throw new DevinUncertain('Devin connection changed.')
     const connection: Connection = {
       rpc: undefined as unknown as DevinRpc, nonce: randomUUID(), profile, fresh: false, tools: new Map(), toolBytes: 0,
-      transcript: { messages: [], bytes: 0 }, replaying: observer, intentionalClose: false,
+      transcript: { messages: [], bytes: 0 }, replaying: observer, modeSet: false, intentionalClose: false,
     }
     const rpc: DevinRpc = new DevinRpc(this.executable, [...(this.options.args ?? []), '--config', profile.path, 'acp'], cwd,
       devinEnvironment(this.options.environment), this.options.requestTimeoutMs ?? 15_000,
@@ -380,6 +382,7 @@ export class DevinAcpHost implements AgentHost {
     }, value => {
       current()
       if (sessionModeConfig(value).current !== mode.devinMode) throw new Error('Devin did not confirm the selected permission setting.')
+      connection.modeSet = true
     })
   }
   private open(id: string): Promise<Connection> {
@@ -585,10 +588,10 @@ export class DevinAcpHost implements AgentHost {
       const update = record(params.update)
       if (!update) throw new Error('Invalid Devin update.')
       if (!connection.replaying && alias.settingsConfirmed && update.sessionUpdate === 'config_option_update' && modelConfig(update).current !== alias.modelId) throw new Error('Devin changed the selected model.')
-      // Devin announces every mode it is set to, the thread's own included. A session also opens on Devin's
-      // default mode before Sotto sets the recorded one back, so that is expected while it replays.
-      if (update.sessionUpdate === 'current_mode_update' && update.currentModeId !== modeOf(alias.providerMode).devinMode
-        && !(connection.replaying && update.currentModeId === DEVIN_MODES[0].devinMode)) throw new Error('Devin changed the session mode.')
+      // Devin announces every mode it is set to, the thread's own included. Until Sotto has set the recorded mode
+      // on this process, what it announces is where the session opened or was left, not a change of its own;
+      // a history read never sets one and never acts.
+      if (update.sessionUpdate === 'current_mode_update' && connection.modeSet && update.currentModeId !== modeOf(alias.providerMode).devinMode) throw new Error('Devin changed the session mode.')
       if (connection.replaying) { this.consume(id, connection.transcript, update); return }
       if (typeof update.toolCallId === 'string') {
         if (connection.tools.size >= 1000 && !connection.tools.has(update.toolCallId)) throw new Error('Too many pending Devin tools.')
