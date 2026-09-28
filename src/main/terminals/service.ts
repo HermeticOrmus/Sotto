@@ -33,6 +33,8 @@ interface LiveTerminal {
   generation: number
   /** The work still owed to a published terminal: its checkout, its process, its branch. Never rejects. */
   ready?: Promise<void> | undefined
+  /** Folder preparation belongs to the terminal, so Reopen can await work begun by an earlier process lifecycle. */
+  folder?: Promise<{ worktree: AgentWorktree; workingDirectory: string }> | undefined
   output: string
   sequence: number
   subscriptions: { dispose(): void }[]
@@ -113,32 +115,37 @@ export class TerminalWorkspaceService extends ToolOperations {
     this.terminals.set(record.terminal.id, record)
     // The renderer gets the terminal here; the checkout, the process and the branch arrive as further events.
     this.publish(record)
-    record.ready = this.begin(record, launcher, worktree, record.generation)
+    record.ready = this.begin(record, launcher, record.generation)
     return this.snapshot(record)
   }) }
 
   /** Everything a published terminal still owes: its checkout, its process, its branch. Each lands with its own event. */
-  private async begin(record: LiveTerminal, launcher: Launcher, worktree: AgentWorktree | undefined, generation: number): Promise<void> {
-    if (worktree) {
-      try {
-        const ready = await this.dependencies.worktrees.ensure(worktree)
-        const workingDirectory = await this.dependencies.worktrees.workingDirectory(ready)
-        if (generation !== record.generation || this.disposed) return
-        record.terminal = { ...record.terminal, worktree: ready, workingDirectory }
-        this.publish(record)
-      } catch {
-        if (generation !== record.generation || this.disposed) return
-        // The folder never appeared, so nothing can run in it; the pane says the command could not start.
-        record.terminal = { ...record.terminal, status: 'unavailable' }
-        this.publish(record)
-        return
-      }
+  private async begin(record: LiveTerminal, launcher: Launcher, generation: number): Promise<void> {
+    try { await this.prepareFolder(record, generation) } catch {
+      if (generation !== record.generation || this.disposed) return
+      // The folder never appeared, so nothing can run in it; the pane says the command could not start.
+      record.terminal = { ...record.terminal, status: 'unavailable' }
+      this.publish(record)
+      return
     }
     await Promise.all([
       // start() publishes its own failure; open has already returned, so nobody is left to throw to.
       this.start(record, launcher, generation).catch(() => { /* Published as unavailable unless cancelled. */ }),
       this.track(record, generation),
     ])
+  }
+
+  private async prepareFolder(record: LiveTerminal, generation: number): Promise<void> {
+    const worktree = record.terminal.worktree
+    if (!worktree) return
+    record.folder ??= (async () => {
+      const ready = await this.dependencies.worktrees.ensure(worktree)
+      return { worktree: ready, workingDirectory: await this.dependencies.worktrees.workingDirectory(ready) }
+    })().catch((error: unknown) => { record.folder = undefined; throw error })
+    const folder = await record.folder
+    if (this.disposed || generation !== record.generation) return fail('session-unavailable', 'This terminal was closed before it could start.')
+    record.terminal = { ...record.terminal, ...folder }
+    this.publish(record)
   }
 
   /** The branch under the terminal, looked up beside the spawn and published when it lands. */
@@ -305,7 +312,9 @@ export class TerminalWorkspaceService extends ToolOperations {
     const restarting = (async () => {
       try {
         const launcher = await this.launcher(record.terminal.launch)
+        await this.prepareFolder(record, generation)
         await this.start(record, launcher, generation)
+        void this.track(record, generation)
         return this.snapshot(record)
       } catch (error) {
         // Launcher failures happen before start() can publish them. A superseded lifecycle owns no state.

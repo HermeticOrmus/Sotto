@@ -113,6 +113,34 @@ describe('terminal workspace service', () => {
     expect(unwrap(await f.service.list()).terminals[0]!.closedAt).not.toBeNull()
   })
 
+  it('Reopen shares the initial checkout preparation after Close invalidates its first start', async () => {
+    const f = await fixture()
+    const checkout = Promise.withResolvers<AgentWorktree>(), directory = Promise.withResolvers<string>(), directoryEntered = Promise.withResolvers<void>()
+    f.worktrees.ensure.mockImplementationOnce(() => checkout.promise)
+    f.worktrees.workingDirectory.mockImplementationOnce(() => { directoryEntered.resolve(); return directory.promise })
+    const opened = unwrap(await f.service.open({ projectId: 'p1', title: 'Build', workingCopy: 'independent', launch: shellLaunch }))
+    unwrap(await f.service.close({ id: opened.terminal.id }))
+    let settled = false
+    const reopening = f.service.restart({ id: opened.terminal.id }).then(result => { settled = true; return result })
+    try {
+      await new Promise<void>(resolve => setImmediate(resolve))
+      expect(settled).toBe(false)
+      expect(f.spawn).not.toHaveBeenCalled()
+      checkout.resolve({ ...opened.terminal.worktree!, status: 'ready' })
+      await directoryEntered.promise
+      expect(f.spawn).not.toHaveBeenCalled()
+      directory.resolve(f.checkout)
+      expect(unwrap(await reopening).terminal).toMatchObject({ status: 'running', workingDirectory: f.checkout, worktree: { status: 'ready' }, closedAt: null })
+      expect(f.worktrees.ensure).toHaveBeenCalledOnce()
+      expect(f.worktrees.workingDirectory).toHaveBeenCalledOnce()
+      expect(f.spawn).toHaveBeenCalledExactlyOnceWith(expect.any(String), expect.any(Array), expect.objectContaining({ cwd: f.checkout }))
+    } finally {
+      checkout.resolve({ ...opened.terminal.worktree!, status: 'ready' }); directory.resolve(f.checkout)
+      await reopening; f.service.dispose()
+    }
+    expect(f.processes[0]!.pty.kill).toHaveBeenCalledOnce()
+  })
+
   it('disposal during launcher lookup leaves no late process or terminal event', async () => {
     const executableExists = vi.fn(async () => true)
     const f = await fixture({ executableExists })
