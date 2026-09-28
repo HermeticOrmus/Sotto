@@ -31,9 +31,9 @@ export async function grokFixture(root?: string, requestTimeoutMs = 2000, pollIn
    return outcome?.outcome === 'cancelled' ? false : outcome?.outcome === 'selected' ? outcome.optionId === 'yes' : undefined
   }},
   sessions:{
-   // A Grok session starts with session/load and stops with the close the agent answers.
+   // Observe the current residency after an accepted load/close, not any historical close request.
    starts:async(id:string)=>{const native=await realId(id);return (await requests()).filter(record=>record.method==='session/load'&&record.params?.sessionId===native).length},
-   stopped:async(id:string)=>{const native=await realId(id);return (await requests()).some(record=>record.method==='_x.ai/session/close'&&record.params?.sessionId===native)},
+   stopped:async(id:string)=>{const native=await realId(id);return (await requests()).findLast(record=>record.method==='fixture/session-resident'&&record.params?.sessionId===native)?.params?.resident===false},
   },
   driver:{typeInProvider:(id:string,text:string)=>action(id,{type:'takeover',text}),completeTurn:(id:string,text:string)=>action(id,{type:'complete',text}),raiseQuestion:(id:string,text:string)=>action(id,{type:'question',text}),raisePermission:(id:string,text:string)=>action(id,{type:'permission',text}),delayNextAck:async()=>script({delayPrompt:requestTimeoutMs+1000,suppressNotifications:true}),requests,
    restart:async()=>{adapter.disconnect();await adapter.closed();return grokFixture(root,requestTimeoutMs,pollIntervalMs,session)}},
