@@ -11,3 +11,11 @@ The [untested minimum light view](../../artifacts/review-386/untested-820-light.
 Independent native Astra Standards and Spec reviews and the coordinating source/visual review reported zero findings. The full two-worker suite remains queued. macOS was covered by renderer copy tests only, not a native app journey.
 
 The branch includes main at `3cb36d8d` (including the phone Settings category and missing-image repair). Integrating the host/history and screenshot fixes changed none of this issue's renderer sources. Final full-suite evidence remains pending.
+
+## Full gate and dependencies
+
+The full two-worker suite at `2265e87d` completed with 5,864 passed, 140 skipped and one failure (446 files passed, 39 skipped and one failed; 964.78 seconds). The concurrent Codex working-copy case expected two accepted sends but received an uncertain first send and an accepted second send. It did not capture the underlying acknowledgement error, so its exact cause remains unproven. The unchanged isolated case passed. This run is not reported as green.
+
+Separate issue #435 established a controlled fixture-budget gap: a valid acknowledgement delayed beyond the functional fixture's two-second budget could return uncertain even though both native proof files matched. That issue uses the normal adapter budget for functional checks and preserves the explicit short deadline and unchanged scripted lost-creation/no-replay coverage. Its controlled evidence does not establish the original full-run failure's cause.
+
+Composition `f9b44df2` includes current main, the reviewed selected-microphone fix #383/PR #434 and the reviewed fixture correction #435. Onboarding's own copy and Continue prerequisite are unchanged. These are explicit dependencies; the composed hosted gate and #435's own full verification remain pending. No new local heavy check was launched during the resource hold.
