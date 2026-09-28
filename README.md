@@ -32,6 +32,8 @@ Thread drafts save automatically while you type, including while other threads a
 
 In Settings, **Test microphone** checks the same input selected for dictation. Changing the input clears the previous test.
 
+Terminal mode keeps closed terminals on its Closed shelf until you quit. Reopen starts the same command with fresh output; Stop keeps the output readable.
+
 ## Install
 
 You need Windows 10 or 11 (x64), or an Apple silicon Mac with macOS 12 or newer.
