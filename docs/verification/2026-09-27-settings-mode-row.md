@@ -13,3 +13,9 @@ Both gate states were checked in light/dark with reduced motion at 1600 by 1000,
 ![Three rooms at typical width](../../artifacts/review-388/settings-three-1280-dark.png)
 
 Typecheck, lint, notices and build passed. Independent native Astra Standards and Spec reviews at `f5b4eba2` and root visual/code review reported zero findings. Later main integration at `53bb7910` preserves the same CSS and desktop assertions. The full two-worker suite remains pending. No paid providers, production profile or physical microphone were used; macOS was not exercised.
+
+## Full gate and current integration
+
+The frozen local full suite at `b882bf03` completed with 5,860 passed, 140 skipped and four failed tests (445 files passed, 39 skipped and two failed files; 1,113.75 seconds). It is not a passing gate. `codexRollback.test.ts` lost its child before acknowledgement. `socketHostContract.test.ts` reported Codex `spawn UNKNOWN`, a Claude child exiting before readiness followed by cleanup timeout, and a failed Devin version probe. These occurred during independently observed machine resource failures; that correlation does not by itself establish every failure's cause. The exact log remains in the owned verification artifacts. A separate bounded neighbor check is assigned; no assertion or deadline was weakened.
+
+Current main integration `d67e326c` includes the dictionary and semantic renderer-test gates. It changes none of this issue's CSS or native geometry assertions. Current static checks and the isolated hosted full gate remain pending; the change is not ready to merge.
