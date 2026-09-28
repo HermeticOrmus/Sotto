@@ -21,6 +21,8 @@ Both saved captures were visually inspected. The recovery copy, attachment chip 
 
 ## Gates and review
 
-Typecheck, lint, notices (174 components), runtime preparation and build passed. The full two-worker suite is queued under the shared machine's concurrency cap, not yet claimed green.
+Typecheck, lint, notices (174 components), runtime preparation and build passed. The full two-worker suite at `bc39f6a8` finished in 1,023.25 seconds: 5,740 passed, 131 skipped, one failure. The existing subagent workflow test queried a unique `phase-1-perf` description before its assignment detail settled and found two matching elements (`subagents.test.tsx:194`). Main already contains the causal fixture repair `56c064b2`, which holds/releases that detail explicitly. The run used a verified-absent owned `SOTTO_PERF_DATA` path; no personal-profile benchmark ran.
+
+Main `53bb7910` was integrated at `f6bfa421`; only additive artifact-ignore entries conflicted, and the attachment production and regression files stayed unchanged. The integrated focused suites pass all 47 tests, including the 32 image cases and the 15 subagent tests with the incoming repair. Typecheck, lint and notices pass again on this integration. The original full run remains a recorded failure; final integrated CI is required before merge.
 
 Two independent native GPT-6 Astra/high reviewers completed Standards and Spec reviews with no findings, and the root review agreed. Later test-only corrections aligned the deferred Buffer type with Node and the exact visible refusal with its delivery-row suffix. Cross-model review was not available; no such review is claimed.
