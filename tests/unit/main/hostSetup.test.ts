@@ -30,6 +30,7 @@ function fixture() {
     attempt: vi.fn((id: string) => statuses.get(id)),
     cancelAttempt: vi.fn(async (id: string) => { statuses.delete(id) }),
     savedAs: vi.fn((): string | undefined => undefined),
+    forget: vi.fn(async (id: string) => { const index = saved.indexOf(id); if (index < 0) return false; saved.splice(index, 1); return true }),
   } satisfies HostSetupHosts
   const events: string[] = []
   let listener: () => void = () => undefined
@@ -183,6 +184,46 @@ describe('HostSetup', () => {
     expect(f.setup.state()).toBeUndefined()
   })
 
+  it('forgets a host the add saved just as Stop setup landed, so the stop saves nothing', async () => {
+    const f = fixture()
+    let release: () => void = () => undefined
+    // Past pairing: the host is saved, and the add is still writing it when the user presses Stop setup.
+    f.hosts.add.mockImplementationOnce(async connection => {
+      f.saved.push(connection.id); f.statuses.set(connection.id, { ...host, id: connection.id, enabled: true, phase: 'connected' })
+      await new Promise<void>(resolve => { release = resolve })
+    })
+    await f.setup.command(start())
+    const adding = f.setup.run('thread-1', 'host_add')
+    await vi.waitFor(() => expect(f.setup.requests().size).toBe(1))
+    f.setup.answer('thread-1', f.setup.requests().get('thread-1')![0]!.id, true)
+    await vi.waitFor(() => expect(f.saved).toEqual([HOST_ID]))
+    const stopping = f.setup.command({ type: 'stop-setup', id: SETUP_ID })
+    release()
+    await stopping
+    expect(f.hosts.forget).toHaveBeenCalledWith(HOST_ID)
+    expect(f.saved).toEqual([])
+    expect(await adding).toMatchObject({ isError: true, result: { added: false, message: expect.stringContaining('forgot it again') } })
+    expect(f.setup.state()).toMatchObject({ phase: 'stopped' })
+    expect(f.setup.state()?.error).toBeUndefined()
+  })
+
+  it('says the host is saved when a stop lands after the add saved it and forgetting it fails', async () => {
+    const f = fixture()
+    let release: () => void = () => undefined
+    f.hosts.add.mockImplementationOnce(async connection => { f.saved.push(connection.id); await new Promise<void>(resolve => { release = resolve }) })
+    f.hosts.forget.mockRejectedValueOnce(new Error('The host could not be reached.'))
+    await f.setup.command(start())
+    const adding = f.setup.run('thread-1', 'host_add')
+    await vi.waitFor(() => expect(f.setup.requests().size).toBe(1))
+    f.setup.answer('thread-1', f.setup.requests().get('thread-1')![0]!.id, true)
+    await vi.waitFor(() => expect(f.saved).toEqual([HOST_ID]))
+    const stopping = f.setup.command({ type: 'stop-setup', id: SETUP_ID })
+    release()
+    await stopping
+    expect(await adding).toMatchObject({ isError: true, result: { added: true } })
+    expect(f.setup.state()).toMatchObject({ phase: 'stopped', error: expect.stringContaining('forge was saved as a host just as the setup stopped') })
+  })
+
   it('stops a pending add question when the setup stops', async () => {
     const f = fixture()
     await f.setup.command(start())
@@ -192,6 +233,7 @@ describe('HostSetup', () => {
     expect(await adding).toMatchObject({ result: { added: false, message: 'The setup was stopped. Nothing was saved.' } })
     expect(f.setup.requests().size).toBe(0)
     expect(f.hosts.add).not.toHaveBeenCalled()
+    expect(f.hosts.forget).not.toHaveBeenCalled()
   })
 
   it('says the thread waits for a command while the provider asks, and stops when the thread is archived', async () => {

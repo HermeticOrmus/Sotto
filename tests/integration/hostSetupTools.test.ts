@@ -148,7 +148,7 @@ describe('the host setup tool over Add host', () => {
       start: async request => { request.created('setup-thread') }, interrupt: async () => undefined,
       thread: () => ({ requestIds: [], archived: false }), windowId: id => id, subscribe: () => () => undefined,
     }
-    const setup = new HostSetup({ version: '0.1.21', threads, hosts: { check: connection => hosts.check(connection), add: connection => hosts.setupAdd(connection),
+    const setup = new HostSetup({ version: '0.1.21', threads, hosts: { check: connection => hosts.check(connection), add: connection => hosts.setupAdd(connection), forget: id => hosts.forgetSaved(id),
       attempt: id => hosts.attempt(id), cancelAttempt: id => hosts.cancelAttempt(id), savedAs: (target, port) => hosts.savedAs(target, port) } })
     const server = new HostSetupToolServer(setup); cleanup.push(() => server.close())
     setup.useTools(threadId => server.revoke(threadId))
@@ -211,7 +211,7 @@ describe('the host setup tool over Add host', () => {
     const hosts = new DesktopHosts({ directory: join(root, 'desktop'), credentials, router, localHostRunning: true, localHostEnabled: () => true, restart: () => undefined, launcher: () => new HeldSsh() })
     await hosts.start(); cleanup.push(() => hosts.close())
     const interrupted: string[] = []
-    const setup = new HostSetup({ version: '0.1.21', hosts: { check: connection => hosts.check(connection), add: connection => hosts.setupAdd(connection),
+    const setup = new HostSetup({ version: '0.1.21', hosts: { check: connection => hosts.check(connection), add: connection => hosts.setupAdd(connection), forget: id => hosts.forgetSaved(id),
       attempt: id => hosts.attempt(id), cancelAttempt: id => hosts.cancelAttempt(id), savedAs: (target, port) => hosts.savedAs(target, port) },
     threads: { choice: () => ({ models: [{ id: 'm', name: 'Model', provider: 'Provider' }], modelId: 'm' }), start: async request => { request.created('setup-thread') },
       interrupt: async threadId => { interrupted.push(threadId) }, thread: () => ({ requestIds: [], archived: false }), windowId: id => id, subscribe: () => () => undefined } })

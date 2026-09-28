@@ -675,7 +675,7 @@ async function createRuntime(): Promise<NativeRuntimeController> {
   // Have my agent set this up (ADR-0035): a host setup thread on this computer, with the host setup tools while it
   // runs. The thread reaches the device through this computer's SSH setup, so it needs the local host.
   const hostSetup = new HostSetup({ version: appVersion,
-    hosts: { check: connection => desktopHosts.check(connection), add: connection => desktopHosts.setupAdd(connection),
+    hosts: { check: connection => desktopHosts.check(connection), add: connection => desktopHosts.setupAdd(connection), forget: id => desktopHosts.forgetSaved(id),
       attempt: id => desktopHosts.attempt(id), cancelAttempt: id => desktopHosts.cancelAttempt(id), savedAs: (target, port) => desktopHosts.savedAs(target, port) },
     threads: coordinatorSetupThreads({ coordinator: agentControl, folder: join(userDataPath, 'host-setup'), localHostRunning: startupSettings.localHostEnabled }) })
   const hostSetupTools = new HostSetupToolServer(hostSetup)

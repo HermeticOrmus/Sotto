@@ -100,7 +100,7 @@ export function HostSetupProgress({ setup, question, approvalError, onOpenThread
       <p>{setup.name} is added and connected. {setup.modelName} set it up in <button type="button" className="host-setup__link tt-focusable" onClick={onOpenThread}>{setup.threadTitle}</button>; the thread stays in your Threads list until you archive it.</p>
     </div> : null}
     {setup.phase === 'stopped' ? <div className="hosts-notice host-setup__card" role="status">
-      <p>Setup stopped. Nothing was saved as a host. Anything the agent installed on {setup.name} stays there, and the thread {setup.threadTitle} stays in your Threads list.</p>
+      <p>Setup stopped. {setup.error ?? 'Nothing was saved as a host.'} Anything the agent installed on {setup.name} stays there, and the thread {setup.threadTitle} stays in your Threads list.</p>
       {setup.threadId ? <div className="host-setup__actions">{openThread}</div> : null}
     </div> : null}
     {setup.phase === 'failed' ? <div className="hosts-notice hosts-notice--error host-setup__card" role="alert">

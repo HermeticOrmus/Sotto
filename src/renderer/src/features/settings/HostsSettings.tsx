@@ -125,8 +125,8 @@ function HostSetupLine({ setup, onShow, onDismiss }: { readonly setup: HostSetup
   return <div className="hosts-setup-line" role="status" data-phase={setup.phase}>
     <p>{running ? <><b>{setup.modelName}</b> is setting up {setup.name} in the thread <b>{setup.threadTitle}</b>.{setup.waiting ? ' It is waiting for your answer there.' : ''}</>
       : setup.phase === 'connected' ? <>{setup.name} is set up and connected. <b>{setup.modelName}</b> set it up in the thread <b>{setup.threadTitle}</b>.</>
-        : setup.phase === 'stopped' ? <>The setup of {setup.name} stopped. Nothing was saved as a host.</>
-          : <>The setup of {setup.name} could not carry on. Nothing was saved as a host.</>}</p>
+        : setup.phase === 'stopped' ? <>The setup of {setup.name} stopped. {setup.error ?? 'Nothing was saved as a host.'}</>
+          : <>{setup.error ?? `The setup of ${setup.name} could not carry on. Nothing was saved as a host.`}</>}</p>
     <Button variant="secondary" aria-label={`Show the setup of ${setup.name}`} onClick={onShow}>Show setup</Button>
     {running ? null : <Button variant="ghost" aria-label={`Dismiss the setup of ${setup.name}`} onClick={onDismiss}>Dismiss</Button>}
   </div>

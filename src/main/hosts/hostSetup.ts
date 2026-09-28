@@ -14,6 +14,8 @@ export interface HostSetupHosts {
   check(connection: Connection): Promise<HostStatus | undefined>
   /** Add host's add, which saves the host only once it answers and pairs. */
   add(connection: Connection): Promise<void>
+  /** Forgets the saved host with this ID, as its row's Forget does; false when it is not saved. */
+  forget(id: string): Promise<boolean>
   attempt(id: string): HostStatus | undefined
   cancelAttempt(id: string): Promise<void>
   /** The saved host's name when this target and port are saved already. */
@@ -192,8 +194,12 @@ export class HostSetup implements HostSetupSource, HostSetupToolHandlers {
     this.emit()
     // A check or add in flight is dropped: nothing is saved, and a pairing it made is revoked. One that finished
     // stays for the checklist to show how far the setup got, until the setup is put away.
+    const adding = run.adding
     if (run.attemptId && this.options.hosts.attempt(run.attemptId)?.phase === 'connecting') await this.options.hosts.cancelAttempt(run.attemptId).catch(() => undefined)
     if (run.threadId) await this.options.threads.interrupt(run.threadId).catch(() => undefined)
+    // An add already past pairing cannot be cancelled and may save the host as the stop lands: wait for it, so
+    // the stop reports what it did (add() forgets such a host again).
+    if (adding) await adding.catch(() => undefined)
     this.emit()
   }
   /** The setup is over: its request goes, and its thread's tool with it. */
@@ -223,10 +229,12 @@ export class HostSetup implements HostSetupSource, HostSetupToolHandlers {
     if (answer === 'stopped' || this.current !== run || !running(run)) return { isError: true, result: { added: false, message: 'The setup was stopped. Nothing was saved.' } }
     if (answer === 'decline') return { result: { added: false, declined: true, message: `The user chose not to add ${run.name} now. Nothing was saved. Ask them what they want to do next.` } }
     run.busy = true; run.attemptId = run.connection.id; run.purpose = 'add'; this.emit()
+    let refused: unknown
     try { await this.options.hosts.add(run.connection) }
-    catch (error) { return { isError: true, result: { added: false, message: error instanceof Error ? error.message : 'The host could not be added. Nothing was saved.' } } }
+    catch (error) { refused = error instanceof Error ? error : new Error('The host could not be added. Nothing was saved.') }
     finally { run.busy = false; this.emit() }
-    if (this.current !== run || !running(run)) return { isError: true, result: { added: false, message: 'The setup was stopped. Nothing was saved.' } }
+    if (this.current !== run || !running(run)) return this.stoppedDuringAdd(run)
+    if (refused instanceof Error) return { isError: true, result: { added: false, message: refused.message } }
     const status = this.options.hosts.attempt(run.connection.id)
     if (status) this.learn(run, status)
     if (status?.phase === 'connected') {
@@ -244,6 +252,21 @@ export class HostSetup implements HostSetupSource, HostSetupToolHandlers {
     }
     this.emit()
     return { isError: true, result: status ? { added: false, ...this.failure(status) } : { added: false, message: 'The add was cancelled before it finished. Nothing was saved.' } }
+  }
+  /**
+   * Stop setup landed while the add ran. An add past pairing cannot be cancelled and may have saved the host just
+   * as the stop arrived; Stop setup saves nothing, so such a host is forgotten again. If that fails, the setup
+   * says the host is saved rather than claiming nothing was.
+   */
+  private async stoppedDuringAdd(run: Run): Promise<HostSetupToolReply> {
+    const stopped = { isError: true, result: { added: false, message: 'The setup was stopped. Nothing was saved.' } }
+    try { if (!(await this.options.hosts.forget(run.connection.id))) return stopped }
+    catch {
+      run.error = `${run.name} was saved as a host just as the setup stopped, and Sotto could not forget it again. Forget it in Settings > Hosts if you do not want it.`
+      this.emit()
+      return { isError: true, result: { added: true, message: 'The setup was stopped after the host was saved, and Sotto could not forget it again. The user can forget it in Settings > Hosts.' } }
+    }
+    return { isError: true, result: { added: false, message: 'The setup was stopped as the host was added, so Sotto forgot it again. Nothing is saved.' } }
   }
   /** What a check or add that stopped says: the step, the reason code, Add host's sentence and its fix. */
   private failure(status: HostStatus): Record<string, unknown> {

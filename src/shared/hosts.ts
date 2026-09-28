@@ -84,7 +84,7 @@ export interface HostSetupState {
   readonly modelName: string
   /** `starting` until the thread has its brief, `running` while it works, then how it ended. */
   readonly phase: 'starting' | 'running' | 'connected' | 'stopped' | 'failed'
-  /** Why the setup could not start or carry on; set with `failed`. */
+  /** Why the setup could not start or carry on, set with `failed`; with `stopped`, a host the stop could not unsave. */
   readonly error?: string | undefined
   /** The latest check or add the thread's tool ran, as the checklist shows it. */
   readonly attempt?: (HostStatus & { readonly purpose: 'check' | 'add' }) | undefined

@@ -150,6 +150,15 @@ export class DesktopHosts {
   cancelAttempt(id: string): Promise<void> { return this.cancelAdd(id) }
   /** The host setup's add (ADR-0035): Add host's add, in the setup's own slot. */
   async setupAdd(input: Connection): Promise<void> { await this.add(input, 'setup') }
+  /**
+   * Forgets a saved host the way its row's Forget does, for a setup stopped just as its add saved the host.
+   * False when the host is not saved, so there was nothing to forget.
+   */
+  async forgetSaved(id: string): Promise<boolean> {
+    if (!this.saved.some(item => item.id === id)) return false
+    await this.command({ type: 'forget', id })
+    return true
+  }
   subscribe(listener: (state: HostsState) => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener) }
   /** What a row shows of a saved host: its connection, with `enabled` read as on when an older file left it out. */
   private fields(host: SavedHost): Omit<HostStatus, 'phase'> {
