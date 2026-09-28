@@ -5,6 +5,7 @@ export default tseslint.config(
   {
     ignores: [
       'artifacts/review-407/**',
+      'artifacts/review-403/**',
       'artifacts/review-389/**',
       'artifacts/review-377/**',
       'artifacts/review-402/**',
