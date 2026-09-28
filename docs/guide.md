@@ -225,6 +225,8 @@ Press the global shortcut once to start and again to stop and transcribe. The de
 Settings:
 
 - Dictation: microphone, global shortcut, recording limit, local sound cues, and streaming transcription so long dictations finish almost immediately after you stop
+
+**Test microphone** checks the input selected for dictation. Changing that input clears the previous test and stops its meter. A missing selected microphone is reported as missing; Sotto does not silently test the default input instead.
 - Transcription: MAI-Transcribe-2 through OpenRouter (the only model), your OpenRouter API key with a verify button, language, and conservative whitespace formatting
 - Cleanup: optional AI cleanup with quality tiers and the personal dictionary that also feeds transcription spelling hints; and the switches for generated thread titles, commit messages and pull request text. The dictionary saves when you leave its field. An older save finishing while you type keeps your newer draft in place; if a save fails, leave the field again to retry.
 - Output: mandatory clipboard safety copy, optional automatic paste, paste delay, and success-message duration

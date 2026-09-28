@@ -30,6 +30,8 @@ Sotto runs the Claude Code, Codex, Grok Build and Devin clients you already have
 
 Thread drafts save automatically while you type, including while other threads are working.
 
+In Settings, **Test microphone** checks the same input selected for dictation. Changing the input clears the previous test.
+
 Terminal mode keeps closed terminals on its Closed shelf until you quit. Reopen starts the same command with fresh output; Stop keeps the output readable.
 
 ## Install

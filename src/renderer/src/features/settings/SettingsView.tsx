@@ -153,6 +153,7 @@ export function SettingsView({
   const [microphoneState, setMicrophoneState] = useState<MicrophoneTestState>('idle')
   const [microphoneLevel, setMicrophoneLevel] = useState(0)
   const microphoneTestRef = useRef<MicrophoneTestController | null>(null)
+  const microphoneTestGeneration = useRef(0)
   const [deviceState, setDeviceState] = useState<'loading' | 'ready' | 'error'>('loading')
   const [hotkeyDraft, setHotkeyDraft] = useState(() => formatAccelerator(settings.hotkey, platform, 'editing'))
   const [pasteDelayDraft, setPasteDelayDraft] = useState(String(settings.pasteDelayMs))
@@ -292,12 +293,17 @@ export function SettingsView({
     return saved
   }, [onUpdateSettings])
 
-  // The microphone opened here is released when Settings goes away.
-  useEffect(() => () => {
-    const controller = microphoneTestRef.current
-    microphoneTestRef.current = null
-    if (controller !== null) void Promise.resolve(controller.stop()).catch(() => undefined)
-  }, [])
+  // A result belongs to one input. A changed selection also invalidates pending permission.
+  useEffect(() => {
+    setMicrophoneState('idle')
+    setMicrophoneLevel(0)
+    return () => {
+      ++microphoneTestGeneration.current
+      const controller = microphoneTestRef.current
+      microphoneTestRef.current = null
+      if (controller !== null) void Promise.resolve(controller.stop()).catch(() => undefined)
+    }
+  }, [settings.microphoneId])
 
   /**
    * The same level test onboarding runs. A microphone that reports ready is
@@ -305,11 +311,14 @@ export function SettingsView({
    * outcome leaves the skip alone and says what went wrong.
    */
   const runMicrophoneTest = async (): Promise<void> => {
+    const generation = ++microphoneTestGeneration.current
+    const selectedDeviceId = settingsRef.current.microphoneId ?? undefined
     const previous = microphoneTestRef.current
     microphoneTestRef.current = null
     setMicrophoneLevel(0)
     setMicrophoneState('requesting')
     if (previous !== null) await Promise.resolve(previous.stop()).catch(() => undefined)
+    if (generation !== microphoneTestGeneration.current) return
     let controller: MicrophoneTestController
     try { controller = createMicrophoneTest() } catch {
       setMicrophoneState('error')
@@ -318,7 +327,7 @@ export function SettingsView({
     microphoneTestRef.current = controller
     const outcome = await controller.start((level) => {
       if (microphoneTestRef.current === controller) setMicrophoneLevel(level)
-    }).catch(() => 'error' as const)
+    }, selectedDeviceId).catch(() => 'error' as const)
     if (microphoneTestRef.current !== controller) return
     setMicrophoneState(outcome)
     if (outcome !== 'ready') {
