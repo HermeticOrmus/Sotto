@@ -46,7 +46,7 @@ it('retains failed dictation across navigation and later dictation, and copies w
   await openPage('home')
   const dictate = async () => {
     await user.click(screen.getByRole('button', { name: 'Start dictation' }))
-    await user.click(screen.getByRole('button', { name: 'Stop', exact: true }))
+    await user.click(screen.getByRole('button', { name: 'Stop' }))
   }
   await dictate()
   await waitFor(() => expect(screen.getByRole('textbox', { name: 'Completed dictation text' })).toHaveValue('Completed words 1'))
