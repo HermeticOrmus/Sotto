@@ -54,7 +54,7 @@ export async function claudeFixture(root?: string, requestTimeoutMs = 2000, envi
     // did (#317, #318); a CLI that never answers the settings request leaves it uncertain.
     settings: { snapshot: true, loseConfirmation: liveSettings.silence },
     sessions: {
-      // One CLI per thread: a launch or a resume is a session start, and the child records its own exit.
+      // One CLI per thread: count launches, but inspect the current child's ownership marker for liveness.
       starts: async id => {
         const native = await realId(id)
         return (await records()).filter(record => ['launch', 'resume'].includes(record.method ?? '')
@@ -62,7 +62,11 @@ export async function claudeFixture(root?: string, requestTimeoutMs = 2000, envi
       },
       stopped: async id => {
         const native = await realId(id)
-        return (await records()).some(record => record.method === 'exit' && (record.params?.frame as { session?: string } | undefined)?.session === native)
+        let pid: number
+        try { pid = Number(await readFile(join(root, `alive-${native}.json`), 'utf8')) }
+        catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true; throw error }
+        try { process.kill(pid, 0); return false }
+        catch (error) { if ((error as NodeJS.ErrnoException).code === 'ESRCH') return true; throw error }
       },
     },
     driver: {
