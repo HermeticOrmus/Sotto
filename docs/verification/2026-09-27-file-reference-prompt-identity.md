@@ -1,6 +1,6 @@
 # File references belong to a prompt revision
 
-Issue #381. Windows verification on September 27, 2026. Implementation `f9137650`, Electron regression `cfd2cf5d`, integrated with main `68f7974c` at `814872d2`. The main integration changes no desktop source or tests.
+Issue #381. Windows verification on September 27, 2026. Implementation `f9137650`, Electron regression `cfd2cf5d`, most recently integrated with main `dcd5db86` at `4b648051`. The prompt-identity changes remain intact alongside main's cancellation and history repairs.
 
 Manual send, steer, queued follow-ups, durable outbox receipts and both draft-clearing paths now use the same prompt digest, including selected file references. An exact retry can reconcile its original receipt; changing the selected files under the same draft ID is refused before dispatch.
 
@@ -23,6 +23,8 @@ Both captures were inspected; the neighboring queue journey also covered existin
 
 ## Gates and review
 
-Typecheck, lint, notices (174 components), runtime preparation and build passed before the iOS-only integration; static checks and notices passed again after integration. The full two-worker suite at `8f6a7c60` finished in 1,193.15 seconds with 5,736 passed, 131 skipped and two failures. Both are the Claude idle-reaping case in `headlessHost.test.ts` and `socketHostContract.test.ts`: `adapterContract.ts:715` expected a new session start after send, but the count stayed at two. The cause is under investigation; this result is not a green full gate or a demonstrated baseline defect. `SOTTO_PERF_DATA` pointed to a verified-absent owned artifact path, excluding personal-profile benchmarks.
+Typecheck, lint, notices (174 components), runtime preparation and build passed before the first main integration. The 94 focused tests, typecheck, lint and notices passed again at `4b648051`. The full two-worker suite at `8f6a7c60` finished in 1,193.15 seconds with 5,736 passed, 131 skipped and two failures. Both are the Claude idle-reaping case in `headlessHost.test.ts` and `socketHostContract.test.ts`: `adapterContract.ts:715` expected a new session start after send, but the count stayed at two. `SOTTO_PERF_DATA` pointed to a verified-absent owned artifact path, excluding personal-profile benchmarks.
+
+The investigation is recorded in issue #411: a historical child-exit record incorrectly satisfied the fixture's current-generation stopped observation. Deterministic real-child regressions reproduced that observation defect, and its separate repair preserves the adapter's reaper deadlines and production behavior. This explains the failed premise, but does not turn the historical run into a green full gate. Final integrated CI is required before merge.
 
 Independent native GPT-6 Astra/high Standards and Spec reviews of `cfd2cf5d` reported no findings, and the root review agreed. The root verified the native review configuration. External cross-model review destinations were rejected by automatic approval review and were not retried; no cross-model review is claimed.
