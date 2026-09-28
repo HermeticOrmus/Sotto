@@ -50,6 +50,8 @@ export interface AgentRuntimeOptions {
   claudeSettingsLog?: (event: ClaudeSettingsEvent) => void
   releaseClient?: ControlDependencies['releaseClient']
   missingAttachment?: ControlDependencies['missingAttachment']
+  /** The headless host says so: it connects every signed-in provider at start and names itself in refusals (ADR-0036). */
+  runsAs?: ControlDependencies['runsAs']
   /** Desktop design fixtures replace the whole provider boundary. */
   host?: AgentHost
   /** Native process overrides keep tests on the production coordinator path. */
@@ -137,6 +139,7 @@ export async function createAgentRuntime(options: AgentRuntimeOptions) {
     ...(options.logFailure ? { logFailure: options.logFailure } : {}),
     ...(options.releaseClient ? { releaseClient: options.releaseClient } : {}),
     ...(options.missingAttachment ? { missingAttachment: options.missingAttachment } : {}),
+    ...(options.runsAs ? { runsAs: options.runsAs } : {}),
     writeThreadTitle: threadTitleWriter(shortTextWriter, options.writingSettings),
     reasoner,
   })

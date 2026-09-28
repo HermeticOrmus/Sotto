@@ -2,12 +2,13 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { constants } from 'node:fs'
 import { access, mkdir, mkdtemp, open, realpath, rmdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { delimiter, isAbsolute, join } from 'node:path'
+import { basename, dirname, isAbsolute, join } from 'node:path'
 
 import { z } from 'zod'
 
 import { orderReasoningEfforts } from '../../shared/reasoningEfforts'
 import type { SubscriptionAccount, SubscriptionClient } from './subscriptionTypes'
+import { findCli, isDispatcher, withCliPath, type CliLookupOptions } from './cliLookup'
 
 const UNAVAILABLE = 'Codex subscription request failed. Check Codex sign-in, model access and usage limits, then retry.'
 const MAX_OUTPUT_BYTES = 1_048_576
@@ -57,36 +58,49 @@ export function nativeEnvironment(): NodeJS.ProcessEnv {
   ))
 }
 
-export async function findExecutable(): Promise<string | null> {
-  const windows = process.platform === 'win32'
+/**
+ * The installed Codex binary, through the shared CLI lookup (ADR-0036). Codex is only ever started as its native
+ * binary: a wrapper script, an npm JavaScript entry point or a `.cmd` shim is passed over, but the binary an
+ * npm package or a version manager keeps is taken, and a found link is followed to it.
+ */
+export async function findExecutable(lookup: CliLookupOptions = {}): Promise<string | null> {
+  const platform = lookup.platform ?? process.platform
+  const windows = platform === 'win32'
   const architecture = process.arch === 'arm64' ? 'arm64' : 'x64'
   const triple = windows ? `${architecture === 'arm64' ? 'aarch64' : 'x86_64'}-pc-windows-msvc`
-    : `${architecture === 'arm64' ? 'aarch64' : 'x86_64'}-${process.platform === 'darwin' ? 'apple-darwin' : 'unknown-linux-musl'}`
-  const name = windows ? 'codex.exe' : 'codex'
-  const packageName = `codex-${process.platform}-${architecture}`
-  const directories = (process.env.PATH ?? '').split(delimiter).map((entry) => entry.replace(/^"|"$/g, '')).filter(isAbsolute)
-  if (windows && process.env.APPDATA) directories.push(join(process.env.APPDATA, 'npm'))
-  directories.push(join(homedir(), '.codex', 'bin'))
-  for (const directory of [...new Set(directories)]) {
-    const packageRoot = join(directory, 'node_modules', '@openai', 'codex')
-    for (const candidate of [
-      join(directory, name),
-      join(packageRoot, 'node_modules', '@openai', packageName, 'vendor', triple, 'bin', name),
-      join(packageRoot, 'vendor', triple, 'bin', name),
-    ]) {
-      try {
-        const executable = await realpath(candidate)
-        await access(executable, windows ? constants.F_OK : constants.X_OK)
-        // Never run a .cmd/.ps1 shell shim or an npm JavaScript entry point.
-        const file = await open(executable, 'r')
-        const header = Buffer.alloc(4)
-        try { await file.read(header, 0, header.length, 0) } finally { await file.close() }
-        if (windows ? header[0] === 0x4d && header[1] === 0x5a
-          : ['7f454c46', 'cffaedfe', 'feedfacf', 'cafebabe', 'bebafeca'].includes(header.toString('hex'))) return executable
-      } catch { /* Try the next installed native binary. */ }
-    }
-  }
-  return null
+    : `${architecture === 'arm64' ? 'aarch64' : 'x86_64'}-${platform === 'darwin' ? 'apple-darwin' : 'unknown-linux-musl'}`
+  const packageName = `codex-${platform}-${architecture}`
+  const executable = await findCli({
+    name: 'codex',
+    last: [join(lookup.home ?? homedir(), '.codex', 'bin')],
+    // npm's layouts: the package beside a Windows prefix's commands, under `lib` beside a POSIX prefix's `bin`, or
+    // beside the `node_modules/.bin` a local install links from. Only a folder named `bin` or `.bin` is looked above,
+    // and never on Windows: a PATH folder just below a drive root would reach `C:\lib`, which any account may create.
+    within: (directory, file) => (windows ? [join(directory, 'node_modules', '@openai')]
+      : basename(directory) === 'bin' ? [join(dirname(directory), 'lib', 'node_modules', '@openai')]
+        : basename(directory) === '.bin' && basename(dirname(directory)) === 'node_modules' ? [join(dirname(directory), '@openai')] : []).flatMap(scope => [
+      join(scope, 'codex', 'node_modules', '@openai', packageName, 'vendor', triple, 'bin', file),
+      join(scope, packageName, 'vendor', triple, 'bin', file),
+      join(scope, 'codex', 'vendor', triple, 'bin', file),
+    ]),
+    accept: candidate => nativeCodex(candidate, windows),
+  }, lookup)
+  return executable ?? null
+}
+
+/** The native binary a candidate is, or leads to: never a manager's shim, a shell script or a JavaScript entry point. */
+async function nativeCodex(candidate: string, windows: boolean): Promise<string | undefined> {
+  try {
+    const executable = await realpath(candidate)
+    if (isDispatcher(executable)) return undefined
+    await access(executable, windows ? constants.F_OK : constants.X_OK)
+    const file = await open(executable, 'r')
+    const header = Buffer.alloc(4)
+    try { await file.read(header, 0, header.length, 0) } finally { await file.close() }
+    const native = windows ? header[0] === 0x4d && header[1] === 0x5a
+      : ['7f454c46', 'cffaedfe', 'feedfacf', 'cafebabe', 'bebafeca'].includes(header.toString('hex'))
+    return native ? executable : undefined
+  } catch { return undefined }
 }
 
 /** One owned, bounded child. No shell, persistent daemon, retries or raw error output. */
@@ -97,7 +111,7 @@ function childOperation<T>(executable: string, args: string[], cwd: string, time
 ): Promise<T> {
   return new Promise((resolve, reject) => {
     signal?.throwIfAborted()
-    const child = spawn(executable, args, { cwd, env, windowsHide: true, shell: false, stdio: 'pipe' })
+    const child = spawn(executable, args, { cwd, env: withCliPath(env, executable), windowsHide: true, shell: false, stdio: 'pipe' })
     let finishing = false
     let closed = false
     let result: T | undefined

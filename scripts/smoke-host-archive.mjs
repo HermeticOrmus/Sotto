@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import process from 'node:process'
@@ -7,9 +7,17 @@ import { setTimeout, clearTimeout } from 'node:timers'
 import { pathToFileURL } from 'node:url'
 import { verifyHostArchive } from './verify-host-archive.mjs'
 
+const PROVIDERS = ['codex', 'claude', 'grok', 'devin']
+
 export async function smokeHostArchive(directory) {
   await verifyHostArchive(directory)
   const data = await mkdtemp(join(tmpdir(), 'sotto-host-smoke-'))
+  // A host connects every provider installed and signed in on its machine (ADR-0036). The smoke runs on the release
+  // machines and in CI, beside real clients and accounts, so every provider starts turned off and none is started.
+  await writeFile(join(data, 'agents.json'), JSON.stringify({
+    configuration: { disconnectedProviders: PROVIDERS }, assignments: [], queue: [], activeThreadId: null, activeProjectId: null,
+    draft: '', draftThreadId: null, composing: false, outbox: [],
+  }))
   // Windows cannot deliver SIGTERM. Only the Windows smoke substitutes the signal through IPC.
   const shim = "process.on('message',m=>{if(m==='SIGTERM'){process.emit('SIGTERM');process.disconnect()}})"
   const args = process.platform === 'win32' ? ['--import', 'data:text/javascript,' + encodeURIComponent(shim)] : []
@@ -46,6 +54,8 @@ export async function smokeHostArchive(directory) {
       const identity = JSON.parse(await readFile(join(data, 'host.json'), 'utf8'))
       const workspace = JSON.parse(await readFile(join(data, 'workspace.json'), 'utf8'))
       if (identity.hostId !== descriptor.hostId || workspace.snapshot.hostId !== identity.hostId) throw new Error('Packaged host did not preserve its identity and workspace')
+      const agents = JSON.parse(await readFile(join(data, 'agents.json'), 'utf8'))
+      if (agents.configuration?.disconnectedProviders?.join() !== PROVIDERS.join()) throw new Error('Packaged host did not keep its providers turned off')
     })()])
   } finally {
     clearTimeout(deadline)

@@ -1,8 +1,8 @@
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { access, constants, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { delimiter, isAbsolute, join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import { z } from 'zod'
+import { findCli, withCliPath, type CliLookupOptions } from './cliLookup'
 
 export const DEVIN_CLI_VERSION = '3000.10.31'
 export const DEVIN_ACP_VERSION = 1
@@ -19,16 +19,13 @@ const safeEnvironment = new Set(['path', 'pathext', 'systemroot', 'windir', 'tem
 export function devinEnvironment(environment: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   return Object.fromEntries(Object.entries(environment).filter(([key]) => safeEnvironment.has(key.toLowerCase())))
 }
-export async function findDevinExecutable(environment: NodeJS.ProcessEnv = process.env): Promise<string | undefined> {
-  const name = process.platform === 'win32' ? 'devin.exe' : 'devin'
-  const pathValue = Object.entries(environment).find(([key]) => key.toLowerCase() === 'path')?.[1] ?? ''
-  const native = process.platform === 'win32'
-    ? environment.LOCALAPPDATA && isAbsolute(environment.LOCALAPPDATA) ? [join(environment.LOCALAPPDATA, 'Programs', 'Devin', 'resources', 'app', 'extensions', 'windsurf', 'devin', 'bin', name)] : []
-    : [join(homedir(), '.local', 'bin', name), join('/Applications/Devin.app/Contents/Resources/app/extensions/windsurf/devin/bin', name), join(homedir(), 'Applications/Devin.app/Contents/Resources/app/extensions/windsurf/devin/bin', name)]
-  for (const candidate of new Set([...pathValue.split(delimiter).filter(isAbsolute).map(path => join(path, name)), ...native])) {
-    try { if ((await stat(candidate)).isFile()) { await access(candidate, constants.X_OK); return candidate } } catch { /* Discovery never reads native credentials. */ }
-  }
-  return undefined
+/** Where Devin's CLI is: the shared CLI lookup (ADR-0036), then inside the Devin app. The lookup never reads native credentials. */
+export async function findDevinExecutable(environment: NodeJS.ProcessEnv = process.env, lookup: Omit<CliLookupOptions, 'environment'> = {}): Promise<string | undefined> {
+  const app = join('resources', 'app', 'extensions', 'windsurf', 'devin', 'bin')
+  const last = (lookup.platform ?? process.platform) === 'win32'
+    ? environment.LOCALAPPDATA && isAbsolute(environment.LOCALAPPDATA) ? [join(environment.LOCALAPPDATA, 'Programs', 'Devin', app)] : []
+    : ['/Applications/Devin.app/Contents/Resources/app/extensions/windsurf/devin/bin', join(lookup.home ?? homedir(), 'Applications/Devin.app/Contents/Resources/app/extensions/windsurf/devin/bin')]
+  return findCli({ name: 'devin', last }, { ...lookup, environment })
 }
 const frameSchema = z.object({
   jsonrpc: z.literal('2.0'), id: z.union([z.string().max(256), z.number().int().safe()]).optional(),
@@ -51,7 +48,7 @@ export class DevinRpc {
   readonly closed: Promise<void>
   constructor(executable: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, private readonly timeoutMs: number,
     private readonly receive: (frame: DevinFrame) => Promise<void> | void, private readonly lost: () => void) {
-    this.child = spawn(executable, args, { cwd, env, windowsHide: true, shell: false, stdio: 'pipe' })
+    this.child = spawn(executable, args, { cwd, env: withCliPath(env, executable), windowsHide: true, shell: false, stdio: 'pipe' })
     this.closed = new Promise(resolve => this.child.once('close', () => { this.fail(); void this.frames.then(resolve, resolve) }))
     this.child.once('exit', () => { this.child.stdout.destroy(); this.child.stderr.destroy() })
     this.child.on('error', () => this.fail()); this.child.stdin.on('error', () => this.fail())
@@ -137,7 +134,7 @@ export class DevinRpc {
 /** The native --version banner, not ACP agentInfo, establishes the tested CLI build. */
 export async function readDevinVersion(executable: string, argsPrefix: string[] = [], env: NodeJS.ProcessEnv = devinEnvironment()): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile(executable, [...argsPrefix, '--version'], { env, windowsHide: true, shell: false, timeout: 30_000, killSignal: 'SIGKILL', maxBuffer: 4_096, encoding: 'utf8' }, (error, stdout) => {
+    execFile(executable, [...argsPrefix, '--version'], { env: withCliPath(env, executable), windowsHide: true, shell: false, timeout: 30_000, killSignal: 'SIGKILL', maxBuffer: 4_096, encoding: 'utf8' }, (error, stdout) => {
       if (error) { reject(new Error('Sotto could not check the installed Devin version. Reinstall Devin and reconnect.')); return }
       const match = /^devin (\d+\.\d+\.\d+)(?: \([a-f0-9]+\))?\s*$/u.exec(stdout)
       if (!match) { reject(new Error('Devin returned an unsupported version banner.')); return }

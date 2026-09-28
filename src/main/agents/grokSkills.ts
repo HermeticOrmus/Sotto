@@ -3,6 +3,7 @@ import { promisify } from 'node:util'
 import { z } from 'zod'
 import type { AgentSkillCatalog, AgentSkillReference } from '../../shared/agentSkills'
 import { selectedSkill, claudeSkillPrompt } from './claudeSkills'
+import { withCliPath } from './cliLookup'
 
 const inspectSchema = z.object({ skills: z.array(z.object({ name: z.string().min(1), description: z.string().default(''), enabled: z.boolean().optional(), userInvocable: z.boolean().optional(), source: z.object({ type: z.string(), path: z.string().min(1) }) })) })
 export function grokCatalog(threadId: string, cwd: string, value: unknown): AgentSkillCatalog {
@@ -12,7 +13,7 @@ export function grokCatalog(threadId: string, cwd: string, value: unknown): Agen
       scope: skill.source.type === 'project' ? 'repo' : skill.source.type === 'user' ? 'user' : 'system', nativeSource: skill.source.type, invocation: `/${skill.name}` })) }
 }
 export async function discoverGrokSkills(threadId: string, cwd: string, executable: string, prefix: string[], environment: NodeJS.ProcessEnv): Promise<AgentSkillCatalog> {
-  const { stdout } = await promisify(execFile)(executable, [...prefix, 'inspect', '--json'], { cwd, env: environment, windowsHide: true, shell: false, timeout: 15000, maxBuffer: 4 * 1024 * 1024 })
+  const { stdout } = await promisify(execFile)(executable, [...prefix, 'inspect', '--json'], { cwd, env: withCliPath(environment, executable), windowsHide: true, shell: false, timeout: 15000, maxBuffer: 4 * 1024 * 1024 })
   return grokCatalog(threadId, cwd, JSON.parse(stdout))
 }
 export function grokSkillPrompt(text: string, skills: readonly AgentSkillReference[], catalog: AgentSkillCatalog): string {

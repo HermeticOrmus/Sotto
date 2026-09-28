@@ -1,8 +1,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { access, constants, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { delimiter, isAbsolute, join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import { z } from 'zod'
+import { findCli, withCliPath, type CliLookupOptions } from './cliLookup'
 
 export const GROK_CLI_VERSION = '1.0.5'
 export const GROK_ACP_VERSION = 1
@@ -21,13 +21,13 @@ export function grokEnvironment(environment: NodeJS.ProcessEnv = process.env): N
   for (const key of ['GROK_HOME', 'GROK_AUTH_PATH']) if (environment[key] && isAbsolute(environment[key]!)) env[key] = environment[key]
   return { ...env, GROK_DISABLE_API_KEY_AUTH: '1', GROK_DISABLE_AUTOUPDATER: '1', GROK_DEFAULT_SELECTED_PERMISSION: 'reject', GROK_REMEMBER_TOOL_APPROVALS: '0' }
 }
-export async function findGrokExecutable(environment: NodeJS.ProcessEnv = process.env): Promise<string | undefined> {
-  const name = process.platform === 'win32' ? 'grok.exe' : 'grok'
-  const home = environment.GROK_HOME && isAbsolute(environment.GROK_HOME) ? environment.GROK_HOME : join(homedir(), '.grok')
-  for (const candidate of new Set([join(home, 'bin', name), ...(environment.PATH ?? '').split(delimiter).filter(isAbsolute).map(path => join(path, name))])) {
-    try { if ((await stat(candidate)).isFile()) { await access(candidate, constants.X_OK); return candidate } } catch { /* Native executables only. */ }
-  }
-  return undefined
+/**
+ * Where Grok Build is: its own `~/.grok/bin` first, where its installer (npm's included) keeps the native binary,
+ * then the shared CLI lookup (ADR-0036).
+ */
+export async function findGrokExecutable(environment: NodeJS.ProcessEnv = process.env, lookup: Omit<CliLookupOptions, 'environment'> = {}): Promise<string | undefined> {
+  const home = environment.GROK_HOME && isAbsolute(environment.GROK_HOME) ? environment.GROK_HOME : join(lookup.home ?? homedir(), '.grok')
+  return findCli({ name: 'grok', first: [join(home, 'bin')] }, { ...lookup, environment })
 }
 const frameSchema = z.object({ jsonrpc: z.literal('2.0'), id: z.union([z.string(), z.number()]).optional(), method: z.string().optional(), params: z.unknown().optional(), result: z.unknown().optional(), error: z.unknown().optional() })
 export type GrokFrame = z.infer<typeof frameSchema>
@@ -53,7 +53,7 @@ export class GrokRpc {
   readonly closed: Promise<void>
   constructor(executable: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, private readonly timeoutMs: number,
     private readonly receive: (frame: GrokFrame) => Promise<void> | void, private readonly lost: () => void) {
-    this.child = spawn(executable, args, { cwd, env, windowsHide: true, shell: false, stdio: 'pipe' })
+    this.child = spawn(executable, args, { cwd, env: withCliPath(env, executable), windowsHide: true, shell: false, stdio: 'pipe' })
     this.closed = new Promise(resolve => this.child.once('close', () => { this.fail(); void this.frames.finally(resolve) }))
     // A Windows leader can inherit its short-lived proxy's output handles. Once the proxy
     // exits those inherited handles must not keep the adapter's shutdown barrier open.

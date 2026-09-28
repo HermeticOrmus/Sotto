@@ -24,6 +24,7 @@ import { ThreadMessageLog } from './threadMessageLog'
 import { cloneHostSnapshot } from './cloneHostSnapshot'
 import { ActivitySubscribers, cloneActivitySnapshot, immutableActivities, isImmutableActivities } from './activitySnapshots'
 import { findExecutable, nativeEnvironment, writeWithCodexExec } from './subscriptionCodex'
+import { withCliPath } from './cliLookup'
 import { CodexSessionLogWatcher, promptDigest, textOf } from './codexSessionLog'
 import { answerRequest, declineRequest, pendingRequest, requestKey, type CodexPendingRequest } from './codexRequests'
 import { needsPerson, unreadableRequest } from './nativeRequests'
@@ -260,7 +261,7 @@ export class CodexAppServerHost implements AgentHost {
       for (const origin of alias.origins) this.watcher.sentDigest(alias.codexThreadId, origin.messageId, origin.digest)
     }
     const child = spawn(executable, this.options.args ?? ['app-server', '--stdio', ...configArguments], {
-      cwd: this.options.userDataPath, env: { ...nativeEnvironment(), CODEX_HOME: codexHome }, windowsHide: true, shell: false, stdio: 'pipe',
+      cwd: this.options.userDataPath, env: withCliPath({ ...nativeEnvironment(), CODEX_HOME: codexHome }, executable), windowsHide: true, shell: false, stdio: 'pipe',
     })
     this.child = child
     let buffer: string[] = []; let bufferedBytes = 0; let stderrBytes = 0; let queuedBytes = 0
