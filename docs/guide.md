@@ -255,7 +255,7 @@ Locally built artifacts are not code-signed because no Windows signing certifica
 
 ### After install
 
-First-run setup explains what leaves the computer, tests microphone access, takes your OpenRouter API key (you can add it later in Settings), and shows the active shortcut and safe paste-test field. The default global shortcut is `Ctrl+Shift+Space` on Windows and `⌃⇧Space` (the literal Control key) on macOS. Press it once to start and again to stop and transcribe. `Escape` cancels an active session.
+First-run setup explains what leaves the computer, tests microphone access, takes your OpenRouter API key (you can add it later in Settings), and shows the active shortcut and safe paste-test field. At the microphone step, **Continue** becomes available after a successful test or after you choose **Skip for now**. If access is blocked or no microphone is found, follow the recovery guidance and try again, or skip. The default global shortcut is `Ctrl+Shift+Space` on Windows and `⌃⇧Space` (the literal Control key) on macOS. Press it once to start and again to stop and transcribe. `Escape` cancels an active session.
 
 Sotto closes to the Windows notification area or the macOS menu bar. Use that menu to show the window, start or stop dictation, toggle automatic paste, or quit completely. On macOS the Dock icon appears only while the Sotto window is open; the menu-bar icon is always there.
 
