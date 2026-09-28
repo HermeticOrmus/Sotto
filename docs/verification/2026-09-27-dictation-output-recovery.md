@@ -12,4 +12,4 @@ The first six size/theme captures exposed a partly clipped recovery action row a
 - [Minimum dark recovery](../../artifacts/review-380/recovery-820-dark.png)
 - [Recovery after output failure](../../artifacts/review-380/recovery-1280-dark.png)
 
-Full two-worker gate and independent review are pending. Every test invocation used a verified-absent owned `SOTTO_PERF_DATA` path. macOS was not exercised locally.
+Independent native Astra Standards and Spec reviews and the parent production/visual review reported no findings. The full two-worker gate is queued. Every test invocation used a verified-absent owned `SOTTO_PERF_DATA` path. macOS was not exercised locally.
