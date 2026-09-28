@@ -17,6 +17,7 @@ import { FakeProviderHost } from '../../fixtures/fakeProviderHost'
 import type { AgentHostSnapshot } from '../../../src/shared/agents'
 import type { ThreadHostEvent } from '../../../src/main/agents/host'
 import { immediatePublishScheduler } from '../../fixtures/publishScheduler'
+import { ProviderUnavailable } from '../../../src/main/agents/providerProblem'
 
 class RetainedCallbacksProvider extends FakeProviderHost {
   readonly snapshots: Array<(snapshot: AgentHostSnapshot) => void> = []
@@ -382,5 +383,25 @@ describe('independent thread providers', () => {
     expect(f.host.resolveProjectId('project')).toBe('project')
     expect(f.host.resolveModelId('fake:model')).toBe(providerEntityId('codex', 'model', 'fake:model'))
     expect(f.host.resolveModelId(providerEntityId('grok', 'model', 'fake:model'))).toBe(providerEntityId('grok', 'model', 'fake:model'))
+  })
+
+  it('carries why a provider is not connected, and what a connected one is signed in with, into its status (ADR-0037)', async () => {
+    const f = await fixture()
+    f.adapters.codex.state.account = 'ChatGPT'
+    vi.spyOn(f.adapters.grok, 'connect').mockRejectedValueOnce(new ProviderUnavailable('signed-out', 'Sign in to Grok Build on this machine, then connect it again.', '1.0.41'))
+    const snapshot = await f.host.connect()
+    const status = (id: string) => snapshot.providers?.find(provider => provider.id === id)
+    expect(status('codex')).toMatchObject({ connection: 'connected', account: 'ChatGPT' })
+    expect(status('codex')?.problem).toBeUndefined()
+    expect(status('grok')).toMatchObject({ connection: 'error', problem: 'signed-out', version: '1.0.41', error: 'Sign in to Grok Build on this machine, then connect it again.' })
+    expect(status('grok')?.account).toBeUndefined()
+    // An adapter that reports its refusal in its snapshot names it there.
+    f.adapters.claude.state.connected = false; f.adapters.claude.state.error = 'Sign in to Claude Code.'; f.adapters.claude.state.problem = 'signed-out'; f.adapters.claude.emit()
+    expect((await f.host.snapshot('codex')).providers?.find(provider => provider.id === 'claude')).toMatchObject({ connection: 'error', problem: 'signed-out' })
+    // A provider turned off has no problem to name.
+    f.host.disconnect('grok')
+    const off = (await f.host.snapshot('codex')).providers?.find(provider => provider.id === 'grok')
+    expect(off).toMatchObject({ connection: 'disconnected' })
+    expect(off?.problem).toBeUndefined()
   })
 })

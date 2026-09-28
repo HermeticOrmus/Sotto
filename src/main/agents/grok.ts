@@ -1,3 +1,4 @@
+import { ProviderUnavailable } from './providerProblem'
 import { BROWSER_MCP_SERVER, type BrowserAgentTools } from './browserAgentServer'
 import type { ScopedThreadTools } from './threadToolServer'
 import { personalContext, type NativeConversation, type PersonalConversation, type PersonalCreateCommand, type PersonalMemory } from './personalConversation'
@@ -294,7 +295,7 @@ export class GrokAcpHost implements AgentHost {
     // Side calls' throwaway homes that a crash or a failed removal left behind hold thread content (ADR-0026).
     await sweepLeftoverSessions(join(this.userDataDirectory, 'writing', 'grok'))
     const executable = this.options.executable ?? await findGrokExecutable(this.options.environment)
-    if (!executable || !isAbsolute(executable)) throw new Error('Install Grok CLI and sign in before connecting Grok.')
+    if (!executable || !isAbsolute(executable)) throw new ProviderUnavailable('not-installed', 'Install Grok CLI and sign in before connecting Grok.')
     this.aliases = await this.aliasStore.read(); this.state.projects = await this.projectStore.read(); this.threads.clear(); this.streams.clear(); this.authored.clear(); this.liveStatus.clear(); this.selections.clear(); this.activePrompts.clear(); this.seenUpdates.clear(); this.answeredRequests.clear(); this.histories.clear()
     if (generation !== this.generation) throw new Error('Grok connection was cancelled.')
     const rpc = new GrokRpc(executable, this.options.args ?? grokArguments(), this.userDataDirectory,
@@ -302,13 +303,15 @@ export class GrokAcpHost implements AgentHost {
         if (this.rpc === rpc) { this.state.connected = false; clearInterval(this.pollTimer); for (const delivery of this.deliveries.values()) delivery.reject(new GrokUncertain('Grok disconnected.')); this.deliveries.clear(); this.pending.clear(); for (const thread of this.threads.values()) thread.requests = []; this.emit() }
       })
     this.rpc = rpc; this.stopping = rpc.closed
+    /** The client's version when it is older than Sotto supports, which a host's tile names (ADR-0037). */
+    let tooOld: string | undefined
     try {
       await rpc.request('initialize', { protocolVersion: GROK_ACP_VERSION, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false }, clientInfo: { name: 'sotto', version: '1' } }, value => {
         const response = z.object({ protocolVersion: z.number(), agentCapabilities: z.object({ loadSession: z.literal(true), mcpCapabilities: z.object({ http: z.boolean().optional() }).optional() }), authMethods: z.array(z.object({ id: z.string() })), _meta: z.object({ agentVersion: z.string().min(1).max(64), modelState: catalogSchema }) }).parse(value)
         // The pin is a floor, not one exact version (ADR-0021): an exact pin is what kept an installed
         // client on 1.0.5 while 1.0.40 was published. Older than the checked version is still refused.
         if (response.protocolVersion !== GROK_ACP_VERSION) throw new GrokUnsupported(`Sotto speaks ACP ${GROK_ACP_VERSION}, and this client answered ACP ${response.protocolVersion}.`)
-        if (compareClientVersions(response._meta.agentVersion, GROK_CLI_VERSION) < 0) throw new GrokUnsupported(`Grok CLI ${GROK_CLI_VERSION} or newer is required, and this client is ${response._meta.agentVersion}.`)
+        if (compareClientVersions(response._meta.agentVersion, GROK_CLI_VERSION) < 0) { tooOld = response._meta.agentVersion; throw new GrokUnsupported(`Grok CLI ${GROK_CLI_VERSION} or newer is required, and this client is ${response._meta.agentVersion}.`) }
         if (!response.authMethods.some(auth => auth.id === 'cached_token') || response.authMethods.some(auth => /api.?key/iu.test(auth.id))) throw new GrokUnsupported('Grok must be signed in to its own subscription; Sotto never connects it with an API key.')
         this.browserHttp = response.agentCapabilities.mcpCapabilities?.http === true
         this.state.version = `${response._meta.agentVersion} / ACP ${GROK_ACP_VERSION}`
@@ -325,7 +328,9 @@ export class GrokAcpHost implements AgentHost {
             reasoningEfforts, ...(reportedDefault && reasoningEfforts.includes(reportedDefault) ? { defaultReasoningEffort: reportedDefault } : {}) }
         })
       })
-      await rpc.request('authenticate', { methodId: 'cached_token', _meta: { headless: true } }, value => { z.object({}).parse(value) })
+      // Grok refuses its cached sign-in when there is none: that is the one refusal a host's tile offers Sign in for (ADR-0037).
+      try { await rpc.request('authenticate', { methodId: 'cached_token', _meta: { headless: true } }, value => { z.object({}).parse(value) }) }
+      catch (error) { throw error instanceof GrokRejected ? new ProviderUnavailable('signed-out', 'Sign in to Grok Build on this machine, then connect it again.', this.state.version.split(' / ')[0]) : error }
       // Lazy sessions: a known thread is in the snapshot from its alias, idle, and loads when it is
       // watched or acted on. Personal chats own their own native request channel, so they load here.
       // A fresh connection reads each session from its start again, so what the store already holds is
@@ -354,9 +359,12 @@ export class GrokAcpHost implements AgentHost {
       // missed, and pressing again will not change it. Anything else, an answer Sotto could not read or
       // a connection lost partway through, says so and is worth another press. The version and the
       // sign-in are named only by the refusal that found them, never over a failure that passed both.
-      const refused = error instanceof GrokUnsupported
+      const refused = error instanceof GrokUnsupported || error instanceof ProviderUnavailable
       const detail = refused || error instanceof GrokUncertain ? error.message : ''
-      throw new Error(['Could not connect Grok.', detail, refused ? '' : 'Connect again to retry.'].filter(Boolean).join(' '), { cause: error })
+      const message = ['Could not connect Grok.', detail, refused ? '' : 'Connect again to retry.'].filter(Boolean).join(' ')
+      if (error instanceof ProviderUnavailable) throw new ProviderUnavailable(error.problem, message, error.version)
+      if (tooOld) throw new ProviderUnavailable('too-old', message, tooOld)
+      throw new Error(message, { cause: error })
     }
   }
   /**

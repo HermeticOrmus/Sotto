@@ -54,6 +54,14 @@ export const REMOTE_COMMANDS: { readonly [T in CommandType]?: Fields<T> } = {
   answer: ['threadId', 'requestId', 'answer', 'approved', 'questionAnswers', 'permissionChoice'],
 }
 /**
+ * The requests besides commands that change something on the host and that a paired client may send: a provider's own
+ * sign-in, run on the host and finished in the client's browser (ADR-0037). Each is answered only to the client that
+ * started the sign-in, and only by a host that lists the `provider-sign-in` feature, which the desktop's phone listener
+ * does not. Signing a provider in on the host answers no permission request, so it needs no `remote-answer` policy; it is
+ * the same trust as `connect`, which pairing already gives, and the iPhone client does not send them.
+ */
+export const REMOTE_SIGN_IN_OPERATIONS = ['sign-in-start', 'sign-in-read', 'sign-in-code', 'sign-in-cancel'] as const
+/**
  * The coordinator settings a paired client may change. Keys, endpoints and the voice engine (speech
  * provider, voices, wake word) stay on the host. Turning spoken replies on or off and the orb colour are
  * preferences, and the follow-up limit only bounds work the user already assigned, which a paired device

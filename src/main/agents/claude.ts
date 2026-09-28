@@ -281,7 +281,15 @@ export class ClaudeStreamJsonHost implements AgentHost {
     if (generation !== this.generation) throw new Error('Claude connection was cancelled.')
     this.state.error = undefined; this.turnFailures.clear(); this.assistantErrors.clear(); this.state.models = account.models.map(model => ({ ...model, provider: 'claude', ready: account.ready, runtimeModes: [...agentRuntimeModeSchema.options], supportsImages: true,
       ...(account.defaultModelId && model.id === account.defaultModelId ? { recommended: true } : {}) }))
-    if (!account.ready || !executable) { this.state.error = account.detail; this.emit(); return this.view() }
+    delete this.state.problem; delete this.state.account
+    if (!account.ready || !executable) {
+      this.state.error = account.detail
+      // What a host's provider tile says and offers (ADR-0037), with the installed version where there is one.
+      this.state.problem = !executable ? 'not-installed' : account.problem ?? 'cannot-start'
+      if (executable) this.state.version = await this.client.version(executable) || this.state.version
+      this.emit(); return this.view()
+    }
+    if (account.account) this.state.account = account.account
     // Without this the version is only known once a session runs, so an idle provider could not be
     // compared against what its channel publishes (ADR-0021).
     this.state.version = await this.client.version(executable) || this.state.version

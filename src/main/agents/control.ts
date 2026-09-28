@@ -1869,7 +1869,14 @@ export class AgentControl {
           this.disconnect(); this.say('Sotto disconnected.')
         }
         return
-      case 'refresh': this.observe(); this.acceptSnapshot(await this.dependencies.host.snapshot(command.provider)); return
+      case 'refresh':
+        this.observe()
+        // Check again on a host's provider tile (ADR-0037): a provider whose last connect failed, because it was not
+        // installed, not signed in or not startable, is tried again. Nothing about which providers are turned on changes.
+        if (command.provider && this.state.host.providers?.find(status => status.id === command.provider)?.connection === 'error') {
+          this.acceptSnapshot(await this.dependencies.host.connect(command.provider)); return
+        }
+        this.acceptSnapshot(await this.dependencies.host.snapshot(command.provider)); return
       case 'check-reasoning': await this.checkReasoning(command.provider); return
       case 'check-client-updates': await this.checkClientUpdates(true); return
       case 'update-client': await this.updateClient(command.provider, command.force === true); return

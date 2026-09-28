@@ -6,6 +6,9 @@ import { Toggle } from '../../components/Toggle'
 import { ConfirmationDialog } from '../../components/ConfirmationDialog'
 import { HostDialog, HostsModal, type HostDialogMode } from './HostDialog'
 import { TailscaleRow, useTailscale } from './TailscaleConnect'
+import { HostProviders, connectedProvidersLabel } from './HostProviders'
+import { useOptionalAgents } from '../../agents/AgentContext'
+import type { AgentProviderStatus } from '../../../../shared/agents'
 import './hosts.css'
 
 /** What a saved host's row says about it, after "SSH forge ·". */
@@ -62,18 +65,24 @@ function HostMenu({ host, onAction }: { readonly host: HostStatus; readonly onAc
   </span>
 }
 
-/** A saved host: its name, where it is and how it is, the switch that keeps it connected, and its menu. */
-function HostRow({ host, onCommand, onAction }: {
+/**
+ * A saved host: its name, where it is and how it is, the switch that keeps it connected, and its menu. A connected host
+ * also says how many of its providers are connected, and Show providers opens its tiles (ADR-0037).
+ */
+function HostRow({ host, onCommand, onAction, providers, bridge }: {
   readonly host: HostStatus
   readonly onCommand: (command: HostsCommand) => Promise<boolean>
   readonly onAction: (host: HostStatus, action: MenuAction) => void
+  readonly providers?: readonly AgentProviderStatus[] | undefined
+  readonly bridge?: HostsBridge | undefined
 }): ReactNode {
   const route = `SSH ${host.target}${host.sshPort ? `, port ${host.sshPort}` : ''}`
+  const shown = host.phase === 'connected' && providers?.length ? providers : undefined
   return <section className="hosts-row" aria-label={host.name} data-phase={host.phase}>
     <span className="hosts-row__icon" aria-hidden="true"><Server size={18} /></span>
     <div className="hosts-row__info">
       <h4>{host.name}</h4>
-      <p className="hosts-row__meta">{route} · <span data-phase={host.phase}>{hostStatusLabel(host)}</span></p>
+      <p className="hosts-row__meta">{route} · <span data-phase={host.phase}>{hostStatusLabel(host)}</span>{shown ? ` · ${connectedProvidersLabel(shown)}` : ''}</p>
       {host.error ? <p className="hosts-row__error" role="alert">{host.error}</p> : null}
     </div>
     <div className="hosts-row__actions">
@@ -92,6 +101,7 @@ function HostRow({ host, onCommand, onAction }: {
       </span>
       <HostMenu host={host} onAction={action => onAction(host, action)} />
     </div>
+    {shown && bridge ? <HostProviders host={host} providers={shown} bridge={bridge} /> : null}
   </section>
 }
 
@@ -146,6 +156,8 @@ export function HostsSettings({ localHostEnabled, onLocalHostChange, bridge = wi
   const [stopId, setStopId] = useState<string | null>(null)
   const addButton = useRef<HTMLButtonElement>(null)
   const tailscale = useTailscale(bridge)
+  // Each connected host's providers, as that host publishes them (ADR-0037).
+  const clientHosts = useOptionalAgents()?.state?.host.clientHosts
   useEffect(() => {
     if (!bridge) return
     let alive = true
@@ -190,7 +202,8 @@ export function HostsSettings({ localHostEnabled, onLocalHostChange, bridge = wi
     {/* A setup the dialog was closed on carries on in its thread, and one that ended stays until put away: this is the way back to it. */}
     {state?.setup && !dialog ? <HostSetupLine setup={state.setup} onShow={() => setDialog({ kind: 'setup' })} onDismiss={() => void run({ type: 'dismiss-setup', id: state.setup!.id })} /> : null}
     <div className="hosts-list">
-      {state?.hosts.map(host => <HostRow key={host.id} host={host} onCommand={run} onAction={act} />)}
+      {state?.hosts.map(host => <HostRow key={host.id} host={host} onCommand={run} onAction={act} bridge={bridge}
+        providers={host.hostId ? clientHosts?.find(item => item.hostId === host.hostId)?.providers : undefined} />)}
       {state && !state.hosts.length ? <p className="hosts-empty">No remote hosts yet.</p> : null}
     </div>
     {error && <p className="hosts-error" role="alert">{error}</p>}

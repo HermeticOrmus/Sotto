@@ -51,6 +51,15 @@ export type AgentSpeechVoice = z.infer<typeof agentSpeechVoicesSchema>[number]
 
 export const providerIdSchema = z.enum(['codex', 'claude', 'grok', 'devin'])
 export type ProviderId = z.infer<typeof providerIdSchema>
+/**
+ * Why a provider is not connected, as a stable code the Hosts page's tiles decide on (ADR-0037): its client is not
+ * there, is older than Sotto supports, is there but not signed in, or is there and could not be started or checked.
+ * The sentence in `error` says the same in words; a window never reads meaning out of the sentence.
+ */
+export const providerProblemSchema = z.enum(['not-installed', 'too-old', 'signed-out', 'cannot-start'])
+export type ProviderProblem = z.infer<typeof providerProblemSchema>
+/** The account kind a connected provider is signed in with, such as "ChatGPT" or "Claude Max": a plan, never an address. */
+const providerAccountSchema = z.string().min(1).max(80)
 
 const id = z.string().min(1).max(512)
 // Scoped public model/project IDs include an encoded native identifier.
@@ -349,6 +358,10 @@ export const agentProviderStatusSchema = z.object({
   name: z.string(), version: z.string(), error: z.string().optional(), capabilities: agentCapabilitiesSchema,
   /** Set when the connected client is newer than the version Sotto's adapter was checked against. */
   verifiedVersion: z.string().max(64).optional(),
+  /** Why it is not connected, when its last connect failed for a reason the adapter could name (ADR-0037). */
+  problem: providerProblemSchema.optional(),
+  /** What it is signed in with, while connected, when its client says. */
+  account: providerAccountSchema.optional(),
 })
 export type AgentProviderStatus = z.infer<typeof agentProviderStatusSchema>
 /**
@@ -379,6 +392,9 @@ export const agentHostSnapshotSchema = z.object({
   /** Set when the connected client is newer than the version this adapter was checked against. */
   verifiedVersion: z.string().max(64).optional(),
   error: z.string().optional(),
+  /** One adapter's own snapshot: why it is not connected, and what it is signed in with (ADR-0037). */
+  problem: providerProblemSchema.optional(),
+  account: providerAccountSchema.optional(),
   capabilities: agentCapabilitiesSchema,
   models: z.array(agentModelSchema), projects: z.array(agentProjectSchema),
   threads: z.array(agentThreadSchema),
@@ -399,7 +415,10 @@ export const subscriptionProviderSchema = z.enum(['codex', 'claude', 'grok'])
 export type SubscriptionProvider = z.infer<typeof subscriptionProviderSchema>
 export const subscriptionAccountSchema = z.object({
   provider: subscriptionProviderSchema, label: z.string(), installed: z.boolean(), ready: z.boolean(),
-  detail: z.string(), models: z.array(z.object({
+  detail: z.string(),
+  /** Why it is not ready, when the client could say (ADR-0037), and the plan it is signed in with when it is. */
+  problem: providerProblemSchema.optional(), account: providerAccountSchema.optional(),
+  models: z.array(z.object({
     id: z.string(), name: z.string(),
     /** Least to most thorough, the last being the highest level, as on `agentModelSchema.reasoningEfforts`. */
     reasoningEfforts: z.array(z.string()).optional(),

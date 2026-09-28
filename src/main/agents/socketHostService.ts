@@ -10,6 +10,8 @@ import { gitRefsPageSchema, type GitRefsPage, type GitRefsRequest } from '../../
 import { gitChangedFilesSchema, type GitChangedFiles, type GitChangedFilesRequest } from '../../shared/gitChangedFiles'
 import { gitPullRequestResultSchema, type GitPullRequestDetail, type GitPullRequestRequest } from '../../shared/gitPullRequests'
 import { hostFoldersResultSchema, type HostFoldersRequest, type HostFoldersResult } from '../../shared/hostFolders'
+import { hostSignInSchema, type HostSignIn } from '../../shared/hostProviders'
+import type { ProviderId } from '../../shared/agents'
 import { HOST_BUSY, hostAttachmentContentSchema, hostIsNewer, hostVersionMismatch, hostHealthFeatures, hostPairingSchema, hostSessionSchema, hostHelloSchema, hostEventPageSchema, hostResponseSchema, hostPushSchema, hostReceiptSchema } from '../../shared/hostProtocol'
 import type { HostHello, HostOperation, HostPairing, HostSession, HostResponse, HostPush, HostEventPage, HostReceipt, HostErrorCode } from '../../shared/hostProtocol'
 import type { HostService, ClientIdentity } from './hostService'
@@ -351,6 +353,17 @@ export class SocketHostService implements HostService {
   async hostFolders(request: HostFoldersRequest): Promise<HostFoldersResult> {
     if (!this.features.includes('host-folders')) throw new HostConnectionError(this.mismatch(), 'version_mismatch')
     return this.read(hostFoldersResultSchema, await this.call({ op: 'host-folders', request }))
+  }
+  /** Whether the host runs its providers' sign-ins for this client (ADR-0037). */
+  offersSignIn(): boolean { return this.features.includes('provider-sign-in') }
+  /**
+   * A provider's own sign-in on the host (ADR-0037). The answer carries the page's address and the code while it waits;
+   * the caller hands the window neither the address nor anything to keep. A host that does not list `provider-sign-in`
+   * is from before it; the version sentence says which side to bring up to date, and nothing is sent.
+   */
+  async signIn(operation: { op: 'sign-in-start'; provider: ProviderId } | { op: 'sign-in-read' | 'sign-in-cancel'; signInId: string } | { op: 'sign-in-code'; signInId: string; code: string }): Promise<HostSignIn | null> {
+    if (!this.offersSignIn()) throw new HostConnectionError(this.mismatch(), 'version_mismatch')
+    return this.read(hostSignInSchema.nullable(), await this.call(operation))
   }
   async revokePairing(): Promise<void> {
     const response = await fetch(this.endpoint('/v1/revoke'), { method: 'POST', headers: { Authorization: 'Bearer ' + this.options.token }, signal: AbortSignal.timeout(15000), redirect: 'error' })

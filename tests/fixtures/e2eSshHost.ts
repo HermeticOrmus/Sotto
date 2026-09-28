@@ -5,6 +5,7 @@ import { existsSync } from 'node:fs'
 import { parseHostArguments, runHeadlessCommandLine, startHeadlessHost } from '../../src/host'
 import { E2EAgentHost, e2eAgentReasoner } from '../../src/main/e2e/agentEffects'
 import type { AgentHostSnapshot } from '../../src/shared/agents'
+import { fakeSignInCommand, signInProviders } from './signInProviders'
 
 /** A provider installed on the host but not signed in there: its connect fails, as Claude Code's did on forge (#459). */
 class SignedOut extends E2EAgentHost {
@@ -17,12 +18,23 @@ async function main(): Promise<void> {
   if (args.some(argument => ADMIN.has(argument))) { await runHeadlessCommandLine(); return }
   const options = parseHostArguments(args)
   delete process.env.SOTTO_HOST_STARTED_BY
+  // With SOTTO_E2E_SIGN_IN_DIR, each provider is signed out until its fake client's sign-in (tests/fixtures/fakeSignInCli.mjs,
+  // at SOTTO_E2E_SIGN_IN_SCRIPT) writes its mark there, and the host runs that fake client for Sign in (#460).
+  const signInDirectory = process.env.SOTTO_E2E_SIGN_IN_DIR, signInScript = process.env.SOTTO_E2E_SIGN_IN_SCRIPT
+  if (signInDirectory && signInScript) {
+    const host = await startHeadlessHost({ ...options, providers: signInProviders(signInDirectory), reasoner: e2eAgentReasoner, signInCommand: fakeSignInCommand(signInDirectory, signInScript) })
+    keepRunning(() => host.close())
+    return
+  }
   // While the file SOTTO_E2E_HOST_SIGNED_OUT names exists, this host starts with every provider signed out.
   const signedOut = Boolean(process.env.SOTTO_E2E_HOST_SIGNED_OUT && existsSync(process.env.SOTTO_E2E_HOST_SIGNED_OUT))
   const provider = (): E2EAgentHost => signedOut ? new SignedOut() : new E2EAgentHost()
   const host = await startHeadlessHost({ ...options, providers: { codex: provider(), claude: provider(), grok: provider(), devin: provider() }, reasoner: e2eAgentReasoner })
+  keepRunning(() => host.close())
+}
+function keepRunning(close: () => Promise<void>): void {
   const keepAlive = setInterval(() => undefined, 60_000)
-  const stop = (): void => { clearInterval(keepAlive); void host.close().finally(() => process.exit(0)) }
+  const stop = (): void => { clearInterval(keepAlive); void close().finally(() => process.exit(0)) }
   process.on('SIGTERM', stop)
   process.on('SIGINT', stop)
 }
