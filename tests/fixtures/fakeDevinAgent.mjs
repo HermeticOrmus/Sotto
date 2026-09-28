@@ -134,22 +134,22 @@ createInterface({ input: process.stdin }).on('line', line => {
   const held = script.holdLoad === true
   if (held) write('script.json', { ...script, holdLoad: false })
   void (async () => {
-  if (held) await released('release-load')
-  const session = read(nativePath(p.sessionId), null)
-  if (!session || script.rejectLoad) { reject(frame.id, -32016); return }
-  // Native Devin first persists a session when it receives its first prompt.
-  if (session.messages.length === 0) { reject(frame.id, -32016); return }
-  if (script.rejectLoadAfterPrompt && session.messages.some(message => message.role === 'user')) { reject(frame.id); return }
-  applyScriptedPolicyChange(script, 'load')
-  // Synthetic: a restored session announces the mode it was left on, which may no longer be the thread's.
-  update(p.sessionId, { sessionUpdate: 'current_mode_update', currentModeId: session.mode ?? 'accept-edits' })
-  if (script.replayModel) update(p.sessionId, { sessionUpdate: 'config_option_update', configOptions: configOptions({ ...session, model: script.replayModel }) })
-  replay(p.sessionId)
-  if (!acquire(p.sessionId)) { reject(frame.id, -32015); return }
-  if (held) await released('release-reply')
-  const loaded = () => result(frame.id, sessionInfo(script.loadModel ? { ...session, model: script.loadModel } : session))
-  // A slow reply holds the session open but not yet confirmed, as a reopen is while Sotto waits on it.
-  if (script.delayLoad) setTimeout(loaded, script.delayLoad); else loaded()
+   if (held) await released('release-load')
+   const session = read(nativePath(p.sessionId), null)
+   if (!session || script.rejectLoad) { reject(frame.id, -32016); return }
+   // Native Devin first persists a session when it receives its first prompt.
+   if (session.messages.length === 0) { reject(frame.id, -32016); return }
+   if (script.rejectLoadAfterPrompt && session.messages.some(message => message.role === 'user')) { reject(frame.id); return }
+   applyScriptedPolicyChange(script, 'load')
+   // Synthetic: a restored session announces the mode it was left on, which may no longer be the thread's.
+   update(p.sessionId, { sessionUpdate: 'current_mode_update', currentModeId: session.mode ?? 'accept-edits' })
+   if (script.replayModel) update(p.sessionId, { sessionUpdate: 'config_option_update', configOptions: configOptions({ ...session, model: script.replayModel }) })
+   replay(p.sessionId)
+   if (!acquire(p.sessionId)) { reject(frame.id, -32015); return }
+   if (held) await released('release-reply')
+   const loaded = () => result(frame.id, sessionInfo(script.loadModel ? { ...session, model: script.loadModel } : session))
+   // A slow reply holds the session open but not yet confirmed, as a reopen is while Sotto waits on it.
+   if (script.delayLoad) setTimeout(loaded, script.delayLoad); else loaded()
   })()
  } else if (frame.method === 'session/set_config_option') {
   const session = read(nativePath(p.sessionId), null)

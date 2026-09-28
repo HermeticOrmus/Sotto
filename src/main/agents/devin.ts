@@ -485,8 +485,9 @@ export class DevinAcpHost implements AgentHost {
   private poll(): Promise<void> {
     if (this.polling) return this.polling
     const now = Date.now()
-    // A session still opening or stopping is left alone: a read then could take the session from its own open.
-    const ids = [...this.connections.keys()].filter(id => !this.loading.has(id) && !this.stopping.has(id)).filter(id => {
+    const ids = [...this.connections.keys()].filter(id => {
+      // A session still opening is read once its open settles, not on this tick.
+      if (this.loading.has(id)) return false
       const busy = this.active.has(id) || this.thread(id).requests.length > 0
       const interval = this.options.pollIntervalMs ?? (busy ? 1_500 : 15_000)
       return (this.observed.has(id) || busy) && now - (this.lastReadAt.get(id) ?? 0) >= interval
@@ -502,6 +503,10 @@ export class DevinAcpHost implements AgentHost {
   private readHistory(id: string): Promise<void> {
     const previous = this.reading.get(id)
     if (previous) return previous
+    // A read loads the session in a process of its own and would take it from an open in progress, so it
+    // starts once the open settles. The open waits only for a read already running, so neither waits on the other.
+    const opening = this.loading.get(id)
+    if (opening) return opening.then(() => this.readHistory(id), () => this.readHistory(id))
     this.lastReadAt.set(id, Date.now())
     const reading = this.read(id).finally(() => { if (this.reading.get(id) === reading) this.reading.delete(id) })
     this.reading.set(id, reading); return reading
