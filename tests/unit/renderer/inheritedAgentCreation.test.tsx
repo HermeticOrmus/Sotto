@@ -1,7 +1,7 @@
 import React from 'react'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { type AgentState, type SubscriptionAccount } from '../../../src/shared/agents'
+import { type AgentCommand, type AgentState, type SubscriptionAccount } from '../../../src/shared/agents'
 import type { TerminalWorkspaceBridge } from '../../../src/shared/terminalWorkspace'
 import { useAddProject } from '../../../src/renderer/src/agents/addProject'
 import { NewTerminalDialog } from '../../../src/renderer/src/terminals/NewTerminalDialog'
@@ -135,7 +135,7 @@ describe('inherited agent in terminal creation', () => {
 })
 
 /** Add project, through the folder browser's File Explorer button, which answers with the stubbed folder. */
-async function addWithExplorer(state: AgentState, command: (request: never) => Promise<AgentState | null>) {
+async function addWithExplorer(state: AgentState, command: (request: AgentCommand) => Promise<AgentState | null>) {
   function AddProject() {
     const addProject = useAddProject(state, command)
     return <><button type="button" onClick={() => void addProject.add()}>Add project</button>{addProject.dialog}</>

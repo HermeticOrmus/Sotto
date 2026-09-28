@@ -1,5 +1,6 @@
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { handleOf } from '../../fixtures/stagedImages'
 
 import { useAgentConnection } from '../../../src/renderer/src/agents/AgentContext'
 import { SHELL_CACHE_KEY, cacheableShell, readShellCache, writeShellCache } from '../../../src/renderer/src/agents/shellCache'
@@ -225,7 +226,8 @@ describe('the startup shell cache', () => {
   })
 
   it('keeps a row\'s own excerpts and nothing else: no transcript, no attachment bytes, no drafts', () => {
-    const image = { id: 'image', name: 'pixel.png', mimeType: 'image/png' as const, dataUrl: 'data:image/png;base64,AAAA' }
+    // Extra bytes are deliberately present to verify that even an overfull input cannot leak them into the cache.
+    const image = { ...handleOf(Buffer.alloc(3), 'image', 'pixel.png'), dataUrl: 'data:image/png;base64,AAAA' }
     const live = { ...fullState([thread('workshop', [message('a', 'user', 'The prompt'), message('bb', 'assistant', 'Hidden middle'), message('ccc', 'assistant', 'The reply')])]),
       draft: 'Unsent draft', draftAttachments: [image],
       threadDrafts: [{ threadId: 'workshop', draftId: '00000000-0000-4000-8000-000000000000', text: 'Unsent draft', attachments: [image], requestId: null, updatedAt: '2026-01-01T00:00:00.000Z' }] }

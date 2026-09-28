@@ -39,7 +39,7 @@ function mount(options: { readonly width?: number; readonly height?: number; rea
   const view = (width: number, height?: number) => <ThreadsView onOpenAgents={vi.fn()} now={NOW} layoutStore={store} paneAreaWidth={width} paneAreaHeight={height} tools={options.tools} {...options.slots} />
   const rendered = render(view(options.width ?? WIDE, options.height))
   const pane = (title: string) => screen.getByRole('region', { name: title })
-  const prompt = (title: string) => within(pane(title)).getByRole('textbox', { name: 'Prompt', exact: true })
+  const prompt = (title: string) => within(pane(title)).getByRole('textbox', { name: 'Prompt' })
   const selections = () => command.mock.calls.filter(([request]) => request.type === 'select-thread').map(([request]) => (request as { threadId: string }).threadId)
   return {
     live, command, store, pane, prompt, selections, held, rendered,
@@ -52,7 +52,7 @@ beforeEach(() => { vi.mocked(useAgents).mockReset() })
 afterEach(() => { cleanup(); vi.useRealTimers() })
 
 const sidebar = () => screen.getByRole('complementary', { name: 'Thread sidebar' })
-const openBesideButton = (title: string) => within(sidebar()).getByRole('button', { name: `Open ${title} beside`, exact: true })
+const openBesideButton = (title: string) => within(sidebar()).getByRole('button', { name: `Open ${title} beside` })
 
 describe('split thread workspace', () => {
   it('opens a second thread beside the first, evenly, and gives the new pane the selection once', async () => {
@@ -68,8 +68,8 @@ describe('split thread workspace', () => {
     expect(view.prompt('Grok voice previews').id).toBe(threadPromptId('grok-previews'))
     expect(view.prompt('Streaming WAV stall').id).toBe(threadPromptId('wav-stall'))
     // Only the focused thread is current in the sidebar; the other open pane is marked as on screen.
-    expect(within(sidebar()).getByRole('button', { name: 'Streaming WAV stall', exact: true })).toHaveAttribute('aria-current', 'page')
-    expect(within(sidebar()).getByRole('button', { name: 'Grok voice previews', exact: true }).closest('li')).toHaveAttribute('data-open')
+    expect(within(sidebar()).getByRole('button', { name: 'Streaming WAV stall' })).toHaveAttribute('aria-current', 'page')
+    expect(within(sidebar()).getByRole('button', { name: 'Grok voice previews' }).closest('li')).toHaveAttribute('data-open')
   })
 
   it('keeps each pane\'s draft, send and pending message with its own thread, across projects', async () => {
@@ -103,7 +103,7 @@ describe('split thread workspace', () => {
     expect(view.selections().at(-1)).toBe('grok-previews')
     expect(screen.queryByRole('separator', { name: /^Resize (?!sidebar$)/ })).toBeNull()
     expect(screen.queryByRole('region', { name: 'Streaming WAV stall' })).toBeNull()
-    expect(within(sidebar()).getByRole('button', { name: 'Streaming WAV stall', exact: true })).toBeInTheDocument()
+    expect(within(sidebar()).getByRole('button', { name: 'Streaming WAV stall' })).toBeInTheDocument()
     expect(view.store.get()).toBe(SINGLE_VIEW)
     // Closing the unfocused pane sends nothing at all.
     await act(async () => { fireEvent.click(openBesideButton('Streaming WAV stall')) })
@@ -183,7 +183,7 @@ describe('split thread workspace', () => {
     const view = mount()
     const data = new Map<string, string>()
     const dataTransfer = { setData: (type: string, value: string) => data.set(type, value), getData: (type: string) => data.get(type) ?? '', get types() { return [...data.keys()] }, effectAllowed: 'all', dropEffect: 'none' }
-    const row = within(sidebar()).getByRole('button', { name: 'Streaming WAV stall', exact: true })
+    const row = within(sidebar()).getByRole('button', { name: 'Streaming WAV stall' })
     expect(row).toHaveAttribute('draggable', 'true')
     fireEvent.dragStart(row, { dataTransfer })
     expect(data.get(THREAD_DRAG_TYPE)).toBe('wav-stall')
@@ -197,7 +197,7 @@ describe('split thread workspace', () => {
     expect(screen.queryByText('Open on the left')).toBeNull()
 
     data.clear()
-    fireEvent.dragStart(within(sidebar()).getByRole('button', { name: 'Footer links', exact: true }), { dataTransfer })
+    fireEvent.dragStart(within(sidebar()).getByRole('button', { name: 'Footer links' }), { dataTransfer })
     const targets = screen.getAllByText('Show here')
     expect(targets).toHaveLength(2)
     await act(async () => { fireEvent.drop(targets[1]!.parentElement!, { dataTransfer }) })
@@ -209,7 +209,7 @@ describe('split thread workspace', () => {
   it('opens beside with Ctrl+Enter from the sidebar and moves between panes with F6', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout'] })
     const view = mount()
-    const row = within(sidebar()).getByRole('button', { name: 'Streaming WAV stall', exact: true })
+    const row = within(sidebar()).getByRole('button', { name: 'Streaming WAV stall' })
     row.focus()
     await act(async () => { fireEvent.keyDown(row, { key: 'Enter', ctrlKey: true }) })
     expect(view.selections()).toEqual(['wav-stall'])
@@ -448,7 +448,7 @@ describe('multi-pane workspace', () => {
     await openAll('Streaming WAV stall')
     const data = new Map<string, string>()
     const dataTransfer = { setData: (type: string, value: string) => data.set(type, value), getData: (type: string) => data.get(type) ?? '', get types() { return [...data.keys()] }, effectAllowed: 'all', dropEffect: 'none' }
-    fireEvent.dragStart(within(sidebar()).getByRole('button', { name: 'Footer links', exact: true }), { dataTransfer })
+    fireEvent.dragStart(within(sidebar()).getByRole('button', { name: 'Footer links' }), { dataTransfer })
     const add = screen.getByText('Add here').parentElement!
     // The new pane will span the row below the first two.
     const expected = document.createElement('div')
@@ -460,7 +460,7 @@ describe('multi-pane workspace', () => {
     expect(regions()).toEqual(['Grok voice previews', 'Streaming WAV stall', 'Footer links'])
     expect(view.pane('Footer links')).toHaveAttribute('data-focused')
     data.clear()
-    fireEvent.dragStart(within(sidebar()).getByRole('button', { name: 'Weekly note', exact: true }), { dataTransfer })
+    fireEvent.dragStart(within(sidebar()).getByRole('button', { name: 'Weekly note' }), { dataTransfer })
     const targets = screen.getAllByText('Show here')
     expect(targets).toHaveLength(3)
     await act(async () => { fireEvent.drop(targets[1]!.parentElement!, { dataTransfer }) })
@@ -525,7 +525,7 @@ describe('multi-pane workspace', () => {
     expect(regions()).toEqual(['Grok voice previews', 'Footer links', 'Weekly note'])
     expect(view.prompt('Weekly note')).toHaveValue('Weekly draft')
     expect(view.pane('Weekly note').parentElement!.style.getPropertyValue('--pane-2-w')).toBe('calc((100% - 0px) * 1)')
-    expect(within(sidebar()).getByRole('button', { name: 'Streaming WAV stall', exact: true })).toBeInTheDocument()
+    expect(within(sidebar()).getByRole('button', { name: 'Streaming WAV stall' })).toBeInTheDocument()
   })
 
   it('restores the saved arrangement, threads, sizes and focus after a restart without sending any thread command', async () => {

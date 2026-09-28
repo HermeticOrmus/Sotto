@@ -94,9 +94,9 @@ describe('Changes as T3’s diff', () => {
     expect(within(block('src/app.ts')).getByRole('img', { name: 'Modified' })).toHaveTextContent('M')
     expect(within(block('logo.png')).getByText('Binary file: no text diff.')).toBeInTheDocument()
     // Staging left the UI (ADR-0027): the commit dialog's file list is the choice.
-    for (const name of ['Stage file', 'Unstage file', 'Commit', 'Git actions']) expect(within(panel()).queryByRole('button', { name, exact: true })).toBeNull()
+    for (const name of ['Stage file', 'Unstage file', 'Commit', 'Git actions']) expect(within(panel()).queryByRole('button', { name })).toBeNull()
     expect(within(panel()).queryByRole('option', { name: /Staged/u })).toBeNull()
-    expect(within(panel()).getByRole('button', { name: 'Checkpoints', exact: true }).closest('.tools-chrome')).toHaveClass('changes-summary')
+    expect(within(panel()).getByRole('button', { name: 'Checkpoints' }).closest('.tools-chrome')).toHaveClass('changes-summary')
   })
 
   it('gives each row its file and line numbers as data for a later selection', async () => {
@@ -316,7 +316,7 @@ describe('Changes as T3’s diff', () => {
     cleanup()
     setup(fakeGit({ truncated: true }))
     await within(panel()).findByText('export const ready = true')
-    expect(within(panel()).getByRole('tab', { name: 'Changes', exact: true })).toHaveAccessibleDescription('3+ changed files')
+    expect(within(panel()).getByRole('tab', { name: 'Changes' })).toHaveAccessibleDescription('3+ changed files')
   })
 
   it('lets the working copy’s dirty mark, not the last count, light the Changes dot once another surface is open', async () => {
@@ -333,7 +333,7 @@ describe('Changes as T3’s diff', () => {
     const files = fakeFilesBridge({ 'visual-gate': { root: 'D:\\work\\workshop', token: TOKEN_A, tree: { 'a.txt': { kind: 'file', content: text('a') } } } })
     const view = render(<ToolsPanel focusedThreadId="visual-gate" state={withWorktree(false)} files={files} gitChanges={git.bridge} store={store} />)
     await within(panel()).findByText('The working copy matches HEAD.')
-    const tab = within(panel()).getByRole('tab', { name: 'Changes', exact: true })
+    const tab = within(panel()).getByRole('tab', { name: 'Changes' })
     expect(tab).not.toHaveAttribute('aria-description')
     act(() => store.setSurface('files'))
     expect(tab.querySelector('.tools-rail__live')).toBeNull()
