@@ -17,3 +17,7 @@ The temporary Grok read-error diagnostic discovered while preparing these checks
 
 - [Queued steering at the minimum size](../../artifacts/review-395/queued-steering-minimum-dark.png)
 - [Completed dictation recovery at the minimum size](../../artifacts/review-395/dictation-recovery-minimum-light.png)
+
+## Integrated dependencies
+
+The actual merged dictation-recovery and SSH-readiness changes were integrated at `c728ed90`. Recovery production source is unchanged from the compact native run. The incoming App test query correction was retained and all 36 App tests passed. Typecheck, lint, notices and all eight workspace-control tests had also passed after the preceding merged fixture/shared-ignore integration. The full two-worker suite remains queued.
