@@ -1,6 +1,6 @@
 import React from 'react'
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 
 import { AgentAppearance } from '../../../src/renderer/src/agents/AgentRoom'
 import { useAgents } from '../../../src/renderer/src/agents/AgentContext'
@@ -39,7 +39,7 @@ const hueDistance = (a: number, b: number): number => {
   return Math.min(distance, 360 - distance)
 }
 
-function handle(): OrbHandle & { setColors: ReturnType<typeof vi.fn>; setState: ReturnType<typeof vi.fn>; setStill: ReturnType<typeof vi.fn> } {
+function handle(): OrbHandle & { setColors: Mock<OrbHandle['setColors']>; setState: Mock<OrbHandle['setState']>; setStill: Mock<OrbHandle['setStill']> } {
   return {
     setState: vi.fn(), setColors: vi.fn(), setStill: vi.fn(), pause: vi.fn(), resume: vi.fn(), redraw: vi.fn(), dispose: vi.fn(),
     colors: () => ['#000000', '#000000'], settings: () => ({}) as never,
