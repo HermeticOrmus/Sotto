@@ -63,17 +63,19 @@ export function useTailscale(bridge: HostsBridge | undefined): TailscaleControl 
   }, [phase, refresh])
   const connect = useCallback((): void => {
     if (!bridge) return
-    setPhase('connecting'); setNotice(null)
+    // A press while the sign-in goes on opens the same page again: main keeps the one tailscale up running.
+    const reopening = phase === 'signing-in'
+    if (!reopening) { setPhase('connecting'); setNotice(null) }
     void bridge.connectTailscale().catch(() => 'failed' as const).then(async outcome => {
       if (!alive.current) return
       if (outcome === 'sign-in-opened') { setPhase('signing-in'); setNotice('Sign in to Tailscale in your browser. Sotto lists your devices once you have.'); return }
       setPhase('idle')
       await refresh()
       if (!alive.current) return
-      if (outcome === 'sign-in-needed') setNotice('Tailscale needs you to sign in. Open the Tailscale app on this computer and sign in there.')
+      if (outcome === 'sign-in-needed') setNotice(reopening ? 'Your browser did not open. Open the Tailscale app on this computer and sign in there.' : 'Tailscale needs you to sign in. Open the Tailscale app on this computer and sign in there.')
       else if (outcome === 'failed') setNotice('Tailscale did not connect. Open the Tailscale app on this computer and connect from there.')
     })
-  }, [bridge, refresh])
+  }, [bridge, phase, refresh])
   const getTailscale = useCallback((): void => {
     if (!bridge) return
     setNotice(null)
@@ -86,11 +88,16 @@ export function useTailscale(bridge: HostsBridge | undefined): TailscaleControl 
 
 const devicesOnTailnet = (count: number): string => `${count} ${count === 1 ? 'device' : 'devices'} on your tailnet`
 
-/** The button a Tailscale that is off or missing offers: the same on the Hosts page and in Add host. */
+/**
+ * The button a Tailscale that is off or missing offers: the same on the Hosts page and in Add host. While the
+ * sign-in goes on in the browser it opens the sign-in page again, since a second tailscale up would only
+ * replace the first.
+ */
 function TailscaleAction({ control, summary }: { readonly control: TailscaleControl; readonly summary: TailscaleSummary }): ReactNode {
   if (summary.state === 'missing') return <Button variant="secondary" onClick={control.getTailscale}>Get Tailscale</Button>
-  if (summary.state === 'off') return <Button variant="secondary" disabled={control.phase === 'connecting'} onClick={control.connect}>{control.phase === 'connecting' ? 'Connecting…' : 'Connect to Tailscale'}</Button>
-  return null
+  if (summary.state !== 'off') return null
+  const label = control.phase === 'connecting' ? 'Connecting…' : control.phase === 'signing-in' ? 'Open sign-in page' : 'Connect to Tailscale'
+  return <Button variant="secondary" disabled={control.phase === 'connecting'} onClick={control.connect}>{label}</Button>
 }
 
 /** The Hosts page's Tailscale row, under This computer. */

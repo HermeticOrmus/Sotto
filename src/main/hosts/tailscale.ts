@@ -150,10 +150,21 @@ export interface HostTailscaleOptions {
   readonly openExternal: (url: string) => Promise<void>
 }
 
+/** One `tailscale up`, from the press that started it until the program ends. */
+interface UpRun {
+  /** The first answer: what the press that started the run is told. */
+  readonly answer: Promise<TailscaleConnectOutcome>
+  readonly stop: AbortController
+  /** The sign-in page it printed, once that page has been opened or tried. */
+  signInUrl?: string
+  answered: boolean
+}
+
 /** Answers the Hosts page and Add host about Tailscale on this computer, and connects it when asked. */
 export class HostTailscale {
   private readonly invoke: TailscaleInvoke
-  private connecting: Promise<TailscaleConnectOutcome> | null = null
+  private running: UpRun | null = null
+  private disposed = false
   constructor(private readonly options: HostTailscaleOptions) { this.invoke = options.invoke ?? tailscaleInvoker() }
 
   async read(): Promise<TailscaleReading> {
@@ -175,32 +186,60 @@ export class HostTailscale {
    * `tailscale up`, with no flags so the node keeps its own settings. When Tailscale answers with its
    * sign-in page, the page opens in the default browser, because the press asked for it, and the command
    * keeps running so the sign-in finishes; the answer comes back as soon as the page is open.
+   *
+   * Only one `tailscale up` runs at a time, for as long as the program runs, not just until it first
+   * answers. A press while it waits for the sign-in opens the same page again rather than starting another,
+   * which would open a second page and could replace the first sign-in.
    */
   connect(): Promise<TailscaleConnectOutcome> {
-    this.connecting ??= this.up().finally(() => { this.connecting = null })
-    return this.connecting
+    if (this.disposed) return Promise.resolve('failed')
+    const running = this.running
+    if (!running) return this.up()
+    return running.answered && running.signInUrl ? this.openSignIn(running.signInUrl) : running.answer
+  }
+
+  /** Stops a `tailscale up` that is still waiting for a sign-in, so none is left running once Sotto quits. */
+  dispose(): void {
+    this.disposed = true
+    this.running?.stop.abort()
+    this.running = null
+  }
+
+  private openSignIn(url: string): Promise<TailscaleConnectOutcome> {
+    return this.options.openExternal(url).then(() => 'sign-in-opened' as const, () => 'sign-in-needed' as const)
   }
 
   private up(): Promise<TailscaleConnectOutcome> {
-    return new Promise(resolve => {
-      let answered = false
-      const answer = (outcome: TailscaleConnectOutcome): void => { if (!answered) { answered = true; resolve(outcome) } }
-      const signIn = (url: string): void => {
-        if (answered) return
-        answered = true
-        this.options.openExternal(url).then(() => resolve('sign-in-opened'), () => resolve('sign-in-needed'))
-      }
-      const watch = (output: string): void => {
-        const url = SIGN_IN_URL.exec(output)?.[1]
-        if (url) signIn(url)
-        else if (OTHER_SIGN_IN.test(output)) answer('sign-in-needed')
-      }
-      this.invoke(['up'], { timeoutMs: UP_LIMIT_MS, watch }).then(result => {
-        if (result === 'missing') return answer('missing')
-        watch(`${result.stdout}\n${result.stderr}\n`)
-        answer(result.code === 0 ? 'connected' : 'failed')
-      }, () => answer('failed'))
-    })
+    const stop = new AbortController()
+    let resolveAnswer!: (outcome: TailscaleConnectOutcome) => void
+    const run: UpRun = { answer: new Promise(resolve => { resolveAnswer = resolve }), stop, answered: false }
+    let decided = false
+    const answer = (outcome: TailscaleConnectOutcome): void => {
+      if (decided) return
+      decided = true
+      run.answered = true
+      resolveAnswer(outcome)
+    }
+    const signIn = (url: string): void => {
+      if (decided) return
+      decided = true
+      run.signInUrl = url
+      void this.openSignIn(url).then(outcome => { run.answered = true; resolveAnswer(outcome) })
+    }
+    const watch = (output: string): void => {
+      const url = SIGN_IN_URL.exec(output)?.[1]
+      if (url) signIn(url)
+      else if (OTHER_SIGN_IN.test(output)) answer('sign-in-needed')
+    }
+    this.running = run
+    const ended = (): void => { if (this.running === run) this.running = null }
+    this.invoke(['up'], { timeoutMs: UP_LIMIT_MS, watch, signal: stop.signal }).then(result => {
+      ended()
+      if (result === 'missing') return answer('missing')
+      watch(`${result.stdout}\n${result.stderr}\n`)
+      answer(result.code === 0 ? 'connected' : 'failed')
+    }, () => { ended(); answer('failed') })
+    return run.answer
   }
 
   /** Get Tailscale: Tailscale's download page, and no other. */

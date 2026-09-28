@@ -131,7 +131,7 @@ describe('Tailscale on this computer', () => {
     expect(await new HostTailscale({ invoke, suggestions: async () => [], openExternal }).connect()).toBe('sign-in-needed')
     expect(openExternal).not.toHaveBeenCalled()
   })
-  it('answers connected, failed or missing from how tailscale up ends, and runs one at a time', async () => {
+  it('answers connected, failed or missing from how tailscale up ends, and answers two presses at once from one run', async () => {
     const make = (answer: Parameters<typeof cli>[0]['up']) => new HostTailscale({ invoke: cli({ up: answer! }), suggestions: async () => [], openExternal: vi.fn() })
     expect(await make(done(0)).connect()).toBe('connected')
     expect(await make(done(1, '', 'backend error: access denied')).connect()).toBe('failed')
@@ -140,6 +140,39 @@ describe('Tailscale on this computer', () => {
     const invoke = cli({ up: done(0) })
     const tailscale = new HostTailscale({ invoke, suggestions: async () => [], openExternal: vi.fn() })
     expect(await Promise.all([tailscale.connect(), tailscale.connect()])).toEqual(['connected', 'connected'])
+    expect(invoke).toHaveBeenCalledTimes(1)
+  })
+  it('keeps one tailscale up while the sign-in goes on: a second press opens the same page again', async () => {
+    let finish: (() => void) | undefined
+    const openExternal = vi.fn(async () => undefined)
+    const invoke = cli({ up: options => new Promise(resolve => {
+      options.watch?.('\nTo authenticate, visit:\n\n\thttps://login.tailscale.com/a/first\n\n')
+      finish = () => resolve({ code: 0, stdout: 'Success.\n', stderr: '' })
+    }) })
+    const tailscale = new HostTailscale({ invoke, suggestions: async () => [], openExternal })
+    expect(await tailscale.connect()).toBe('sign-in-opened')
+    expect(await tailscale.connect()).toBe('sign-in-opened')
+    expect(invoke).toHaveBeenCalledTimes(1)
+    expect(openExternal.mock.calls).toEqual([['https://login.tailscale.com/a/first'], ['https://login.tailscale.com/a/first']])
+    // Once the sign-in finishes and the program ends, the next press starts a new tailscale up.
+    finish!()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(await tailscale.connect()).toBe('sign-in-opened')
+    expect(invoke).toHaveBeenCalledTimes(2)
+  })
+  it('stops a tailscale up still waiting for the sign-in when Sotto closes, and starts no other', async () => {
+    let signal: AbortSignal | undefined
+    const invoke = cli({ up: options => new Promise(resolve => {
+      signal = options.signal
+      options.watch?.('To authenticate, visit:\n\thttps://login.tailscale.com/a/xyz\n')
+      options.signal?.addEventListener('abort', () => resolve({ code: null, stdout: '', stderr: '' }))
+    }) })
+    const tailscale = new HostTailscale({ invoke, suggestions: async () => [], openExternal: vi.fn(async () => undefined) })
+    expect(await tailscale.connect()).toBe('sign-in-opened')
+    expect(signal?.aborted).toBe(false)
+    tailscale.dispose()
+    expect(signal?.aborted).toBe(true)
+    expect(await tailscale.connect()).toBe('failed')
     expect(invoke).toHaveBeenCalledTimes(1)
   })
   it('says the sign-in is needed when the browser does not open', async () => {

@@ -354,6 +354,11 @@ it('says to finish signing in when Tailscale opens its page, and fills in once i
     const row = await screen.findByRole('region', { name: 'Tailscale' })
     await user.click(await within(row).findByRole('button', { name: 'Connect to Tailscale' }))
     expect((await within(row).findByRole('status')).textContent).toBe('Sign in to Tailscale in your browser. Sotto lists your devices once you have.')
+    // While the sign-in goes on, the button opens the same page again rather than starting another connect.
+    await user.click(within(row).getByRole('button', { name: 'Open sign-in page' }))
+    expect(off.connectTailscale).toHaveBeenCalledTimes(2)
+    expect(within(row).getByRole('button', { name: 'Open sign-in page' })).toBeTruthy()
+    expect(within(row).getByRole('status').textContent).toBe('Sign in to Tailscale in your browser. Sotto lists your devices once you have.')
     off.setTailscale(RUNNING)
     await act(async () => { await vi.advanceTimersByTimeAsync(3_000) })
     await waitFor(() => expect(row.textContent).toContain('Connected as millZach'))

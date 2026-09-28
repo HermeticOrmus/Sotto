@@ -22,6 +22,8 @@ export interface TailscaleRunOptions {
   readonly stopOn?: RegExp
   /** Hears everything printed so far, each time more arrives, while the run goes on. */
   readonly watch?: (output: string) => void
+  /** Stops the run when aborted, such as a `tailscale up` still waiting for a sign-in when Sotto quits. */
+  readonly signal?: AbortSignal
 }
 /** Runs one CLI command. Rejects with an `ENOENT` error when the executable is not there. */
 export type TailscaleRun = (executable: string, args: readonly string[], options: TailscaleRunOptions) => Promise<TailscaleRunResult>
@@ -36,7 +38,7 @@ export function tailscaleCandidates(platform: NodeJS.Platform = process.platform
 
 export const runTailscale: TailscaleRun = (executable, args, options) => new Promise((resolve, reject) => {
   let stopped = false
-  const child = execFile(executable, [...args], { timeout: options.timeoutMs, windowsHide: true, maxBuffer: 4 * 1024 * 1024, encoding: 'utf8' }, (error, stdout, stderr) => {
+  const child = execFile(executable, [...args], { timeout: options.timeoutMs, windowsHide: true, maxBuffer: 4 * 1024 * 1024, encoding: 'utf8', ...(options.signal ? { signal: options.signal } : {}) }, (error, stdout, stderr) => {
     const code = (error as NodeJS.ErrnoException | null)?.code
     if (code === 'ENOENT') { reject(error); return }
     const exit = error === null ? 0 : stopped || typeof (error as { code?: unknown }).code !== 'number' ? null : (error as unknown as { code: number }).code

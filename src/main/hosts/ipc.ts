@@ -6,7 +6,7 @@ import type { DesktopHosts } from './desktopHosts'
 import type { HostTailscale } from './tailscale'
 
 export function registerHostsIpc(ipc: IpcMainAdapter, hosts: DesktopHosts, senders: () => readonly TrustedIpcSender[], publish: (state: HostsState) => void,
-  tailscale: Pick<HostTailscale, 'devices' | 'status' | 'connect' | 'openDownload'>): () => void {
+  tailscale: Pick<HostTailscale, 'devices' | 'status' | 'connect' | 'openDownload' | 'dispose'>): () => void {
   const answer = <T>(channel: string, run: () => T): void => {
     ipc.handle(channel, (event, ...args) => {
       if (!isAuthorizedIpcSender(event, senders(), ['main'])) throw new Error('Open Hosts in the main Sotto window.')
@@ -28,5 +28,6 @@ export function registerHostsIpc(ipc: IpcMainAdapter, hosts: DesktopHosts, sende
   answer(HOSTS_TAILSCALE_DOWNLOAD, () => tailscale.openDownload())
   const off = hosts.subscribe(publish)
   const channels = [HOSTS_GET, HOSTS_COMMAND, HOSTS_DEVICES, HOSTS_TAILSCALE, HOSTS_TAILSCALE_CONNECT, HOSTS_TAILSCALE_DOWNLOAD]
-  return () => { off(); for (const channel of channels) ipc.removeHandler(channel) }
+  // Sotto is closing: a `tailscale up` still waiting for a sign-in is stopped rather than left running.
+  return () => { off(); for (const channel of channels) ipc.removeHandler(channel); tailscale.dispose() }
 }
