@@ -11,7 +11,7 @@ function fixture(rows: SubagentRow[] = [row('first')]) {
   const listeners = new Set<(change: SubagentChange) => void>()
   const bridge: SubagentsBridge = {
     page: vi.fn(async ({ threadId, before }) => ({ threadId, revision: 1, rows: before ? [row('older', 1, { status: 'completed' })] : rows, summary, ...(before ? {} : { before: 2 }) })),
-    assignments: vi.fn(async ({ threadId, agentId }) => ({ threadId, agentId, assignments: [{ id: `${agentId}-run`, sequence: 2, title: 'Current task', prompt: 'Full task instructions', result: 'Returned findings', status: 'completed' }, { id: `${agentId}-old`, sequence: 1, title: 'Earlier task', result: 'Earlier result', status: 'completed' }] })),
+    assignments: vi.fn<SubagentsBridge['assignments']>(async ({ threadId, agentId }) => ({ threadId, agentId, assignments: [{ id: `${agentId}-run`, sequence: 2, title: 'Current task', prompt: 'Full task instructions', result: 'Returned findings', status: 'completed' }, { id: `${agentId}-old`, sequence: 1, title: 'Earlier task', result: 'Earlier result', status: 'completed' }] })),
     onChanged: vi.fn(listener => { listeners.add(listener); return () => listeners.delete(listener) }),
   }
   return { bridge, emit: (change: SubagentChange) => { for (const listener of listeners) listener(change) } }
@@ -109,7 +109,7 @@ describe('Agents roster', () => {
     await waitFor(() => expect(cache.thread('one').loading).toBe(false))
     for (let sequence = 51; sequence <= 650; sequence++) emit({ threadId: 'one', revision: sequence, rows: [row(`agent-${sequence}`, sequence)], summary: { ...summary, total: sequence } })
     expect(cache.thread('one').rows).toHaveLength(50)
-    expect(cache.thread('one').rows[0].sequence).toBe(601)
+    expect(cache.thread('one').rows[0]?.sequence).toBe(601)
     expect(cache.thread('one').before).toBe(601)
     expect(bridge.page).toHaveBeenCalledTimes(1)
     expect(bridge.assignments).not.toHaveBeenCalled()
@@ -124,7 +124,7 @@ describe('Agents roster', () => {
     emit({ threadId: 'one', revision: 3, rows: [row('first', 1, { revision: 3, status: 'completed' })], summary })
     resolve({ threadId: 'one', revision: 1, rows: [row('first')], summary })
     await waitFor(() => expect(cache.thread('one').loading).toBe(false))
-    expect(cache.thread('one').rows[0].status).toBe('completed')
+    expect(cache.thread('one').rows[0]?.status).toBe('completed')
   })
 
   it('never shows an old thread’s delayed roster after switching to an empty selected thread', async () => {

@@ -16,6 +16,7 @@ import {
   type TranscriptionKeyCheck,
 } from '../../../src/shared/contracts'
 import { DEFAULT_SETTINGS } from '../../../src/shared/settings'
+import { agentContextFixture } from '../../fixtures/agentContext'
 
 vi.mock('../../../src/renderer/src/agents/AgentContext', async importOriginal => ({
   ...await importOriginal<typeof import('../../../src/renderer/src/agents/AgentContext')>(),
@@ -75,7 +76,7 @@ function baseProps(overrides: Partial<SettingsViewProps> = {}): SettingsViewProp
 const copy = platformCopy('win32')
 
 async function selectCategory(name: string): Promise<void> {
-  await userEvent.click(screen.getByRole('tab', { name, exact: true }))
+  await userEvent.click(screen.getByRole('tab', { name }))
 }
 
 describe('SettingsView', () => {
@@ -86,35 +87,35 @@ describe('SettingsView', () => {
     for (const name of categories) {
       await selectCategory(name)
       expect(screen.getAllByRole('tabpanel')).toHaveLength(1)
-      const panel = screen.getByRole('tabpanel', { name, exact: true })
+      const panel = screen.getByRole('tabpanel', { name })
       expect(panel).toBeVisible()
-      expect(screen.getByRole('tab', { name, exact: true })).toHaveAttribute('aria-selected', 'true')
+      expect(screen.getByRole('tab', { name })).toHaveAttribute('aria-selected', 'true')
       // The sidebar foot's room switch is a tablist of its own, so the count is scoped to the sections.
       expect(within(screen.getByRole('tablist', { name: 'Settings sections' })).getAllByRole('tab', { selected: true })).toHaveLength(1)
       expect(screen.getAllByRole('tabpanel', { hidden: true })).toHaveLength(11)
     }
-    screen.getByRole('tab', { name: 'Application', exact: true }).focus()
+    screen.getByRole('tab', { name: 'Application' }).focus()
     await user.keyboard('{Home}')
-    expect(screen.getByRole('tab', { name: 'Dictation', exact: true })).toHaveFocus()
+    expect(screen.getByRole('tab', { name: 'Dictation' })).toHaveFocus()
     await user.keyboard('{ArrowDown}')
-    expect(screen.getByRole('tab', { name: 'Transcription', exact: true })).toHaveFocus()
+    expect(screen.getByRole('tab', { name: 'Transcription' })).toHaveFocus()
     // The column continues into the sidebar foot (the room switch, then the page links) before the room itself.
     await user.tab()
     expect(screen.getByRole('tablist', { name: 'Page' })).toContainElement(document.activeElement as HTMLElement)
     for (const name of ['Chats', 'History', 'Settings', 'Help']) {
       await user.tab()
-      expect(screen.getByRole('link', { name, exact: true })).toHaveFocus()
+      expect(screen.getByRole('link', { name })).toHaveFocus()
     }
     await user.tab()
-    expect(screen.getByRole('tabpanel', { name: 'Transcription', exact: true })).toHaveFocus()
+    expect(screen.getByRole('tabpanel', { name: 'Transcription' })).toHaveFocus()
     await user.tab()
     expect(screen.getByLabelText('OpenRouter API key')).toHaveFocus()
     expect(screen.queryByRole('textbox', { name: 'Global shortcut' })).not.toBeInTheDocument()
-    screen.getByRole('tab', { name: 'Transcription', exact: true }).focus()
+    screen.getByRole('tab', { name: 'Transcription' }).focus()
     await user.keyboard('{End}')
-    expect(screen.getByRole('tab', { name: 'Git', exact: true })).toHaveFocus()
+    expect(screen.getByRole('tab', { name: 'Git' })).toHaveFocus()
     await user.keyboard('{ArrowUp}')
-    expect(screen.getByRole('tab', { name: 'Application', exact: true })).toHaveFocus()
+    expect(screen.getByRole('tab', { name: 'Application' })).toHaveFocus()
   })
 
   it('preserves invalid numeric drafts and their validation when returning to a category', async () => {
@@ -349,7 +350,7 @@ describe('SettingsView', () => {
 
   it('keeps custom instructions typed just before the style changes away from Custom instructions', async () => {
     const user = userEvent.setup()
-    const update = vi.fn(async () => true)
+    const update = vi.fn<Parameters<typeof SettingsView>[0]['onUpdateSettings']>(async () => true)
     const props = baseProps({ onUpdateSettings: update, settings: { ...DEFAULT_SETTINGS, onboardingComplete: true, gitWritingStyle: 'custom' } })
     const rendered = render(<SettingsView {...props} />)
     await selectCategory('Git')
@@ -367,7 +368,7 @@ describe('SettingsView', () => {
   it('groups every Git setting under the moment it acts, in one Git section', async () => {
     render(<SettingsView {...baseProps()} />)
     await selectCategory('Git')
-    const panel = screen.getByRole('tabpanel', { name: 'Git', exact: true })
+    const panel = screen.getByRole('tabpanel', { name: 'Git' })
     const groups = within(panel).getAllByRole('region')
     expect(groups.map(group => within(group).getByRole('heading', { level: 3 }).textContent)).toEqual(['When a thread commits', 'When a pull request is made or merged', 'When you read Changes', 'In the background'])
     // The controls of each group in the order the eye meets them.
@@ -380,7 +381,7 @@ describe('SettingsView', () => {
     // Moved, not copied: Application and Cleanup keep none of them.
     for (const section of ['Application', 'Cleanup']) {
       await selectCategory(section)
-      const other = screen.getByRole('tabpanel', { name: section, exact: true })
+      const other = screen.getByRole('tabpanel', { name: section })
       for (const name of ['Git fetch interval', 'Default merge method', 'Commit and pull request style']) expect(within(other).queryByRole('combobox', { name })).toBeNull()
       for (const name of ['Automatically pull', 'Auto-settle merged threads', 'Proactive panels', 'Follow pull request templates', 'Hide whitespace changes']) expect(within(other).queryByRole('switch', { name })).toBeNull()
     }
@@ -1024,10 +1025,7 @@ describe('SettingsView', () => {
       credentials: { reasoning: false, grokSpeech: false, secure: true }, reasoningAccounts: [],
       membership: { status: 'beta', label: 'Test', expiresAt: null },
     }
-    vi.mocked(useOptionalAgents).mockReturnValue({
-      state, command: vi.fn(async () => state), error: null, voice: { status: 'off' }, muteVoice: vi.fn(), stopSpeech: vi.fn(), retryVoice: vi.fn(),
-      attention: { items: [], show: false, dismiss: vi.fn(), reopen: vi.fn(), next: vi.fn(async () => undefined) },
-    })
+    vi.mocked(useOptionalAgents).mockReturnValue(agentContextFixture(state, vi.fn(async () => state)))
     const { container } = render(<SettingsView {...baseProps()} />)
     await selectCategory('Agents')
     const nav = screen.getByRole('tablist', { name: 'Settings sections' })
@@ -1051,10 +1049,7 @@ describe('SettingsView', () => {
       credentials: { reasoning: false, grokSpeech: false, secure: true }, reasoningAccounts: [],
       membership: { status: 'beta', label: 'Test', expiresAt: null },
     }
-    vi.mocked(useOptionalAgents).mockReturnValue({
-      state, command: vi.fn(async () => state), error: null, voice: { status: 'off' }, muteVoice: vi.fn(), stopSpeech: vi.fn(), retryVoice: vi.fn(),
-      attention: { items: [], show: false, dismiss: vi.fn(), reopen: vi.fn(), next: vi.fn(async () => undefined) },
-    })
+    vi.mocked(useOptionalAgents).mockReturnValue(agentContextFixture(state, vi.fn(async () => state)))
     const { container, rerender } = render(<SettingsView {...baseProps()} />)
     await selectCategory('Agents')
     const agents = container.querySelector('#settings-agents') as HTMLElement
@@ -1084,10 +1079,7 @@ function withProjects(): void {
     credentials: { reasoning: false, grokSpeech: false, secure: true }, reasoningAccounts: [],
     membership: { status: 'beta', label: 'Test', expiresAt: null },
   }
-  vi.mocked(useOptionalAgents).mockReturnValue({
-    state, command: vi.fn(async () => state), error: null, voice: { status: 'off' }, muteVoice: vi.fn(), stopSpeech: vi.fn(), retryVoice: vi.fn(),
-    attention: { items: [], show: false, dismiss: vi.fn(), reopen: vi.fn(), next: vi.fn(async () => undefined) },
-  })
+  vi.mocked(useOptionalAgents).mockReturnValue(agentContextFixture(state, vi.fn(async () => state)))
 }
 
 describe('Project thread defaults in Application settings', () => {
@@ -1100,7 +1092,7 @@ describe('Project thread defaults in Application settings', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Project defaults' }))
     const choice = screen.getByRole('combobox', { name: 'New threads in this project work in' })
     expect(choice).toHaveValue('independent')
-    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Project', exact: true }), 'two')
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Project' }), 'two')
     expect(choice).toHaveValue('inherit')
     await userEvent.selectOptions(choice, 'independent')
     expect(onUpdateSettings).toHaveBeenLastCalledWith({ projectThreadWorkingCopyDefaults: { one: 'independent', missing: 'shared', two: 'independent' } })
@@ -1123,7 +1115,7 @@ describe('Project thread defaults in Application settings', () => {
     const choice = screen.getByRole('combobox', { name: 'New threads in this project work in' })
     await userEvent.selectOptions(choice, 'independent')
     expect(choice).toBeDisabled()
-    expect(screen.getByRole('combobox', { name: 'Project', exact: true })).toBeDisabled()
+    expect(screen.getByRole('combobox', { name: 'Project' })).toBeDisabled()
     await act(async () => pending.resolve(false))
     expect(choice).toBeEnabled()
     expect(choice).toHaveValue('inherit')

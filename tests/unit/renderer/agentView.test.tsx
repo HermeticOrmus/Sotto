@@ -10,6 +10,7 @@ import { WidgetApp } from '../../../src/renderer/src/widget/WidgetApp'
 import { DEFAULT_WIDGET_PALETTE } from '../../../src/shared/themeBranding'
 import { handleOf } from '../../fixtures/stagedImages'
 import type { AgentAttachmentStageRequest } from '../../../src/shared/agents'
+import { agentContextFixture } from '../../fixtures/agentContext'
 
 vi.mock('../../../src/renderer/src/agents/AgentContext', () => ({ useAgents: vi.fn() }))
 vi.mock('../../../src/renderer/src/agents/orb/AgentOrb', () => ({ AgentOrb: () => null }))
@@ -41,7 +42,7 @@ function stateFixture(): AgentState {
 }
 
 function connection(state: AgentState, command = vi.fn(async () => state)): ReturnType<typeof useAgents> {
-  return { state, command, error: null, voice: { status: 'wake' }, muteVoice: vi.fn(), stopSpeech: vi.fn(), retryVoice: vi.fn() }
+  return { ...agentContextFixture(state, command), voice: { status: 'wake' } }
 }
 
 beforeEach(() => { vi.mocked(useAgents).mockReset() })
@@ -74,7 +75,7 @@ describe('one pill with agent controls', () => {
     state.configuration.enabled = true
     const command = vi.fn(async () => state)
     const onPresentationChange = vi.fn()
-    const view = () => <WidgetApp snapshot={idle} platform="win32" now={0} agents={{ state, command, error: null }} onPresentationChange={onPresentationChange} />
+    const view = () => <WidgetApp snapshot={idle} platform="win32" now={0} agents={connection(state, command)} onPresentationChange={onPresentationChange} />
     const { rerender, container } = render(view())
     expect(screen.getByTestId('widget-sliver')).toBeInTheDocument()
     expect(container.querySelector('.agent-widget')).toBeNull()
@@ -101,7 +102,7 @@ describe('one pill with agent controls', () => {
     state.configuration.speak = true
     const command = vi.fn(async () => state)
     const onToggle = vi.fn()
-    const { rerender } = render(<WidgetApp snapshot={idle} platform="win32" now={0} onToggle={onToggle} agents={{ state, command, error: null }} />)
+    const { rerender } = render(<WidgetApp snapshot={idle} platform="win32" now={0} onToggle={onToggle} agents={connection(state, command)} />)
     fireEvent.mouseEnter(screen.getByTestId('widget-sliver'))
     fireEvent.click(screen.getByRole('button', { name: 'Mute microphone' }))
     expect(command).toHaveBeenCalledWith({ type: 'voice', action: 'mute' })
@@ -111,7 +112,7 @@ describe('one pill with agent controls', () => {
     expect(onToggle).not.toHaveBeenCalled()
     state.configuration.speak = false
     state.voice.status = 'muted'
-    rerender(<WidgetApp snapshot={idle} platform="win32" now={0} agents={{ state, command, error: null }} />)
+    rerender(<WidgetApp snapshot={idle} platform="win32" now={0} agents={connection(state, command)} />)
     expect(screen.getByRole('button', { name: 'Unmute microphone' })).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByRole('button', { name: 'Unmute voice' })).toHaveAttribute('title', 'Unmute voice')
   })
@@ -122,7 +123,7 @@ describe('one pill with agent controls', () => {
     const command = vi.fn(async () => state)
     const onStop = vi.fn()
     const onPresentationChange = vi.fn()
-    render(<WidgetApp snapshot={{ ...idle, status: 'listening', sessionId: 'test', startedAt: 0, level: 0.6, cancellable: true }} platform="win32" now={5000} agents={{ state, command, error: null }} onStop={onStop} onPresentationChange={onPresentationChange} />)
+    render(<WidgetApp snapshot={{ ...idle, status: 'listening', sessionId: 'test', startedAt: 0, level: 0.6, cancellable: true }} platform="win32" now={5000} agents={connection(state, command)} onStop={onStop} onPresentationChange={onPresentationChange} />)
     expect(screen.getByTestId('listening-bars')).toBeInTheDocument()
     expect(screen.getByText('00:05')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Mute microphone' })).toBeInTheDocument()
@@ -138,14 +139,14 @@ describe('one pill with agent controls', () => {
     const command = vi.fn(async () => state)
     const onStop = vi.fn()
     const hidden = { ...idle, voiceCoordinator: false }
-    const { rerender } = render(<WidgetApp snapshot={hidden} platform="win32" now={0} agents={{ state, command, error: null }} />)
+    const { rerender } = render(<WidgetApp snapshot={hidden} platform="win32" now={0} agents={connection(state, command)} />)
     fireEvent.mouseEnter(screen.getByTestId('widget-sliver'))
     expect(screen.queryByRole('button', { name: 'Mute microphone' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Mute voice' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Expand threads' })).toBeNull()
     expect(screen.queryByRole('region', { name: 'Threads' })).toBeNull()
     // Dictation is what the widget is for, so its own controls must survive.
-    rerender(<WidgetApp snapshot={{ ...hidden, status: 'listening', sessionId: 'test', startedAt: 0, level: 0.6, cancellable: true }} platform="win32" now={5000} agents={{ state, command, error: null }} onStop={onStop} />)
+    rerender(<WidgetApp snapshot={{ ...hidden, status: 'listening', sessionId: 'test', startedAt: 0, level: 0.6, cancellable: true }} platform="win32" now={5000} agents={connection(state, command)} onStop={onStop} />)
     expect(screen.getByTestId('listening-bars')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Stop dictation' }))
     expect(onStop).toHaveBeenCalledTimes(1)
