@@ -16,6 +16,46 @@ import { closeSotto, launchSotto, openPage, type LaunchedSotto } from './support
  */
 const APPROVAL_URL = 'https://login.tailscale.com/a/l1fixture2b3c'
 
+/**
+ * The contrast of each piece of the checklist's text against the surface it sits on, the notice cards'
+ * sunken surface included. Computed colours arrive as oklab or oklch; a canvas turns any of them into sRGB.
+ */
+function checklistContrast(page: Page) {
+  return page.evaluate(() => {
+    const context = document.createElement('canvas').getContext('2d', { willReadFrequently: true })!
+    const parse = (value: string): number[] => {
+      context.clearRect(0, 0, 1, 1)
+      context.fillStyle = value
+      context.fillRect(0, 0, 1, 1)
+      const [r, g, b, a] = context.getImageData(0, 0, 1, 1).data
+      return [r!, g!, b!, a! / 255]
+    }
+    const background = (element: Element | null): number[] => {
+      const layers: number[][] = []
+      for (let node = element; node; node = node.parentElement) {
+        const colour = parse(getComputedStyle(node).backgroundColor)
+        if (colour[3]! > 0) layers.push(colour)
+        if (colour[3] === 1) break
+      }
+      return layers.reverse().reduce((under, over) => under.map((channel, index) => index === 3 ? 1 : over[index]! * over[3]! + channel * (1 - over[3]!)), [0, 0, 0, 1])
+    }
+    const luminance = ([r, g, b]: number[]): number => {
+      const linear = (channel: number): number => { const c = channel / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4 }
+      return 0.2126 * linear(r!) + 0.7152 * linear(g!) + 0.0722 * linear(b!)
+    }
+    const selector = ['.host-setup__summary b', '.host-setup__summary p > span', '.host-setup__title', '.host-setup__card p', '.host-setup__link', '.host-setup__command code'].join(', ')
+    return [...document.querySelectorAll<HTMLElement>(selector)].filter(element => element.getClientRects().length && element.textContent?.trim()).map(element => {
+      const surface = background(element)
+      const text = parse(getComputedStyle(element).color)
+      const blended = text.map((channel, index) => index === 3 ? 1 : channel * text[3]! + surface[index]! * (1 - text[3]!))
+      const [light, dark] = [luminance(blended), luminance(surface)].sort((a, b) => b - a)
+      return { element: element.className || element.tagName.toLowerCase(), text: element.textContent!.trim().slice(0, 40), ratio: Math.round(((light! + 0.05) / (dark! + 0.05)) * 100) / 100 }
+    })
+  })
+}
+/** The lowest contrast measured for each kind of text, by state and appearance, for the verification note. */
+const contrast: Record<string, Record<string, number>> = {}
+
 async function capture(launched: LaunchedSotto, name: string): Promise<void> {
   const { page } = launched
   for (const [width, height] of [[1600, 1000], [1280, 800], [820, 560]] as const) {
@@ -30,6 +70,12 @@ async function capture(launched: LaunchedSotto, name: string): Promise<void> {
         const box = element.getBoundingClientRect()
         return box.left >= 0 && box.right <= innerWidth && box.top >= 0 && box.bottom <= innerHeight && element.scrollWidth <= element.clientWidth
       })).toBe(true)
+      // Text meets 4.5:1 on the surface it sits on, in both rooms.
+      for (const { element, text, ratio } of await checklistContrast(page)) {
+        expect(ratio, `${text} (${element}) in ${name} at ${width} ${appearance}`).toBeGreaterThanOrEqual(4.5)
+        const key = `${name} ${appearance}`
+        contrast[key] = { ...contrast[key], [element]: Math.min(contrast[key]?.[element] ?? Infinity, ratio) }
+      }
       await page.screenshot({ path: test.info().outputPath(`${name}-${width}-${appearance}.png`), animations: 'disabled' })
     }
   }
@@ -119,6 +165,7 @@ test('Add host shows each step, waits for Tailscale approval, shows a failure on
     expect((JSON.parse(await readFile(join(profile, 'remote-hosts.json'), 'utf8')) as { name: string }[]).map(host => host.name)).toEqual(['forge'])
     expect(await readFile(join(profile, 'remote-hosts.json'), 'utf8')).not.toContain('tailscale.com')
     expect(errors).toEqual([])
+    await writeFile(test.info().outputPath('host-setup-contrast.json'), JSON.stringify(contrast, null, 2))
   } finally {
     // The host the launch script started outlives Sotto, as a real one does; this run stops it first. Started
     // on this computer, it holds a copy of the app's output handles, which would keep the app from closing.

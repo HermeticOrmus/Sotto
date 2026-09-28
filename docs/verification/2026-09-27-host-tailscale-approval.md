@@ -10,6 +10,16 @@ Verified September 27, 2026, on Windows 11, in the built app under Playwright. S
 
 At each of the three moments the spec set the window to 1600x1000, 1280x800 and the 820x560 minimum, in dark and in light, with reduced motion on, and checked that the dialog stayed inside the window and did not scroll sideways; at the minimum it scrolls in itself.
 
+At every size and in both rooms the spec also measures each piece of the checklist's text against the surface it sits on, the notice cards' sunken surface included, and fails below 4.5:1. The lowest ratios it measured:
+
+| Text | Dark | Light |
+| --- | --- | --- |
+| Host name in the summary line | 17.49 | 14.49 |
+| "· user and port from your SSH configuration" (muted) | 8.49 | 6.18 |
+| Step names, including not-started steps (muted) | 8.49 | 6.18 |
+| Card sentences: the failure, the Tailscale wait, connected | 18.74 | 14.19 |
+| **Why Tailscale asks** (accent text, 12.5px) | 11.99 | 6.52 |
+
 `tests/e2e/hosts.spec.ts` still adds `127.0.0.1` on port 1 through Windows' real OpenSSH. It now finds the failure on the Reach step of "127.0.0.1 could not be added", with the `ssh -p 1 127.0.0.1` command and **Copy** (`real-ssh-failed-820-light.png`).
 
 ## What the other suites cover
@@ -18,6 +28,8 @@ At each of the three moments the spec set the window to 1600x1000, 1280x800 and 
 - `tests/integration/sshLauncher.test.ts`: the steps a real launcher reports over the fake ssh (reach, sign-in on a password question, install on the first output, start); a Tailscale hold approved after it began, with its page and the approval clearing; `ServerAliveCountMax=21` on the commands and `2` on the forward; no approval within the budget is `tailscale-unapproved`, the approval budget replacing the shorter sign-in one; OpenSSH's own timeout on a held connection; a Node too new on the installation step.
 - `tests/integration/desktopHosts.test.ts`: the step, the approval page and the fix reach the dialog's state; Open approval page opens the page only while it waits and only Tailscale's own; a failure lands on its step; `tailscale-unapproved` stops a saved host's retries; the dialog's sentence for it says nothing was saved.
 - `tests/unit/renderer/hostsSettings.test.tsx`: the dialog's three states, the keyboard path (focus to Cancel, to Open approval page, to Done; Escape cancels), Copy, Try again, Change, a refusal before connecting going back to the form, and a saved host's row while Tailscale waits.
+
+After review, the same suites also cover: an Open approval page press that fails staying on the Tailscale card and leaving the failed step to main's sentence; a port forward Tailscale holds, shown on the Tailscale step with its 30 seconds, failing with a sentence that says so, and, once approved, dropping later as a dropped connection; a request sent to a connected host keeping `ServerAliveCountMax=2` and saying to switch the host off and on when Tailscale holds it; the hidden status line that says which step is in progress and that a command was copied; and the saved identity file in the `ssh` command a failure offers.
 
 ## Not checked live
 
