@@ -27,5 +27,5 @@ export const hostIdOf = (entity: { readonly id: string; readonly hostId?: string
 /** A small label naming the host a project is on. Decorative: the row it sits in carries the host in its name. */
 export function HostBadge({ host }: { readonly host: ListedHost }): ReactNode {
   const Icon = host.kind === 'local' ? Laptop : Server
-  return <span className="host-badge" data-kind={host.kind} title={`On ${host.name}`} aria-hidden="true"><Icon size={11} />{host.name}</span>
+  return <span className="host-badge" data-kind={host.kind} title={`On ${host.name}`} aria-hidden="true"><Icon size={11} /><span className="host-badge__name">{host.name}</span></span>
 }
