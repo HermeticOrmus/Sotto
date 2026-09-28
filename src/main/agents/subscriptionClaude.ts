@@ -15,6 +15,13 @@ interface ClaudeSubscriptionOptions {
   completionTimeoutMs?: number
   outputLimitBytes?: number
 }
+/**
+ * Claude Code's floor is a set of flags, not a version: a client whose `--help` lacks any of them is too old
+ * (ADR-0035). The reason: Sotto's turns run over stream-json (`--input-format`, `--output-format`, `--verbose`),
+ * and its side calls (ADR-0026) run tool-free and leave no session (`--safe-mode`, `--tools ''`,
+ * `--permission-prompts none`, `--no-session-persistence`, `--system-prompt`) on a chosen `--model` and `--effort`.
+ * Anthropic publishes no version for the set, so a host's tile names none.
+ */
 const REQUIRED_FLAGS = ['--safe-mode', '--tools', '--permission-prompts', '--no-session-persistence', '--input-format', '--output-format', '--system-prompt', '--model', '--effort', '--verbose']
 const MODEL_ID = z.string().max(160).regex(/^[a-z0-9][a-z0-9._:/-]*(?:\[[a-z0-9]+\])?$/iu)
 const NATIVE_MODEL = z.object({

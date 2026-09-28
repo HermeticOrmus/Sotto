@@ -103,14 +103,16 @@ export class ConfiguredProviderHost implements AgentHost {
       ...(snapshot.error ? { error: snapshot.error } : {}),
       // What the Hosts page's tile decides on (ADR-0037): why it is not connected, or what it is signed in with.
       ...(!snapshot.connected && snapshot.error && snapshot.problem ? { problem: snapshot.problem } : {}),
+      ...(!snapshot.connected && snapshot.error && snapshot.problem === 'too-old' && snapshot.requiredVersion ? { requiredVersion: snapshot.requiredVersion } : {}),
       ...(snapshot.connected && snapshot.account ? { account: snapshot.account } : {}) }
   }
   private failed(id: ProviderId, error: unknown): void {
     const slot = this.slots.get(id)!
     const named = providerProblemOf(error)
-    const status = { ...slot.status }; delete status.account; delete status.problem
+    const status = { ...slot.status }; delete status.account; delete status.problem; delete status.requiredVersion
     slot.status = { ...status, connection: 'error', error: error instanceof Error ? error.message : 'Provider connection failed.',
-      ...(named ? { problem: named.problem } : {}), ...(named?.version ? { version: named.version } : {}) }
+      ...(named ? { problem: named.problem } : {}), ...(named?.version ? { version: named.version } : {}),
+      ...(named?.problem === 'too-old' && named.requiredVersion ? { requiredVersion: named.requiredVersion } : {}) }
     slot.snapshot.connected = false
   }
   private aggregate(): AgentHostSnapshot {
@@ -154,7 +156,7 @@ export class ConfiguredProviderHost implements AgentHost {
     if (slot.status.connection === 'connected') return
     slot.wanted = true; const epoch = ++slot.epoch
     slot.unsubscribeSnapshot?.(); slot.unsubscribeEvents?.()
-    slot.status = { ...slot.status, connection: 'connecting' }; delete slot.status.error; delete slot.status.problem
+    slot.status = { ...slot.status, connection: 'connecting' }; delete slot.status.error; delete slot.status.problem; delete slot.status.requiredVersion
     this.watchActivity(id, slot, epoch)
     // A thread belongs to one provider. Its events keep that provider's connection epoch.
     slot.unsubscribeEvents = this.options.hosts[id].subscribeEvents?.(event => {
@@ -377,7 +379,7 @@ export class ConfiguredProviderHost implements AgentHost {
       slot.unsubscribeSnapshot?.(); slot.unsubscribeEvents?.()
       slot.unsubscribeSnapshot = undefined; slot.unsubscribeEvents = undefined
       this.options.hosts[id].disconnect(); slot.snapshot.connected = false
-      slot.status = { ...slot.status, connection: 'disconnected' }; delete slot.status.error; delete slot.status.problem; delete slot.status.account
+      slot.status = { ...slot.status, connection: 'disconnected' }; delete slot.status.error; delete slot.status.problem; delete slot.status.requiredVersion; delete slot.status.account
     }
     this.publish()
   }
