@@ -21,3 +21,5 @@ The temporary Grok read-error diagnostic discovered while preparing these checks
 ## Integrated dependencies
 
 The actual merged dictation-recovery and SSH-readiness changes were integrated at `c728ed90`. Recovery production source is unchanged from the compact native run. The incoming App test query correction was retained and all 36 App tests passed. Typecheck, lint, notices and all eight workspace-control tests had also passed after the preceding merged fixture/shared-ignore integration. The full two-worker suite remains queued.
+
+The branch was refreshed onto actual main `22c8e90b` at `f21a755b`. All merges, including the additive CI instructions, were automatic. `workspaceControl.test.ts` and the `test:recovery` package command are unchanged from the previously reviewed integration `3437de36`; the committed native evidence remains scoped to its recorded build. No diagnostic test modules remain under this branch's artifact folder. Final acceptance will use the exact reviewed combined candidate's full gate and subsequent issue-specific PR CI; that combined result is still pending, and no new local full pass is claimed.
