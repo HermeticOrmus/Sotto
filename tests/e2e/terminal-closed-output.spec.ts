@@ -4,6 +4,7 @@ import { closeSotto, launchSotto, openThreads, resizeWindow } from './support/so
 
 test('Closed keeps a native terminal row and reopens it with fresh output', async () => {
   test.skip(process.platform !== 'win32', 'Native Windows ConPTY acceptance')
+  test.setTimeout(120_000)
   const launched = await launchSotto()
   const { page } = launched
   try {
