@@ -56,7 +56,7 @@
 .host-setup__model > .tt-select { width: auto; max-width: 100%; min-height: 32px; font-size: 13px; }
 
 /* Who is setting the machine up, in which thread, with the way there. */
-.host-setup__agent { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 12px; border: 1px solid var(--tt-hairline); border-radius: var(--tt-radius-md); padding: 8px 8px 8px 12px; }
+.host-setup__agent { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 4px; border: 1px solid var(--tt-hairline); border-radius: var(--tt-radius-md); padding: 8px 8px 8px 12px; }
 .hosts-settings .host-setup__agent > p { flex: 1 1 240px; min-width: 0; margin: 0; color: var(--tt-text); font-size: 13px; }
 .host-setup__agent b { font-weight: 600; }
 .host-setup__agent > .tt-button { flex: 0 0 auto; min-height: 32px; padding: 0 14px; font-size: 13px; }
@@ -65,3 +65,5 @@
 /* Have my agent fix this, under a failed step's sentence and command. */
 .host-setup__offer { display: grid; gap: 8px; border-top: 1px solid var(--tt-hairline); padding-top: 10px; }
 .hosts-settings .host-setup__offer .host-setup__quiet { margin: 0; }
+/* A link inside a card's sentence reads at the sentence's size. */
+.host-setup__card p .host-setup__link { padding: 0; font-size: inherit; }

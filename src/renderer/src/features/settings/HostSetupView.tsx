@@ -85,17 +85,17 @@ export function HostSetupProgress({ setup, question, approvalError, onOpenThread
       : `The agent wants to run a command on ${setup.name}. Answer it in the thread to carry on.`}</p>
     <div className="host-setup__actions">{openThread}</div>
   </div> : undefined
+  const line = !ended(setup) ? <div className="host-setup__agent">
+    <p>{setup.phase === 'starting'
+      ? <>Starting the thread <b>{setup.threadTitle}</b> on <b>{setup.modelName}</b>.</>
+      : <><b>{setup.modelName}</b> is setting up {setup.name} in the thread <b>{setup.threadTitle}</b>. You answer each command it wants to run.</>}</p>
+    {openThread}
+  </div> : undefined
   return <>
-    {!ended(setup) ? <div className="host-setup__agent">
-      <p>{setup.phase === 'starting'
-        ? <>Starting the thread <b>{setup.threadTitle}</b> on <b>{setup.modelName}</b>.</>
-        : <><b>{setup.modelName}</b> is setting up {setup.name} in the thread <b>{setup.threadTitle}</b>. You answer each command it wants to run.</>}</p>
-      {openThread}
-    </div> : null}
     <HostSetupChecklist name={setup.name} summary={hostSetupSummary(target, setup.sshPort)} host={attempt} outcome={outcome}
       error={attempt?.phase === 'error' ? attempt.error ?? null : null} approvalError={approvalError} question={question}
       onOpenApproval={onOpenApproval} onOpenGuide={onOpenGuide}
-      agent={{ byAgent: setup.byAgent, waiting, idle: attempt === undefined && setup.phase !== 'connected' }} />
+      agent={{ byAgent: setup.byAgent, waiting, line, idle: attempt === undefined && setup.phase !== 'connected' }} />
     {setup.phase === 'connected' ? <div className="hosts-notice host-setup__card host-setup__card--done" role="status">
       <p>{setup.name} is added and connected. {setup.modelName} set it up in <button type="button" className="host-setup__link tt-focusable" onClick={onOpenThread}>{setup.threadTitle}</button>; the thread stays in your Threads list until you archive it.</p>
     </div> : null}

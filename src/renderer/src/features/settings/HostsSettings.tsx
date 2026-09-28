@@ -1,6 +1,6 @@
 import React, { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { Laptop, MoreHorizontal, Plus, Server } from 'lucide-react'
-import { type HostsBridge, type HostsCommand, type HostsState, type HostStatus } from '../../../../shared/hosts'
+import { type HostSetupState, type HostsBridge, type HostsCommand, type HostsState, type HostStatus } from '../../../../shared/hosts'
 import { Button } from '../../components/Button'
 import { Toggle } from '../../components/Toggle'
 import { ConfirmationDialog } from '../../components/ConfirmationDialog'
@@ -119,6 +119,19 @@ function RenameDialog({ host, onRename, onClose }: { readonly host: HostStatus; 
   </HostsModal>
 }
 
+/** A host setup running without its dialog, or ended and not yet put away (ADR-0035). */
+function HostSetupLine({ setup, onShow, onDismiss }: { readonly setup: HostSetupState; readonly onShow: () => void; readonly onDismiss: () => void }): ReactNode {
+  const running = setup.phase === 'starting' || setup.phase === 'running'
+  return <div className="hosts-setup-line" role="status" data-phase={setup.phase}>
+    <p>{running ? <><b>{setup.modelName}</b> is setting up {setup.name} in the thread <b>{setup.threadTitle}</b>.{setup.waiting ? ' It is waiting for your answer there.' : ''}</>
+      : setup.phase === 'connected' ? <>{setup.name} is set up and connected. <b>{setup.modelName}</b> set it up in the thread <b>{setup.threadTitle}</b>.</>
+        : setup.phase === 'stopped' ? <>The setup of {setup.name} stopped. Nothing was saved as a host.</>
+          : <>The setup of {setup.name} could not carry on. Nothing was saved as a host.</>}</p>
+    <Button variant="secondary" aria-label={`Show the setup of ${setup.name}`} onClick={onShow}>Show setup</Button>
+    {running ? null : <Button variant="ghost" aria-label={`Dismiss the setup of ${setup.name}`} onClick={onDismiss}>Dismiss</Button>}
+  </div>
+}
+
 export function HostsSettings({ localHostEnabled, onLocalHostChange, bridge = window.sotto?.hosts }: {
   localHostEnabled: boolean; onLocalHostChange: (enabled: boolean) => Promise<boolean>; bridge?: HostsBridge | undefined
 }): ReactNode {
@@ -169,11 +182,8 @@ export function HostsSettings({ localHostEnabled, onLocalHostChange, bridge = wi
     <p>Dictation and automatic paste always use this computer. They do not paste into a remote host.</p>
     <div className="hosts-heading"><h3>Remote hosts</h3><Button ref={addButton} variant="secondary" disabled={!bridge} onClick={() => setDialog({ kind: 'add' })}><Plus size={16} aria-hidden="true" />Add host</Button></div>
     <p>Connect to machines you reach over SSH. Sotto signs in with your SSH setup, starts the host if needed and pairs this computer. Hosts that are on reconnect when Sotto starts, and a host Sotto started keeps running until you stop it.</p>
-    {/* A setup the dialog was closed on carries on in its thread; this is the way back to it. */}
-    {state?.setup && (state.setup.phase === 'starting' || state.setup.phase === 'running') ? <div className="hosts-setup-line" role="status">
-      <p><b>{state.setup.modelName}</b> is setting up {state.setup.name} in the thread <b>{state.setup.threadTitle}</b>.{state.setup.waiting ? ' It is waiting for your answer.' : ''}</p>
-      <Button variant="secondary" aria-label={`Show the setup of ${state.setup.name}`} onClick={() => setDialog({ kind: 'setup' })}>Show setup</Button>
-    </div> : null}
+    {/* A setup the dialog was closed on carries on in its thread, and one that ended stays until put away: this is the way back to it. */}
+    {state?.setup && !dialog ? <HostSetupLine setup={state.setup} onShow={() => setDialog({ kind: 'setup' })} onDismiss={() => void run({ type: 'dismiss-setup', id: state.setup!.id })} /> : null}
     <div className="hosts-list">
       {state?.hosts.map(host => <HostRow key={host.id} host={host} onCommand={run} onAction={act} />)}
       {state && !state.hosts.length ? <p className="hosts-empty">No remote hosts yet.</p> : null}

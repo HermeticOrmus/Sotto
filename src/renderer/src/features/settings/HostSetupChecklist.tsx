@@ -82,6 +82,8 @@ export interface AgentSetupView {
   readonly waiting?: ReactNode
   /** No check has run yet: every step is still to come. */
   readonly idle: boolean
+  /** Who is working in which thread, under the line saying what is being set up. */
+  readonly line?: ReactNode
 }
 
 /**
@@ -143,6 +145,7 @@ export function HostSetupChecklist({ name, summary, host, outcome, error, approv
       <p><b>{name}</b> <span>· {summary}</span></p>
       {onChange ? <Button variant="ghost" onClick={onChange} aria-label={outcome === 'connecting' ? 'Change the host to add, and stop connecting' : 'Change the host to add'}>Change</Button> : null}
     </div>
+    {agent?.line}
     <ol className="host-setup__steps" aria-label="Connection steps">
       {steps.map((step, index) => {
         const state = stateOf(index, step)

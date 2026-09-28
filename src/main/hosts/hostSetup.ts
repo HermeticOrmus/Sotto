@@ -97,7 +97,12 @@ export class HostSetup implements HostSetupSource, HostSetupToolHandlers {
   async command(command: Extract<HostsCommand, { type: 'start-setup' | 'stop-setup' | 'dismiss-setup' }>): Promise<void> {
     if (command.type === 'start-setup') await this.start(command)
     else if (command.type === 'stop-setup') await this.stop(command.id)
-    else if (this.current?.id === command.id && !running(this.current)) { this.current = undefined; this.emit() }
+    else if (this.current?.id === command.id && !running(this.current)) {
+      // Put away: a finished check or failed add the checklist still showed goes with it, as Add host's Cancel drops one.
+      const { attemptId } = this.current
+      this.current = undefined; this.emit()
+      if (attemptId) await this.options.hosts.cancelAttempt(attemptId).catch(() => undefined)
+    }
   }
   // Sotto's own request in the setup thread: "Add forge as a host?".
   requests(): ReadonlyMap<string, readonly AgentRequest[]> {
@@ -185,8 +190,9 @@ export class HostSetup implements HostSetupSource, HostSetupToolHandlers {
     run.phase = 'stopped'
     this.end(run)
     this.emit()
-    // A check or add in flight is dropped: nothing is saved, and a pairing it made is revoked.
-    if (run.attemptId) await this.options.hosts.cancelAttempt(run.attemptId).catch(() => undefined)
+    // A check or add in flight is dropped: nothing is saved, and a pairing it made is revoked. One that finished
+    // stays for the checklist to show how far the setup got, until the setup is put away.
+    if (run.attemptId && this.options.hosts.attempt(run.attemptId)?.phase === 'connecting') await this.options.hosts.cancelAttempt(run.attemptId).catch(() => undefined)
     if (run.threadId) await this.options.threads.interrupt(run.threadId).catch(() => undefined)
     this.emit()
   }
