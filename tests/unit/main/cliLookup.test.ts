@@ -156,6 +156,16 @@ describe('the CLI lookup', () => {
     expect(await find('codex', linux({ npm_config_prefix: join(home, 'npm-prefix') }))).toBe(vendored)
   })
 
+  it('takes Codex from an npm package a manager installed under node_modules/.bin, and looks above no other folder', async () => {
+    const arch = process.arch === 'arm64' ? 'aarch64' : 'x86_64'
+    const modules = join(home, '.local', 'share', 'mise', 'installs', 'npm-openai-codex', 'latest', 'node_modules')
+    await file(join(modules, '.bin', 'codex'), '#!/usr/bin/env node\n')
+    const vendored = await native(join(modules, '@openai', 'codex', 'vendor', `${arch}-unknown-linux-musl`, 'bin', 'codex'))
+    // A PATH folder that is not a prefix's `bin` is never looked above.
+    await native(join(root, 'lib', 'node_modules', '@openai', 'codex', 'vendor', `${arch}-unknown-linux-musl`, 'bin', 'codex'))
+    expect(await find('codex', linux({ PATH: join(root, 'tools') }))).toBe(vendored)
+  })
+
   it('finds Grok Build in its own ~/.grok/bin before PATH', async () => {
     await native(join(root, 'on-path', 'grok'))
     const own = await native(join(home, '.grok', 'bin', 'grok'))
@@ -185,6 +195,15 @@ describe('the CLI lookup on Windows', () => {
     expect(await findClaudeExecutable(options.environment, undefined, { home, platform: 'win32' })).toBe(claude)
     expect(await findGrokExecutable(options.environment, { home, platform: 'win32' })).toBe(grok)
     expect(await findDevinExecutable(options.environment, { home, platform: 'win32' })).toBe(devin)
+  })
+
+  it('never looks for the Codex npm package above a PATH folder', async () => {
+    // A PATH folder just below a drive root, such as C:\tools: its parent's `lib` is one any account may create.
+    const arch = process.arch === 'arm64' ? 'aarch64' : 'x86_64'
+    await file(join(root, 'lib', 'node_modules', '@openai', 'codex', 'vendor', `${arch}-pc-windows-msvc`, 'bin', 'codex.exe'), MZ)
+    const appData = join(root, 'AppData', 'Roaming')
+    const codex = await file(join(appData, 'npm', 'node_modules', '@openai', 'codex', 'vendor', `${arch}-pc-windows-msvc`, 'bin', 'codex.exe'), MZ)
+    expect(await findCodexExecutable(windows({ PATH: join(root, 'tools'), APPDATA: appData }))).toBe(codex)
   })
 
   it('accepts only a Windows executable as Codex and never asks a login shell', async () => {

@@ -2,7 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { constants } from 'node:fs'
 import { access, mkdir, mkdtemp, open, realpath, rmdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { isAbsolute, join } from 'node:path'
+import { basename, dirname, isAbsolute, join } from 'node:path'
 
 import { z } from 'zod'
 
@@ -73,8 +73,12 @@ export async function findExecutable(lookup: CliLookupOptions = {}): Promise<str
   const executable = await findCli({
     name: 'codex',
     last: [join(lookup.home ?? homedir(), '.codex', 'bin')],
-    // npm's layouts: the package beside a Windows prefix's commands, or under `lib` beside a POSIX prefix's `bin`.
-    within: (directory, file) => [join(directory, 'node_modules', '@openai'), join(directory, '..', 'lib', 'node_modules', '@openai')].flatMap(scope => [
+    // npm's layouts: the package beside a Windows prefix's commands, under `lib` beside a POSIX prefix's `bin`, or
+    // beside the `node_modules/.bin` a local install links from. Only a folder named `bin` or `.bin` is looked above,
+    // and never on Windows: a PATH folder just below a drive root would reach `C:\lib`, which any account may create.
+    within: (directory, file) => (windows ? [join(directory, 'node_modules', '@openai')]
+      : basename(directory) === 'bin' ? [join(dirname(directory), 'lib', 'node_modules', '@openai')]
+        : basename(directory) === '.bin' && basename(dirname(directory)) === 'node_modules' ? [join(dirname(directory), '@openai')] : []).flatMap(scope => [
       join(scope, 'codex', 'node_modules', '@openai', packageName, 'vendor', triple, 'bin', file),
       join(scope, packageName, 'vendor', triple, 'bin', file),
       join(scope, 'codex', 'vendor', triple, 'bin', file),
