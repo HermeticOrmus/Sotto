@@ -5,6 +5,11 @@ import { dirname, join, resolve } from 'node:path'
 import { GrokAcpHost } from '../../src/main/agents/grok'
 import type { RecordedRpc } from './codexFixture'
 import type { AdapterSessionOptions } from '../integration/adapterContract'
+/** A log may not exist before its first event; any other read failure is evidence, not an empty trace. */
+async function readLog(path: string): Promise<string> {
+ try { return await readFile(path, 'utf8') }
+ catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return ''; throw error }
+}
 /** The frames the fake client's one-shot mode was sent, grouped into Sotto's side calls (ADR-0026). */
 async function sideCalls(root: string): Promise<{ cwd: string; model: string | undefined; material: string }[]> {
  const frames = (await readFile(join(root,'oneshot.jsonl'),'utf8').catch(()=>'')).trim().split('\n').filter(Boolean).map(line => (JSON.parse(line) as { frame: { method?: string; params?: Record<string, unknown> } }).frame)
@@ -17,8 +22,12 @@ async function sideCalls(root: string): Promise<{ cwd: string; model: string | u
 export async function grokFixture(root?: string, requestTimeoutMs = 2000, pollIntervalMs = 20, session: AdapterSessionOptions = {}) {
  root ??= await mkdtemp(join(tmpdir(),'sotto-grok-thread-'))
  const adapter = new GrokAcpHost(root,{executable:process.execPath,args:[resolve('tests/fixtures/fakeGrokThreadAgent.mjs'),root],requestTimeoutMs,pollIntervalMs,...session})
- const checkViolations = async () => { const text = await readFile(join(root,'violations.jsonl'),'utf8').catch(()=>''); if (text) throw new Error(`Invalid Grok reply: ${text}`) }
- const requests = async (): Promise<RecordedRpc[]> => { await checkViolations(); return (await readFile(join(root,'requests.jsonl'),'utf8').catch(()=>'')).trim().split('\n').filter(Boolean).map(line=>JSON.parse(line)) }
+ const checkViolations = async () => { const text = await readLog(join(root,'violations.jsonl')); if (text) throw new Error(`Invalid Grok reply: ${text}`) }
+ const requests = async (): Promise<RecordedRpc[]> => {
+  await checkViolations()
+  const text = await readLog(join(root,'requests.jsonl'))
+  return text.trim().split('\n').filter(Boolean).map(line=>JSON.parse(line))
+ }
  const script = (value: unknown) => writeFile(join(root,'script.json'),JSON.stringify(value))
  const realId = async (id: string): Promise<string> => JSON.parse(await readFile(join(root,'grok-threads.json'),'utf8'))[id].grokSessionId
  const action = async (id: string, value: Record<string,unknown>) => { await writeFile(join(root,'control.json'),JSON.stringify({id:randomUUID(),sessionId:await realId(id),...value})) }
