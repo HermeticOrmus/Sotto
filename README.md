@@ -22,13 +22,17 @@ Sotto runs the Claude Code, Codex, Grok Build and Devin clients you already have
 
 - **One sidebar for every agent.** Each provider keeps its own sign-in and models. Sotto keeps the threads. Stop still reaches running work when its last prompt is unconfirmed.
 - **You answer every request.** Anything a thread's permissions don't already allow waits for you. A paired device needs your permission to answer requests or create threads with permissions that allow actions without asking, even when those permissions come from the host's defaults.
-- **Tools beside each thread.** A browser, a terminal, the thread's files and its changes.
+- **Tools beside each thread.** A browser, a terminal, the thread's files and its changes. Terminal input stays in order; if input is refused, Sotto says so before you try again.
 - **Codex's Computer Use.** In a Codex thread set to Full access, with the Codex app open, Codex can operate the apps on your computer.
 - **Git in one press.** Commit, push and open a pull request. Leave the message empty and the agent writes it.
 - **Worktrees for parallel work.** Give a thread its own branch and folder, and remove the folder when you're done.
 - **Dictation anywhere.** Press `Ctrl+Shift+Space` (`⌃⇧Space` on a Mac), speak, and press it again. The text is copied and can be pasted at your cursor.
 
 Thread drafts save automatically while you type, including while other threads are working.
+
+New threads open in Unsettled with the defaults saved in Settings → Agents. An existing empty thread is reused only while it is unsettled, its known model, effort and permission choices match those defaults, and no setting change is pending.
+
+In Settings, **Test microphone** checks the same input selected for dictation. Changing the input clears the previous test.
 
 Terminal mode keeps closed terminals on its Closed shelf until you quit. Reopen starts the same command with fresh output; Stop keeps the output readable.
 
@@ -44,7 +48,7 @@ You need Windows 10 or 11 (x64), or an Apple silicon Mac with macOS 12 or newer.
 xattr -dr com.apple.quarantine /Applications/Sotto.app
 ```
 
-Then install and sign in to at least one agent client, and connect it in **Settings → Providers**. For dictation, add an [OpenRouter API key](https://openrouter.ai/keys) in Settings.
+First-run setup asks you to test your microphone or choose **Skip for now** before continuing. Then install and sign in to at least one agent client, and connect it in **Settings → Providers**. For dictation, add an [OpenRouter API key](https://openrouter.ai/keys) in Settings.
 
 ## Privacy and cost
 
