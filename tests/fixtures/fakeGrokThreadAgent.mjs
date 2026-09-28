@@ -98,6 +98,7 @@ createInterface({input:process.stdin}).on('line', line => {
  else if (frame.method === 'session/new') {
   checkPolicy(p._meta)
   const sessionId = randomUUID(); sessions[sessionId] = {cwd:p.cwd,updates:[],permissionMode:nativeMode(p._meta)}; resident.add(sessionId); save()
+  record({method:'fixture/session-resident',params:{sessionId,resident:true}})
   const reply = () => send({id:frame.id,result:{sessionId,models:catalogOf(script)}})
   if (script.delayCreate) setTimeout(reply,script.delayCreate); else reply()
  }
@@ -110,12 +111,14 @@ createInterface({input:process.stdin}).on('line', line => {
    if (!resident.has(p.sessionId)) session.permissionMode = nativeMode(p._meta)
    else if (p._meta?.yoloMode) session.permissionMode = 'bypassPermissions'
    resident.add(p.sessionId); save()
+   record({method:'fixture/session-resident',params:{sessionId:p.sessionId,resident:true}})
    send({id:frame.id,result:{models:catalogOf(script),_meta:{sessionId:p.sessionId}}})
   }
  }
  else if (frame.method === '_x.ai/session/close') {
   if (script.rejectClose) { send({id:frame.id,error:{code:-32603,message:'Rejected close'}}); return }
   const closed = resident.delete(p.sessionId)
+  record({method:'fixture/session-resident',params:{sessionId:p.sessionId,resident:false}})
   send({id:frame.id,result:{result:{success:true,outcome:closed ? 'closed' : 'notResident'}}})
  }
  else if (frame.method === 'session/set_model') {
