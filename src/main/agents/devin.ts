@@ -6,6 +6,7 @@ import { version as appVersion } from '../../../package.json'
 import { agentProjectSchema, type AgentHostSnapshot, type AgentMessage, type AgentProviderMode, type AgentRuntimeMode, type AgentThread } from '../../shared/agents'
 import { mergeAgentActivities } from '../../shared/agentActivity'
 import { AtomicJsonStore } from '../storage/atomicJsonStore'
+import { ProviderUnavailable } from './providerProblem'
 import type { ActivitySubscriptionOptions, AgentHost, AgentHostCommand, AgentHostResult, ThreadHistorySource, ThreadHostEvent, ThreadReadPurpose } from './host'
 import { ThreadMessageLog } from './threadMessageLog'
 import { cloneHostSnapshot } from './cloneHostSnapshot'
@@ -311,6 +312,9 @@ export class DevinAcpHost implements AgentHost {
       this.state.error = error instanceof Error && error.message
         ? error.message
         : 'Devin did not confirm the connection. Your threads and drafts are kept.'
+      // What a host's provider tile says and offers (ADR-0037); a refusal without a name reads as not startable.
+      if (error instanceof ProviderUnavailable) { this.state.problem = error.problem; if (error.version) this.state.version = error.version }
+      else delete this.state.problem
       this.emit(); return this.current()
     }
   }
@@ -323,9 +327,9 @@ export class DevinAcpHost implements AgentHost {
       throw new Error('Sotto could not prepare its own Devin folder. Your threads and drafts are kept. Check access to Sotto’s data folder and connect again.', { cause: error })
     }
     this.executable = this.options.executable ?? await findDevinExecutable(this.options.environment) ?? ''
-    if (!isAbsolute(this.executable)) throw new Error('Install Devin CLI and run devin auth login, then connect again. Your threads and drafts are kept.')
+    if (!isAbsolute(this.executable)) throw new ProviderUnavailable('not-installed', 'Install Devin CLI and run devin auth login, then connect again. Your threads and drafts are kept.')
     const version = await readDevinVersion(this.executable, this.options.args ?? [], devinEnvironment(this.options.environment))
-    if (compareClientVersions(version, DEVIN_CLI_VERSION) < 0) throw new Error('This Devin version is older than the one Sotto checked. Your threads are kept. Use Devin CLI ' + DEVIN_CLI_VERSION + ' or newer before connecting.')
+    if (compareClientVersions(version, DEVIN_CLI_VERSION) < 0) throw new ProviderUnavailable('too-old', 'This Devin version is older than the one Sotto checked. Your threads are kept. Use Devin CLI ' + DEVIN_CLI_VERSION + ' or newer before connecting.', version)
     const [aliases, projects] = await Promise.all([this.aliasStore.read(), this.projectStore.read()])
     if (generation !== this.generation) throw new DevinUncertain('Devin connection changed.')
     const catalog = await this.start(this.catalogDirectory, 'nothing')
@@ -345,7 +349,8 @@ export class DevinAcpHost implements AgentHost {
       await this.revalidate(catalog, this.catalogDirectory, generation)
       // This empty session belongs only to discovery; no inference runs at connect.
       if (disposableSession) await catalog.rpc.request('session/delete', { sessionId: disposableSession })
-      if (!this.state.models.length) throw new Error('Devin returned no available models. Run devin auth login and check your account access, then reconnect. Your threads and drafts are kept.')
+      // Devin lists no models to an account it has no sign-in for.
+      if (!this.state.models.length) throw new ProviderUnavailable('signed-out', 'Devin returned no available models. Run devin auth login and check your account access, then reconnect. Your threads and drafts are kept.', version)
     } finally { catalog.intentionalClose = true; catalog.rpc.close(); await catalog.rpc.closed }
     if (generation !== this.generation) throw new DevinUncertain('Devin connection changed.')
     // Replace what this process holds only once discovery has succeeded. A
@@ -356,7 +361,7 @@ export class DevinAcpHost implements AgentHost {
     for (const id of Object.keys(this.aliases)) {
       this.thread(id); this.log.seed(id, this.history?.messageIdentities(id) ?? [])
     }
-    this.state.connected = true; this.state.version = version + ' / ACP 1'; delete this.state.error
+    this.state.connected = true; this.state.version = version + ' / ACP 1'; delete this.state.error; delete this.state.problem
     if (compareClientVersions(version, DEVIN_CLI_VERSION) > 0) this.state.verifiedVersion = DEVIN_CLI_VERSION
     else delete this.state.verifiedVersion
     // A thread that cannot be opened is that thread's error, not the provider's: the rest stay usable.

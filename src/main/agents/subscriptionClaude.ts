@@ -51,6 +51,25 @@ const ENVIRONMENT_KEYS = new Set([
   'disable_auto_compact', 'disable_compact', 'claude_autocompact_pct_override', 'claude_code_auto_compact_window',
 ])
 
+/**
+ * The environment every Claude Code process Sotto starts gets: the allow-list above and `NO_COLOR`. Its sign-in on a
+ * host runs with the same one (ADR-0037), so the credential lands where the adapter then looks for it.
+ */
+export function claudeEnvironment(environment: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const filtered: NodeJS.ProcessEnv = {}
+  for (const [key, value] of Object.entries(environment)) {
+    if (ENVIRONMENT_KEYS.has(key.toLowerCase()) && value !== undefined) filtered[key] = value
+  }
+  filtered.NO_COLOR = '1'
+  return filtered
+}
+/** "Claude Max" for `max`: the plan Claude Code says it is signed in with, as a host's provider tile shows it. */
+function claudePlan(subscriptionType: string): string | undefined {
+  const plan = subscriptionType.trim()
+  if (!/^[a-z][a-z0-9 _-]{0,40}$/iu.test(plan)) return undefined
+  return `Claude ${plan.charAt(0).toUpperCase()}${plan.slice(1)}`
+}
+
 /** Runs the user's unmodified Claude CLI; OAuth credentials never enter Sotto. */
 /**
  * Where Claude Code is, through the shared CLI lookup (ADR-0036): PATH, the login shell's PATH, then
@@ -116,28 +135,34 @@ export class ClaudeSubscriptionClient implements SubscriptionClient {
   private async inspect(signal?: AbortSignal): Promise<{ account: SubscriptionAccount; executable: string | null }> {
     const executable = await this.findExecutable()
     const account: SubscriptionAccount = { provider: 'claude', label: 'Claude Code subscription', installed: Boolean(executable), ready: false,
-      detail: 'Install Claude Code and sign in with your Claude subscription, then check the connection in Sotto.', models: [] }
+      detail: 'Install Claude Code and sign in with your Claude subscription, then check the connection in Sotto.', problem: 'not-installed', models: [] }
     if (!executable) return { account, executable }
     try {
       await mkdir(this.workingDirectory, { recursive: true })
       const help = await this.run(executable, ['--help'], '', 10_000, signal)
       if (!REQUIRED_FLAGS.every(flag => help.includes(flag))) {
         account.detail = 'Update Claude Code to a version supporting safe mode and tool-free reasoning, then check the connection in Sotto.'
+        account.problem = 'too-old'
         return { account, executable }
       }
       const output = await this.run(executable, ['--safe-mode', 'auth', 'status', '--json'], '', 10_000, signal)
       const auth = AUTH.parse(JSON.parse(output))
       if (!auth.loggedIn || auth.authMethod !== 'claude.ai' || !auth.subscriptionType) {
         account.detail = 'Sign in to Claude Code with your Claude subscription, then check the connection in Sotto. Sotto will not switch to API billing.'
+        account.problem = 'signed-out'
         return { account, executable }
       }
       account.models = await this.models(executable, signal)
       if (account.models.some(model => model.id === 'default')) account.defaultModelId = 'default'
       account.allowCustomModel = true
       account.ready = true
+      delete account.problem
+      const plan = claudePlan(auth.subscriptionType)
+      if (plan) account.account = plan
       account.detail = 'Uses your signed-in Claude subscription. Its usage limits and account settings apply.'
     } catch {
       account.detail = 'Could not verify the Claude Code subscription and model list. Open Claude Code to check its sign-in, then check the connection in Sotto.'
+      account.problem = 'cannot-start'
     }
     return { account, executable }
   }
@@ -167,14 +192,7 @@ export class ClaudeSubscriptionClient implements SubscriptionClient {
     return findClaudeExecutable(this.options.environment ?? process.env, this.options.executable)
   }
 
-  environment(): NodeJS.ProcessEnv {
-    const filtered: NodeJS.ProcessEnv = {}
-    for (const [key, value] of Object.entries(this.options.environment ?? process.env)) {
-      if (ENVIRONMENT_KEYS.has(key.toLowerCase()) && value !== undefined) filtered[key] = value
-    }
-    filtered.NO_COLOR = '1'
-    return filtered
-  }
+  environment(): NodeJS.ProcessEnv { return claudeEnvironment(this.options.environment) }
 
   /**
    * The installed client's own version. Claude Code otherwise only says it in a running session's

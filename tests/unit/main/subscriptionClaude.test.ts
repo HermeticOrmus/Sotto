@@ -281,4 +281,13 @@ describe('Claude thread environment', () => {
     } })
     expect(client.environment()).toEqual({ Path: 'bin', ProgramData: 'C:\\ProgramData', ALLUSERSPROFILE: 'C:\\ProgramData', NO_COLOR: '1' })
   })
+
+  it('names why it is not ready, and the plan it is signed in with, for the tiles of a host (ADR-0037)', async () => {
+    expect(await (await fixture()).client.status()).toMatchObject({ ready: true, account: 'Claude Max' })
+    expect((await (await fixture()).client.status()).problem).toBeUndefined()
+    expect(await (await fixture({ auth: { loggedIn: false } })).client.status()).toMatchObject({ ready: false, problem: 'signed-out' })
+    // API billing is not a sign-in Sotto uses, so it reads as signed out of the subscription.
+    expect(await (await fixture({ auth: { loggedIn: true, authMethod: 'api_key' } })).client.status()).toMatchObject({ ready: false, problem: 'signed-out' })
+    expect(await (await fixture({ help: '--print --output-format --tools' })).client.status()).toMatchObject({ ready: false, problem: 'too-old' })
+  })
 })
