@@ -65,6 +65,8 @@ Model, effort, image and permission-mode controls reflect the adapter's verified
 
 While a thread is running, **Steer now** beside a queued message sends that message into the current turn when the provider supports steering. The rest of the queue and any newer composer draft stay in place. An unconfirmed message cannot be steered again; use **Check again** to reconcile its delivery.
 
+Stop has independent admission through the coordinator and workspace, so a pending prompt acknowledgement or unresolved delivery cannot block cancellation. Its own saved intent leaves the original prompt and reconciliation record intact. Queued follow-ups stay paused, and no prompt is replayed automatically.
+
 ## Working copies and Git
 
 Git on the Threads page works the way T3 Code does it (ADR-0027): the working copy and branch are chosen on the branch toolbar under the composer, the Git action in the pane header commits, pushes and opens pull requests, **Changes** in Tools reads what changed, and **Pull request** in Tools reads and merges the branch's pull request. The branch toolbar, the Git action and Pull request run on the thread's own host; Changes reads from this window, so a thread on a paired host has none here. GitHub is reached only through `gh` on your own sign-in; see the README's privacy section for what is fetched and when.
