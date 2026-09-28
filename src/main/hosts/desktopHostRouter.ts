@@ -1,4 +1,4 @@
-import { agentCommandSchema, HOST_CANNOT_STAGE_SCREENSHOTS, agentShell, isThreadProviderConnected, type AgentAttachmentContent, type AgentAttachmentContentRequest, type AgentAttachmentHandle, type AgentAttachmentStageRequest, type AgentAttachmentUpload, type AgentCommand, type AgentState, type AgentThreadDetail, type AgentThreadDetailUpdate, type AgentAttachmentPreviewRequest, type AgentAttachmentPreviewResult } from '../../shared/agents'
+import { agentCommandSchema, HOST_CANNOT_STAGE_SCREENSHOTS, agentShell, isThreadProviderConnected, nameHostInRefusal, type AgentAttachmentContent, type AgentAttachmentContentRequest, type AgentAttachmentHandle, type AgentAttachmentStageRequest, type AgentAttachmentUpload, type AgentCommand, type AgentState, type AgentThreadDetail, type AgentThreadDetailUpdate, type AgentAttachmentPreviewRequest, type AgentAttachmentPreviewResult } from '../../shared/agents'
 import { clientAgentState, hostEntityKey, mapHostReferences, parseHostEntityKey } from '../../shared/clientIdentity'
 import type { ClientIdentity, HostService } from '../agents/hostService'
 import type { GitRefsPage, GitRefsRequest } from '../../shared/gitRefs'
@@ -83,7 +83,8 @@ export class DesktopHostRouter {
       const original = connection.service.shell()
       return { connection, original, state: clientAgentState(original) }
     })
-    const base = entries.find(item => item.connection.hostId === this.selectedHostId)?.state ?? this.empty()
+    const selected = entries.find(item => item.connection.hostId === this.selectedHostId)
+    const base = selected ? this.named(selected.connection, selected.state) : this.empty()
     const multiple = entries.length > 1
     const threads = entries.flatMap(({ connection, original, state }) => state.host.threads.map((thread, index) => ({
       ...thread, hostId: connection.hostId, hostLabel: multiple ? connection.name : undefined, remoteHost: connection.kind === 'remote',
@@ -201,7 +202,7 @@ export class DesktopHostRouter {
       // without the forward, compose and send would still target the previous one.
       if (connection.available?.() !== false) {
         const result = await connection.service.command(command, client)
-        if (result.error) this.notice = result.error
+        if (result.error) this.notice = this.refusal(connection, result.error)
       }
       this.emit(); return this.shell()
     }
@@ -212,7 +213,7 @@ export class DesktopHostRouter {
     const selections = this.selections
     try {
       const result = await connection.service.command(command as AgentCommand, client)
-      if (result.error) this.notice = result.error
+      if (result.error) this.notice = this.refusal(connection, result.error)
     } finally {
       if (SELECTING_COMMANDS.has(command.type) && selections === this.selections) this.follow(connection, { activeThreadId, activeProjectId })
     }
@@ -231,6 +232,13 @@ export class DesktopHostRouter {
     this.selectedHostId = connection.hostId
     this.selectedThreadId = after.activeThreadId === null ? null : hostEntityKey(connection.hostId, after.activeThreadId)
     this.selectedProjectId = after.activeProjectId === null ? null : hostEntityKey(connection.hostId, after.activeProjectId)
+  }
+  /** A remote host cannot know the name this computer saved it under, so its refusals are given it here (#459). */
+  private refusal(connection: DesktopHostConnection, message: string): string {
+    return connection.kind === 'remote' ? nameHostInRefusal(message, connection.name) : message
+  }
+  private named(connection: DesktopHostConnection, state: AgentState): AgentState {
+    return state.error ? { ...state, error: this.refusal(connection, state.error) } : state
   }
   private emit(): void { const state = this.shell(); for (const listener of this.listeners) listener(state) }
   dispose(): void { for (const hostId of [...this.hosts.keys()]) this.remove(hostId); this.listeners.clear(); this.detailListeners.clear() }

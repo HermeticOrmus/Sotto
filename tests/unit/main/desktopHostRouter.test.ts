@@ -5,7 +5,7 @@ import { DesktopHostRouter, type DesktopHostConnection } from '../../../src/main
 import { emptyDesktopState } from '../../../src/main/hosts/inactiveLocalHost'
 import { desktopWindowClient } from '../../../src/main/agents/hostService'
 import { hostEntityKey } from '../../../src/shared/clientIdentity'
-import { hostForThread, capabilitiesForThread, type AgentCommand } from '../../../src/shared/agents'
+import { hostForThread, capabilitiesForThread, noProviderRefusal, type AgentCommand } from '../../../src/shared/agents'
 
 const LOCAL = '11111111-1111-4111-8111-111111111111'
 const REMOTE = '22222222-2222-4222-8222-222222222222'
@@ -22,6 +22,23 @@ function fixture(hostId: string, kind: 'local' | 'remote') {
   return { state, command, detail, observe, connection }
 }
 describe('desktop host routing', () => {
+  it('names the host in its no-provider refusal by the name this computer saved it under (#459)', async () => {
+    const router = new DesktopHostRouter(emptyDesktopState), local = fixture(LOCAL, 'local'), remote = fixture(REMOTE, 'remote')
+    router.add(local.connection); router.add({ ...remote.connection, name: 'forge' })
+    router.select(REMOTE)
+    remote.state.error = noProviderRefusal('host', false)
+    remote.command.mockImplementationOnce(async () => ({ ...remote.state, error: noProviderRefusal('host', true) }))
+    expect((await router.command({ type: 'manual-send', threadId: hostEntityKey(REMOTE, 'thread'), text: 'Reply' }, desktopWindowClient())).error)
+      .toBe('No provider is connected on forge. Connect one in Settings → Hosts. Your draft is saved.')
+    remote.command.mockImplementationOnce(async () => remote.state)
+    await router.command({ type: 'create-project', title: 'Site', path: '/srv/site', useExisting: true }, desktopWindowClient())
+    expect(router.shell().error).toBe('No provider is connected on forge. Connect one in Settings → Hosts.')
+    // This computer's own refusal names this computer already and is passed on as it is.
+    const own = new DesktopHostRouter(emptyDesktopState)
+    own.add(local.connection)
+    local.state.error = noProviderRefusal('desktop', false)
+    expect(own.shell().error).toBe('No provider is connected on this computer. Connect one in Settings → Providers.')
+  })
   it('keeps colliding IDs distinct and dispatches every thread action to its owner', async () => {
     const router = new DesktopHostRouter(emptyDesktopState), local = fixture(LOCAL, 'local'), remote = fixture(REMOTE, 'remote')
     router.add(local.connection); router.add(remote.connection)

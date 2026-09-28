@@ -83,6 +83,8 @@ async function startHostRuntime(options: HeadlessHostOptions) {
       logFailure: code => options.log?.(code),
       // A desktop shows this host's refusals, so an image this host lost is named as the host's, not "this computer".
       missingAttachment: MISSING_REMOTE_ATTACHMENT,
+      // The host connects every provider that is installed and signed in here, except the ones turned off (ADR-0036).
+      runsAs: 'headless-host',
       // The host owns its worktrees, so it reclaims them under the rules in its own settings (ADR-0019, ADR-0025).
       worktreeCleanup: { pullRequestMerged: githubPullRequestMerged, log: event => options.log?.(event) },
       claudeSettingsLog: event => options.log?.(event),

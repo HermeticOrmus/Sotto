@@ -9,7 +9,7 @@ import { isAbsolute, join, resolve } from 'node:path'
 import { z } from 'zod'
 import {
   agentAssignmentSchema, agentConfigurationSchema, agentQueueItemSchema, agentAttachmentHandlesSchema, agentAttachmentHandleSchema, agentAttachmentSchema, attachmentDigestSchema, AGENT_MAX_ATTACHMENTS, agentThreadOptionsSchema, agentThreadDraftSchema, agentDeliverySchema,
-  providerUpgradeSchema, defaultAgentConfiguration, PROVIDER_REJECTED_ACTION, PROVIDER_RESULT_UNCONFIRMED, THREAD_SETTINGS_UNRECONCILED, EMPTY_AGENT_HOST, PROVIDER_LABELS, supportsAgentSupervision, isSubscriptionReasoning, agentDeliveryReceiptsSchema, MAX_DELIVERED_DRAFTS, enabledThreadProviders, defaultNewThreadModelId, capabilitiesForThread, isThreadProviderConnected, providerIdSchema, threadSummaryOf,
+  providerUpgradeSchema, defaultAgentConfiguration, PROVIDER_REJECTED_ACTION, PROVIDER_RESULT_UNCONFIRMED, THREAD_SETTINGS_UNRECONCILED, EMPTY_AGENT_HOST, PROVIDER_LABELS, supportsAgentSupervision, isSubscriptionReasoning, agentDeliveryReceiptsSchema, MAX_DELIVERED_DRAFTS, enabledThreadProviders, defaultNewThreadModelId, capabilitiesForThread, isThreadProviderConnected, providerIdSchema, threadSummaryOf, noProviderRefusal,
   type AgentMessage, type AgentThreadDetail, type AgentThreadDetailDelta, type AgentThreadDetailUpdate, type ProviderId, type AgentModel, type AgentRuntimeMode, type AgentAttachmentHandle, type AgentAttachmentUpload, type AgentAttachmentContent, type AgentAttachmentPreviewRequest, type AgentAttachmentPreviewResult, type AgentAssignment, type AgentCommand, type AgentConfiguration, type AgentDelivery, type AgentThreadDraft, type AgentHostSnapshot, type AgentProject, type AgentQueueItem, type AgentState, type AgentThread, type ProviderClientUpdate, type SubscriptionProvider,
 } from '../../shared/agents'
 import { nearestReasoningEffort, resolveNewThreadPermission } from '../../shared/newThreadDefaults'
@@ -116,6 +116,22 @@ function firstExchange(thread: AgentThread, trigger: 'automatic' | 'requested', 
 /** What a Connect press meets while that provider's client is being replaced. */
 function updatingRefusal(provider: ProviderId): string {
   return `${PROVIDER_LABELS[provider]} is updating. It connects again when the update finishes.`
+}
+/**
+ * The providers the user has turned off once `off` are turned off and `on` turned on, in the stable provider order.
+ * What a headless host leaves alone when it starts (ADR-0036).
+ */
+function turnedOff(configuration: AgentConfiguration, off: readonly ProviderId[], on: readonly ProviderId[]): ProviderId[] {
+  const next = new Set([...(configuration.disconnectedProviders ?? []), ...off])
+  for (const provider of on) next.delete(provider)
+  return providerIdSchema.options.filter(provider => next.has(provider))
+}
+/** The configuration with its turned-off record replaced; an empty record is left out, as one never written. */
+function withTurnedOff(configuration: AgentConfiguration, off: readonly ProviderId[]): AgentConfiguration {
+  const next = { ...configuration }
+  if (off.length) next.disconnectedProviders = [...off]
+  else delete next.disconnectedProviders
+  return next
 }
 function connectionRefusal(snapshot: AgentHostSnapshot, provider: ProviderId | undefined, fallback: string): string | undefined {
   const requested = provider && snapshot.providers?.find(entry => entry.id === provider)
@@ -271,6 +287,13 @@ export class AgentControl {
     releaseClient?: (provider: ProviderId) => Promise<() => Promise<void>>
     /** The sentence a send is refused with when an image it names is no longer kept; a headless host names itself. */
     missingAttachment?: string
+    /**
+     * Which process this coordinator runs in. The headless host (`src/host/index.ts`) connects every provider
+     * that is installed and signed in when it starts, except the ones the user turned off, and its refusals point
+     * at Settings → Hosts on whichever desktop shows them (ADR-0036). Absent means the desktop, which connects the
+     * providers the user connected in Settings → Providers.
+     */
+    runsAs?: 'desktop' | 'headless-host'
   }) {
     this.followupStore = new FollowupStore(dependencies.directory)
     this.clients = dependencies.clients ?? new ProviderClients()
@@ -365,6 +388,13 @@ export class AgentControl {
       item.draftId ??= this.state.threadDrafts?.find(draft => draft.threadId === item.threadId && (item.draftDigest
         ? item.draftDigest === followupDigest(draft) : draft.requestId === null))?.draftId ?? randomUUID()
       this.setDelivery(item.threadId, item.draftId, 'uncertain', { commandId: item.id, messageId: item.messageId })
+    }
+    // A headless host connects every provider that is installed and signed in, except the ones the user turned off
+    // (ADR-0036). Trying one is how Sotto learns whether it is installed and signed in: a provider that is not
+    // ends in its own error and is not retried, and the host stays up for the ones that are.
+    if (this.dependencies.runsAs === 'headless-host' && this.dependencies.host.concurrentProviders) {
+      const off = new Set(this.state.configuration.disconnectedProviders ?? [])
+      this.state.configuration.enabledProviders = providerIdSchema.options.filter(provider => !off.has(provider))
     }
     // Redaction also reaches disk when control is disabled and no reconnect will run.
     await this.persist()
@@ -1005,15 +1035,18 @@ export class AgentControl {
     if (!assignment) throw new Error('Assign this thread to Sotto first.')
     return assignment
   }
-  private canAct(threadId?: string): void {
+  /** `draftKept` is whether what the user was doing survives a refusal as a saved draft: true for a send, false for a create. */
+  private canAct(threadId?: string, draftKept = true): void {
     if (this.disposed) throw new Error('Sotto is stopping. Your draft is saved.')
     if (!['active', 'beta'].includes(this.state.membership.status)) throw new Error('Agent actions require an active Sotto membership. Free dictation remains available.')
     if (this.state.membership.expiresAt && Date.parse(this.state.membership.expiresAt) <= Date.now()) throw new Error('Refresh your Sotto membership before starting more agent actions. Existing provider work continues.')
-    if (threadId && !isThreadProviderConnected(this.state.host, this.thread(threadId))) throw new Error('Reconnect this thread provider before sending. Your draft is saved.')
-    if (!this.state.host.connected) throw new Error('Reconnect the provider before sending. Your draft is saved.')
+    // Nothing connected at all names the machine and the page that connects one (#459); one thread's provider
+    // being down while others are connected is that thread's own refusal.
+    if (!this.state.host.connected) throw new Error(noProviderRefusal(this.dependencies.runsAs === 'headless-host' ? 'host' : 'desktop', draftKept))
+    if (threadId && !isThreadProviderConnected(this.state.host, this.thread(threadId))) throw new Error(`Reconnect this thread provider before sending.${draftKept ? ' Your draft is saved.' : ''}`)
   }
   private canCreate(provider?: ProviderId): void {
-    this.canAct()
+    this.canAct(undefined, false)
     if (this.outbox.some(item => (item.type === 'create-project' || item.type === 'create-thread') && (!provider || (item.provider ?? this.state.configuration.provider) === provider))) {
       throw new Error('An earlier creation has an unknown result. Reconnect and inspect the provider before creating anything else; select the existing project or thread if it appears.')
     }
@@ -1765,7 +1798,14 @@ export class AgentControl {
         // Preserve an established enabled set when changing only the legacy default choice.
         if (next.provider !== before.provider && next.enabledProviders === undefined && this.state.host.providers) next.enabledProviders = enabledThreadProviders(before)
         if (command.patch.enabledProviders !== undefined) {
-          for (const provider of enabledThreadProviders(before)) if (!next.enabledProviders?.includes(provider)) this.dependencies.host.disconnect(provider)
+          const removed = enabledThreadProviders(before).filter(provider => !next.enabledProviders?.includes(provider))
+          for (const provider of removed) this.dependencies.host.disconnect(provider)
+          // What the new set leaves out is turned off, and what it puts back is on again (ADR-0036).
+          if (command.patch.disconnectedProviders === undefined) {
+            const off = turnedOff(before, removed, next.enabledProviders ?? [])
+            if (off.length) next.disconnectedProviders = off
+            else delete next.disconnectedProviders
+          }
         }
         if (speechRevision !== this.speechPreferenceRevision) next.speak = this.state.configuration.speak
         this.state.configuration = next
@@ -1789,6 +1829,7 @@ export class AgentControl {
         if (others && !others.length) throw new Error(updatingRefusal(this.updatingClient!))
         if (command.provider) {
           this.state.configuration.enabledProviders = [...new Set([...enabledThreadProviders(this.state.configuration), command.provider])]
+          this.state.configuration = withTurnedOff(this.state.configuration, turnedOff(this.state.configuration, [], [command.provider]))
           if (!this.dependencies.host.concurrentProviders) this.state.configuration.enabled = true
           await this.persist()
         }
@@ -1815,12 +1856,15 @@ export class AgentControl {
       case 'disconnect':
         if (command.provider) {
           this.state.configuration.enabledProviders = enabledThreadProviders(this.state.configuration).filter(provider => provider !== command.provider)
+          this.state.configuration = withTurnedOff(this.state.configuration, turnedOff(this.state.configuration, [command.provider], []))
           this.dependencies.host.disconnect(command.provider)
           this.acceptSnapshot(await this.dependencies.host.snapshot(command.provider))
           this.say(`${PROVIDER_LABELS[command.provider]} disconnected.`)
         } else {
-          if (this.dependencies.host.concurrentProviders) this.state.configuration.enabledProviders = []
-          else this.state.configuration.enabled = false
+          if (this.dependencies.host.concurrentProviders) {
+            this.state.configuration.enabledProviders = []
+            this.state.configuration = withTurnedOff(this.state.configuration, [...providerIdSchema.options])
+          } else this.state.configuration.enabled = false
           this.disconnect(); this.say('Sotto disconnected.')
         }
         return
@@ -2021,7 +2065,7 @@ export class AgentControl {
         return
       }
       case 'configure-thread': {
-        this.canAct()
+        this.canAct(undefined, false)
         if (command.modelId === undefined && command.reasoningEffort === undefined && command.runtimeMode === undefined && command.providerMode === undefined) throw new Error('Choose a thread setting to change.')
         if (this.thread(command.threadId).nativeSessionStarted !== false && !capabilitiesForThread(this.state.host, this.thread(command.threadId)).configureThread) throw new Error('This provider does not support changing thread settings.')
         // Checked against the thread as Sotto holds it, without opening it: watching or reading a reaped Claude
@@ -2089,7 +2133,7 @@ export class AgentControl {
       case 'pause': this.assignment(command.threadId).paused = true; this.say(`Paused management of ${this.thread(command.threadId).title}. Provider work continues.`); return
       case 'interrupt': {
         const validate = (): void => {
-          this.canAct()
+          this.canAct(undefined, false)
           if (!capabilitiesForThread(this.state.host, this.thread(command.threadId)).interrupt) throw new Error('This connection cannot stop agent work.')
           if (isThreadClosed(this.thread(command.threadId))) throw new Error('This thread is settled or archived. There is no open work to stop.')
         }
@@ -2101,7 +2145,7 @@ export class AgentControl {
       }
       case 'compact-thread': {
         const validate = (): void => {
-          this.canAct(command.threadId)
+          this.canAct(command.threadId, false)
           const thread = this.thread(command.threadId)
           if (!capabilitiesForThread(this.state.host, thread).compact || thread.manualCompactionSupported === false) throw new Error('Native manual compaction is unavailable for this thread.')
           if (isThreadClosed(thread) || thread.nativeSessionStarted === false || thread.status === 'running' || thread.requests.length) throw new Error('Wait for this thread to finish and answer its requests before compacting.')
@@ -2255,7 +2299,9 @@ export class AgentControl {
   }
   private async dispatchPending(command: DispatchCommand, turn?: ActiveTurn, validate?: () => void, draftId?: string,
     client: ClientIdentity = this.localClient): Promise<void> {
-    this.canAct()
+    // A prompt or an answer stays as a draft when this refuses; a create, a setting or a stop has none.
+    const draftKept = promptOf(command) !== null || command.type === 'answer'
+    this.canAct(undefined, draftKept)
     // Refused here, before an outbox entry exists and long before the provider hears anything.
     if (command.type === 'answer') this.guardClientGrant(client)
     const threadId = 'threadId' in command ? command.threadId : undefined
@@ -2264,7 +2310,7 @@ export class AgentControl {
       : command.type === 'create-thread' || (command.type === 'configure-thread' && command.modelId && this.thread(command.threadId).nativeSessionStarted === false)
         ? resolveModel(this.state.host.models, command.modelId)?.providerId : command.type === 'answer'
           ? requestDraftProvider(this.state.host, this.thread(command.threadId), this.state.configuration.provider) : this.thread(command.threadId).providerId
-    if (threadId && command.type !== 'create-thread' && !(command.type === 'configure-thread' && this.thread(threadId).nativeSessionStarted === false)) this.canAct(threadId)
+    if (threadId && command.type !== 'create-thread' && !(command.type === 'configure-thread' && this.thread(threadId).nativeSessionStarted === false)) this.canAct(threadId, draftKept)
     const toThread = prompt ?? (command.type === 'answer' ? command : null)
     if (toThread) {
       const thread = this.thread(toThread.threadId); const capabilities = capabilitiesForThread(this.state.host, thread)
@@ -2312,7 +2358,7 @@ export class AgentControl {
     let providerLatencyMs: number | undefined
     let previewAttachments: AgentAttachmentHandle[] = []
     try {
-      this.canAct(); this.guardAuthority(command, turn); validate?.()
+      this.canAct(undefined, draftKept); this.guardAuthority(command, turn); validate?.()
       if (prompt?.attachments?.length) {
         // Checked again now the outbox entry owns the content: a sweep that runs from here on keeps it, and one
         // that ran while this waited behind a running lane is caught here rather than at the adapter.
@@ -2323,13 +2369,13 @@ export class AgentControl {
       if (command.type === 'answer' && answerRequest && answerQuestions.length && provider) {
         const draftAnswers = answerRequest.questions?.length ? command.questionAnswers : { [answerRequest.id]: { optionIds: [command.answer] } }
         await this.dependencies.bindRequestDraftDecision?.({ kind: 'thread', ownerId: command.threadId, providerId: provider, requestId: command.requestId, questions: answerQuestions }, command.commandId, draftAnswers)
-        this.canAct(); this.guardAuthority(command, turn); validate?.()
+        this.canAct(undefined, draftKept); this.guardAuthority(command, turn); validate?.()
       }
       const providerStartedAt = Date.now()
       // The images become the adapter's to read here, at the provider boundary, and not before (ADR-0031).
       const hostCommand = (prompt?.attachments?.length
         ? { ...prompt, attachments: prompt.attachments.map(image => this.promptImage(image)) } : command) as AgentHostCommand
-      try { this.canAct(); result = await this.dependencies.host.execute(hostCommand) }
+      try { this.canAct(undefined, draftKept); result = await this.dependencies.host.execute(hostCommand) }
       finally { providerLatencyMs = Math.max(0, Date.now() - providerStartedAt) }
     } catch (error) {
       this.outbox = this.outbox.filter(o => o.id !== command.commandId)
