@@ -16,8 +16,8 @@ export function useRevisionDraft<T extends string | number>(authoritative: T, di
   const token = useRef(0)
   const authorityVersion = useRef(0)
   const pending = useRef<DraftSubmission<T>[]>([])
-  const source = useRef({ authoritative, onAccept })
-  source.current = { authoritative, onAccept }
+  const source = useRef({ authoritative, display, onAccept })
+  source.current = { authoritative, display, onAccept }
 
   const replace = (next: string): void => {
     current.current = next
@@ -59,7 +59,16 @@ export function useRevisionDraft<T extends string | number>(authoritative: T, di
       return submission
     },
     isLatest: (submission: DraftSubmission<T>): boolean => pending.current.at(-1)?.token === submission.token && authorityVersion.current === submission.authorityVersion,
-    fail: (submission: DraftSubmission<T>, restore: boolean): void => {
+    settle: (submission: DraftSubmission<T>, saved: boolean, restore: boolean): void => {
+      if (saved) {
+        // Saving the current raw value produces no prop change. Its successful receipt still advances accepted authority.
+        if (submission.authorityVersion === authorityVersion.current && source.current.authoritative === submission.submitted &&
+          pending.current.some(item => item.token === submission.token)) {
+          accepted.current = { authoritative: source.current.authoritative, display: source.current.display }
+          pending.current = pending.current.filter(item => item.token > submission.token)
+        }
+        return
+      }
       const latest = pending.current.at(-1)?.token === submission.token
       pending.current = pending.current.filter(item => item.token !== submission.token)
       if (restore && latest && revision.current === submission.editVersion) replace(accepted.current.display)

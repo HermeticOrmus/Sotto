@@ -29,7 +29,7 @@ describe('revision-aware settings drafts', () => {
     expect(result.current.isLatest(submission)).toBe(false)
     rerender({ authoritative: 'A' })
     expect(result.current.value).toBe('External')
-    act(() => { result.current.fail(submission, true) })
+    act(() => { result.current.settle(submission, false, true) })
     expect(result.current.value).toBe('External')
   })
 
@@ -39,7 +39,7 @@ describe('revision-aware settings drafts', () => {
     act(() => { result.current.edit('Sotto') })
     const submission = result.current.begin('Sotto', true)!
     expect(result.current.begin('Sotto', true)).toBeNull()
-    act(() => { result.current.fail(submission, false) })
+    act(() => { result.current.settle(submission, false, false) })
     expect(result.current.read()).toBe('Sotto')
     expect(result.current.begin('Sotto', true)).not.toBeNull()
   })
@@ -50,9 +50,9 @@ describe('revision-aware settings drafts', () => {
     const first = result.current.begin(300)!
     act(() => { result.current.edit('400') })
     const second = result.current.begin(400)!
-    act(() => { result.current.fail(first, true) })
+    act(() => { result.current.settle(first, false, true) })
     expect(result.current.value).toBe('400')
-    act(() => { result.current.fail(second, true) })
+    act(() => { result.current.settle(second, false, true) })
     expect(result.current.value).toBe('200')
   })
 
@@ -86,7 +86,7 @@ describe('revision-aware settings drafts', () => {
     expect(renders - initial).toBe(1)
     const submission = result.current.begin('Sotto', true)!
     expect(renders - initial).toBe(1)
-    act(() => { result.current.fail(submission, false) })
+    act(() => { result.current.settle(submission, false, false) })
     expect(renders - initial).toBe(1)
   })
 })
@@ -98,7 +98,7 @@ it('does not resurrect an ignored acknowledgement when a later edit fails', () =
   expect(result.current.value).toBe('External')
   act(() => { result.current.edit('B') })
   const next = result.current.begin('B')!
-  act(() => { result.current.fail(next, true) })
+  act(() => { result.current.settle(next, false, true) })
   expect(result.current.value).toBe('External')
 })
 
@@ -109,7 +109,7 @@ it('uses an accepted receipt as the rollback target while a newer edit is still 
   rerender({ authoritative: 'A' })
   expect(result.current.value).toBe('B')
   const next = result.current.begin('B')!
-  act(() => { result.current.fail(next, true) })
+  act(() => { result.current.settle(next, false, true) })
   expect(result.current.value).toBe('A')
 })
 
@@ -120,4 +120,30 @@ it('commits an explicit return to a value whose old receipt was superseded', () 
   rerender({ authoritative: 'A' })
   act(() => { result.current.edit('A') })
   expect(result.current.begin('A', true)).not.toBeNull()
+})
+
+it('accepts successful same-value commits without waiting for a prop change', () => {
+  const { result, rerender } = draft()
+  act(() => { result.current.edit('A'); result.current.begin('A') })
+  rerender({ authoritative: 'External' })
+  rerender({ authoritative: 'A' })
+  act(() => { result.current.edit('A') })
+  const returned = result.current.begin('A')!
+  act(() => { result.current.settle(returned, true, true) })
+  act(() => { result.current.edit('B') })
+  const failed = result.current.begin('B')!
+  act(() => { result.current.settle(failed, false, true) })
+  expect(result.current.value).toBe('A')
+})
+
+it('does not accept a successful result from a superseded authority generation', () => {
+  const { result, rerender } = draft()
+  act(() => { result.current.edit('A') })
+  const old = result.current.begin('A')!
+  rerender({ authoritative: 'External' })
+  rerender({ authoritative: 'A' })
+  act(() => { result.current.settle(old, true, true); result.current.edit('B') })
+  const failed = result.current.begin('B')!
+  act(() => { result.current.settle(failed, false, true) })
+  expect(result.current.value).toBe('External')
 })

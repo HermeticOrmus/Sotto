@@ -251,7 +251,8 @@ export function SettingsView({
     const value = llmDictionaryDraft.read()
     const submission = llmDictionaryDraft.begin(value, true)
     if (submission === null) return
-    if (!await save({ llmDictionary: value }, 'Dictionary saved.')) llmDictionaryDraft.fail(submission, false)
+    const saved = await save({ llmDictionary: value }, 'Dictionary saved.')
+    llmDictionaryDraft.settle(submission, saved, false)
   }
 
   const savePasteDelay = async (): Promise<void> => {
@@ -262,7 +263,8 @@ export function SettingsView({
     }
     setPasteDelayError(undefined)
     const submission = pasteDelayDraft.begin(value)!
-    if (!await save({ pasteDelayMs: value }, 'Paste delay saved.')) pasteDelayDraft.fail(submission, true)
+    const saved = await save({ pasteDelayMs: value }, 'Paste delay saved.')
+    pasteDelayDraft.settle(submission, saved, true)
   }
 
   const saveSuccessDuration = async (): Promise<void> => {
@@ -273,7 +275,8 @@ export function SettingsView({
     }
     setSuccessDurationError(undefined)
     const submission = successDurationDraft.begin(value)!
-    if (!await save({ successDisplayMs: value }, 'Success duration saved.')) successDurationDraft.fail(submission, true)
+    const saved = await save({ successDisplayMs: value }, 'Success duration saved.')
+    successDurationDraft.settle(submission, saved, true)
   }
 
   // One busy flag for all three: they are the same button row, and only one of
@@ -316,10 +319,11 @@ export function SettingsView({
     }
     const submission = hotkeyDraft.begin(candidate)!
     const result = await onReplaceHotkey(candidate).catch(() => ({ ok: false as const, reason: 'unavailable' as const }))
-    if (!hotkeyDraft.isLatest(submission)) return
+    const latest = hotkeyDraft.isLatest(submission)
+    hotkeyDraft.settle(submission, result.ok, true)
+    if (!latest) return
     if (result.ok) setNotice({ text: 'Global shortcut updated.', error: false })
     else {
-      hotkeyDraft.fail(submission, true)
       setNotice({ text: result.reason === 'conflict' ? 'Another application is already using that shortcut. Your previous shortcut is still active.' : result.reason === 'invalid' ? 'That shortcut is not valid. Your previous shortcut is still active.' : 'The shortcut could not be updated. Your previous shortcut is still active.', error: true })
     }
   }
