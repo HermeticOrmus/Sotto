@@ -1,9 +1,9 @@
 import { z } from 'zod'
+import type { HostDeviceList, TailscaleConnectOutcome, TailscaleSummary } from './hostDevices'
 
 export const HOSTS_GET = 'hosts:get'
 export const HOSTS_COMMAND = 'hosts:command'
 export const HOSTS_CHANGED = 'hosts:changed'
-export const HOSTS_SSH_SUGGESTIONS = 'hosts:ssh-suggestions'
 
 /** Where a new host's installation and data folders default to on the SSH host. */
 export const DEFAULT_HOST_INSTALL_PATH = '~/.local/share/sotto-host'
@@ -77,13 +77,15 @@ export const hostsCommandSchema = z.discriminatedUnion('type', [
 export type HostsCommand = z.infer<typeof hostsCommandSchema>
 
 /**
- * A host the user's own SSH setup already knows, offered while typing in Add host: an alias from the SSH
- * configuration, or a name from known hosts. Read on this computer and never sent anywhere.
+ * A host the user's own SSH setup already knows, which Add host lists among its devices: an alias from the
+ * SSH configuration, or a name from known hosts. Read on this computer and never sent anywhere.
  */
 export interface SshHostSuggestion {
   readonly alias: string
   /** Where the alias goes, such as `zach@forge.example.net`, when the configuration says. */
   readonly detail?: string
+  /** The configuration's `HostName` for the alias, when it has one Sotto can read. */
+  readonly hostname?: string
   /** A known host recorded on a port other than 22. */
   readonly port?: number
   readonly source: 'config' | 'known-hosts'
@@ -92,8 +94,14 @@ export interface HostsBridge {
   get(): Promise<HostsState>
   command(command: HostsCommand): Promise<HostsState>
   onChanged(listener: (state: HostsState) => void): () => void
-  /** The hosts this computer's SSH configuration and known hosts name, read when asked. */
-  sshSuggestions(): Promise<SshHostSuggestion[]>
+  /** The devices Add host lists, from this computer's Tailscale and SSH setup, read when asked. */
+  devices(): Promise<HostDeviceList>
+  /** Tailscale on this computer, read when asked. */
+  tailscale(): Promise<TailscaleSummary>
+  /** Runs this computer's `tailscale up`, opening Tailscale's sign-in page in the default browser when it asks for one. */
+  connectTailscale(): Promise<TailscaleConnectOutcome>
+  /** Opens Tailscale's download page in the default browser. */
+  openTailscaleDownload(): Promise<void>
 }
 
 /** Client projection only; remote wire payloads keep their original host-local IDs. */

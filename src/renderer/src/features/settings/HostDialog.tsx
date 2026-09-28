@@ -1,7 +1,10 @@
-import React, { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode } from 'react'
+import React, { useEffect, useId, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode } from 'react'
 import { LoaderCircle } from 'lucide-react'
-import { DEFAULT_HOST_DATA_DIRECTORY, DEFAULT_HOST_INSTALL_PATH, type HostsBridge, type HostsState, type HostStatus, type RemoteHost, type SshHostSuggestion } from '../../../../shared/hosts'
+import { DEFAULT_HOST_DATA_DIRECTORY, DEFAULT_HOST_INSTALL_PATH, type HostsBridge, type HostsState, type HostStatus, type RemoteHost } from '../../../../shared/hosts'
+import type { HostDevice, HostDeviceList, TailscaleSummary } from '../../../../shared/hostDevices'
 import { Button } from '../../components/Button'
+import { DevicePicker } from './DevicePicker'
+import { TailscalePrompt, type TailscaleControl } from './TailscaleConnect'
 import { HostSetupChecklist, hostSetupSummary, hostSetupTitle, TAILSCALE_GUIDE_URL, type HostSetupOutcome } from './HostSetupChecklist'
 
 /** How many Hosts modals are open, so a saved host's SSH question waits rather than stacking on one. */
@@ -13,7 +16,7 @@ const modalsChanged = (change: number): void => { openModals += change; for (con
 export const useHostsModalOpen = (): boolean => useSyncExternalStore(subscribeModals, () => openModals > 0)
 
 /**
- * A modal for Settings > Hosts: focus starts inside it, Tab stays inside it, Escape answers it (after
+ * A modal for Settings > Hosts: focus starts inside it (on `data-autofocus` when a control has it), Tab stays inside it, Escape answers it (after
  * anything open inside has answered first) and focus goes back to what opened it.
  */
 export function HostsModal({ title, onClose, busy = false, children, footer, className = '' }: {
@@ -27,9 +30,11 @@ export function HostsModal({ title, onClose, busy = false, children, footer, cla
   useEffect(() => { modalsChanged(1); return () => modalsChanged(-1) }, [])
   useEffect(() => {
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null
-    dialog.current?.querySelector<HTMLElement>('input:not(:disabled), button:not(:disabled)')?.focus()
+    // Focus starts on the control marked for it, such as Add host's Device list below a Tailscale prompt, else on the first one.
+    const start = dialog.current?.querySelector<HTMLElement>('[data-autofocus]:not(:disabled)') ?? dialog.current?.querySelector<HTMLElement>('input:not(:disabled), button:not(:disabled)')
+    start?.focus()
     // Escape is heard on the document, so it still answers while focus sits on a control that just turned off.
-    // Anything open inside the dialog (the suggestions list) answers it first and stops it there.
+    // Anything open inside the dialog (Add host's device list) answers it first and stops it there.
     const onEscape = (event: globalThis.KeyboardEvent): void => { if (event.key === 'Escape' && !event.defaultPrevented) { event.preventDefault(); close.current() } }
     document.addEventListener('keydown', onEscape)
     return () => { document.removeEventListener('keydown', onEscape); queueMicrotask(() => { if (opener?.isConnected) opener.focus() }) }
@@ -57,60 +62,6 @@ export const targetHost = (target: string): string => target.slice(target.lastIn
 /** The user part of an SSH target, or '' when the SSH configuration decides. */
 const targetUser = (target: string): string => target.includes('@') ? target.slice(0, target.lastIndexOf('@')) : ''
 
-/**
- * "SSH host or alias": a combobox over the hosts this computer's SSH setup already knows. Arrow keys move
- * through the list, Enter takes the highlighted host (or, with none highlighted, adds what was typed), and
- * Escape closes the list before it closes the dialog.
- */
-function HostCombobox({ value, onChange, suggestions, offer, disabled, onPick, onSubmit, describedBy }: {
-  readonly value: string; readonly onChange: (value: string) => void; readonly suggestions: readonly SshHostSuggestion[]
-  /** False in Edit connection, which changes a saved route rather than choosing a new one: no list opens. */
-  readonly offer: boolean
-  readonly disabled: boolean; readonly onPick: (suggestion: SshHostSuggestion) => void; readonly onSubmit: () => void
-  readonly describedBy: string
-}): ReactNode {
-  const [open, setOpen] = useState(false)
-  const [active, setActive] = useState(-1)
-  const listId = useId()
-  const inputId = useId()
-  const query = value.trim().toLowerCase()
-  const matches = useMemo(() => suggestions.filter(item => item.alias.toLowerCase().includes(query) || (item.detail ?? '').toLowerCase().includes(query)), [suggestions, query])
-  const shown = offer && open && !disabled && (matches.length > 0 || query !== '')
-  const optionId = (index: number): string => `${listId}-option-${index}`
-  const pick = (suggestion: SshHostSuggestion): void => { onPick(suggestion); setOpen(false); setActive(-1) }
-  return <div className="hosts-combo">
-    <label className="tt-field__label" htmlFor={inputId}>SSH host or alias</label>
-    <input id={inputId} className="tt-input tt-focusable" role="combobox" aria-expanded={shown} aria-controls={listId} aria-autocomplete="list"
-      aria-activedescendant={shown && active >= 0 ? optionId(active) : undefined} aria-describedby={describedBy}
-      autoComplete="off" autoCapitalize="none" spellCheck={false} maxLength={256} disabled={disabled}
-      placeholder="Search your SSH hosts or type user@server" value={value}
-      onFocus={() => setOpen(true)} onClick={() => setOpen(true)} onBlur={() => { setOpen(false); setActive(-1) }}
-      onChange={event => { onChange(event.target.value); setOpen(true); setActive(-1) }}
-      onKeyDown={event => {
-        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-          event.preventDefault(); setOpen(true)
-          if (!matches.length) return
-          setActive(current => event.key === 'ArrowDown' ? Math.min(matches.length - 1, current + 1) : Math.max(-1, current - 1))
-        } else if (event.key === 'Enter') {
-          event.preventDefault()
-          if (shown && active >= 0 && matches[active]) pick(matches[active]!)
-          else { setOpen(false); onSubmit() }
-        } else if (event.key === 'Escape' && shown) {
-          // The list answers Escape first; the dialog only closes on the next one.
-          event.preventDefault(); event.stopPropagation(); setOpen(false); setActive(-1)
-        }
-      }} />
-    <ul className="hosts-combo__list" id={listId} role="listbox" aria-label="SSH hosts" hidden={!shown}>
-      {matches.map((item, index) => <li key={item.alias} id={optionId(index)} role="option" aria-selected={index === active}
-        onMouseDown={event => { event.preventDefault(); pick(item) }} onMouseEnter={() => setActive(index)}>
-        <b>{item.alias}</b>{item.detail && item.detail !== item.alias ? <small>{item.detail}</small> : null}
-        <span className="hosts-combo__source">{item.source === 'config' ? 'SSH configuration' : 'Known hosts'}</span>
-      </li>)}
-      {!matches.length && query ? <li role="option" aria-selected={false} aria-disabled="true" className="hosts-combo__empty"><small>No saved SSH hosts match "{value.trim()}". Press Enter to use it as typed.</small></li> : null}
-    </ul>
-  </div>
-}
-
 /** What the dialog is for: adding a new host, or changing a saved host's connection. */
 export type HostDialogMode = { readonly kind: 'add' } | { readonly kind: 'edit'; readonly host: HostStatus }
 
@@ -120,8 +71,11 @@ export type HostDialogMode = { readonly kind: 'add' } | { readonly kind: 'edit';
  * Tailscale's questions itself and shows a failure on the step it happened. Edit connection saves the new
  * route; a host that is on connects again with it.
  */
-export function HostDialog({ mode, bridge, state, onClose }: {
-  readonly mode: HostDialogMode; readonly bridge: HostsBridge; readonly state: HostsState | null; readonly onClose: () => void
+export function HostDialog({ mode, bridge, state, tailscale, onClose }: {
+  readonly mode: HostDialogMode; readonly bridge: HostsBridge; readonly state: HostsState | null
+  /** Tailscale on this computer, shared with the Hosts page's row. */
+  readonly tailscale?: TailscaleControl | undefined
+  readonly onClose: () => void
 }): ReactNode {
   const editing = mode.kind === 'edit' ? mode.host : undefined
   const [host, setHost] = useState(editing ? targetHost(editing.target) : '')
@@ -130,7 +84,11 @@ export function HostDialog({ mode, bridge, state, onClose }: {
   const [installPath, setInstallPath] = useState(editing?.installPath ?? DEFAULT_HOST_INSTALL_PATH)
   const [dataDirectory, setDataDirectory] = useState(editing?.dataDirectory ?? DEFAULT_HOST_DATA_DIRECTORY)
   const [identityFile, setIdentityFile] = useState(editing?.identityFile ?? '')
-  const [suggestions, setSuggestions] = useState<SshHostSuggestion[]>([])
+  // Add host lists the devices Sotto can see; Another SSH host swaps the list for typing a host, and
+  // Choose from your devices comes back to it (`back`, which puts focus on the list again).
+  const [entry, setEntry] = useState<'device' | 'typed' | 'back'>('device')
+  const [devices, setDevices] = useState<{ readonly tailscale: TailscaleSummary | null; readonly devices: HostDeviceList['devices']; readonly failed?: boolean } | null>(null)
+  const [picked, setPicked] = useState<HostDevice | null>(null)
   const [attempt, setAttempt] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -142,14 +100,14 @@ export function HostDialog({ mode, bridge, state, onClose }: {
   const cancelButton = useRef<HTMLButtonElement>(null)
   const doneButton = useRef<HTMLButtonElement>(null)
   const formRef = useRef<HTMLFormElement>(null)
-  /** What Add host was pressed for, kept for the checklist's summary line. */
+  /** What Add host was pressed for, kept for the checklist's title and summary line. */
   const [submitted, setSubmitted] = useState<{ name: string; user: string; port?: number } | null>(null)
   /** Set once the host this dialog added is connected; the dialog then says so until closed. */
   const [connected, setConnected] = useState(false)
   const closeRef = useRef(onClose)
   closeRef.current = onClose
   const hintId = useId()
-  const userId = useId(), portId = useId(), installId = useId(), dataId = useId(), dataHintId = useId(), identityId = useId(), answerId = useId()
+  const hostId = useId(), userId = useId(), portId = useId(), installId = useId(), dataId = useId(), dataHintId = useId(), identityId = useId(), answerId = useId()
   // The add this dialog started, as main reports it; it leaves `adding` for `hosts` once the host is saved.
   const adding = attempt !== null && state?.adding?.id === attempt ? state.adding : undefined
   const addedHost = attempt !== null ? state?.hosts.find(item => item.id === attempt) : undefined
@@ -159,19 +117,42 @@ export function HostDialog({ mode, bridge, state, onClose }: {
   // Once the connect has failed, main's sentence is the one that says why; one from this dialog is older.
   const shownError = adding?.phase === 'error' ? adding.error ?? error : error
   const approvalWaiting = adding?.tailscale?.waiting === true
+  // Read when the dialog opens, and again whenever Tailscale on this computer changes while it is open: the
+  // tailnet's devices fill in once it connects, leave once it stops, and a machine that has just joined appears.
+  const tailscaleState = tailscale?.summary?.state
+  const tailscaleShape = tailscale?.summary ? tailscale.summary.state === 'running' ? `running:${tailscale.summary.deviceCount}` : tailscale.summary.state : undefined
+  const lastTailscaleShape = useRef(tailscaleShape)
+  const [deviceReads, setDeviceReads] = useState(0)
+  useEffect(() => {
+    const before = lastTailscaleShape.current
+    lastTailscaleShape.current = tailscaleShape
+    if (before !== undefined && tailscaleShape !== undefined && before !== tailscaleShape) setDeviceReads(count => count + 1)
+  }, [tailscaleShape])
   useEffect(() => {
     if (editing) return
     let alive = true
-    void bridge.sshSuggestions().then(found => { if (alive) setSuggestions(found) }, () => undefined)
+    // A list that cannot be read still offers Another SSH host.
+    void bridge.devices().then(found => { if (alive) setDevices(found) }, () => { if (alive) setDevices({ tailscale: null, devices: [], failed: true }) })
     return () => { alive = false }
-  }, [bridge, editing])
+  }, [bridge, editing, deviceReads])
+  // Connect to Tailscale goes with its prompt once Tailscale is up; focus moves on to the Device field rather than being dropped.
+  useEffect(() => {
+    if (tailscaleState === 'running' && (document.activeElement === null || document.activeElement === document.body)) formRef.current?.querySelector<HTMLElement>('[role="combobox"], input')?.focus()
+  }, [tailscaleState])
   // Added and connected: the checklist says so until Done. Added but not connected (a host of another Sotto
   // version, which is saved): its row says what to update, so the dialog closes onto it.
   useEffect(() => { if (addedHost?.phase === 'connected') setConnected(true); else if (addedHost?.phase === 'error' && !connected) closeRef.current() }, [addedHost?.phase, connected])
   useEffect(() => { setAnswer('') }, [prompt?.id])
   useEffect(() => { if (!approvalWaiting) setApprovalError(null) }, [approvalWaiting])
-  const saved = new Set(state?.hosts.map(item => targetHost(item.target).toLowerCase()) ?? [])
-  const offered = suggestions.filter(item => !saved.has(item.alias.toLowerCase()))
+  const saved = state?.hosts.map(item => ({ name: item.name, host: targetHost(item.target) })) ?? []
+  const typing = editing !== undefined || entry === 'typed'
+  const pick = (device: HostDevice): void => { setPicked(device); setHost(device.target); setUser(''); setPort(device.port ? String(device.port) : ''); setError(null) }
+  // Back to the list, what was typed gives way to the device it shows.
+  const chooseFromDevices = (): void => {
+    if (picked) pick(picked)
+    else { setHost(''); setUser(''); setPort('') }
+    setEntry('back')
+  }
   const close = (): void => {
     // A failed or unfinished add is dropped with the dialog: main keeps nothing for it.
     if (attempt !== null && !added) void bridge.command({ type: 'cancel-add', id: attempt }).catch(() => undefined)
@@ -179,7 +160,7 @@ export function HostDialog({ mode, bridge, state, onClose }: {
   }
   const connection = (): Omit<RemoteHost, 'enabled' | 'id' | 'name'> | string => {
     const name = host.trim()
-    if (!name) return 'Enter an SSH host or alias, such as forge or user@server.'
+    if (!name) return typing ? 'Enter an SSH host or alias, such as forge or user@server.' : 'Choose a device, or choose Another SSH host… to type one.'
     const portText = port.trim()
     const portNumber = portText === '' ? undefined : Number(portText)
     if (portNumber !== undefined && (!Number.isInteger(portNumber) || portNumber < 1 || portNumber > 65535)) return 'Enter a port between 1 and 65535, or leave Port empty to use your SSH configuration.'
@@ -201,10 +182,11 @@ export function HostDialog({ mode, bridge, state, onClose }: {
       return
     }
     const id = crypto.randomUUID()
+    // A new host is named after the device picked, or the host part typed, until renamed, cut to the length a name may have.
+    const named = (picked && route.target === picked.target ? picked.name : targetHost(route.target)).slice(0, MAX_NAME_LENGTH)
     setAttempt(id); setSending(true)
-    setSubmitted({ name: targetHost(route.target), user: targetUser(route.target), ...(route.sshPort ? { port: route.sshPort } : {}) })
-    // A new host is named after its host part until renamed, cut to the length a name may have.
-    try { await bridge.command({ type: 'add', host: { id, name: targetHost(route.target).slice(0, MAX_NAME_LENGTH), ...route } }) }
+    setSubmitted({ name: named, user: targetUser(route.target), ...(route.sshPort ? { port: route.sshPort } : {}) })
+    try { await bridge.command({ type: 'add', host: { id, name: named, ...route } }) }
     catch (failure) {
       // Refused before connecting (already saved, still adding another): back to the form, which says why.
       setAttempt(null)
@@ -212,11 +194,11 @@ export function HostDialog({ mode, bridge, state, onClose }: {
     }
     finally { setSending(false) }
   }
-  /** Change: drops the attempt, connecting or failed, and gives the form back with what was typed. */
+  /** Change: drops the attempt, connecting or failed, and gives the form back with what was picked or typed. */
   const change = (): void => {
     if (attempt !== null) void bridge.command({ type: 'cancel-add', id: attempt }).catch(() => undefined)
     setAttempt(null); setError(null)
-    queueMicrotask(() => formRef.current?.querySelector<HTMLInputElement>('input')?.focus())
+    queueMicrotask(() => formRef.current?.querySelector<HTMLElement>('[role="combobox"], input')?.focus())
   }
   const openApproval = async (): Promise<void> => {
     if (attempt === null) return
@@ -262,20 +244,24 @@ export function HostDialog({ mode, bridge, state, onClose }: {
     {setup ? <HostSetupChecklist name={submitted.name} summary={hostSetupSummary(submitted.user, submitted.port)} host={adding ?? addedHost} outcome={outcome}
       error={shownError} approvalError={approvalError} question={question} {...(outcome === 'connected' ? {} : { onChange: change })}
       onOpenApproval={() => void openApproval()} onOpenGuide={() => void window.sotto?.openExternalLink?.(TAILSCALE_GUIDE_URL)} /> : <>
-    <p className="hosts-dialog__intro">{editing ? 'The new connection is used the next time Sotto connects. A host that is on connects again now.' : 'Sotto connects as soon as you add it.'}</p>
+    <p className="hosts-dialog__intro">{editing ? 'The new connection is used the next time Sotto connects. A host that is on connects again now.' : 'Pick a machine Sotto can reach over SSH. Sotto connects as soon as you add it.'}</p>
+    {!editing && tailscale ? <TailscalePrompt control={tailscale} /> : null}
     <form ref={formRef} className="hosts-dialog__fields" onSubmit={event => { event.preventDefault(); void submit() }}
-      onKeyDown={event => { const target = event.target as HTMLElement; if (event.key === 'Enter' && target instanceof HTMLInputElement && target.getAttribute('role') !== 'combobox') { event.preventDefault(); void submit() } }}>
-      <div className="tt-field">
-        <HostCombobox value={host} onChange={setHost} suggestions={offered} offer={!editing} disabled={fieldsDisabled} describedBy={hintId}
-          onPick={item => { setHost(item.alias); if (item.port) setPort(String(item.port)); addButton.current?.focus() }} onSubmit={() => void submit()} />
-        <p className="tt-field__description" id={hintId}>{editing ? 'An alias from your SSH configuration, or a host name.' : 'Suggestions come from your SSH configuration and known hosts.'}</p>
-      </div>
-      <div className="hosts-dialog__pair">
+      onKeyDown={event => { if (event.key === 'Enter' && event.target instanceof HTMLInputElement) { event.preventDefault(); void submit() } }}>
+      {typing ? <div className="tt-field">
+        <label className="tt-field__label" htmlFor={hostId}>SSH host</label>
+        <input id={hostId} className="tt-input tt-focusable" value={host} disabled={fieldsDisabled} aria-describedby={hintId} autoComplete="off" autoCapitalize="none" spellCheck={false} maxLength={MAX_TARGET_LENGTH}
+          autoFocus={entry === 'typed'} placeholder="forge or user@server" onChange={event => setHost(event.target.value)} />
+        <p className="tt-field__description" id={hintId}>{editing ? 'An alias from your SSH configuration, or a host name.'
+          : <>A host name, an alias from your SSH configuration or user@server. <button type="button" className="hosts-devices__back tt-focusable" disabled={fieldsDisabled} onClick={chooseFromDevices}>Choose from your devices</button></>}</p>
+      </div> : <DevicePicker devices={devices?.devices ?? null} failed={devices?.failed === true} tailscale={tailscale?.summary ?? devices?.tailscale ?? null} saved={saved} value={picked}
+        onPick={pick} onOther={() => setEntry('typed')} disabled={fieldsDisabled} autoFocus={entry === 'back'} />}
+      {typing ? <div className="hosts-dialog__pair">
         <div className="tt-field"><label className="tt-field__label" htmlFor={userId}>Username <span className="hosts-dialog__optional">(optional)</span></label>
           <input id={userId} className="tt-input tt-focusable" value={user} disabled={fieldsDisabled} autoCapitalize="none" spellCheck={false} maxLength={64} placeholder="From your SSH configuration" onChange={event => setUser(event.target.value)} /></div>
         <div className="tt-field"><label className="tt-field__label" htmlFor={portId}>Port <span className="hosts-dialog__optional">(optional)</span></label>
           <input id={portId} className="tt-input tt-focusable" value={port} disabled={fieldsDisabled} inputMode="numeric" maxLength={5} placeholder="22" onChange={event => setPort(event.target.value)} /></div>
-      </div>
+      </div> : null}
       <details className="hosts-dialog__advanced">
         <summary className="tt-focusable">Folders on the host</summary>
         <div className="tt-field"><label className="tt-field__label" htmlFor={installId}>Host installation folder</label>

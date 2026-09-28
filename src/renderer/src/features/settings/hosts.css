@@ -51,18 +51,6 @@
 .hosts-settings .hosts-dialog__client { margin: 0; font-size: 12px; overflow-wrap: anywhere; }
 .hosts-dialog .tt-dialog__actions { margin-top: 20px; }
 
-/* Suggestions from the SSH setup, under the SSH host or alias field. */
-.hosts-combo { position: relative; display: grid; gap: 5px; }
-.hosts-combo__list { position: absolute; z-index: 5; top: calc(100% + 4px); right: 0; left: 0; max-height: 220px; overflow: auto; margin: 0; border: 1px solid var(--tt-border); border-radius: var(--tt-radius-md); background: var(--tt-surface-overlay); box-shadow: var(--tt-shadow-overlay); padding: 4px; list-style: none; }
-.hosts-combo__list[hidden] { display: none; }
-.hosts-combo__list [role='option'] { display: flex; align-items: baseline; gap: 8px; min-width: 0; border-radius: var(--tt-radius-sm); padding: 7px 10px; cursor: pointer; }
-.hosts-combo__list [role='option'][aria-selected='true'] { background: var(--tt-selected); }
-.hosts-combo__list [role='option'] b { flex: 0 0 auto; font-weight: 600; }
-.hosts-combo__list [role='option'] small { min-width: 0; overflow: hidden; color: var(--tt-text-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.hosts-combo__source { flex: 0 0 auto; margin-left: auto; color: var(--tt-text-faint); font-size: 11px; }
-.hosts-combo__list .hosts-combo__empty { cursor: default; }
-.hosts-combo__list .hosts-combo__empty small { white-space: normal; }
-
 /* What the dialog is doing: connecting, asking SSH's question, or what went wrong. */
 .hosts-notice { display: flex; align-items: flex-start; gap: 10px; margin-top: 14px; border-left: 2px solid var(--tt-accent); border-radius: var(--tt-radius-sm); background: var(--tt-surface-sunken); padding: 10px 12px; font-size: 13px; }
 .hosts-settings .hosts-notice p { margin: 0; color: var(--tt-text); font-size: 13px; }

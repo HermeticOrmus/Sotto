@@ -6,9 +6,11 @@ import { DesktopHosts } from './hosts/desktopHosts'
 import { inactiveLocalHost, emptyDesktopState, requireLocalHistoryCleanup } from './hosts/inactiveLocalHost'
 import { registerHostsIpc } from './hosts/ipc'
 import { PhoneAccess, type PhoneAccessEvent } from './phones/phoneAccess'
-import { TailscaleCli } from './phones/tailscale'
+import { TailscaleCli, tailscaleInvoker } from './phones/tailscale'
+import { HostTailscale } from './hosts/tailscale'
 import { registerPhonesIpc } from './phones/ipc'
 import { e2eTailscale } from './e2e/tailscale'
+import { e2eHostsTailscale } from './e2e/hostsTailscale'
 import { e2eSshStandIn } from './e2e/sshStandIn'
 import { SshHostLauncher } from './hosts/sshLauncher'
 import { PHONES_CHANGED } from '../shared/phones'
@@ -1103,9 +1105,14 @@ async function createRuntime(): Promise<NativeRuntimeController> {
         },
       }, () => windows.getTrustedRenderers())
       const cleanupMemory = registerMemoryIpc(ipcMain, memoryProfile, () => windows.getTrustedRenderers(), snapshot => windows.sendToMain(MEMORY_CHANGED, snapshot))
-      // An end-to-end run reads a stand-in SSH folder inside its own profile, never the machine's ~/.ssh.
-      const cleanupHosts = registerHostsIpc(ipcMain, desktopHosts, () => windows.getTrustedRenderers(), state => windows.sendToMain(HOSTS_CHANGED, state),
-        () => discoverSshHosts(e2eConfiguration ? { home: join(userDataPath, 'e2e-home') } : {}))
+      // An end-to-end run reads a stand-in SSH folder and a recorded Tailscale status inside its own profile,
+      // never the machine's ~/.ssh or Tailscale, and opens no browser.
+      const hostTailscale = new HostTailscale({
+        ...(e2eConfiguration ? { invoke: tailscaleInvoker(e2eHostsTailscale(userDataPath), ['tailscale']) } : {}),
+        suggestions: () => discoverSshHosts(e2eConfiguration ? { home: join(userDataPath, 'e2e-home') } : {}),
+        openExternal: async url => { if (e2eConfiguration === null) await shell.openExternal(url) },
+      })
+      const cleanupHosts = registerHostsIpc(ipcMain, desktopHosts, () => windows.getTrustedRenderers(), state => windows.sendToMain(HOSTS_CHANGED, state), hostTailscale)
       const cleanupPhones = registerPhonesIpc(ipcMain, phoneAccess, () => windows.getTrustedRenderers(), state => windows.sendToMain(PHONES_CHANGED, state))
       const cleanupAgents = registerAgentIpc(ipcMain, hostRouter, hostRouter, () => windows.getTrustedRenderers(), platform, e2eConfiguration === null ? naturalSpeechModels : {
         status: async () => ({ ready: true, completedBytes: 1, totalBytes: 1 }),

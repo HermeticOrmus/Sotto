@@ -4,7 +4,7 @@ import { isAbsolute, join, parse, resolve } from 'node:path'
 import type { SshHostSuggestion } from '../../shared/hosts'
 
 /**
- * The hosts the user's own SSH setup already knows, for Add host's suggestions: every `Host` alias in
+ * The hosts the user's own SSH setup already knows, for Add host's device list: every `Host` alias in
  * `~/.ssh/config` and the files it includes, then the names in `~/.ssh/known_hosts`. This follows T3 Code's
  * `discoverSshHosts`. Wildcard and negated patterns are skipped, as are hashed known-hosts lines, which name
  * nothing readable. What is read stays on this computer: it goes to the window that asked and nowhere
@@ -161,7 +161,7 @@ export async function discoverSshHosts(options: { readonly home?: string; readon
     const hostname = host.hostname && !host.hostname.includes('%') ? host.hostname : undefined
     if (hostname) destinations.add(hostname)
     const detail = host.user ? `${host.user}@${hostname ?? host.alias}` : hostname !== undefined && hostname !== host.alias ? hostname : undefined
-    suggestions.set(host.alias, { alias: host.alias, source: 'config', ...(detail ? { detail } : {}) })
+    suggestions.set(host.alias, { alias: host.alias, source: 'config', ...(detail ? { detail } : {}), ...(hostname ? { hostname } : {}) })
   }
   const known = await files.read(join(home, '.ssh', 'known_hosts'))
   for (const entry of parseKnownHosts(known ?? '').sort((left, right) => left.host.localeCompare(right.host))) {
