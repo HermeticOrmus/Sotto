@@ -23,9 +23,13 @@ export function unavailableReason(device: HostDevice, saved: readonly SavedHostN
   return undefined
 }
 
-/** The line under a device's name: its system, where the SSH configuration sends it, and where Sotto learned of it. */
-export function deviceDetails(device: HostDevice, usable: boolean): string {
-  const tailscale = device.tailscale ? device.tailscale.ssh ? 'Tailscale SSH' : usable ? 'Tailscale, SSH server not checked' : 'Tailscale' : undefined
+/**
+ * The line under a device's name: its system, where the SSH configuration sends it, and where Sotto learned
+ * of it. A computer without Tailscale SSH may still run its own SSH server, which Sotto has not checked; a
+ * phone runs no host either way.
+ */
+export function deviceDetails(device: HostDevice): string {
+  const tailscale = device.tailscale ? device.tailscale.ssh ? 'Tailscale SSH' : device.unavailable === 'phone' ? 'Tailscale' : 'Tailscale, SSH server not checked' : undefined
   return [device.os, device.detail, tailscale, device.sshConfiguration ? 'SSH configuration' : undefined, device.knownHost ? 'Known hosts' : undefined].filter(Boolean).join(' · ')
 }
 
@@ -56,9 +60,11 @@ function Dot({ device }: { readonly device: HostDevice }): ReactNode {
  * typing a host. From the keyboard: the arrow keys, Home and End move, typed letters jump to a name, Enter
  * or Space picks, and Escape closes the list before it closes the dialog.
  */
-export function DevicePicker({ devices, tailscale, saved, value, onPick, onOther, disabled, autoFocus = false, describedBy }: {
+export function DevicePicker({ devices, failed = false, tailscale, saved, value, onPick, onOther, disabled, autoFocus = false }: {
   /** Null while the devices are being read. */
   readonly devices: readonly HostDevice[] | null
+  /** The devices could not be read; the list still offers Another SSH host. */
+  readonly failed?: boolean
   readonly tailscale: TailscaleSummary | null
   readonly saved: readonly SavedHostName[]
   readonly value: HostDevice | null
@@ -66,7 +72,6 @@ export function DevicePicker({ devices, tailscale, saved, value, onPick, onOther
   readonly onOther: () => void
   readonly disabled: boolean
   readonly autoFocus?: boolean
-  readonly describedBy?: string
 }): ReactNode {
   const labelId = useId(), listId = useId()
   const button = useRef<HTMLButtonElement>(null)
@@ -74,6 +79,8 @@ export function DevicePicker({ devices, tailscale, saved, value, onPick, onOther
   const [open, setOpen] = useState(true)
   const [active, setActive] = useState(-1)
   const typed = useRef({ text: '', at: 0 })
+  /** When Enter or Space was last handled, so the click a browser adds after it does not act twice. */
+  const keyed = useRef(0)
   const now = Date.now()
   const listed = (devices ?? []).map(device => ({ kind: 'device' as const, device, reason: unavailableReason(device, saved, now) }))
   const usable = listed.filter(entry => entry.reason === undefined)
@@ -120,6 +127,7 @@ export function DevicePicker({ devices, tailscale, saved, value, onPick, onOther
     }
   }
   const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>): void => {
+    if (event.key === 'Enter' || event.key === ' ') keyed.current = Date.now()
     const letter = event.key.length === 1 && event.key !== ' ' && !event.ctrlKey && !event.metaKey && !event.altKey
     if (!shown) {
       if (['ArrowDown', 'ArrowUp', 'Home', 'End', 'Enter', ' '].includes(event.key) || letter) {
@@ -148,7 +156,7 @@ export function DevicePicker({ devices, tailscale, saved, value, onPick, onOther
       onMouseEnter: () => { if (usableEntry) setActive(index) }, onClick: () => choose(index),
     } as const
     if (entry.kind === 'other') return <li key="other" {...common} className="hosts-devices__other"><span className="hosts-dot hosts-dot--none" aria-hidden="true" /><b>{OTHER_LABEL}</b><small>Type a host name or user@server</small></li>
-    const details = deviceDetails(entry.device, usableEntry)
+    const details = deviceDetails(entry.device)
     return <li key={`${entry.device.target}-${index}`} {...common}>
       <Dot device={entry.device} /><b>{entry.device.name}</b>
       <small>{details}{entry.reason ? <>{details ? ' · ' : ''}<span className="hosts-devices__why">{entry.reason}</span></> : null}</small>
@@ -158,17 +166,22 @@ export function DevicePicker({ devices, tailscale, saved, value, onPick, onOther
   return <div ref={field} className="tt-field hosts-devices">
     <span className="tt-field__label" id={labelId}>Device</span>
     <button ref={button} type="button" role="combobox" className="hosts-devices__button tt-focusable" disabled={disabled} data-autofocus
-      aria-haspopup="listbox" aria-expanded={shown} aria-controls={listId} aria-labelledby={labelId} aria-describedby={describedBy}
+      aria-haspopup="listbox" aria-expanded={shown} aria-controls={listId} aria-labelledby={labelId}
       aria-activedescendant={shown && active >= 0 ? optionId(active) : undefined}
-      onClick={event => { if (event.detail === 0) return; if (shown) close(); else { setOpen(true); setActive(firstChoice()) } }}
+      onClick={() => {
+        // A click a screen reader sends has no key before it; one a browser adds after Enter or Space was handled already.
+        if (Date.now() - keyed.current < 500) return
+        if (shown) close(); else { setOpen(true); setActive(firstChoice()) }
+      }}
       onKeyDown={onKeyDown}>
-      {value ? <><Dot device={value} /><span className="hosts-devices__value"><b>{value.name}</b><small>{deviceDetails(value, true)}</small></span></>
+      {value ? <><Dot device={value} /><span className="hosts-devices__value"><b>{value.name}</b><small>{deviceDetails(value)}</small></span></>
         : <span className="hosts-devices__value hosts-devices__placeholder">{devices === null ? 'Looking for your devices…' : 'Choose a device'}</span>}
       <ChevronDown size={16} aria-hidden="true" className="hosts-devices__chevron" />
     </button>
     {/* Pressing inside the list keeps focus on the button, which owns the keyboard. */}
     <div className="hosts-devices__popup" hidden={!shown} onMouseDown={event => event.preventDefault()}>
-      {devices === null ? <p className="hosts-devices__status">Looking for your devices…</p> : null}
+      {devices === null ? <p className="hosts-devices__status">Looking for your devices…</p>
+        : failed ? <p className="hosts-devices__status" role="status">Sotto could not read the devices on this computer. Nothing was changed. Choose Another SSH host to type one.</p> : null}
       <ul className="hosts-devices__list" id={listId} role="listbox" aria-labelledby={labelId}>
         {usable.length ? <li role="presentation"><ul role="group" aria-label="Can connect"><li role="presentation" className="hosts-devices__group" aria-hidden="true">Can connect</li>
           {usable.map((entry, index) => option(entry, index))}</ul></li> : null}

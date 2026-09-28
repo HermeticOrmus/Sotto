@@ -29,14 +29,18 @@ export function useTailscale(bridge: HostsBridge | undefined): TailscaleControl 
   const [summary, setSummary] = useState<TailscaleSummary | null>(null)
   const [phase, setPhase] = useState<TailscaleControl['phase']>('idle')
   const [notice, setNotice] = useState<string | null>(null)
+  const [unread, setUnread] = useState(false)
   const alive = useRef(true)
   const refresh = useCallback(async (): Promise<TailscaleSummary | null> => {
     if (!bridge) return null
     try {
       const next = await bridge.tailscale()
-      if (alive.current) setSummary(next)
+      if (alive.current) { setSummary(next); setUnread(false) }
       return next
-    } catch { return null }
+    } catch {
+      if (alive.current) setUnread(true)
+      return null
+    }
   }, [bridge])
   useEffect(() => {
     alive.current = true
@@ -67,7 +71,7 @@ export function useTailscale(bridge: HostsBridge | undefined): TailscaleControl 
       await refresh()
       if (!alive.current) return
       if (outcome === 'sign-in-needed') setNotice('Tailscale needs you to sign in. Open the Tailscale app on this computer and sign in there.')
-      else if (outcome === 'failed') setNotice('Tailscale did not connect, and nothing was changed. Open the Tailscale app on this computer to connect.')
+      else if (outcome === 'failed') setNotice('Tailscale did not connect. Open the Tailscale app on this computer and connect from there.')
     })
   }, [bridge, refresh])
   const getTailscale = useCallback((): void => {
@@ -75,7 +79,9 @@ export function useTailscale(bridge: HostsBridge | undefined): TailscaleControl 
     setNotice(null)
     void bridge.openTailscaleDownload().catch(() => { if (alive.current) setNotice('Your browser did not open. Go to tailscale.com/download to get Tailscale.') })
   }, [bridge])
-  return { summary, phase, notice, connect, getTailscale }
+  // A first read that fails leaves the row saying so, rather than checking for ever.
+  const unreadNotice = unread && summary === null ? 'Sotto could not check Tailscale on this computer. Nothing was changed. Come back to this window to check again.' : null
+  return { summary, phase, notice: notice ?? unreadNotice, connect, getTailscale }
 }
 
 const devicesOnTailnet = (count: number): string => `${count} ${count === 1 ? 'device' : 'devices'} on your tailnet`

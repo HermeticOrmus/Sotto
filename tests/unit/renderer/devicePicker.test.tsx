@@ -23,9 +23,12 @@ it('gives the reason a device cannot be used, a saved host first', () => {
   expect(unavailableReason({ target: 'forge', name: 'forge', sshConfiguration: true, names: ['forge'] }, [{ name: 'Other', host: 'spark' }], NOW)).toBeUndefined()
 })
 
-it('words where a device comes from, and says Tailscale SSH is unchecked only where it could matter', () => {
+it('words where a device comes from, and says an SSH server is unchecked on any computer without Tailscale SSH', () => {
   const pihole: HostDevice = { target: 'pihole', name: 'pihole', os: 'Linux', tailscale: { online: true, ssh: false }, sshConfiguration: true, knownHost: true, names: ['pihole'] }
-  expect(deviceDetails(pihole, true)).toBe('Linux · Tailscale, SSH server not checked · SSH configuration · Known hosts')
-  expect(deviceDetails(pihole, false)).toBe('Linux · Tailscale · SSH configuration · Known hosts')
-  expect(deviceDetails({ target: 'spark', name: 'spark', detail: 'zach@spark.lan', sshConfiguration: true, names: ['spark'] }, true)).toBe('zach@spark.lan · SSH configuration')
+  expect(deviceDetails(pihole)).toBe('Linux · Tailscale, SSH server not checked · SSH configuration · Known hosts')
+  expect(deviceDetails({ ...pihole, tailscale: { online: false, ssh: false }, unavailable: 'offline' })).toBe('Linux · Tailscale, SSH server not checked · SSH configuration · Known hosts')
+  expect(deviceDetails({ ...pihole, tailscale: { online: true, ssh: true } })).toBe('Linux · Tailscale SSH · SSH configuration · Known hosts')
+  // A phone runs no host either way.
+  expect(deviceDetails({ target: 'phone', name: 'phone', os: 'iOS', tailscale: { online: true, ssh: false }, unavailable: 'phone', names: ['phone'] })).toBe('iOS · Tailscale')
+  expect(deviceDetails({ target: 'spark', name: 'spark', detail: 'zach@spark.lan', sshConfiguration: true, names: ['spark'] })).toBe('zach@spark.lan · SSH configuration')
 })

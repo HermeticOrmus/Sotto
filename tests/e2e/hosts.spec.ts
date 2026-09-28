@@ -95,7 +95,7 @@ test('client-only desktop keeps local history, renders Hosts, and retains dictat
       /^buildbox\.example\.net/,
     ])
     const cantUse = dialog.getByRole('group', { name: "Can't use now" })
-    await expect(cantUse.getByRole('option')).toHaveText([/^spark.*Already added as Spark$/, /^omarchyLinux · Tailscale SSH · Offline, last seen \d+ days? ago$/, /^DESKTOP-8NPFSBMWindows · Tailscale · Offline/, 'iphone-15-proiOS · Tailscale · A phone cannot run the host'])
+    await expect(cantUse.getByRole('option')).toHaveText([/^spark.*Already added as Spark$/, /^omarchyLinux · Tailscale SSH · Offline, last seen \d+ days? ago$/, /^DESKTOP-8NPFSBMWindows · Tailscale, SSH server not checked · Offline/, 'iphone-15-proiOS · Tailscale · A phone cannot run the host'])
     await expect(dialog.getByText("Don't see your machine? Install Tailscale on it and sign in as millZach@github.")).toBeVisible()
     await expect(tailscale.getByText('Connected as millZach · 5 devices on your tailnet')).toBeVisible()
     await capture('host-add', true)

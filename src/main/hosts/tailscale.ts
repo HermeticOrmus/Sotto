@@ -95,7 +95,7 @@ function peerDevice(item: TailscalePeer): Draft {
 /**
  * One list from Tailscale's devices and the SSH setup. A configuration alias whose `HostName` (the alias
  * itself when it has none) is one of a device's names is the same machine: it shows once, with both tags,
- * and Sotto connects through the alias so the user's user and key settings apply. A known host that is
+ * and Sotto connects through the first such alias so the user's user and key settings apply. A known host that is
  * one of a device's names only adds its tag. Usable devices come first (online tailnet devices by name,
  * then the configuration in the order it is written, then known hosts); then the offline devices, most
  * recently seen first, and phones.
@@ -107,10 +107,13 @@ export function mergeDevices(reading: TailscaleReading, suggestions: readonly Ss
   for (const suggestion of suggestions) {
     if (suggestion.source === 'config') {
       const goesTo = lower(suggestion.hostname ?? suggestion.alias)
-      const match = peers.find(item => !item.aliased && item.device.names.includes(goesTo))
+      const match = peers.find(item => item.device.names.includes(goesTo))
       if (match) {
+        // The first alias written for a device is the one Sotto connects through; a later one only adds a name
+        // the device answers to, so the device still shows once.
+        if (!match.aliased) Object.assign(match.device, { target: suggestion.alias, name: suggestion.alias, sshConfiguration: true })
         match.aliased = true
-        Object.assign(match.device, { target: suggestion.alias, name: suggestion.alias, sshConfiguration: true, names: [...new Set([...match.device.names, lower(suggestion.alias)])] })
+        match.device.names = [...new Set([...match.device.names, lower(suggestion.alias)])]
         continue
       }
       configured.push({ target: suggestion.alias, name: suggestion.alias, sshConfiguration: true, names: [...new Set([suggestion.alias, suggestion.hostname ?? ''].filter(Boolean).map(lower))], ...(suggestion.detail ? { detail: suggestion.detail } : {}) })

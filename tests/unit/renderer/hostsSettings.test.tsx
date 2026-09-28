@@ -251,6 +251,33 @@ it('adds a picked device by its SSH alias or tailnet name, named as the list nam
   expect(second.command).toHaveBeenCalledWith({ type: 'add', host: expect.objectContaining({ name: 'buildbox.example.net', target: 'buildbox.example.net', sshPort: 2200 }) })
 })
 
+it('says so when the devices or Tailscale cannot be read, and still offers Another SSH host', async () => {
+  const user = userEvent.setup()
+  const { bridge } = fixture([])
+  const broken: HostsBridge = { ...bridge, devices: async () => { throw new Error('IPC failed') }, tailscale: async () => { throw new Error('IPC failed') } }
+  settings(broken)
+  const row = await screen.findByRole('region', { name: 'Tailscale' })
+  expect((await within(row).findByRole('status')).textContent).toBe('Sotto could not check Tailscale on this computer. Nothing was changed. Come back to this window to check again.')
+  await user.click(screen.getByRole('button', { name: 'Add host' }))
+  const dialog = screen.getByRole('dialog', { name: 'Add host' })
+  expect((await within(dialog).findByText(/could not read the devices/)).textContent).toBe('Sotto could not read the devices on this computer. Nothing was changed. Choose Another SSH host to type one.')
+  expect(within(dialog).getAllByRole('option').map(option => option.querySelector('b')?.textContent)).toEqual(['Another SSH host…'])
+})
+
+it('opens and closes the list on a click with no key before it, the way a screen reader activates it', async () => {
+  const { bridge } = fixture([]), user = userEvent.setup()
+  settings(bridge)
+  const { picker } = await openAddHost(user)
+  expect(picker.getAttribute('aria-expanded')).toBe('true')
+  act(() => { picker.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 0 })) })
+  expect(picker.getAttribute('aria-expanded')).toBe('false')
+  act(() => { picker.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 0 })) })
+  expect(picker.getAttribute('aria-expanded')).toBe('true')
+  // Enter opens once: the click a browser adds after it does not close the list again.
+  await user.keyboard('{Escape}{Enter}')
+  expect(picker.getAttribute('aria-expanded')).toBe('true')
+})
+
 it('types a host through Another SSH host, and Choose from your devices goes back to the list', async () => {
   const { bridge, command } = fixture([]), user = userEvent.setup()
   settings(bridge)
@@ -340,7 +367,7 @@ it('says in words when Tailscale does not connect, and offers Get Tailscale when
   settings(failing.bridge)
   const row = await screen.findByRole('region', { name: 'Tailscale' })
   await user.click(await within(row).findByRole('button', { name: 'Connect to Tailscale' }))
-  expect((await within(row).findByRole('status')).textContent).toBe('Tailscale did not connect, and nothing was changed. Open the Tailscale app on this computer to connect.')
+  expect((await within(row).findByRole('status')).textContent).toBe('Tailscale did not connect. Open the Tailscale app on this computer and connect from there.')
   cleanup()
   const missing = fixture([], undefined, { tailscale: { state: 'missing' } })
   settings(missing.bridge)

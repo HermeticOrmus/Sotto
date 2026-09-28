@@ -64,6 +64,17 @@ describe('merging Tailscale with the SSH setup', () => {
     expect(mergeDevices(reading, [{ alias: 'forge', source: 'config' }])[0]).toMatchObject({ target: 'forge', sshConfiguration: true, tailscale: { online: true } })
     expect(mergeDevices(reading, [{ alias: 'box', source: 'config', hostname: 'Forge.Tail5728ca.ts.net.' }])[0]).toMatchObject({ target: 'box', name: 'box', sshConfiguration: true, os: 'Linux' })
   })
+  it('folds a second alias for the same device into it, connecting through the first', () => {
+    const devices = mergeDevices(readTailscaleStatus(TAILSCALE_RUNNING), [
+      { alias: 'lab', source: 'config', hostname: 'omarchy.tail5728ca.ts.net' },
+      { alias: 'lab-root', source: 'config', detail: 'root@omarchy', hostname: 'omarchy' },
+    ])
+    const omarchy = devices.filter(device => device.names.includes('omarchy'))
+    expect(omarchy).toHaveLength(1)
+    expect(omarchy[0]).toMatchObject({ target: 'lab', name: 'lab', sshConfiguration: true, unavailable: 'offline' })
+    expect(omarchy[0]!.names).toEqual(expect.arrayContaining(['lab', 'lab-root']))
+    expect(devices.some(device => device.name === 'lab-root')).toBe(false)
+  })
   it('lists the SSH setup alone when Tailscale is off or missing', () => {
     const devices = mergeDevices(readTailscaleStatus(TAILSCALE_STOPPED), SSH)
     expect(devices.map(device => device.name)).toEqual(['forge', 'pihole', 'spark', 'buildbox.example.net', 'omarchy'])

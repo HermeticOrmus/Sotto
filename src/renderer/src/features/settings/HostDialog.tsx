@@ -85,7 +85,7 @@ export function HostDialog({ mode, bridge, state, tailscale, onClose }: {
   // Add host lists the devices Sotto can see; Another SSH host swaps the list for typing a host, and
   // Choose from your devices comes back to it (`back`, which puts focus on the list again).
   const [entry, setEntry] = useState<'device' | 'typed' | 'back'>('device')
-  const [devices, setDevices] = useState<{ readonly tailscale: TailscaleSummary | null; readonly devices: HostDeviceList['devices'] } | null>(null)
+  const [devices, setDevices] = useState<{ readonly tailscale: TailscaleSummary | null; readonly devices: HostDeviceList['devices']; readonly failed?: boolean } | null>(null)
   const [picked, setPicked] = useState<HostDevice | null>(null)
   const [attempt, setAttempt] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
@@ -107,19 +107,19 @@ export function HostDialog({ mode, bridge, state, tailscale, onClose }: {
   // Read when the dialog opens, and again once Tailscale connects from off or missing, so the tailnet's devices fill in.
   const tailscaleState = tailscale?.summary?.state
   const lastTailscaleState = useRef(tailscaleState)
-  const [reads, setReads] = useState(0)
+  const [deviceReads, setDeviceReads] = useState(0)
   useEffect(() => {
     const before = lastTailscaleState.current
     lastTailscaleState.current = tailscaleState
-    if (tailscaleState === 'running' && (before === 'off' || before === 'missing')) setReads(count => count + 1)
+    if (tailscaleState === 'running' && (before === 'off' || before === 'missing')) setDeviceReads(count => count + 1)
   }, [tailscaleState])
   useEffect(() => {
     if (editing) return
     let alive = true
     // A list that cannot be read still offers Another SSH host.
-    void bridge.devices().then(found => { if (alive) setDevices(found) }, () => { if (alive) setDevices({ tailscale: null, devices: [] }) })
+    void bridge.devices().then(found => { if (alive) setDevices(found) }, () => { if (alive) setDevices({ tailscale: null, devices: [], failed: true }) })
     return () => { alive = false }
-  }, [bridge, editing, reads])
+  }, [bridge, editing, deviceReads])
   // Connect to Tailscale goes with its prompt once Tailscale is up; focus moves on to the Device field rather than being dropped.
   const form = useRef<HTMLFormElement>(null)
   useEffect(() => {
@@ -201,7 +201,7 @@ export function HostDialog({ mode, bridge, state, tailscale, onClose }: {
           autoFocus={entry === 'typed'} placeholder="forge or user@server" onChange={event => setHost(event.target.value)} />
         <p className="tt-field__description" id={hintId}>{editing ? 'An alias from your SSH configuration, or a host name.'
           : <>A host name, an alias from your SSH configuration or user@server. <button type="button" className="hosts-devices__back tt-focusable" disabled={fieldsDisabled} onClick={chooseFromDevices}>Choose from your devices</button></>}</p>
-      </div> : <DevicePicker devices={devices?.devices ?? null} tailscale={devices?.tailscale ?? tailscale?.summary ?? null} saved={saved} value={picked}
+      </div> : <DevicePicker devices={devices?.devices ?? null} failed={devices?.failed === true} tailscale={devices?.tailscale ?? tailscale?.summary ?? null} saved={saved} value={picked}
         onPick={pick} onOther={() => setEntry('typed')} disabled={fieldsDisabled} autoFocus={entry === 'back'} />}
       {typing ? <div className="hosts-dialog__pair">
         <div className="tt-field"><label className="tt-field__label" htmlFor={userId}>Username <span className="hosts-dialog__optional">(optional)</span></label>
