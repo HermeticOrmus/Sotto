@@ -201,6 +201,9 @@ it('turns Add host into the setup checklist once pressed, asks SSH questions on 
   push({ adding })
   const steps = (): string[] => within(within(dialog).getByRole('list', { name: 'Connection steps' })).getAllByRole('listitem').map(item => `${item.querySelector('[role="img"]')?.getAttribute('aria-label')}: ${item.querySelector('.host-setup__title')?.textContent}`)
   expect(steps()).toEqual(['In progress: Reaching forge…', 'Not started: Sign in', 'Not started: Check the host installation', 'Not started: Start the host', 'Not started: Pair this computer'])
+  // A screen reader hears the connect move on, step by step.
+  const progress = () => within(dialog).getAllByRole('status')[0]!.textContent
+  expect(progress()).toBe('Reaching forge…')
   expect(within(dialog).getByRole('button', { name: 'Connecting…' })).toHaveProperty('disabled', true)
   expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: 'Cancel' }))
   // SSH's question is asked on the step that asked it, since there is no row for the host yet.
@@ -213,12 +216,13 @@ it('turns Add host into the setup checklist once pressed, asks SSH questions on 
   expect(command).toHaveBeenCalledWith({ type: 'ssh-answer', id: sent.host.id, promptId: 'prompt-1', answer: 'synthetic' })
   push({ adding: { ...adding, step: 'start' } })
   expect(steps().slice(0, 4)).toEqual(['Done: Reached forge', 'Done: Signed in', 'Done: Host installed', 'In progress: Starting the host…'])
+  expect(progress()).toBe('Starting the host…')
   // Saved and connected: the dialog says so, and Done closes it.
   push({ adding: undefined, hosts: [{ ...adding, phase: 'connected', step: 'pair' }] })
   resolveAdd!(state())
   await waitFor(() => expect(screen.getByRole('dialog', { name: 'forge is connected' })).toBeTruthy())
   expect(steps()).toEqual(['Done: Reached forge', 'Done: Signed in', 'Done: Host installed', 'Done: Host started', 'Done: Paired'])
-  expect(within(dialog).getByRole('status').textContent).toContain('forge is added and connected.')
+  expect(within(dialog).getAllByRole('status').map(item => item.textContent)).toEqual(['', expect.stringContaining('forge is added and connected.')])
   expect(within(dialog).queryByRole('button', { name: /^Change/ })).toBeNull()
   const done = within(dialog).getByRole('button', { name: 'Done' })
   expect(document.activeElement).toBe(done)
@@ -346,6 +350,7 @@ it('shows a failure on its own step with its fix to copy, and Try again and Chan
   await user.click(within(alert).getByRole('button', { name: 'Copy the command' }))
   expect(writeText).toHaveBeenCalledWith('ssh-keygen -R forge.example.net')
   expect(within(alert).getByRole('button', { name: 'Copy the command' }).textContent).toBe('Copied')
+  expect(within(alert).getByRole('status').textContent).toBe('Copied the command')
   // The steps after the failure never started.
   expect(within(dialog).getAllByRole('listitem').slice(2).map(item => item.getAttribute('data-state'))).toEqual(['todo', 'todo', 'todo'])
   expect(screen.getByText('No remote hosts yet.')).toBeTruthy()

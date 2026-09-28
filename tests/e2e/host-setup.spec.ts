@@ -107,7 +107,7 @@ test('Add host shows each step, waits for Tailscale approval, shows a failure on
     const connected = page.getByRole('dialog', { name: 'forge is connected' })
     await expect(connected).toBeVisible({ timeout: 90_000 })
     await expect(titles(page)).toHaveText(['Reached forge', 'Approved in Tailscale', 'Signed in', 'Host installed', 'Host started', 'Paired'])
-    await expect(connected.getByRole('status')).toContainText('forge is added and connected.')
+    await expect(connected.getByRole('status').filter({ hasText: 'forge is added and connected.' })).toBeVisible()
     await expect(connected.getByRole('button', { name: 'Done' })).toBeFocused()
     await capture(launched, 'host-setup-connected')
     await page.keyboard.press('Enter')

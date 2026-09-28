@@ -65,6 +65,8 @@ function FixCommand({ fix }: { readonly fix: NonNullable<HostStatus['fix']> }): 
       </Button>
     </div>
     {copied === 'failed' ? <p className="host-setup__quiet">The command could not be copied. Select it and copy it yourself.</p> : null}
+    {/* The button keeps saying what a press does; this says that it worked. */}
+    <span className="tt-visually-hidden" role="status">{copied === 'copied' ? 'Copied the command' : ''}</span>
   </>
 }
 
@@ -111,7 +113,10 @@ export function HostSetupChecklist({ name, summary, host, outcome, error, approv
     if (outcome === 'failed') return 'failed'
     return 'active'
   }
+  // Said to a screen reader as the connect moves on; the failure and the connected card speak for themselves.
+  const progress = outcome !== 'connecting' ? '' : waiting ? stepTitle('tailscale', 'waiting', name) : current ? stepTitle(current, 'active', name) : ''
   return <div className="host-setup">
+    <span className="tt-visually-hidden" role="status">{progress}</span>
     <div className="host-setup__summary">
       <p><b>{name}</b> <span>· {summary}</span></p>
       {onChange ? <Button variant="ghost" onClick={onChange} aria-label={outcome === 'connecting' ? 'Change the host to add, and stop connecting' : 'Change the host to add'}>Change</Button> : null}
