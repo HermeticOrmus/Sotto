@@ -153,6 +153,7 @@ export function SettingsView({
   const [microphoneState, setMicrophoneState] = useState<MicrophoneTestState>('idle')
   const [microphoneLevel, setMicrophoneLevel] = useState(0)
   const microphoneTestRef = useRef<MicrophoneTestController | null>(null)
+  const microphoneTestGeneration = useRef(0)
   const [deviceState, setDeviceState] = useState<'loading' | 'ready' | 'error'>('loading')
   const [hotkeyDraft, setHotkeyDraft] = useState(() => formatAccelerator(settings.hotkey, platform, 'editing'))
   const [pasteDelayDraft, setPasteDelayDraft] = useState(String(settings.pasteDelayMs))
@@ -182,6 +183,10 @@ export function SettingsView({
   const successDurationEditVersionRef = useRef(0)
   const successDurationSubmissionRef = useRef<DraftSubmission<number> | null>(null)
   const successDurationTokenRef = useRef(0)
+  const llmDictionaryDraftRef = useRef(llmDictionaryDraft)
+  const llmDictionaryEditVersionRef = useRef(0)
+  const llmDictionaryTokenRef = useRef(0)
+  const llmDictionarySubmissionsRef = useRef<DraftSubmission<string>[]>([])
 
   settingsRef.current = settings
 
@@ -234,6 +239,16 @@ export function SettingsView({
   }, [settings.successDisplayMs])
 
   useEffect(() => {
+    // Settings saves are ordered, but several blurs can be queued before the first acknowledgement.
+    const submission = llmDictionarySubmissionsRef.current.find(value => value.submitted === settings.llmDictionary)
+    if (submission) {
+      llmDictionarySubmissionsRef.current = llmDictionarySubmissionsRef.current.filter(value => value.token > submission.token)
+      if (llmDictionaryEditVersionRef.current !== submission.editVersion) return
+    } else {
+      // An external update remains authoritative, including over older saves still awaiting a reply.
+      llmDictionaryEditVersionRef.current += 1
+    }
+    llmDictionaryDraftRef.current = settings.llmDictionary
     setLlmDictionaryDraft(settings.llmDictionary)
   }, [settings.llmDictionary])
   useEffect(() => {
@@ -278,12 +293,17 @@ export function SettingsView({
     return saved
   }, [onUpdateSettings])
 
-  // The microphone opened here is released when Settings goes away.
-  useEffect(() => () => {
-    const controller = microphoneTestRef.current
-    microphoneTestRef.current = null
-    if (controller !== null) void Promise.resolve(controller.stop()).catch(() => undefined)
-  }, [])
+  // A result belongs to one input. A changed selection also invalidates pending permission.
+  useEffect(() => {
+    setMicrophoneState('idle')
+    setMicrophoneLevel(0)
+    return () => {
+      ++microphoneTestGeneration.current
+      const controller = microphoneTestRef.current
+      microphoneTestRef.current = null
+      if (controller !== null) void Promise.resolve(controller.stop()).catch(() => undefined)
+    }
+  }, [settings.microphoneId])
 
   /**
    * The same level test onboarding runs. A microphone that reports ready is
@@ -291,11 +311,14 @@ export function SettingsView({
    * outcome leaves the skip alone and says what went wrong.
    */
   const runMicrophoneTest = async (): Promise<void> => {
+    const generation = ++microphoneTestGeneration.current
+    const selectedDeviceId = settingsRef.current.microphoneId ?? undefined
     const previous = microphoneTestRef.current
     microphoneTestRef.current = null
     setMicrophoneLevel(0)
     setMicrophoneState('requesting')
     if (previous !== null) await Promise.resolve(previous.stop()).catch(() => undefined)
+    if (generation !== microphoneTestGeneration.current) return
     let controller: MicrophoneTestController
     try { controller = createMicrophoneTest() } catch {
       setMicrophoneState('error')
@@ -304,7 +327,7 @@ export function SettingsView({
     microphoneTestRef.current = controller
     const outcome = await controller.start((level) => {
       if (microphoneTestRef.current === controller) setMicrophoneLevel(level)
-    }).catch(() => 'error' as const)
+    }, selectedDeviceId).catch(() => 'error' as const)
     if (microphoneTestRef.current !== controller) return
     setMicrophoneState(outcome)
     if (outcome !== 'ready') {
@@ -314,6 +337,22 @@ export function SettingsView({
       return
     }
     if (settingsRef.current.microphoneSkipped) await onUpdateSettings({ microphoneSkipped: false }).catch(() => false)
+  }
+
+  const saveDictionary = async (): Promise<void> => {
+    const value = llmDictionaryDraftRef.current
+    if (value === settingsRef.current.llmDictionary && !llmDictionarySubmissionsRef.current.some(submission => submission.submitted !== value)) return
+    if (llmDictionarySubmissionsRef.current.some(submission => submission.editVersion === llmDictionaryEditVersionRef.current)) return
+    const submission: DraftSubmission<string> = {
+      token: ++llmDictionaryTokenRef.current,
+      submitted: value,
+      authoritativeAtSubmit: settingsRef.current.llmDictionary,
+      editVersion: llmDictionaryEditVersionRef.current,
+    }
+    llmDictionarySubmissionsRef.current.push(submission)
+    if (!await save({ llmDictionary: value }, 'Dictionary saved.')) {
+      llmDictionarySubmissionsRef.current = llmDictionarySubmissionsRef.current.filter(value => value.token !== submission.token)
+    }
   }
 
   const savePasteDelay = async (): Promise<void> => {
@@ -553,7 +592,12 @@ export function SettingsView({
                   <Field label="Formatting quality" description="Low is near-instant; higher tiers format better but add up to a couple seconds."><Select disabled={!settings.llmFormatting} value={settings.llmQuality} onChange={(event) => void save({ llmQuality: event.currentTarget.value as LlmQuality })}><option value="low">Low — fastest (Mercury 2)</option><option value="medium">Medium (Nova 2 Lite)</option><option value="value">Value — cheap, near-High (GLM-5.3 Flash)</option><option value="high">High — best formatting (Claude Haiku 4.5)</option></Select></Field>
                   <div className="settings-input-action">
                     <Field label="Personal dictionary" description="One word or name per line. Sent as spelling hints with your audio and used during cleanup.">
-                      <textarea className="tt-input" rows={5} value={llmDictionaryDraft} onBlur={() => { if (llmDictionaryDraft !== settings.llmDictionary) void save({ llmDictionary: llmDictionaryDraft }, 'Dictionary saved.') }} onChange={(event) => setLlmDictionaryDraft(event.currentTarget.value)} />
+                      <textarea className="tt-input" rows={5} value={llmDictionaryDraft} onBlur={() => void saveDictionary()} onChange={(event) => {
+                        const value = event.currentTarget.value
+                        llmDictionaryDraftRef.current = value
+                        llmDictionaryEditVersionRef.current += 1
+                        setLlmDictionaryDraft(value)
+                      }} />
                     </Field>
 
                   </div>

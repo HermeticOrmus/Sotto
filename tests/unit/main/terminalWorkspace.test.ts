@@ -8,6 +8,9 @@ import type { AgentWorktree } from '../../../src/shared/agents'
 import { TerminalWorkspaceService, type TerminalWorkspaceDependencies } from '../../../src/main/terminals/service'
 import type { WorkspaceTerminalEvent } from '../../../src/shared/terminalWorkspace'
 import type { ToolsResult } from '../../../src/shared/tools'
+import { createTerminalWorkspaceBridge } from '../../../src/preload/terminals'
+import { registerTerminalWorkspaceIpc } from '../../../src/main/terminals/ipc'
+import type { IpcInvocationEvent } from '../../../src/main/ipc/registerIpc'
 
 const unwrap = <T>(result: ToolsResult<T>): T => { if (!result.ok) throw new Error(JSON.stringify(result)); return result.value }
 const cleanup: (() => Promise<void>)[] = []
@@ -54,6 +57,64 @@ async function started(service: TerminalWorkspaceService, request: unknown) {
 }
 
 describe('terminal workspace service', () => {
+  it('lists every Closed row through IPC, releases its output, and keeps the active limit on reopen', async () => {
+    const f = await fixture()
+    const handlers = new Map<string, (event: IpcInvocationEvent, ...args: unknown[]) => unknown>()
+    const url = 'file:///main.html', mainFrame = { parent: null, url }, sender = { mainFrame, getURL: () => url, isDestroyed: () => false }
+    const unregister = registerTerminalWorkspaceIpc({ handle: (channel, fn) => { handlers.set(channel, fn) }, removeHandler: channel => { handlers.delete(channel) } }, f.service, () => [{ role: 'main', url, webContents: sender }])
+    const bridge = createTerminalWorkspaceBridge({ invoke: async (channel, ...args) => handlers.get(channel)!({ sender, senderFrame: mainFrame }, ...args), on: vi.fn(), removeListener: vi.fn() })
+    cleanup.push(async () => unregister())
+    const closed = []
+    const outputs = []
+    const request = { projectId: 'p1', title: 'Build', workingCopy: 'shared' as const, launch: shellLaunch }
+    for (let i = 0; i < 70; i++) {
+      const opened = unwrap(await bridge.open({ ...request, title: `Build ${i}` }))
+      const ready = unwrap(await bridge.read({ id: opened.terminal.id }))
+      f.processes.at(-1)!.emit('This output belongs to the closed process\r\n')
+      unwrap(await bridge.close({ id: ready.terminal.id }))
+      const ended = unwrap(await bridge.read({ id: ready.terminal.id }))
+      outputs.push(ended.output)
+      expect(ended.terminal).toMatchObject({ ...ready.terminal, status: 'exited', exitCode: null, closedAt: expect.any(Number) })
+      closed.push(ended.terminal)
+    }
+    expect(unwrap(await bridge.list()).terminals).toEqual(closed)
+    expect(outputs.every(output => output === '')).toBe(true)
+    const active = []
+    for (let i = 0; i < 64; i++) active.push(unwrap(await bridge.open(request)).terminal)
+    expect(unwrap(await bridge.list()).terminals).toHaveLength(134)
+    expect(await bridge.open(request)).toMatchObject({ ok: false, error: { code: 'busy' } })
+    expect(await bridge.restart({ id: closed[0]!.id })).toMatchObject({ ok: false, error: { code: 'busy' } })
+    unwrap(await bridge.close({ id: active[0]!.id }))
+    const reopened = unwrap(await bridge.restart({ id: closed[0]!.id }))
+    expect(reopened.terminal).toMatchObject({ id: closed[0]!.id, title: 'Build 0', closedAt: null, status: 'running' })
+    expect(reopened.output).not.toContain('belongs to the closed')
+    expect(unwrap(await bridge.list()).terminals.filter(item => item.closedAt === null)).toHaveLength(64)
+  })
+
+  it('does not let concurrent opens overtake the active terminal limit', async () => {
+    const f = await fixture()
+    const request = { projectId: 'p1', title: 'Build', workingCopy: 'shared', launch: shellLaunch }
+    for (let i = 0; i < 63; i++) unwrap(await f.service.open(request))
+    const results = await Promise.all([f.service.open(request), f.service.open(request)])
+    expect(results.filter(item => item.ok)).toHaveLength(1)
+    expect(results.filter(item => !item.ok)).toHaveLength(1)
+    expect(unwrap(await f.service.list()).terminals).toHaveLength(64)
+  })
+
+  it('admits only one of two different Closed rows when one active slot remains', async () => {
+    const f = await fixture()
+    const request = { projectId: 'p1', title: 'Build', workingCopy: 'shared', launch: shellLaunch }
+    const closed = [await started(f.service, request), await started(f.service, request)]
+    for (const item of closed) unwrap(await f.service.close({ id: item.terminal.id }))
+    for (let i = 0; i < 63; i++) unwrap(await f.service.open(request))
+    const results = await Promise.all(closed.map(item => f.service.restart({ id: item.terminal.id })))
+    expect(results.filter(item => item.ok)).toHaveLength(1)
+    expect(results.filter(item => !item.ok)).toEqual([{ ok: false, error: expect.objectContaining({ code: 'busy' }) }])
+    const listing = unwrap(await f.service.list()).terminals
+    expect(listing.filter(item => item.closedAt === null)).toHaveLength(64)
+    expect(listing.filter(item => item.closedAt !== null)).toHaveLength(1)
+    expect(f.spawn).toHaveBeenCalledTimes(66)
+  })
   it('publishes the terminal before its process exists, then its process and its branch', async () => {
     const f = await fixture()
     const opened = unwrap(await f.service.open({ projectId: 'p1', title: 'Build', workingCopy: 'shared', launch: shellLaunch }))
@@ -118,6 +179,7 @@ describe('terminal workspace service', () => {
     unwrap(await f.service.stop(request))
     expect(f.processes[0]!.pty.kill).toHaveBeenCalledOnce()
     expect(unwrap(await f.service.read(request)).terminal.status).toBe('exited')
+    expect(unwrap(await f.service.read(request)).output).toContain('hello')
     expect(await f.service.write({ ...request, data: 'x' })).toMatchObject({ ok: false, error: { code: 'not-running' } })
     const restarted = unwrap(await f.service.restart(request))
     expect(restarted.terminal.id).toBe(terminal.id)
@@ -139,8 +201,10 @@ describe('terminal workspace service', () => {
     const f = await fixture()
     expect(unwrap(await f.service.list()).shell).toBe('powershell')
     const { terminal } = await started(f.service, { projectId: 'p1', title: 'Build', workingCopy: 'shared', launch: shellLaunch })
+    f.processes[0]!.emit('Natural exit preserves output')
     f.processes[0]!.exit(3)
     expect(unwrap(await f.service.read({ id: terminal.id })).terminal).toMatchObject({ status: 'exited', exitCode: 3 })
+    expect(unwrap(await f.service.read({ id: terminal.id })).output).toContain('Natural exit preserves output')
     unwrap(await f.service.restart({ id: terminal.id }))
     expect(unwrap(await f.service.restart({ id: terminal.id })).terminal).toMatchObject({ status: 'running', exitCode: null })
     expect(f.processes[1]!.pty.kill).toHaveBeenCalledOnce()

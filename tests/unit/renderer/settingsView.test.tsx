@@ -556,6 +556,40 @@ describe('SettingsView', () => {
     expect(await screen.findByText(/microphone ready/i)).toBeVisible()
   })
 
+  it('tests the selected input and discards its late result after the selection changes', async () => {
+    const outcome = deferred<'ready'>()
+    const stop = vi.fn(async () => undefined)
+    let publishLevel!: (level: number) => void
+    const start = vi.fn((onLevel: (level: number) => void) => { publishLevel = onLevel; return outcome.promise })
+    const props = baseProps({ settings: { ...DEFAULT_SETTINGS, microphoneId: 'headset', microphoneSkipped: true },
+      createMicrophoneTest: () => ({ start, stop }) })
+    const rendered = render(<SettingsView {...props} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Test microphone' }))
+    expect(start).toHaveBeenCalledWith(expect.any(Function), 'headset')
+    rendered.rerender(<SettingsView {...props} settings={{ ...props.settings, microphoneId: 'desk' }} />)
+    await waitFor(() => expect(stop).toHaveBeenCalledOnce())
+    await act(async () => { publishLevel(0.8); outcome.resolve('ready') })
+    expect(screen.queryByText(/microphone ready/i)).not.toBeInTheDocument()
+    expect(props.onUpdateSettings).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'Test microphone' })).toBeEnabled()
+  })
+
+  it('clears a ready meter when the selected input changes and tests the new input', async () => {
+    const stop = vi.fn(async () => undefined)
+    const start = vi.fn(async (onLevel: (level: number) => void) => { onLevel(0.7); return 'ready' as const })
+    const props = baseProps({ createMicrophoneTest: () => ({ start, stop }) })
+    const rendered = render(<SettingsView {...props} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Test microphone' }))
+    expect(await screen.findByText(/microphone ready/i)).toBeVisible()
+    rendered.rerender(<SettingsView {...props} settings={{ ...props.settings, microphoneId: 'desk' }} />)
+    await waitFor(() => expect(stop).toHaveBeenCalledOnce())
+    expect(screen.queryByText(/microphone ready/i)).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Test microphone' }))
+    expect(start).toHaveBeenLastCalledWith(expect.any(Function), 'desk')
+    rendered.unmount()
+    expect(stop).toHaveBeenCalledTimes(2)
+  })
+
   it('keeps the skip when the Settings test cannot reach a microphone', async () => {
     const user = userEvent.setup()
     const onUpdateSettings = vi.fn(async () => true)
@@ -1093,5 +1127,129 @@ describe('Project thread defaults in Application settings', () => {
     await selectCategory('Application')
     await userEvent.click(screen.getByRole('button', { name: 'Project defaults' }))
     expect(screen.getByText('Add a project in Threads to set its default working copy.')).toBeVisible()
+  })
+})
+
+
+describe('Personal dictionary draft acknowledgements', () => {
+  async function dictionary() {
+    const answers: Array<ReturnType<typeof deferred<boolean>>> = []
+    const update = vi.fn<SettingsViewProps['onUpdateSettings']>(() => { const answer = deferred<boolean>(); answers.push(answer); return answer.promise })
+    const props = baseProps({ onUpdateSettings: update })
+    const view = render(<SettingsView {...props} />)
+    await selectCategory('Cleanup')
+    const input = screen.getByRole('textbox', { name: 'Personal dictionary' })
+    const edit = (value: string) => { input.focus(); fireEvent.change(input, { target: { value } }) }
+    const publish = (value: string) => view.rerender(<SettingsView {...props} settings={{ ...props.settings, llmDictionary: value }} />)
+    return { input, edit, publish, answers, update }
+  }
+
+  it.each(['before', 'after'] as const)('preserves newer typing when an older acknowledgement is published %s its save result', async order => {
+    const f = await dictionary()
+    f.edit('Sotto'); fireEvent.blur(f.input)
+    f.edit('Sotto\nZach')
+    if (order === 'before') f.publish('Sotto')
+    await act(async () => f.answers[0]!.resolve(true))
+    if (order === 'after') f.publish('Sotto')
+    expect(f.input).toHaveValue('Sotto\nZach')
+    expect(f.input).toHaveFocus()
+    fireEvent.blur(f.input)
+    expect(f.update).toHaveBeenLastCalledWith({ llmDictionary: 'Sotto\nZach' })
+    f.publish('Sotto\nZach')
+    await act(async () => f.answers[1]!.resolve(true))
+    expect(f.input).toHaveValue('Sotto\nZach')
+    expect(screen.getByRole('status')).toHaveTextContent('Dictionary saved.')
+  })
+
+  it('retains the latest draft through repeated blur and refocus while earlier saves are queued', async () => {
+    const f = await dictionary()
+    f.edit('A'); fireEvent.blur(f.input)
+    f.edit('B'); fireEvent.blur(f.input)
+    f.edit('C')
+    f.publish('A'); await act(async () => f.answers[0]!.resolve(true))
+    expect(f.input).toHaveValue('C')
+    f.publish('B'); await act(async () => f.answers[1]!.resolve(true))
+    expect(f.input).toHaveValue('C')
+    fireEvent.blur(f.input)
+    expect(f.update.mock.calls.map(([patch]) => patch)).toEqual([{ llmDictionary: 'A' }, { llmDictionary: 'B' }, { llmDictionary: 'C' }])
+    f.publish('C'); await act(async () => f.answers[2]!.resolve(true))
+    expect(f.input).toHaveValue('C')
+  })
+
+  it('saves a return to the previous value when an older different value is still queued', async () => {
+    const f = await dictionary()
+    f.edit('A'); fireEvent.blur(f.input)
+    f.edit(''); fireEvent.blur(f.input)
+    expect(f.update.mock.calls.map(([patch]) => patch)).toEqual([{ llmDictionary: 'A' }, { llmDictionary: '' }])
+    f.publish('A'); await act(async () => f.answers[0]!.resolve(true))
+    expect(f.input).toHaveValue('')
+    f.publish(''); await act(async () => f.answers[1]!.resolve(true))
+    expect(f.input).toHaveValue('')
+  })
+
+  it('accepts an external update while saving and ignores the older acknowledgement afterward', async () => {
+    const f = await dictionary()
+    f.edit('A'); fireEvent.blur(f.input)
+    f.publish('External')
+    expect(f.input).toHaveValue('External')
+    f.publish('A'); await act(async () => f.answers[0]!.resolve(true))
+    expect(f.input).toHaveValue('External')
+    fireEvent.blur(f.input)
+    expect(f.update).toHaveBeenLastCalledWith({ llmDictionary: 'External' })
+  })
+
+  it('retains the draft when the update rejects and retries it on the next blur', async () => {
+    const f = await dictionary()
+    f.update.mockRejectedValueOnce(new Error('Synthetic save rejection'))
+    f.edit('Sotto'); fireEvent.blur(f.input)
+    expect(await screen.findByRole('alert')).toHaveTextContent('could not be saved')
+    expect(f.input).toHaveValue('Sotto')
+    f.input.focus(); fireEvent.blur(f.input)
+    expect(f.update).toHaveBeenCalledTimes(2)
+    f.publish('Sotto'); await act(async () => f.answers[0]!.resolve(true))
+    expect(f.input).toHaveValue('Sotto')
+  })
+
+  it('keeps failed text available for another blur and never restores a superseded failed draft', async () => {
+    const f = await dictionary()
+    f.edit('A'); fireEvent.blur(f.input)
+    f.edit('B'); fireEvent.blur(f.input)
+    await act(async () => f.answers[0]!.resolve(false))
+    expect(f.input).toHaveValue('B')
+    await act(async () => f.answers[1]!.resolve(false))
+    expect(f.input).toHaveValue('B')
+    expect(screen.getByRole('alert')).toHaveTextContent('Your previous setting is still active.')
+    f.input.focus(); fireEvent.blur(f.input)
+    expect(f.update).toHaveBeenLastCalledWith({ llmDictionary: 'B' })
+    f.publish('B'); await act(async () => f.answers[2]!.resolve(true))
+    expect(f.input).toHaveValue('B')
+  })
+
+  it('accepts external settings updates and does not treat an unrelated setting publication as a dictionary acknowledgement', async () => {
+    const f = await dictionary()
+    f.publish('External')
+    expect(f.input).toHaveValue('External')
+    f.edit('A'); fireEvent.blur(f.input)
+    f.edit('B')
+    f.publish('External')
+    expect(f.input).toHaveValue('B')
+    f.publish('A'); await act(async () => f.answers[0]!.resolve(true))
+    expect(f.input).toHaveValue('B')
+    f.publish('New external')
+    expect(f.input).toHaveValue('New external')
+  })
+
+  it('saves exact multiline text on keyboard blur and skips an unchanged field', async () => {
+    const f = await dictionary()
+    const user = userEvent.setup()
+    await user.click(f.input)
+    await user.type(f.input, '  Sotto{Enter}Zach  ')
+    await user.tab()
+    expect(f.update).toHaveBeenCalledOnce()
+    expect(f.update).toHaveBeenCalledWith({ llmDictionary: '  Sotto\nZach  ' })
+    f.publish('  Sotto\nZach  '); await act(async () => f.answers[0]!.resolve(true))
+    await user.click(f.input); await user.tab()
+    expect(f.update).toHaveBeenCalledOnce()
+    expect(f.input).toHaveValue('  Sotto\nZach  ')
   })
 })
