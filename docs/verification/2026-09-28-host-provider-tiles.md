@@ -1,6 +1,6 @@
 # A host's providers are connected and signed in from this computer (#460)
 
-September 28, 2026. Branch `feat/host-provider-tiles` from `fix/host-provider-lookup` at 0e1cc2b6 (#459, whose pull request was still open), on the Windows development machine. The running-app journey is `tests/e2e/host-provider-tiles.spec.ts` against the built app (1 passed, then 5 of 5 with `--repeat-each=5`). It adds a host named forge through a scripted ssh that runs the real launch script, which starts a real headless host. That host's providers are scripted to be signed out until their fake clients (`tests/fixtures/fakeSignInCli.mjs`) sign in, and the host runs those fake clients for Sign in, over pipes, exactly as it runs the real ones. The local host is off and reduced motion is on in that profile, the host's home is a throwaway folder, and opening a page is recorded instead of opening a browser, so no real account, provider or browser is touched.
+September 28, 2026. Branch `feat/host-provider-tiles` from `fix/host-provider-lookup` at 0e1cc2b6 (#459, whose pull request was still open at the time and has since merged), on the Windows development machine. The running-app journey is `tests/e2e/host-provider-tiles.spec.ts` against the built app (1 passed, then 5 of 5 with `--repeat-each=5`). It adds a host named forge through a scripted ssh that runs the real launch script, which starts a real headless host. That host's providers are scripted to be signed out until their fake clients (`tests/fixtures/fakeSignInCli.mjs`) sign in, and the host runs those fake clients for Sign in, over pipes, exactly as it runs the real ones. The local host is off and reduced motion is on in that profile, the host's home is a throwaway folder, and opening a page is recorded instead of opening a browser, so no real account, provider or browser is touched.
 
 ## What was proved in the running app
 
@@ -18,6 +18,18 @@ forge starts the way it was on September 28: Codex signed in, Claude Code and Gr
 - `tests/integration/codexAccount.test.ts`: a signed-out Codex is refused as `signed-out` with its version, a ChatGPT sign-in is named, and a Codex that cannot say connects as before.
 - `tests/unit/main/subscriptionClaude.test.ts` and `tests/unit/main/providerSwitch.test.ts`: the problem codes and the plan ("Claude Max") from Claude Code, and the provider switch carrying `problem`, `account` and a failed client's version into the status and dropping them when turned off.
 - `tests/unit/renderer/hostProviders.test.tsx`: each tile's words, the disclosure, both dialog shapes, focus, Escape cancelling on the host, the refusal and Try again. `tests/unit/shared/hostProviders.test.ts`: the pages Sotto opens, exactly. `tests/unit/main/remoteCommands.test.ts`: every host request is decided, the four sign-in requests among them.
+
+## After review
+
+The two-axis review found five things, all fixed on the branch, each with a test that fails without the fix:
+
+- A start that answers after its dialog has gone (Escape while it still says Starting, or React running the effect twice) now cancels its sign-in on the host (`hostProviders.test.tsx`).
+- Two starts for one provider that overlap no longer both run a client, and a host that stops during the lookup spawns nothing (`providerSignIn.test.ts`, with a lookup held open).
+- The page and a printed code are read only once something follows them, so a pipe that hands the output over in pieces cannot cut Claude Code's address short (`providerSignIn.test.ts`, with the fake client's output cut in two).
+- The device code is read out one character at a time from a visually hidden sibling; the code as shown is hidden from assistive technology.
+- A host that fails to answer twice in a row gets "forge stopped answering while Grok Build was signing in. If its tile still says Not signed in, try again." with Try again, and the host shortens a message longer than the 600 characters the client reads.
+
+After the review fixes and a merge of `main` (with #459 now merged), the journey ran again against the built app: `host-provider-tiles.spec.ts`, `hosts.spec.ts` and `host-provider-lookup.spec.ts`, 3 passed.
 
 ## Checked on this computer, not in the app
 
