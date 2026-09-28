@@ -8,4 +8,6 @@ Typecheck, full lint, notices verification and production build passed. The real
 
 The [untested minimum light view](../../artifacts/review-386/untested-820-light.png) and [denied dark view](../../artifacts/review-386/denied-1280-dark.png) were visually inspected. Copy and actions remain readable, Continue is visibly unavailable, and recovery guidance remains visible. The narrow window retains the existing vertical scroll. No design baseline changed; generated runtime files were restored.
 
-The full two-worker suite and independent final Standards/Spec reviews remain pending. macOS was covered by renderer copy tests only, not a native app journey.
+Independent native Astra Standards and Spec reviews and the coordinating source/visual review reported zero findings. The full two-worker suite remains queued. macOS was covered by renderer copy tests only, not a native app journey.
+
+The branch includes main at `3cb36d8d` (including the phone Settings category and missing-image repair). Integrating the host/history and screenshot fixes changed none of this issue's renderer sources. Final full-suite evidence remains pending.
