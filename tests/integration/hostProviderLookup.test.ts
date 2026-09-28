@@ -83,6 +83,17 @@ describe('a headless host and its providers', () => {
     expect((await configuration(data)).disconnectedProviders).toBeUndefined()
   })
 
+  it('keeps every provider off on a host that was disconnected before the record existed', async () => {
+    const data = join(await folder('sotto-host-providers-'), 'data')
+    // Disconnect with no provider saved an empty enabled set, which nothing else writes.
+    await saved(data, { enabledProviders: [] })
+    const providers = counted()
+    const host = await start(data, providers)
+    expect(host.service.shell().host.connected).toBe(false)
+    expect(Object.values(providers).map(provider => provider.connects)).toEqual([0, 0, 0, 0])
+    expect((await configuration(data)).disconnectedProviders).toEqual(['codex', 'claude', 'grok', 'devin'])
+  })
+
   it('turns off every provider on Disconnect, and a changed enabled set records what it left out', async () => {
     const data = join(await folder('sotto-host-providers-'), 'data')
     let host = await start(data)

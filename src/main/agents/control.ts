@@ -393,6 +393,11 @@ export class AgentControl {
     // (ADR-0036). Trying one is how Sotto learns whether it is installed and signed in: a provider that is not
     // ends in its own error and is not retried, and the host stays up for the ones that are.
     if (this.dependencies.runsAs === 'headless-host' && this.dependencies.host.concurrentProviders) {
+      // A host saved before the record existed wrote an empty enabled set only for Disconnect with no provider,
+      // which no default produces: that was the user turning every provider off, and it stays so.
+      if (this.state.configuration.disconnectedProviders === undefined && this.state.configuration.enabledProviders?.length === 0) {
+        this.state.configuration = withTurnedOff(this.state.configuration, [...providerIdSchema.options])
+      }
       const off = new Set(this.state.configuration.disconnectedProviders ?? [])
       this.state.configuration.enabledProviders = providerIdSchema.options.filter(provider => !off.has(provider))
     }
