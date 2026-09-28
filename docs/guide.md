@@ -58,6 +58,10 @@ Codex can see and operate the apps on your computer with its Computer Use, as it
 
 Ask for it by name ("use Computer Use to…") or with Codex's `$computer-use` skill. Its calls show in the thread's activity as **Computer Use**. When one fails because either condition is missing, the activity says which, and nothing was changed.
 
+### Terminal mode
+
+In Terminal mode, **Close** releases the terminal's output and keeps its row on **Closed** until Sotto quits. **Reopen** starts the same command with fresh output. **Stop**, a command finishing, or hiding its pane keeps the output readable. Up to 64 terminals can be open at once; Closed rows do not count toward that limit.
+
 ### Sending, steering and screenshots
 
 While a thread is running, **Steer now** beside a queued message sends that message into the current turn when the provider supports steering. The rest of the queue and any newer composer draft stay in place. An unconfirmed message cannot be steered again; use **Check again** to reconcile its delivery.
@@ -69,6 +73,8 @@ A screenshot longer than 2576 pixels on either side is scaled down to that as it
 A screenshot is kept once, as a file on the computer that runs the thread (the host, for a thread on a remote host), from the moment you attach it until nothing needs it: not an unsent draft, not a queued message, and not a sent message's preview, which lasts seven days. An hour after that it is removed. With **Keep local history** off, a newly attached screenshot stays in memory instead, so an unsent draft or queued message comes back from a restart without it; a queued message that lost one waits, paused, and says so.
 
 You can create a thread from the Threads page while another thread has a saved coordinator draft. The draft stays with its original thread, including while the voice coordinator is hidden for the beta.
+
+Stop can cancel running work even when the provider has not confirmed the last prompt. That prompt stays unconfirmed until the provider reports receiving it; stopping does not resend it or discard its saved identity.
 
 ### History and copying
 
@@ -379,6 +385,7 @@ Builds are ad-hoc signed and not notarized, so anyone installing the disk image 
 - **"Too many requests":** OpenRouter is rate limiting the key. Wait a minute, then dictate again.
 - **"OpenRouter error" or "Couldn't transcribe":** OpenRouter's transcription service failed, or its answer could not be read. Dictate again in a moment. If it keeps happening, `transcription-diagnostics.jsonl` in the app's data folder records each failure's reason and HTTP status, without any of your words.
 - **AI cleanup not applied:** Check that AI cleanup is enabled and that the computer is online. When cleanup fails or times out, Sotto delivers the raw transcript instead of failing the dictation.
+- **Thread messages could not be saved:** Restore access to local storage and refresh. Sotto keeps failed messages in order and retries while it is open, waiting longer between repeated failures. Saving a thread name does not clear this warning. Quitting makes one final attempt, but messages still unsaved cannot survive a restart. Turning Keep local history off keeps pending messages only for this run; turning it back on does not save words from while it was off.
 - **Terminal view could not load:** Press **Reload window** to try again. Terminals keep running and retain their output. Sotto saves thread drafts first and keeps the window open if any thread draft or question answer is not saved. Save those drafts, then try again.
 - **Window disappeared:** Sotto is probably hidden in the Windows notification area or the macOS menu bar. Open it from that icon or start Sotto again; the existing instance will be shown.
 - **A thread never asks:** The provider says a request only you can answer was declined without reaching you. Its client is not routing those requests, so it answers them itself and the thread keeps working. Nothing in the thread is lost. Answer in that client meanwhile, and check **Settings → Providers** for a client update and Sotto for its own.
