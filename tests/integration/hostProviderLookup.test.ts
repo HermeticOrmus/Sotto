@@ -129,8 +129,8 @@ describe.skipIf(process.platform === 'win32')('a headless host on a machine whos
     const cli = join(installs, 'claude', '2.1.281', 'bin', 'claude')
     await writeFile(cli, `#!/usr/bin/env node\nprocess.argv.splice(2, 0, ${JSON.stringify(state)})\nimport(${JSON.stringify(pathToFileURL(resolve('tests/fixtures/fakeClaudeThread.mjs')).href)})\n`)
     await chmod(cli, 0o755)
-    // Saved before this change: Codex alone, which this machine does not have.
-    await saved(data, { enabledProviders: ['codex'], disconnectedProviders: ['grok', 'devin'] })
+    // Nothing saved names Claude Code. The others are turned off, so the host starts no client this machine has.
+    await saved(data, { enabledProviders: [], disconnectedProviders: ['codex', 'grok', 'devin'] })
 
     for (const key of keys) delete process.env[key]
     Object.assign(process.env, { PATH: '/usr/local/bin:/usr/bin:/bin', HOME: home, SHELL: '/bin/sh' })
@@ -138,8 +138,7 @@ describe.skipIf(process.platform === 'win32')('a headless host on a machine whos
     const host = await startHeadlessHost({ dataDirectory: data, reasoner: e2eAgentReasoner })
     hosts.push(host)
     await expect.poll(() => connection(host.service.shell(), 'claude'), { timeout: 10_000 }).toBe('connected')
-    expect(connection(host.service.shell(), 'grok')).toBe('disconnected')
-    expect(connection(host.service.shell(), 'devin')).toBe('disconnected')
+    for (const provider of ['codex', 'grok', 'devin'] as const) expect(connection(host.service.shell(), provider)).toBe('disconnected')
 
     const project = join(root, 'site')
     const result = await host.service.command({ type: 'create-project', provider: 'claude', title: 'site', path: project }, client)

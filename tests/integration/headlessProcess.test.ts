@@ -51,13 +51,14 @@ describe('the built Node host process', () => {
   })
 
   it('starts under Node, handles SIGTERM and exits cleanly with its data intact', async () => {
-    // No provider is enabled in this fixture. Native adapter process journeys are in headlessHost.
+    // Every provider is turned off in this fixture, so the host starts no client installed on this machine
+    // (ADR-0036). Native adapter process journeys are in headlessHost.
     const data = join(root, 'data')
     const { mkdir } = await import('node:fs/promises')
     await mkdir(data)
     const { defaultAgentConfiguration } = await import('../../src/shared/agents')
     await writeFile(join(data, 'agents.json'), JSON.stringify({
-      configuration: { ...defaultAgentConfiguration(), enabled: false, enabledProviders: [] },
+      configuration: { ...defaultAgentConfiguration(), enabled: false, enabledProviders: [], disconnectedProviders: ['codex', 'claude', 'grok', 'devin'] },
       assignments: [], queue: [], activeThreadId: null, activeProjectId: null, draft: '', draftThreadId: null,
       composing: false, outbox: [],
     }))
