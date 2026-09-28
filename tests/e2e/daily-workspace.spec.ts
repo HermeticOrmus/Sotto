@@ -9,10 +9,11 @@ import { DEFAULT_SETTINGS } from '../../src/shared/settings'
 import { requireOwnedE2EProfile } from '../../scripts/e2e-profile-policy.mjs'
 import { closeSotto, launchSotto, openThreads, userMessageTexts, type LaunchedSotto } from './support/sottoLaunch'
 import { terminalOutput } from './support/terminal'
+import { evidenceDirectory } from './support/evidence'
 
 // Full app, real controller/IPC/files/PTY/browser/Git/worktrees; coding providers are explicit fixtures.
 // GitHub is a scripted gh (tests/fixtures/fakeGh.mjs), reached AFTER a real push to an owned local bare repository.
-const SHOTS = resolve('artifacts/issue-74-daily-workspace')
+const SHOTS = evidenceDirectory('artifacts/issue-74-daily-workspace')
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true, timeout: 15000 }).trim()
 async function size(launched: LaunchedSotto, width = 1600, height = 1000): Promise<void> {
   await launched.app.evaluate(({ BrowserWindow }, [width, height]) => {

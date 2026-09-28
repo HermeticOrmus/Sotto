@@ -15,8 +15,6 @@
 
 Each gate is its own named step, so a red check names the gate that failed.
 
-`tests/integration/nativeTargetRefresh.test.ts` holds one unrelated thread's actual native history refresh open while another thread receives its prompt acknowledgement and exact persisted receipt. The barrier stays held through both assertions for Codex, Claude and Grok; the normal test deadline bounds failures, with no wall-clock performance budget. A diagnostic that makes the target wait for the held refresh must fail the acknowledgement assertion before cleanup releases the history read.
-
 `tsconfig.tests.json` checks every `tests/**/*.tsx` file, including renderer tests,
 benchmarks and fixture views, with the web project's JSX and DOM assumptions plus
 Node, Vitest and Testing Library types. Vitest executes these files but does not
@@ -24,6 +22,8 @@ replace this semantic check. The node and web projects keep their existing sourc
 boundaries. Test fixtures must satisfy the current bridge and component contracts;
 an ignored query option or an incomplete mock is an error in the normal typecheck
 gate, even if the test happens to run.
+
+`tests/integration/nativeTargetRefresh.test.ts` holds one unrelated thread's actual native history refresh open while another thread receives its prompt acknowledgement and exact persisted receipt. The barrier stays held through both assertions for Codex, Claude and Grok; the normal test deadline bounds failures, with no wall-clock performance budget. A diagnostic that makes the target wait for the held refresh must fail the acknowledgement assertion before cleanup releases the history read.
 
 The job cancels a superseded run on the same ref (`concurrency` with `cancel-in-progress`), has a 30-minute safety timeout, and requests only `contents: read`.
 
@@ -270,9 +270,13 @@ npx vitest run tests/integration/codexComputerUseLive.test.ts --maxWorkers=1
 
 Build and run `npx playwright test tests/e2e/agent-browser.spec.ts tests/e2e/tools-sidecar.spec.ts tests/e2e/phase-three-tools-bridge.spec.ts` to exercise the real Electron browser, permission continuation, feedback drafts and the Tools pane. The agent test uses a local page and test-only provider entry point; it needs no provider account. Screenshots and a geometry report are written to ignored `artifacts/agent-browser/`. Native-provider compatibility and actual desktop results are recorded separately in `docs/verification/`.
 
-## Grok request-log observations
+## Manual Windows desktop check
 
-`tests/integration/grokFixtureReadErrors.test.ts` requires the fake Grok request and violation observers to distinguish absent initial logs from unreadable logs. A known start remains a known start after a temporary fault is removed; EACCES and EBUSY surface as read errors, while malformed JSON remains a parse error. An unreadable violation log cannot silently pass its protocol check. The fixture does not turn these failures into missing provider work or evidence (#420).
+After `npm ci`, run `npm run test:desktop-smoke` from the release checkout on an interactive Windows desktop. This is an explicit prerequisite in the [release procedure](release/releasing.md), and can also be run manually while developing. Normal CI continues to exclude Electron; no scheduled job, secret, publishing action or design-baseline regeneration is added.
+
+The command runs `test:recovery`, which checks focused real application boundaries, builds once and drives receipt, queued-steering and completed-dictation recovery. It then uses that same build for both daily-workspace cases and the Settings index journey. The daily check drives actual keyboard input through a Windows shell, verifies the changed file, reads its diff, commits and pushes only to an owned temporary bare repository; its GitHub client is scripted. The restart case checks drafts and queues, while Settings checks real saves, failure feedback, keyboard navigation, themes and persistence.
+
+Electron journeys run serially with one worker. Do not run another Electron journey on the same desktop concurrently. The wrapper refuses other platforms, clears live-provider and timing-benchmark flags and any alternate Electron entry point, and supplies a verified absent owned performance-data path. Fixtures create and remove only their owned temporary profiles. `SOTTO_E2E_ARTIFACT_ROOT` routes the selected journeys' screenshots and proof files into ignored `artifacts/review-393/desktop-run/`, each in its own named subdirectory; the runner does not modify or restore committed captures. Standalone spec runs keep their usual evidence paths unless that option is supplied. Inspect the emitted screenshots after a UI change and keep only selected evidence. A failed stage stops the command and blocks the release check; investigate its assertion before rerunning. Record the source commit, actual test counts and platform in the release evidence. A local Windows pass does not establish macOS execution.
 
 ## Recovery through application boundaries
 
@@ -287,6 +291,10 @@ Build and run `npx playwright test tests/e2e/agent-browser.spec.ts tests/e2e/too
 | Real Electron renderer and preload | Receipt feedback, queued steering and selectable dictation recovery use the built app and test-only provider or clipboard effects. |
 
 This command complements the full suite. Its fake provider boundary proves Sotto's recovery contract, not a paid provider's availability. The broader repeatable desktop workflow is tracked separately in #393.
+
+## Grok request-log observations
+
+`tests/integration/grokFixtureReadErrors.test.ts` requires the fake Grok request and violation observers to distinguish absent initial logs from unreadable logs. A known start remains a known start after a temporary fault is removed; EACCES and EBUSY surface as read errors, while malformed JSON remains a parse error. An unreadable violation log cannot silently pass its protocol check. The fixture does not turn these failures into missing provider work or evidence (#420).
 
 ## Stale host-lock test processes
 

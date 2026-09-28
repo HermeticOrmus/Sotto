@@ -3,11 +3,12 @@ import { resolve } from 'node:path'
 import { expect, test } from '@playwright/test'
 import { E2E_PRESERVED_CLIPBOARD, E2E_TRANSCRIPT } from '../../src/shared/e2e'
 import { closeSotto, launchSotto, openPage, resizeWindow } from './support/sottoLaunch'
+import { evidenceDirectory } from './support/evidence'
 
 test('completed dictation survives clipboard failure, navigation and later dictation with history off', async () => {
   const launched = await launchSotto('clipboard-recovery')
   const { page } = launched
-  const evidence = resolve('artifacts/review-380')
+  const evidence = evidenceDirectory('artifacts/review-380')
   await mkdir(evidence, { recursive: true })
   try {
     await page.evaluate(async () => window.sotto!.updateSettings({ onboardingComplete: true, historyEnabled: false, autoPaste: true, reducedMotion: 'on' }))
