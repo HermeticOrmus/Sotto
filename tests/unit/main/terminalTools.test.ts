@@ -34,9 +34,48 @@ async function fixture(options: Pick<TerminalDependencies, 'env' | 'platform'> =
   const service = createService()
   const owner = unwrap(await service.list({ threadId: 'a' })).workspace
   const target = { threadId: owner.threadId, workspaceId: owner.workspaceId }
-  return { service, createService, target, processes, spawn, events, change: () => { cwd = other } }
+  return { service, createService, target, files, processes, spawn, events, change: () => { cwd = other } }
 }
 describe('persistent terminal service', () => {
+  it('keeps writes in request order while another session can pass a held workspace validation', async () => {
+    const f = await fixture()
+    const first = unwrap(await f.service.create(f.target)), other = unwrap(await f.service.create(f.target))
+    const request = { ...f.target, sessionId: first.session.id }
+    const release = Promise.withResolvers<void>(), entered = Promise.withResolvers<void>()
+    const resolved = await f.files.resolveWorkspace('a')
+    if (!resolved.ok) throw new Error(resolved.error.message)
+    const owner = resolved.value
+    const validation = vi.spyOn(f.files, 'resolveWorkspace').mockResolvedValue({ ok: true, value: owner })
+    validation.mockImplementationOnce(async () => { entered.resolve(); await release.promise; return { ok: true, value: owner } })
+    const pending = f.service.write({ ...request, data: 'S' })
+    await entered.promise
+    const next = f.service.write({ ...request, data: 'e' })
+    try {
+      unwrap(await f.service.write({ ...request, sessionId: other.session.id, data: 'independent' }))
+      expect(f.processes[1]!.pty.write).toHaveBeenCalledWith('independent')
+      expect(f.processes[0]!.pty.write).not.toHaveBeenCalled()
+    } finally { release.resolve(); await Promise.all([pending, next]) }
+    expect(unwrap(await pending)).toBeUndefined()
+    expect(unwrap(await next)).toBeUndefined()
+    expect(vi.mocked(f.processes[0]!.pty.write).mock.calls.map(args => args[0])).toEqual(['S', 'e'])
+  })
+
+  it('does not send held or queued input after the old terminal closes', async () => {
+    const f = await fixture(), first = unwrap(await f.service.create(f.target))
+    const request = { ...f.target, sessionId: first.session.id }
+    const release = Promise.withResolvers<void>(), entered = Promise.withResolvers<void>()
+    const original = f.files.resolveWorkspace.bind(f.files)
+    vi.spyOn(f.files, 'resolveWorkspace').mockImplementationOnce(async (...args) => { entered.resolve(); await release.promise; return original(...args) })
+    const pending = f.service.write({ ...request, data: 'old' })
+    await entered.promise
+    const next = f.service.write({ ...request, data: 'queued' })
+    try { unwrap(await f.service.close(request)); unwrap(await f.service.create(f.target)) }
+    finally { release.resolve() }
+    expect(await pending).toMatchObject({ ok: false, error: { code: 'session-unavailable' } })
+    expect(await next).toMatchObject({ ok: false, error: { code: 'session-unavailable' } })
+    for (const process of f.processes) expect(process.pty.write).not.toHaveBeenCalled()
+  })
+
   it.each(['win32', 'darwin', 'linux'] as const)('starts a color-capable interactive shell independently of launcher color overrides on %s', async platform => {
     const env = Object.freeze({
       SystemRoot: 'C:\\Windows', SHELL: '/bin/zsh', PATH: '/custom/bin', USER_THEME: 'custom',
