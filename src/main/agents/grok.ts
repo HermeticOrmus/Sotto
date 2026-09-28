@@ -1,4 +1,5 @@
 import { BROWSER_MCP_SERVER, type BrowserAgentTools } from './browserAgentServer'
+import type { ScopedThreadTools } from './threadToolServer'
 import { personalContext, type NativeConversation, type PersonalConversation, type PersonalCreateCommand, type PersonalMemory } from './personalConversation'
 import { existingWorkingDirectory } from './threadWorktrees'
 import { ProviderSnapshotPublisher } from './providerSnapshotPublisher'
@@ -127,9 +128,13 @@ export class GrokAcpHost implements AgentHost {
   private browserHttp = false
   private browserTools: BrowserAgentTools | undefined
   useBrowserTools(tools: BrowserAgentTools): void { this.browserTools = tools }
+  private hostSetupTools: ScopedThreadTools | undefined
+  useHostSetupTools(tools: ScopedThreadTools): void { this.hostSetupTools = tools }
+  /** Sotto's own tool servers for this thread: the browser's, and the host setup tools while its setup runs (ADR-0035). */
   private async browserServers(id: string) {
-    if (!this.browserTools || this.aliases[id]?.kind === 'personal' || !this.browserHttp) return []
-    return [await this.browserTools.mcpServer(id)]
+    if (this.aliases[id]?.kind === 'personal' || !this.browserHttp) return []
+    const setup = await this.hostSetupTools?.mcpServer(id)
+    return [...(this.browserTools ? [await this.browserTools.mcpServer(id)] : []), ...(setup ? [setup] : [])]
   }
   private showRequest(pending: Pending): void {
     if (this.aliases[pending.threadId]!.answeredRequestIds.includes(pending.request.id)) { pending.answering = true; pending.request.delivery = 'uncertain'; this.answeredRequests.add(pending.request.id) }
@@ -137,8 +142,10 @@ export class GrokAcpHost implements AgentHost {
   }
   /** Grok's prompt for this thread's own browser server, answered here rather than shown (ADR-0020). */
   private browserAdmission(pending: Pending): unknown {
-    if (!pending.permission || !this.browserTools || !this.browserHttp || this.aliases[pending.threadId]?.kind === 'personal') return undefined
-    return grokBrowserAdmission(pending, BROWSER_MCP_SERVER, this.browserTools.definitions.map(tool => tool.name))
+    if (!pending.permission || !this.browserHttp || this.aliases[pending.threadId]?.kind === 'personal') return undefined
+    // The host setup tools are answered the same way: adding asks the user in the thread itself (ADR-0035).
+    return (this.browserTools ? grokBrowserAdmission(pending, BROWSER_MCP_SERVER, this.browserTools.definitions.map(tool => tool.name)) : undefined)
+      ?? (this.hostSetupTools ? grokBrowserAdmission(pending, this.hostSetupTools.name, this.hostSetupTools.definitions.map(tool => tool.name)) : undefined)
   }
   private readonly usage: NativeUsage
   private readonly aliasStore: AtomicJsonStore<Record<string, Alias>>

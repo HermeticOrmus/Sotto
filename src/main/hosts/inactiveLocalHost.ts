@@ -31,13 +31,13 @@ export async function inactiveLocalHost(directory: string): Promise<Awaited<Retu
     get: shell, shell, configuration: () => state.configuration, command: async () => unavailable(),
     threadDetail: () => null, attachmentPreview: unavailable, stageAttachment: async () => unavailable(), attachmentContent: async () => null, gitRefs: async () => unavailable(), gitChangedFiles: async () => unavailable(), gitPullRequest: async () => unavailable(),
     subscribe: unsubscribe, subscribeThreadDetail: unsubscribe, dispose: idle, closed: async () => undefined,
-    privacyChanged: async () => undefined, hasPendingThreadWork: () => false,
+    privacyChanged: async () => undefined, hasPendingThreadWork: () => false, useSottoRequests: idle,
     requestAnswerRecovery: () => ({ uncertainRequestIds: [], completed: [] }), refreshRequestDraft: async () => unavailable(),
   }
   const host = {
     workspaceSnapshot: () => structuredClone(state.host), snapshot: async () => structuredClone(state.host),
     subscribe: unsubscribe, subscribeSubagents: unsubscribe, setCheckpointHooks: idle,
-    useBrowserTools: idle,
+    useBrowserTools: idle, useHostSetupTools: idle,
     // Git actions are wired at start whichever host runs. With no local threads there is nothing to guard or to refresh.
     setMutationGuard: idle, gitActionFinished: async () => undefined,
     dispose: idle, disconnect: idle, close: async () => undefined,

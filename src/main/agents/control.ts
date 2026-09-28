@@ -37,6 +37,7 @@ import { agentActivitySignature, applyAgentThreadDetailDelta, diffAgentThreadDet
 import { resolveFilesBinding } from '../files/binding'
 import { THREAD_SCOPED_COMMAND_TYPES } from '../../shared/threadLanes'
 import type { FilesBinding } from '../files/service'
+import { isSottoRequest, withSottoRequests, type SottoThreadRequests } from './sottoRequests'
 
 /** One shared empty array stands in for every shell thread's history; the clone that follows copies nothing. */
 const EMPTY_MESSAGES: AgentMessage[] = []
@@ -187,6 +188,9 @@ export class AgentControl {
   private readonly providerReconnect = new Map<ProviderId, ReturnType<typeof setTimeout>>()
   private retirementFailure: string | null = null
   private disposed = false
+  /** Requests Sotto owns, merged into their threads (ADR-0035); absent until main gives the coordinator some. */
+  private sottoRequests: SottoThreadRequests | undefined
+  private unsubscribeSottoRequests: (() => void) | undefined
   private readonly activeCommands = new Set<Promise<AgentState>>()
   private membershipTimer: ReturnType<typeof setInterval> | null = null
   private privacyCleanupPending = false
@@ -317,7 +321,7 @@ export class AgentControl {
     await this.followupStore.load(this.stageInline, handle => this.attachments.has(handle.digest))
     this.syncFollowups()
     await this.dependencies.host.initialize?.()
-    if (this.dependencies.host.workspaceSnapshot) this.state.host = this.dependencies.host.workspaceSnapshot()
+    if (this.dependencies.host.workspaceSnapshot) this.state.host = this.withSottoRequests(this.dependencies.host.workspaceSnapshot())
     const cutoff = Date.now() - 7 * 86_400_000
     const historyDisabled = this.dependencies.historyEnabled?.() === false
     for (const assignment of this.state.assignments) {
@@ -393,6 +397,22 @@ export class AgentControl {
       // Independent native discovery must not delay constructing the desktop IPC surface.
       else void connection
     }
+  }
+  /**
+   * Requests Sotto itself puts in a thread, such as the host setup thread's "Add forge as a host?" (ADR-0035). They
+   * sit among the thread's requests from now on, and the user's answer goes back to them rather than to a provider.
+   */
+  useSottoRequests(requests: SottoThreadRequests): void {
+    this.unsubscribeSottoRequests?.()
+    this.sottoRequests = requests
+    this.unsubscribeSottoRequests = requests.subscribe(() => {
+      if (this.disposed) return
+      this.state.host = this.withSottoRequests(this.state.host)
+      this.publish()
+    })
+  }
+  private withSottoRequests(snapshot: AgentHostSnapshot): AgentHostSnapshot {
+    return this.sottoRequests ? withSottoRequests(snapshot, this.sottoRequests.requests()) : snapshot
   }
   hasPendingThreadWork(threadId: string): boolean {
     return this.outbox.some(item => item.threadId === threadId)
@@ -2113,6 +2133,18 @@ export class AgentControl {
         const answerDraft = this.state.threadDrafts?.find(draft => draft.threadId === command.threadId && draft.requestId === command.requestId
           && draft.text.trim() === command.answer.trim() && !draft.attachments.length)
         if (request.delivery === 'uncertain') throw new Error('This answer may already have arrived. Refresh the original request; it will not be resent.')
+        if (isSottoRequest(request.id)) {
+          // Sotto's own request: the answer is Sotto's to act on, and no provider hears it. Only a client that may
+          // grant reaches here (guardClientGrant above), as for every other request (ADR-0004).
+          if (!this.sottoRequests) throw new Error('This request is no longer pending. Refresh the thread.')
+          this.sottoRequests.answer(command.threadId, command.requestId, command.approved === true)
+          this.recordAnswerAttribution({ type: 'answer', commandId: randomUUID(), threadId: command.threadId, requestId: command.requestId, answer: command.answer,
+            ...(command.approved === undefined ? {} : { approved: command.approved }), ...(command.permissionChoice ? { permissionChoice: command.permissionChoice } : {}) }, client)
+          this.state.queue = this.state.queue.filter(q => q.requestId !== command.requestId)
+          this.say(`Answered ${thread.title}.`)
+          this.presentQueue(true, selectionRevision)
+          return
+        }
         await this.dispatch({ type: 'answer', commandId: randomUUID(), threadId: command.threadId, requestId: command.requestId, answer: command.answer, ...(command.approved === undefined ? {} : { approved: command.approved }), ...(command.questionAnswers ? { questionAnswers: command.questionAnswers } : {}), ...(command.permissionChoice ? { permissionChoice: command.permissionChoice } : {}) }, turn, undefined, undefined, client)
         assignment?.handledRequestIds.push(command.requestId)
         this.state.queue = this.state.queue.filter(q => q.requestId !== command.requestId)
@@ -2604,7 +2636,7 @@ export class AgentControl {
   private acceptSnapshot(snapshot: AgentHostSnapshot): void {
     if (this.disposed) return
     const connecting = this.state.connection === 'connecting'
-    this.state.host = snapshot
+    this.state.host = this.withSottoRequests(snapshot)
     this.scheduleProviderReconnects()
     if (this.state.activeProjectId) this.state.activeProjectId = this.dependencies.host.resolveProjectId?.(this.state.activeProjectId) ?? this.state.activeProjectId
     if (this.state.configuration.defaultModelId) this.state.configuration.defaultModelId = this.dependencies.host.resolveModelId?.(this.state.configuration.defaultModelId) ?? this.state.configuration.defaultModelId
@@ -2881,6 +2913,7 @@ export class AgentControl {
     this.broadcastPending = false
     if (this.membershipTimer) clearInterval(this.membershipTimer)
     this.unsubscribe?.()
+    this.unsubscribeSottoRequests?.()
     this.disconnect()
     this.listeners.clear()
     this.detailListeners.clear()

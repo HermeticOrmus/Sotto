@@ -1,5 +1,6 @@
 import { loadHostIdentity, migrateWorkspaceHost, stampHostSnapshot } from './hostIdentity'
 import type { BrowserAgentTools } from './browserAgentServer'
+import type { ScopedThreadTools } from './threadToolServer'
 import { createHash, randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import { cloneHostSnapshot } from './cloneHostSnapshot'
@@ -113,6 +114,7 @@ const WRITE_WINDOW_MS = 250
  * Only an unstarted local thread can change provider. Native bindings are never rewritten. */
 export class WorkspaceHost implements AgentHost {
   useBrowserTools(tools: BrowserAgentTools): void { this.inner.useBrowserTools?.(tools) }
+  useHostSetupTools(tools: ScopedThreadTools): void { this.inner.useHostSetupTools?.(tools) }
   readonly concurrentProviders: boolean
   private state: Workspace = { snapshot: structuredClone(EMPTY_AGENT_HOST), creations: [], projectAliases: [] }
   private readonly store: AtomicJsonStore<Workspace>

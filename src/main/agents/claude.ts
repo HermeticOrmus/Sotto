@@ -1,4 +1,5 @@
 import type { BrowserAgentTools } from './browserAgentServer'
+import type { ScopedThreadTools, ThreadMcpServer } from './threadToolServer'
 import { ClaudeHistory } from './claudeHistory'
 import { ProviderSnapshotPublisher } from './providerSnapshotPublisher'
 import { isDeepStrictEqual } from 'node:util'
@@ -131,8 +132,10 @@ function permissionArguments(mode: AgentRuntimeMode = 'approval-required'): stri
 // the native prompt asked the same question a second time without naming the browser. The names are
 // listed one by one because the CLI does not match a wildcard against a tool added at launch, and
 // the flag is variadic, so it is only ever followed here by another option.
-function browserAllowance(server: string, definitions: readonly { name: string }[]): string[] {
-  return definitions.length ? ['--allowedTools', ...definitions.map(tool => `mcp__${server}__${tool.name}`)] : []
+/** Sotto's own tools carry no native prompt: the answer that matters is Sotto's (ADR-0020, ADR-0035). */
+function toolAllowance(servers: readonly { server: ThreadMcpServer; definitions: readonly { name: string }[] }[]): string[] {
+  const names = servers.flatMap(({ server, definitions }) => definitions.map(tool => `mcp__${server.name}__${tool.name}`))
+  return names.length ? ['--allowedTools', ...names] : []
 }
 export interface ClaudeStreamJsonHostOptions {
   userDataPath: string; executable?: string; args?: string[]; claudeHome?: string; environment?: NodeJS.ProcessEnv; requestTimeoutMs?: number; pollIntervalMs?: number
@@ -149,6 +152,8 @@ type Runtime = { protocol: ClaudeProtocol; requests: Map<string, ClaudePending>;
 export class ClaudeStreamJsonHost implements AgentHost {
   private browserTools: BrowserAgentTools | undefined
   useBrowserTools(tools: BrowserAgentTools): void { this.browserTools = tools }
+  private hostSetupTools: ScopedThreadTools | undefined
+  useHostSetupTools(tools: ScopedThreadTools): void { this.hostSetupTools = tools }
   private readonly usage: NativeUsage
   private readonly aliasStore: AtomicJsonStore<Record<string, Alias>>
   private readonly projectStore: AtomicJsonStore<AgentHostSnapshot['projects']>
@@ -769,14 +774,18 @@ export class ClaudeStreamJsonHost implements AgentHost {
     if (generation !== this.generation) throw new Error('Claude connection was cancelled.')
     if (!resume && alias.origins.length) throw new Error('Claude native history is unavailable. Restore its session before continuing; Sotto will not recreate or resend an uncertain turn.')
     const browser = alias.kind !== 'personal' ? await this.browserTools?.mcpServer(id) : undefined
-    const browserArguments = browser ? ['--mcp-config', JSON.stringify({ mcpServers: { [browser.name]: {
-      type: browser.type, url: browser.url, headers: Object.fromEntries(browser.headers.map(header => [header.name, header.value])),
-    } } }), ...browserAllowance(browser.name, this.browserTools?.definitions ?? [])] : []
+    // A host setup thread also gets the host setup tools, while its setup runs; every other thread gets none.
+    const setup = alias.kind !== 'personal' ? await this.hostSetupTools?.mcpServer(id) : undefined
+    const servers = [...(browser ? [{ server: browser, definitions: this.browserTools?.definitions ?? [] }] : []),
+      ...(setup ? [{ server: setup, definitions: this.hostSetupTools?.definitions ?? [] }] : [])]
+    const browserArguments = servers.length ? ['--mcp-config', JSON.stringify({ mcpServers: Object.fromEntries(servers.map(({ server }) => [server.name, {
+      type: server.type, url: server.url, headers: Object.fromEntries(server.headers.map(header => [header.name, header.value])),
+    }])) }), ...toolAllowance(servers)] : []
     const args = [...(this.options.args ?? []), ...browserArguments, '--print', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
       '--include-partial-messages', '--replay-user-messages', ...permissionArguments(alias.runtimeMode),
       ...(alias.kind === 'personal' ? ['--append-system-prompt', this.personalContexts.get(id) ?? personalContext()] : []),
       resume ? '--resume' : '--session-id', alias.sessionId, '--model', alias.modelId, ...(alias.reasoningEffort ? ['--effort', alias.reasoningEffort] : [])]
-    const runtime: Runtime = { requests: new Map(), answered: new Set(), protocol: new ClaudeProtocol(this.executable, args, alias.cwd, { ...this.client.environment(), ...(browser ? { MCP_TOOL_TIMEOUT: '360000' } : {}) }, this.options.requestTimeoutMs ?? 15000,
+    const runtime: Runtime = { requests: new Map(), answered: new Set(), protocol: new ClaudeProtocol(this.executable, args, alias.cwd, { ...this.client.environment(), ...(setup ? { MCP_TOOL_TIMEOUT: '600000' } : browser ? { MCP_TOOL_TIMEOUT: '360000' } : {}) }, this.options.requestTimeoutMs ?? 15000,
       frame => { if (this.runtimes.get(id) === runtime) this.frame(id, frame) }, () => {
         if (this.runtimes.get(id) !== runtime) return
         // Each thread has its own CLI, so one ending is this thread's failure, not the provider's: the others
