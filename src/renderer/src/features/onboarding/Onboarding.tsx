@@ -126,7 +126,7 @@ export function Onboarding({
           <section>
             <p className="onboarding-eyebrow">Microphone</p>
             <h1 id="onboarding-heading" ref={headingRef} tabIndex={-1}>Check your microphone</h1>
-            <p className="onboarding-lead">Sotto needs microphone access only while you record or run this test.</p>
+            <p className="onboarding-lead">Sotto needs microphone access only while you record or run this test. Test your microphone or choose Skip for now to continue.</p>
             <div className="onboarding-microphone-test" data-state={microphoneState}>
               {/* The wave the widget and the Dictate room show; it listens for as long as the test's stream runs. */}
               <VoiceWave stage={microphoneState === 'requesting' || microphoneState === 'ready' ? 'listening' : 'idle'} value={microphoneLevel} label="Microphone level" size="deck" />
@@ -195,7 +195,7 @@ export function Onboarding({
 
         <footer className="onboarding-actions">
           <Button variant="ghost" onClick={goBack} disabled={step === 1 || finishing}>Back</Button>
-          {step < STEP_COUNT ? <Button onClick={advance}>Continue</Button> : (
+          {step < STEP_COUNT ? <Button disabled={step === 2 && microphoneState !== 'ready' && !microphoneSkipped} onClick={advance}>Continue</Button> : (
             <Button
               onClick={() => void finish()}
               disabled={(microphoneState !== 'ready' && !microphoneSkipped) || finishing}
