@@ -15,6 +15,8 @@
 
 Each gate is its own named step, so a red check names the gate that failed.
 
+`tests/integration/nativeTargetRefresh.test.ts` holds one unrelated thread's actual native history refresh open while another thread receives its prompt acknowledgement and exact persisted receipt. The barrier stays held through both assertions for Codex, Claude and Grok; the normal test deadline bounds failures, with no wall-clock performance budget. A diagnostic that makes the target wait for the held refresh must fail the acknowledgement assertion before cleanup releases the history read.
+
 `tsconfig.tests.json` checks every `tests/**/*.tsx` file, including renderer tests,
 benchmarks and fixture views, with the web project's JSX and DOM assumptions plus
 Node, Vitest and Testing Library types. Vitest executes these files but does not
@@ -291,3 +293,7 @@ The workflow has no path filters, so changes under `apps/ios` and the host proto
 ## Current-session reaper observations
 
 The Claude fixture's stopped check reads its current child ownership marker and probes that PID. Grok records residency after an accepted load or close; a historical or rejected close is not evidence that its current session stopped. `sessionFixtureObservation.test.ts` covers a real resumed Claude child and a Grok close/reload, including a rejected close. The host contracts keep their existing deadlines and assert actual session ownership rather than elapsed time.
+
+## Grok idle history maintenance
+
+`grokIdleMaintenance.test.ts` holds real fake-provider history reads against a controlled clock. Repeated empty polls must not renew idle age, and the first sweep after a read settles must use the existing age. Separate cases check actual durable-only provider events and foreground refreshes. `sessionReaper.test.ts` protects reads without blocking another eligible session and rechecks activity, watched state and working state after settlement. These are structural checks with no new deadlines or stopwatch assertions (#440).
