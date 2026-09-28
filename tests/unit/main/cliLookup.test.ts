@@ -212,6 +212,15 @@ describe('the PATH a found client runs with', () => {
     expect(Object.keys(environment).sort()).toEqual(['HOME', 'PATH'])
   })
 
+  it('leaves the PATH alone for Codex found on it through a link to a binary elsewhere', async ({ skip }) => {
+    const binary = await native(join(home, '.local', 'share', 'mise', 'installs', 'codex', 'latest', 'bin', 'codex'))
+    if (!await link(binary, join(root, 'on-path', 'codex'))) skip('This account cannot make symbolic links.')
+    const loginShell = vi.fn(async () => undefined)
+    expect(await findCodexExecutable({ ...linux({ PATH: join(root, 'on-path') }), loginShellPath: loginShell })).toBe(binary)
+    expect(withCliPath({ PATH: join(root, 'on-path') }, binary)).toEqual({ PATH: join(root, 'on-path') })
+    expect(loginShell).not.toHaveBeenCalled()
+  })
+
   it('keeps Windows\' own spelling of Path', async () => {
     const claude = await file(join(home, '.local', 'bin', 'claude.exe'), MZ)
     expect(await findClaudeExecutable({ Path: empty }, undefined, { home, platform: 'win32' })).toBe(claude)

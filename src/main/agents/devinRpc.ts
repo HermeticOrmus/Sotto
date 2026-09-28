@@ -19,7 +19,7 @@ const safeEnvironment = new Set(['path', 'pathext', 'systemroot', 'windir', 'tem
 export function devinEnvironment(environment: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   return Object.fromEntries(Object.entries(environment).filter(([key]) => safeEnvironment.has(key.toLowerCase())))
 }
-/** Where Devin's CLI is: the shared CLI lookup (ADR-0036), then inside the Devin app. Discovery never reads native credentials. */
+/** Where Devin's CLI is: the shared CLI lookup (ADR-0036), then inside the Devin app. The lookup never reads native credentials. */
 export async function findDevinExecutable(environment: NodeJS.ProcessEnv = process.env, lookup: Omit<CliLookupOptions, 'environment'> = {}): Promise<string | undefined> {
   const app = join('resources', 'app', 'extensions', 'windsurf', 'devin', 'bin')
   const last = (lookup.platform ?? process.platform) === 'win32'

@@ -207,8 +207,8 @@ export function isDispatcher(real: string): boolean {
  * Where a found client came from, for the PATH its process gets: the folders the lookup found outside the
  * inherited PATH, which go ahead of it, and the login shell's folders the inherited PATH lacks, which follow it.
  */
-interface Found { readonly ahead: readonly string[]; readonly after: readonly string[] }
-const found = new Map<string, Found>()
+interface ClientPath { readonly ahead: readonly string[]; readonly after: readonly string[] }
+const clientPaths = new Map<string, ClientPath>()
 
 /** Finds one client the way the order above says, or undefined when it is not installed anywhere Sotto looks. */
 export async function findCli(spec: CliSpec, options: CliLookupOptions = {}): Promise<string | undefined> {
@@ -224,14 +224,15 @@ export async function findCli(spec: CliSpec, options: CliLookupOptions = {}): Pr
   const login = (): Promise<string | undefined> => windows ? Promise.resolve(undefined) : (options.loginShellPath ?? (() => loginShellPath(environment)))()
   const accept = spec.accept ?? ((candidate: string) => executableFile(candidate, platform))
   const tried = new Set<string>()
-  const attempt = async (folders: readonly string[]): Promise<string | undefined> => {
+  /** The client and the folder it was found in, which for a followed link is not the client's own folder. */
+  const attempt = async (folders: readonly string[]): Promise<{ executable: string; folder: string } | undefined> => {
     for (const folder of folders) {
       const key = windows ? folder.toLowerCase() : folder
       if (tried.has(key) || shimFolders.some(shims => same(shims, folder))) continue
       tried.add(key)
       for (const candidate of [join(folder, file), ...(spec.within?.(folder, file) ?? [])]) {
         const executable = await accept(candidate)
-        if (executable) return executable
+        if (executable) return { executable, folder }
       }
     }
     return undefined
@@ -246,10 +247,10 @@ export async function findCli(spec: CliSpec, options: CliLookupOptions = {}): Pr
     async () => spec.last ?? [],
   ]
   for (const stage of stages) {
-    const executable = await attempt(await stage())
-    if (!executable) continue
-    await remember(executable, spec.name, { environment, platform, home, loginShellPath: login }, inherited)
-    return executable
+    const found = await attempt(await stage())
+    if (!found) continue
+    await rememberClientPath(found.executable, found.folder, spec.name, { environment, platform, home, loginShellPath: login }, inherited)
+    return found.executable
   }
   return undefined
 }
@@ -259,18 +260,18 @@ export async function findCli(spec: CliSpec, options: CliLookupOptions = {}): Pr
  * client runs `#!/usr/bin/env node`. Its own folder and Node's go ahead of the inherited PATH, and the login
  * shell's other folders after it. A client found on the inherited PATH is left with that PATH as it is.
  */
-async function remember(executable: string, name: string, options: Required<Pick<CliLookupOptions, 'environment' | 'platform' | 'home' | 'loginShellPath'>>, inherited: readonly string[]): Promise<void> {
+async function rememberClientPath(executable: string, foundIn: string, name: string, options: Required<Pick<CliLookupOptions, 'environment' | 'platform' | 'home' | 'loginShellPath'>>, inherited: readonly string[]): Promise<void> {
   const same = sameFolder(options.platform === 'win32')
   const onPath = (folder: string): boolean => inherited.some(entry => same(entry, folder))
   const folder = dirname(executable)
-  if (onPath(folder)) { found.delete(executable); return }
+  if (onPath(foundIn)) { clientPaths.delete(executable); return }
   const ahead = [folder]
   if (name !== 'node') {
     const node = await findCli({ name: 'node' }, options)
     if (node && !onPath(dirname(node)) && !same(dirname(node), folder)) ahead.push(dirname(node))
   }
   const after = entries(await options.loginShellPath()).filter(entry => !onPath(entry) && !ahead.some(value => same(value, entry)))
-  found.set(executable, { ahead, after: [...new Set(after)] })
+  clientPaths.set(executable, { ahead, after: [...new Set(after)] })
 }
 
 /**
@@ -279,7 +280,7 @@ async function remember(executable: string, name: string, options: Required<Pick
  * lookup did not find (a test's fixture, a path given in settings) keeps the PATH it was given.
  */
 export function withCliPath(environment: NodeJS.ProcessEnv, executable: string): NodeJS.ProcessEnv {
-  const extra = found.get(executable)
+  const extra = clientPaths.get(executable)
   if (!extra) return environment
   const key = Object.keys(environment).find(name => name.toLowerCase() === 'path') ?? 'PATH'
   const inherited = (environment[key] ?? '').split(delimiter).filter(Boolean)
@@ -289,6 +290,6 @@ export function withCliPath(environment: NodeJS.ProcessEnv, executable: string):
 
 /** Forgets what earlier lookups found and asked, so a test starts clean. */
 export function resetCliLookup(): void {
-  found.clear()
+  clientPaths.clear()
   loginPaths.clear()
 }
