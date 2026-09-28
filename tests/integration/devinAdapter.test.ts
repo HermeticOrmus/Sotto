@@ -349,10 +349,22 @@ describe('Devin dispatch and decision boundaries', () => {
     await send(id); await f.driver.completeTurn(id, 'Smart reply')
     await expect.poll(async () => (await thread(id)).status).toBe('idle')
     await f.host.execute({ type: 'configure-thread', commandId: randomUUID(), threadId: id, providerMode: 'bypass' })
-    // The restored session announces Smart, where it was left, before Sotto sets Bypass back on it.
-    await f.host.refreshThread(id)
-    expect(await thread(id)).toMatchObject({ providerMode: 'bypass', status: 'idle' })
+    // The restored session announces Smart, where it was left, before Sotto sets Bypass back on it. A send that
+    // arrives while the session reopens waits for that, so it never prompts under the mode Devin was left on.
+    await f.script({ delayLoad: 1500 })
+    const loads = (await f.driver.requests()).filter(record => record.method === 'session/load').length
+    const reopening = f.host.refreshThread(id)
+    await expect.poll(async () => (await f.driver.requests()).filter(record => record.method === 'session/load').length).toBeGreaterThan(loads)
     expect(await send(id, 'Second prompt')).toMatchObject({ accepted: true })
+    await reopening; await f.script({})
+    expect(await thread(id)).toMatchObject({ providerMode: 'bypass' })
+    const requests = await f.driver.requests()
+    const modeSet = requests.findLastIndex(record => record.method === 'session/set_config_option' && record.params?.configId === 'mode')
+    expect(requests[modeSet]?.params).toMatchObject({ value: 'bypass' })
+    expect(requests.findLastIndex(record => record.method === 'session/prompt')).toBeGreaterThan(modeSet)
+    // Once Bypass is set on the reopened session, Devin moving off it on its own still fails the session.
+    await f.action(id, { type: 'mode', mode: 'smart' })
+    await expect.poll(async () => (await thread(id)).status).toBe('error')
   })
 
   it('still fails a session whose mode Devin changes on its own', async () => {

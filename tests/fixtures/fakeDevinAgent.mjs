@@ -139,8 +139,10 @@ createInterface({ input: process.stdin }).on('line', line => {
   update(p.sessionId, { sessionUpdate: 'current_mode_update', currentModeId: session.mode ?? 'accept-edits' })
   if (script.replayModel) update(p.sessionId, { sessionUpdate: 'config_option_update', configOptions: configOptions({ ...session, model: script.replayModel }) })
   replay(p.sessionId)
-  if (!acquire(p.sessionId)) reject(frame.id, -32015)
-  else result(frame.id, sessionInfo(script.loadModel ? { ...session, model: script.loadModel } : session))
+  if (!acquire(p.sessionId)) { reject(frame.id, -32015); return }
+  const loaded = () => result(frame.id, sessionInfo(script.loadModel ? { ...session, model: script.loadModel } : session))
+  // A slow reply holds the session open but not yet confirmed, as a reopen is while Sotto waits on it.
+  if (script.delayLoad) setTimeout(loaded, script.delayLoad); else loaded()
  } else if (frame.method === 'session/set_config_option') {
   const session = read(nativePath(p.sessionId), null)
   const known = p.configId === 'model' ? p.value === 'fixture-model' : p.configId === 'mode' && MODES.some(mode => mode.value === p.value)
