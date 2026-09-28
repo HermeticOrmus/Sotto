@@ -144,3 +144,20 @@ it('says the provider is connected when the sign-in ends well, and Done closes t
   await user.click(within(dialog).getByRole('button', { name: 'Done' }))
   expect(screen.queryByRole('dialog')).toBeNull()
 })
+
+it('stops the sign-in on the host when the dialog closes before the host has answered the start', async () => {
+  const user = userEvent.setup()
+  let answer: (view: ProviderSignInView) => void = () => undefined
+  const { bridge: hosts, signIn } = bridge(request => request.type === 'start'
+    ? new Promise<ProviderSignInView>(resolve => { answer = resolve }) : Promise.resolve(null))
+  render(<div className="hosts-settings"><HostProviders host={forge} bridge={hosts}
+    providers={[status('codex', { connection: 'error', problem: 'signed-out', version: '0.155.1' })]} /></div>)
+  await user.click(screen.getByRole('button', { name: 'Show providers on forge' }))
+  await user.click(screen.getByRole('button', { name: 'Sign in to Codex on forge from this computer' }))
+  const dialog = screen.getByRole('dialog', { name: 'Sign in to Codex on forge' })
+  expect(within(dialog).getByText('Starting Codex\'s sign-in on forge…')).toBeInTheDocument()
+  await user.keyboard('{Escape}')
+  expect(screen.queryByRole('dialog')).toBeNull()
+  answer({ id: SIGN_IN, provider: 'codex', shape: 'device-code', stage: 'waiting', code: 'WDJB-MJHT', page: 'auth.openai.com' })
+  await waitFor(() => expect(signIn).toHaveBeenCalledWith({ type: 'cancel', id: HOST, signInId: SIGN_IN }))
+})

@@ -37,12 +37,15 @@ export function HostProviderSignIn({ host, provider, bridge, onClose }: {
   const current = useRef<ProviderSignInView | null>(null)
   current.current = view
 
-  // Start, and start again on Try again. A sign-in still running when the dialog goes is stopped on the host.
+  // Start, and start again on Try again. A sign-in still running when the dialog goes is stopped on the host, including
+  // one whose start answers only after the dialog has gone (Escape while it still says Starting).
   useEffect(() => {
     let alive = true
     setView(null); setError(null); setOpened(false); setCode(''); setCodeError(null)
-    bridge.signIn({ type: 'start', id: host.id, provider })
-      .then(started => { if (alive) setView(started) }, failure => { if (alive) setError(clean(failure, `${name} could not start signing in on ${host.name}. Nothing was changed. Try again.`)) })
+    bridge.signIn({ type: 'start', id: host.id, provider }).then(started => {
+      if (alive) { setView(started); return }
+      if (started && running(started)) void bridge.signIn({ type: 'cancel', id: host.id, signInId: started.id }).catch(() => undefined)
+    }, failure => { if (alive) setError(clean(failure, `${name} could not start signing in on ${host.name}. Nothing was changed. Try again.`)) })
     return () => { alive = false }
   }, [attempt, bridge, host.id, host.name, name, provider])
   useEffect(() => () => { const last = current.current; if (last && running(last)) void bridge.signIn({ type: 'cancel', id: host.id, signInId: last.id }).catch(() => undefined) }, [bridge, host.id])
