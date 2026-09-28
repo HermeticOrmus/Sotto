@@ -133,14 +133,24 @@ describe('the CLI lookup', () => {
     }
   })
 
-  it('rejects a Codex wrapper script but takes the binary it wraps, while Claude Code may be started by its wrapper', async () => {
-    // forge on September 28: ~/.local/bin/codex runs `mise x`; the native binary is under mise's installs.
-    await wrapper(join(home, '.local', 'bin', 'codex'), 'codex')
-    const claudeWrapper = await wrapper(join(home, '.local', 'bin', 'claude'), 'claude')
-    const codex = await native(join(home, '.local', 'share', 'mise', 'installs', 'codex', 'latest', 'bin', 'codex'))
-    await native(join(home, '.local', 'share', 'mise', 'installs', 'claude', 'latest', 'claude'))
-    expect(await find('codex', linux())).toBe(codex)
-    expect(await find('claude', linux())).toBe(claudeWrapper)
+  it.each(PROVIDERS)('passes over a %s wrapper that runs the command through mise, for the install it would run', async provider => {
+    // forge on September 28: ~/.local/bin/<tool> runs `mise use -g` and then `mise x`, and is on the login shell's
+    // PATH too. The install under mise's `latest` is what the wrapper would have started.
+    const miseWrapper = await wrapper(join(home, '.local', 'bin', provider), provider)
+    const install = await native(join(home, '.local', 'share', 'mise', 'installs', provider, 'latest', ...(provider === 'claude' ? [] : ['bin']), provider))
+    expect(await find(provider, linux({}, dirname(miseWrapper)))).toBe(install)
+  })
+
+  it('passes over an asdf exec wrapper and a mise exec wrapper, but takes a script that runs Node', async () => {
+    const asdf = await file(join(root, 'asdf-wrapper', 'claude'), '#!/usr/bin/env bash\nexec asdf exec claude "$@"\n')
+    const exec = await file(join(root, 'exec-wrapper', 'claude'), '#!/bin/sh\nexec /usr/bin/mise exec claude -- claude "$@"\n')
+    const script = await file(join(root, 'npm-bin', 'claude'), '#!/usr/bin/env node\n// The misery of x is not a manager.\nrequire("./cli.js")\n')
+    for (const wrapped of [asdf, exec]) {
+      resetCliLookup()
+      expect(await find('claude', linux({ PATH: dirname(wrapped) }))).toBeUndefined()
+    }
+    resetCliLookup()
+    expect(await find('claude', linux({ PATH: dirname(script) }))).toBe(script)
   })
 
   it('follows a found Codex link to its native binary, and takes the one inside an npm package', async ({ skip }) => {

@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { constants } from 'node:fs'
-import { access, readdir, readFile, realpath, stat } from 'node:fs/promises'
+import { access, open, readdir, readFile, realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, delimiter, dirname, isAbsolute, join } from 'node:path'
 
@@ -20,7 +20,9 @@ import { basename, delimiter, dirname, isAbsolute, join } from 'node:path'
  *
  * A manager's shims are never the client. A mise shim's real path is the `mise` binary and a Volta shim's is
  * `volta-shim`, and started by that path either one runs the manager rather than the tool, so a candidate whose
- * real path is one of them is passed over, and the mise and asdf shim folders are not searched at all.
+ * real path is one of them is passed over, and the mise and asdf shim folders are not searched at all. Nor is a script
+ * that runs its command through a manager (forge's `~/.local/bin/claude` runs `mise use -g` and then `mise x`): the
+ * lookup goes on to the install that script would have run.
  *
  * Nothing here logs: a path can name the user.
  */
@@ -56,6 +58,9 @@ const DISPATCHERS = new Set(['mise', 'volta-shim'])
 const LOGIN_SHELL_TIMEOUT_MS = 5_000
 const LOGIN_SHELL_MAX_BYTES = 64 * 1024
 const MARKER = '__SOTTO_LOGIN_PATH__'
+/** How much of a script is read to see whether it runs its command through a manager. */
+const WRAPPER_READ_BYTES = 4 * 1024
+const MANAGER_RUN = /(?:^|[\s;&|(`"'/])(?:(?:mise|rtx)["']?\s+(?:x|exec)|asdf["']?\s+exec)\b/mu
 
 const pathValue = (environment: NodeJS.ProcessEnv): string | undefined =>
   Object.entries(environment).find(([key]) => key.toLowerCase() === 'path')?.[1]
@@ -189,14 +194,32 @@ export function loginShellPath(environment: NodeJS.ProcessEnv = process.env): Pr
   return pending
 }
 
-/** A regular file that may be executed and is not a manager's shim. Started by the path it was found at. */
+/**
+ * A regular file that may be executed and is neither a manager's shim nor a script that hands the command to a
+ * manager. Started by the path it was found at.
+ */
 export async function executableFile(candidate: string, platform: NodeJS.Platform = process.platform): Promise<string | undefined> {
   try {
     if (!(await stat(candidate)).isFile()) return undefined
     await access(candidate, platform === 'win32' ? constants.F_OK : constants.X_OK)
-    if (isDispatcher(await realpath(candidate))) return undefined
+    const real = await realpath(candidate)
+    if (isDispatcher(real) || await runsThroughManager(real)) return undefined
     return candidate
   } catch { return undefined }
+}
+/**
+ * Whether a script runs its command through a version manager (`mise x`, `mise exec`, `asdf exec`), the way forge's
+ * `~/.local/bin/claude` does. Such a wrapper can change the manager's own settings on every start (`mise use -g`)
+ * and makes the client look like its installer's, so the lookup passes it over for the install it would run.
+ */
+async function runsThroughManager(file: string): Promise<boolean> {
+  const handle = await open(file, 'r')
+  try {
+    const head = Buffer.alloc(WRAPPER_READ_BYTES)
+    const { bytesRead } = await handle.read(head, 0, head.length, 0)
+    const text = head.subarray(0, bytesRead).toString('utf8')
+    return text.startsWith('#!') && MANAGER_RUN.test(text)
+  } finally { await handle.close() }
 }
 /** Whether a real path is a version manager's own binary, which is what a shim resolves to. */
 export function isDispatcher(real: string): boolean {
