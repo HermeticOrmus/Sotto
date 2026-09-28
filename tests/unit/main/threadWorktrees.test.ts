@@ -30,6 +30,34 @@ async function removeTestCheckout(root: string, path: string) {
   await rm(path, { recursive: true })
 }
 describe('independent working-copy allocation', () => {
+  it('coordinates setup and inspection without adding Git subprocesses to their existing validation', async () => {
+    const f = await fixture()
+    const calls: string[][] = []
+    const service = new ThreadWorktrees(f.root, async (cwd, args) => { calls.push(args); return git(cwd, args) })
+    const allocation = await service.allocate(f.project, 'independent')
+    calls.length = 0
+    const ready = await service.ensure(allocation)
+    expect(calls).toHaveLength(7)
+    expect(calls.filter(args => args.includes('--git-common-dir'))).toHaveLength(2)
+    calls.length = 0
+    expect((await service.inspect(ready)).status).toBe('ready')
+    expect(calls).toHaveLength(5)
+    expect(calls.filter(args => args.includes('--git-common-dir'))).toHaveLength(2)
+    calls.length = 0
+    expect((await service.ensure(ready)).status).toBe('ready')
+    expect(calls).toHaveLength(6)
+    expect(calls.filter(args => args.includes('--git-common-dir'))).toHaveLength(2)
+    await removeTestCheckout(f.root, ready.path!)
+    calls.length = 0
+    const restored = await service.restore(ready)
+    expect(restored.status).toBe('ready')
+    expect(calls).toHaveLength(5)
+    expect(await readFile(join(restored.path!, 'tracked.txt'), 'utf8')).toBe('committed baseline')
+    calls.length = 0
+    expect((await service.reclaim(restored)).reclaimedAt).toBeDefined()
+    expect(calls).toHaveLength(7)
+  })
+
   it('coordinates registry access across service instances and linked project roots while another repository progresses', async () => {
     const f = await fixture()
     const other = await fixture()
