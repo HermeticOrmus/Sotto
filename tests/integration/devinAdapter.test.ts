@@ -344,7 +344,8 @@ describe('Devin dispatch and decision boundaries', () => {
   })
 
   it('reopens a thread with history whose mode changed since Devin last held it', async () => {
-    const id = await create('smart'); f.host.observeThreads([id])
+    // Unwatched, like the other reopen tests: a watched thread's history reads hold the session while it reopens.
+    const id = await create('smart')
     await send(id); await f.driver.completeTurn(id, 'Smart reply')
     await expect.poll(async () => (await thread(id)).status).toBe('idle')
     await f.host.execute({ type: 'configure-thread', commandId: randomUUID(), threadId: id, providerMode: 'bypass' })
