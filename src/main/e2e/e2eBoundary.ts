@@ -49,8 +49,13 @@ export function createE2ENativeState(): E2ENativeState {
   return { clipboardText: E2E_PRESERVED_CLIPBOARD, pasteAttempts: 0 }
 }
 
-export function createE2EClipboard(state: E2ENativeState): ClipboardAdapter {
-  return { writeText: (text) => { state.clipboardText = text } }
+export function createE2EClipboard(state: E2ENativeState, scenario?: E2EScenario): ClipboardAdapter {
+  let attempts = 0
+  return { writeText: (text) => {
+    attempts++
+    if (scenario === 'clipboard-recovery' && attempts <= 3) throw new Error('Synthetic clipboard unavailable')
+    state.clipboardText = text
+  } }
 }
 
 export function createE2EPasteProcess(
