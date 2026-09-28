@@ -138,7 +138,8 @@ describe('the host setup tool over Add host', () => {
     cleanup.push(() => remote.close())
     const credentials = new AgentCredentials(join(root, 'desktop'), new HostCredentialEncryption('synthetic-desktop-credential-key')); await credentials.load()
     const router = new DesktopHostRouter(emptyDesktopState); cleanup.push(async () => router.dispose())
-    const failures: Error[] = [new SshFailure('node-missing')], connects: SshHostConfiguration[] = []
+    // The first connect is the user's own Add it on another machine, which fails; the setup's first check follows.
+    const failures: Error[] = [new SshFailure('auth-failed'), new SshFailure('node-missing')], connects: SshHostConfiguration[] = []
     const hosts = new DesktopHosts({ directory: join(root, 'desktop'), credentials, router, localHostRunning: true, localHostEnabled: () => true, restart: () => undefined,
       launcher: () => new ScriptedSsh(remote, failures, connects) })
     await hosts.start(); cleanup.push(() => hosts.close())
@@ -147,7 +148,7 @@ describe('the host setup tool over Add host', () => {
       start: async request => { request.created('setup-thread') }, interrupt: async () => undefined,
       thread: () => ({ requestIds: [], archived: false }), windowId: id => id, subscribe: () => () => undefined,
     }
-    const setup = new HostSetup({ version: '0.1.21', threads, hosts: { check: connection => hosts.check(connection), add: async connection => { await hosts.command({ type: 'add', host: connection }) },
+    const setup = new HostSetup({ version: '0.1.21', threads, hosts: { check: connection => hosts.check(connection), add: connection => hosts.setupAdd(connection),
       attempt: id => hosts.attempt(id), cancelAttempt: id => hosts.cancelAttempt(id), savedAs: (target, port) => hosts.savedAs(target, port) } })
     const server = new HostSetupToolServer(setup); cleanup.push(() => server.close())
     setup.useTools(threadId => server.revoke(threadId))
@@ -156,6 +157,10 @@ describe('the host setup tool over Add host', () => {
     await hosts.command({ type: 'start-setup', id: randomUUID(), host: { id: hostId, name: 'forge', target: 'zach@forge', identityFile: '', installPath: '/opt/sotto', dataDirectory: '/data/sotto' }, modelId: 'claude:opus' })
     expect(await server.mcpServer('another-thread')).toBeUndefined()
     const endpoint = (await server.mcpServer('setup-thread'))!
+    const other = { name: 'other', target: 'zach@other', identityFile: '', installPath: '/opt/sotto', dataDirectory: '/data/sotto' }
+    const otherId = randomUUID()
+    await hosts.command({ type: 'add', host: { id: otherId, ...other } })
+    expect(hosts.get().adding).toMatchObject({ id: otherId, phase: 'error', reason: 'auth-failed' })
 
     const missing = await callTool(endpoint, 'host_check')
     expect(missing.body!.result.isError).toBe(true)
@@ -164,7 +169,15 @@ describe('the host setup tool over Add host', () => {
     const passed = await callTool(endpoint, 'host_check')
     expect(parsed(passed)).toMatchObject({ ok: true })
     expect(hosts.get()).toMatchObject({ hosts: [], setup: { byAgent: ['install'], attempt: { checked: true } } })
-    expect(connects.every(item => item.target === 'zach@forge')).toBe(true)
+    expect(connects.slice(1).every(item => item.target === 'zach@forge')).toBe(true)
+    // The setup's checks and Add host's own attempt keep apart: the dialog still shows its failure on another machine,
+    // and the user's next Add it there leaves the setup's finished check where it was.
+    expect(hosts.get().adding).toMatchObject({ id: otherId, phase: 'error', reason: 'auth-failed' })
+    failures.push(new SshFailure('auth-failed'))
+    await hosts.command({ type: 'add', host: { id: randomUUID(), ...other } })
+    expect(hosts.get().adding).toMatchObject({ target: 'zach@other', phase: 'error' })
+    expect(hosts.get().setup).toMatchObject({ attempt: { purpose: 'check', checked: true } })
+    expect(parsed(await callTool(endpoint, 'host_status'))).toMatchObject({ last: { kind: 'check', ok: true } })
     // A check pairs nothing: no credential is kept for it, and nothing is saved.
     expect(credentials.has('remote-host:' + hosts.get().setup!.attempt!.id)).toBe(false)
     expect(credentials.has('remote-host:' + hostId)).toBe(false)
@@ -198,7 +211,7 @@ describe('the host setup tool over Add host', () => {
     const hosts = new DesktopHosts({ directory: join(root, 'desktop'), credentials, router, localHostRunning: true, localHostEnabled: () => true, restart: () => undefined, launcher: () => new HeldSsh() })
     await hosts.start(); cleanup.push(() => hosts.close())
     const interrupted: string[] = []
-    const setup = new HostSetup({ version: '0.1.21', hosts: { check: connection => hosts.check(connection), add: async connection => { await hosts.command({ type: 'add', host: connection }) },
+    const setup = new HostSetup({ version: '0.1.21', hosts: { check: connection => hosts.check(connection), add: connection => hosts.setupAdd(connection),
       attempt: id => hosts.attempt(id), cancelAttempt: id => hosts.cancelAttempt(id), savedAs: (target, port) => hosts.savedAs(target, port) },
     threads: { choice: () => ({ models: [{ id: 'm', name: 'Model', provider: 'Provider' }], modelId: 'm' }), start: async request => { request.created('setup-thread') },
       interrupt: async threadId => { interrupted.push(threadId) }, thread: () => ({ requestIds: [], archived: false }), windowId: id => id, subscribe: () => () => undefined } })
@@ -209,11 +222,12 @@ describe('the host setup tool over Add host', () => {
     await hosts.command({ type: 'start-setup', id: setupId, host: { id: randomUUID(), name: 'forge', target: 'forge', identityFile: '', installPath: '/opt/sotto', dataDirectory: '/data/sotto' }, modelId: 'm' })
     const endpoint = (await server.mcpServer('setup-thread'))!
     const checking = callTool(endpoint, 'host_check')
-    await vi.waitFor(() => expect(hosts.get().adding?.phase).toBe('connecting'))
+    await vi.waitFor(() => expect(hosts.get().setup?.attempt?.phase).toBe('connecting'))
     await hosts.command({ type: 'stop-setup', id: setupId })
     expect(parsed(await checking)).toMatchObject({ ok: false, message: 'The setup was stopped. Nothing was saved.' })
     expect(interrupted).toEqual(['setup-thread'])
     expect(hosts.get()).toMatchObject({ hosts: [], setup: { phase: 'stopped' } })
     expect(hosts.get().adding).toBeUndefined()
+    expect(hosts.get().setup?.attempt).toBeUndefined()
   })
 })

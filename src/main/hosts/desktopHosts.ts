@@ -77,8 +77,14 @@ export class DesktopHosts {
    * host's, and it joins the saved hosts only once the host answers and this computer pairs.
    */
   private adding: SavedHost | undefined
-  /** Add host's connect, which close() waits for so a quit does not leave its credential behind. */
+  /**
+   * The host setup's check or add (ADR-0035), kept apart from Add host's so neither cancels the other: the user can
+   * add another machine in the dialog while an agent sets one up. It is keyed by its ID the same way.
+   */
+  private setupAttempt: SavedHost | undefined
+  /** Add host's and the setup's connects, which close() waits for so a quit does not leave a credential behind. */
   private pendingAdd: Promise<void> = Promise.resolve()
+  private pendingSetup: Promise<void> = Promise.resolve()
   private generation = 0
   /** The host setup, once main has one; Settings > Hosts shows it and sends it its commands. */
   private setup: HostSetupSource | undefined
@@ -127,15 +133,23 @@ export class DesktopHosts {
   attempt(id: string): HostStatus | undefined {
     const status = this.status.get(id)
     if (!status) return undefined
-    const host = this.adding?.id === id ? this.adding : this.saved.find(item => item.id === id)
+    const host = this.attemptHost(id) ?? this.saved.find(item => item.id === id)
     return host ? { ...status, ...this.fields(host) } : undefined
   }
+  /** Add host's attempt or the setup's with this ID. */
+  private attemptHost(id: string): SavedHost | undefined {
+    return this.adding?.id === id ? this.adding : this.setupAttempt?.id === id ? this.setupAttempt : undefined
+  }
+  /** Whether this host is being added or checked, by Add host or the setup, and not saved yet. */
+  private isAttempt(host: SavedHost): boolean { return this.adding === host || this.setupAttempt === host }
   /** The saved host a connection would duplicate, by target and port, as Add host refuses it. */
   savedAs(target: string, sshPort: number | undefined): string | undefined {
     return this.saved.find(item => item.target === target && (item.sshPort ?? 22) === (sshPort ?? 22))?.name
   }
-  /** Drops Add host's attempt when it is this one, as Cancel and Change do: nothing of it is kept. */
+  /** Drops Add host's or the setup's attempt when it is this one, as Cancel and Change do: nothing of it is kept. */
   cancelAttempt(id: string): Promise<void> { return this.cancelAdd(id) }
+  /** The host setup's add (ADR-0035): Add host's add, in the setup's own slot. */
+  async setupAdd(input: Connection): Promise<void> { await this.add(input, 'setup') }
   subscribe(listener: (state: HostsState) => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener) }
   /** What a row shows of a saved host: its connection, with `enabled` read as on when an older file left it out. */
   private fields(host: SavedHost): Omit<HostStatus, 'phase'> {
@@ -161,8 +175,8 @@ export class DesktopHosts {
       await this.setup.command(command)
       return this.get()
     }
-    if (this.adding !== undefined && this.adding.id === ('id' in command ? command.id : command.host.id)) {
-      // Add host's own questions are answered in its dialog, and its Cancel ends the attempt.
+    if (this.attemptHost('id' in command ? command.id : command.host.id)) {
+      // Add host's own questions, and the setup's, are answered where the attempt shows, and Cancel ends it.
       if (command.type === 'ssh-answer') { this.live.get(command.id)?.launcher.answerPrompt(command.promptId, command.answer); return this.get() }
       if (command.type === 'disconnect') { await this.cancelAdd(command.id); return this.get() }
     }
@@ -236,27 +250,42 @@ export class DesktopHosts {
    * exception: a host that answers but runs another Sotto version is saved, so its row can say which side to
    * update and offer Stop host for a host Sotto started.
    */
-  private async add(input: Connection): Promise<HostsState> {
+  private async add(input: Connection, slot: 'dialog' | 'setup' = 'dialog'): Promise<HostsState> {
     if (this.closed) return this.get()
-    if (this.adding && this.status.get(this.adding.id)?.phase === 'connecting') throw new Error(`Sotto is still connecting to ${targetHost(this.adding.target)}. Wait for it, or cancel it first.`)
+    this.refuseBusySlot(input, slot)
     if (this.saved.some(item => item.id === input.id)) throw new Error('This host is already saved.')
     validateConnection(input)
     const duplicate = this.saved.find(item => item.target === input.target && (item.sshPort ?? 22) === (input.sshPort ?? 22))
     if (duplicate) throw new Error(`${input.target} is already saved as ${duplicate.name}. ${NOTHING_SAVED} Switch it on in the list instead.`)
-    if (this.adding) await this.cancelAdd(this.adding.id)
+    const previous = slot === 'dialog' ? this.adding : this.setupAttempt
+    if (previous) await this.cancelAdd(previous.id)
     const host: SavedHost = { ...input }
-    this.adding = host
+    if (slot === 'dialog') this.adding = host; else this.setupAttempt = host
     this.status.set(host.id, { ...this.fields(host), phase: 'connecting' })
     this.emit()
     const pending = this.open(host)
-    this.pendingAdd = pending.catch(() => undefined)
+    if (slot === 'dialog') this.pendingAdd = pending.catch(() => undefined); else this.pendingSetup = pending.catch(() => undefined)
     await pending
     return this.get()
   }
+  /**
+   * Add host and the setup each connect to one machine at a time, and never both to the same one, so two adds
+   * cannot save it twice. Anything else runs side by side: neither cancels the other's attempt.
+   */
+  private refuseBusySlot(input: Connection, slot: 'dialog' | 'setup'): void {
+    const own = slot === 'dialog' ? this.adding : this.setupAttempt, other = slot === 'dialog' ? this.setupAttempt : this.adding
+    const connecting = (host: SavedHost | undefined): host is SavedHost => host !== undefined && this.status.get(host.id)?.phase === 'connecting'
+    if (connecting(own)) throw new Error(`Sotto is still connecting to ${targetHost(own.target)}. Wait for it, or cancel it first.`)
+    if (connecting(other) && other.target === input.target && (other.sshPort ?? 22) === (input.sshPort ?? 22)) {
+      throw new Error(slot === 'dialog'
+        ? `An agent is connecting to ${targetHost(input.target)} for its host setup right now. ${NOTHING_SAVED} Wait for it, or stop the setup first.`
+        : `Add host is connecting to ${targetHost(input.target)} right now. ${NOTHING_SAVED} Wait for it to finish, then try again.`)
+    }
+  }
   private async cancelAdd(id: string): Promise<void> {
-    const host = this.adding
-    if (host?.id !== id) return
-    this.adding = undefined
+    const host = this.attemptHost(id)
+    if (!host) return
+    if (this.adding === host) this.adding = undefined; else this.setupAttempt = undefined
     // Pairing already finished, so the host holds a record of this computer that nothing will use. Revoke it
     // while the connection is still open; `closing` keeps the drop the revoke causes from being read as a failure.
     const active = this.live.get(id)
@@ -283,8 +312,8 @@ export class DesktopHosts {
   }
   /** Moves the host Add host connected to into the saved list, switched on. */
   private async commitAdd(host: SavedHost): Promise<void> {
-    if (this.adding !== host) return
-    this.adding = undefined
+    if (!this.isAttempt(host)) return
+    if (this.adding === host) this.adding = undefined; else this.setupAttempt = undefined
     delete host.enabled
     this.saved = [...this.saved, host]
     await this.save()
@@ -321,12 +350,12 @@ export class DesktopHosts {
     void this.open(host).catch(() => undefined)
   }
   private async open(host: SavedHost): Promise<void> {
-    const adding = this.adding === host
+    const adding = this.isAttempt(host)
     const wasOn = host.enabled !== false
     if (this.live.has(host.id)) await this.disconnect(host.id, true)
     // Tearing down the previous session takes a moment. A switch-off, Forget, edit or cancelled add in that
     // moment already cleared the row, so this attempt has nothing left to connect for.
-    if (this.closed || (adding ? this.adding !== host : !this.saved.includes(host)) || (wasOn && host.enabled === false)) return
+    if (this.closed || (adding ? !this.isAttempt(host) : !this.saved.includes(host)) || (wasOn && host.enabled === false)) return
     const active: LiveHost = { launcher: this.options.launcher?.() ?? new SshHostLauncher(), generation: ++this.generation }
     this.live.set(host.id, active)
     this.status.set(host.id, { ...this.status.get(host.id), ...this.fields(host), phase: 'connecting', reconnecting: this.retries.has(host.id) && !this.retries.get(host.id)!.first, error: undefined,
@@ -345,7 +374,7 @@ export class DesktopHosts {
       if (!this.options.credentials.has(`remote-host:${host.id}`)) await this.pairOverTunnel(host, active)
       await this.openSocket(host, active)
       if (adding) {
-        if (this.adding === host && this.live.get(host.id) === active) await this.commitAdd(host)
+        if (this.isAttempt(host) && this.live.get(host.id) === active) await this.commitAdd(host)
         // Cancelled while the socket opened: the credential it paired with belongs to nothing.
         else await this.forgetCredential(host.id)
       }
@@ -353,7 +382,7 @@ export class DesktopHosts {
       let failure = error instanceof Error ? error : new Error('The host could not connect. Check its SSH settings and try again.')
       const otherVersion = error instanceof HostConnectionError && error.code === 'version_mismatch' && this.live.get(host.id) === active
       // A host that answers with another version is the right host, so Add host keeps it (see add()).
-      if (otherVersion && this.adding === host) await this.commitAdd(host)
+      if (otherVersion && this.isAttempt(host)) await this.commitAdd(host)
       if (otherVersion && active.tunnel) {
         const newer = active.socket?.hostIsNewer() ?? false
         await active.socket?.close().catch(() => undefined)
@@ -398,7 +427,7 @@ export class DesktopHosts {
         delete host.hostId; delete host.clientId
         await this.forgetCredential(host.id)
         // A cancelled add has no dialog left to tell.
-        if (this.adding === host) this.update(host.id, { phase: 'error', reconnecting: false, error: unsavedMessage(failure.message), step, fix, reason, tailscale: waited })
+        if (this.isAttempt(host)) this.update(host.id, { phase: 'error', reconnecting: false, error: unsavedMessage(failure.message), step, fix, reason, tailscale: waited })
         return
       }
       // A host forgotten or edited while it connected has no row left for this attempt to report to.
@@ -436,20 +465,21 @@ export class DesktopHosts {
   }
   /**
    * A host setup check (ADR-0035): Add host's own connect on a device, as far as the host answering through the
-   * forward, and nothing more. It pairs nothing and saves nothing. It takes Add host's place while it runs, so
-   * the dialog's checklist shows it, and SSH's questions and Tailscale's approval are answered there.
+   * forward, and nothing more. It pairs nothing and saves nothing. It runs in the setup's own slot, beside any
+   * attempt of Add host's, so neither cancels the other; the setup's checklist shows it, and SSH's questions and
+   * Tailscale's approval are answered there.
    */
   async check(input: Connection): Promise<HostStatus | undefined> {
     if (this.closed) throw new Error('Sotto is closing. Nothing was checked.')
-    if (this.adding && this.status.get(this.adding.id)?.phase === 'connecting') throw new Error(`Sotto is still connecting to ${targetHost(this.adding.target)}. Wait for it, or cancel it first.`)
+    this.refuseBusySlot(input, 'setup')
     validateConnection(input)
-    if (this.adding) await this.cancelAdd(this.adding.id)
+    if (this.setupAttempt) await this.cancelAdd(this.setupAttempt.id)
     const host: SavedHost = { ...input }
-    this.adding = host
+    this.setupAttempt = host
     this.status.set(host.id, { ...this.fields(host), phase: 'connecting', step: 'reach' })
     this.emit()
     const pending = this.runCheck(host)
-    this.pendingAdd = pending.catch(() => undefined)
+    this.pendingSetup = pending.catch(() => undefined)
     await pending
     return this.attempt(host.id)
   }
@@ -463,7 +493,7 @@ export class DesktopHosts {
       await active.launcher.disconnect().catch(() => undefined)
       if (this.live.get(host.id) !== active) return
       this.live.delete(host.id)
-      if (this.adding === host) this.update(host.id, { phase: 'disconnected', step: 'pair', checked: true, owned: active.tunnel.owned })
+      if (this.setupAttempt === host) this.update(host.id, { phase: 'disconnected', step: 'pair', checked: true, owned: active.tunnel.owned })
     } catch (error) {
       const failure = error instanceof Error ? error : new Error('The host could not connect. Check its SSH settings and try again.')
       await active.launcher.disconnect().catch(() => undefined)
@@ -471,7 +501,7 @@ export class DesktopHosts {
       this.live.delete(host.id)
       const { step, fix, reason, waited } = this.failureFields(host, active, failure)
       // A cancelled check has no dialog left to tell.
-      if (this.adding === host) this.update(host.id, { phase: 'error', reconnecting: false, error: unsavedMessage(failure.message), step, fix, reason, tailscale: waited })
+      if (this.setupAttempt === host) this.update(host.id, { phase: 'error', reconnecting: false, error: unsavedMessage(failure.message), step, fix, reason, tailscale: waited })
     }
   }
   private async pairOverTunnel(host: SavedHost, active: LiveHost): Promise<void> {
@@ -580,7 +610,8 @@ export class DesktopHosts {
     // A host still being added is cancelled as its dialog's Cancel would, and its connect is waited for, so
     // the quit drain does not end before its credential is cleared and its pairing revoked.
     if (this.adding) await this.cancelAdd(this.adding.id).catch(() => undefined)
-    await this.pendingAdd
+    if (this.setupAttempt) await this.cancelAdd(this.setupAttempt.id).catch(() => undefined)
+    await Promise.all([this.pendingAdd, this.pendingSetup])
     await Promise.allSettled([...this.live.keys()].map(id => this.disconnect(id))); await this.writing
   }
 }
