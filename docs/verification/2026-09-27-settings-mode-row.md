@@ -12,4 +12,4 @@ Both gate states were checked in light/dark with reduced motion at 1600 by 1000,
 
 ![Three rooms at typical width](../../artifacts/review-388/settings-three-1280-dark.png)
 
-Static gates, full two-worker suite and independent Standards/Spec review remain pending. No paid providers, production profile or physical microphone were used; macOS was not exercised.
+Typecheck, lint, notices and build passed. Independent native Astra Standards and Spec reviews at `f5b4eba2` and root visual/code review reported zero findings. Later main integration at `53bb7910` preserves the same CSS and desktop assertions. The full two-worker suite remains pending. No paid providers, production profile or physical microphone were used; macOS was not exercised.
