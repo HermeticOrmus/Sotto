@@ -84,9 +84,9 @@ describe('discoverSshHosts', () => {
       'omarchy ssh-ed25519 AAAA',
     ].join('\n'))
     expect(await discoverSshHosts({ home })).toEqual([
-      { alias: 'pihole', source: 'config', detail: 'pi@100.77.163.67' },
+      { alias: 'pihole', source: 'config', detail: 'pi@100.77.163.67', hostname: '100.77.163.67' },
       { alias: 'omarchy', source: 'config' },
-      { alias: 'forge', source: 'config', detail: 'zach@forge.tail5728ca.ts.net' },
+      { alias: 'forge', source: 'config', detail: 'zach@forge.tail5728ca.ts.net', hostname: 'forge.tail5728ca.ts.net' },
       { alias: 'alpha.example.net', source: 'known-hosts', port: 2200, detail: 'alpha.example.net:2200' },
       { alias: 'zeta.example.net', source: 'known-hosts' },
     ])

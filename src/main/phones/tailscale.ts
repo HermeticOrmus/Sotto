@@ -20,6 +20,8 @@ export interface TailscaleRunOptions {
   readonly timeoutMs: number
   /** Stops the run as soon as its output matches, such as the CLI waiting on a consent page. */
   readonly stopOn?: RegExp
+  /** Hears everything printed so far, each time more arrives, while the run goes on. */
+  readonly watch?: (output: string) => void
 }
 /** Runs one CLI command. Rejects with an `ENOENT` error when the executable is not there. */
 export type TailscaleRun = (executable: string, args: readonly string[], options: TailscaleRunOptions) => Promise<TailscaleRunResult>
@@ -40,11 +42,12 @@ export const runTailscale: TailscaleRun = (executable, args, options) => new Pro
     const exit = error === null ? 0 : stopped || typeof (error as { code?: unknown }).code !== 'number' ? null : (error as unknown as { code: number }).code
     resolve({ code: exit, stdout: String(stdout), stderr: String(stderr) })
   })
-  if (options.stopOn) {
+  if (options.stopOn || options.watch) {
     let seen = ''
     const watch = (chunk: unknown): void => {
       seen += String(chunk)
-      if (!stopped && options.stopOn!.test(seen)) { stopped = true; child.kill() }
+      options.watch?.(seen)
+      if (!stopped && options.stopOn?.test(seen)) { stopped = true; child.kill() }
     }
     child.stdout?.on('data', watch)
     child.stderr?.on('data', watch)
@@ -116,26 +119,32 @@ export type ServeResult =
   | { readonly ok: false; readonly reason: 'not-enabled'; readonly enableUrl?: string }
   | { readonly ok: false; readonly reason: 'failed' }
 
-/** The CLI, found once and remembered. Each method answers in terms the Phones page can say plainly. */
-export class TailscaleCli {
-  private executable: string | undefined
-  constructor(private readonly run: TailscaleRun = runTailscale, private readonly candidates: readonly string[] = tailscaleCandidates()) {}
+/** Runs a command on the first executable that exists, or answers `missing` when none does. */
+export type TailscaleInvoke = (args: readonly string[], options: TailscaleRunOptions) => Promise<TailscaleRunResult | 'missing'>
 
-  /** Runs a command on the first executable that exists, or answers `missing` when none does. */
-  private async invoke(args: readonly string[], options: TailscaleRunOptions): Promise<TailscaleRunResult | 'missing'> {
-    const order = this.executable ? [this.executable] : this.candidates
+/** Finds the CLI on first use and remembers the executable that ran, until it stops being there. */
+export function tailscaleInvoker(run: TailscaleRun = runTailscale, candidates: readonly string[] = tailscaleCandidates()): TailscaleInvoke {
+  let executable: string | undefined
+  return async (args, options) => {
+    const order = executable ? [executable] : candidates
     for (const candidate of order) {
       try {
-        const result = await this.run(candidate, args, options)
-        this.executable = candidate
+        const result = await run(candidate, args, options)
+        executable = candidate
         return result
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
       }
     }
-    this.executable = undefined
+    executable = undefined
     return 'missing'
   }
+}
+
+/** The CLI, found once and remembered. Each method answers in terms the Phones page can say plainly. */
+export class TailscaleCli {
+  private readonly invoke: TailscaleInvoke
+  constructor(run: TailscaleRun = runTailscale, candidates: readonly string[] = tailscaleCandidates()) { this.invoke = tailscaleInvoker(run, candidates) }
 
   async status(): Promise<TailscaleStatus> {
     const result = await this.invoke(['status', '--json'], { timeoutMs: 10_000 })

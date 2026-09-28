@@ -1,27 +1,32 @@
 import { z } from 'zod'
-import { HOSTS_GET, HOSTS_COMMAND, HOSTS_SSH_SUGGESTIONS, hostsCommandSchema, type HostsState, type SshHostSuggestion } from '../../shared/hosts'
+import { HOSTS_GET, HOSTS_COMMAND, hostsCommandSchema, type HostsState } from '../../shared/hosts'
+import { HOSTS_DEVICES, HOSTS_TAILSCALE, HOSTS_TAILSCALE_CONNECT, HOSTS_TAILSCALE_DOWNLOAD } from '../../shared/hostDevices'
 import { isAuthorizedIpcSender, type IpcMainAdapter, type TrustedIpcSender } from '../ipc/registerIpc'
 import type { DesktopHosts } from './desktopHosts'
-import { discoverSshHosts } from './sshSuggestions'
+import type { HostTailscale } from './tailscale'
 
 export function registerHostsIpc(ipc: IpcMainAdapter, hosts: DesktopHosts, senders: () => readonly TrustedIpcSender[], publish: (state: HostsState) => void,
-  suggestions: () => Promise<SshHostSuggestion[]> = () => discoverSshHosts()): () => void {
-  ipc.handle(HOSTS_GET, (event, ...args) => {
-    if (!isAuthorizedIpcSender(event, senders(), ['main'])) throw new Error('Open Hosts in the main Sotto window.')
-    z.tuple([]).parse(args)
-    return hosts.get()
-  })
+  tailscale: Pick<HostTailscale, 'devices' | 'status' | 'connect' | 'openDownload'>): () => void {
+  const answer = <T>(channel: string, run: () => T): void => {
+    ipc.handle(channel, (event, ...args) => {
+      if (!isAuthorizedIpcSender(event, senders(), ['main'])) throw new Error('Open Hosts in the main Sotto window.')
+      z.tuple([]).parse(args)
+      return run()
+    })
+  }
+  answer(HOSTS_GET, () => hosts.get())
   ipc.handle(HOSTS_COMMAND, (event, ...args) => {
     if (!isAuthorizedIpcSender(event, senders(), ['main'])) throw new Error('Open Hosts in the main Sotto window.')
     const [command] = z.tuple([hostsCommandSchema]).parse(args)
     return hosts.command(command)
   })
-  // The SSH configuration and known hosts are read on each request, so an alias added a moment ago is offered.
-  ipc.handle(HOSTS_SSH_SUGGESTIONS, (event, ...args) => {
-    if (!isAuthorizedIpcSender(event, senders(), ['main'])) throw new Error('Open Hosts in the main Sotto window.')
-    z.tuple([]).parse(args)
-    return suggestions()
-  })
+  // Tailscale and the SSH setup are read on each request, so a device that just came online, or an alias
+  // added a moment ago, is listed.
+  answer(HOSTS_DEVICES, () => tailscale.devices())
+  answer(HOSTS_TAILSCALE, () => tailscale.status())
+  answer(HOSTS_TAILSCALE_CONNECT, () => tailscale.connect())
+  answer(HOSTS_TAILSCALE_DOWNLOAD, () => tailscale.openDownload())
   const off = hosts.subscribe(publish)
-  return () => { off(); ipc.removeHandler(HOSTS_GET); ipc.removeHandler(HOSTS_COMMAND); ipc.removeHandler(HOSTS_SSH_SUGGESTIONS) }
+  const channels = [HOSTS_GET, HOSTS_COMMAND, HOSTS_DEVICES, HOSTS_TAILSCALE, HOSTS_TAILSCALE_CONNECT, HOSTS_TAILSCALE_DOWNLOAD]
+  return () => { off(); for (const channel of channels) ipc.removeHandler(channel) }
 }
