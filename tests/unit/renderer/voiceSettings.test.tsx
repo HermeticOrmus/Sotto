@@ -15,7 +15,7 @@ function harness(ready = false, options: { configuration?: Partial<AgentConfigur
   function View() {
     const [configuration, setConfiguration] = useState({ ...defaultAgentConfiguration(), speechProvider: 'natural' as const, ...options.configuration })
     const change = <K extends keyof AgentConfiguration>(key: K, value: AgentConfiguration[K]): void => { setConfiguration(current => ({ ...current, [key]: value })) }
-    return <VoiceSettings configuration={configuration} change={change} command={command} grokKeySaved={options.keySaved} voiceError={options.voiceError} />
+    return <VoiceSettings configuration={configuration} change={change} command={command} {...(options.keySaved === undefined ? {} : { grokKeySaved: options.keySaved })} {...(options.voiceError === undefined ? {} : { voiceError: options.voiceError })} />
   }
   render(<View />)
   return { command, voiceModel, grokVoices, getSettings }
@@ -24,7 +24,7 @@ function harness(ready = false, options: { configuration?: Partial<AgentConfigur
 describe('natural voice setup', () => {
   it('allows stopping a preview without enabling agent control', async () => {
     const h = harness()
-    fireEvent.click(screen.getByRole('button', { name: 'Stop speech', exact: true }))
+    fireEvent.click(screen.getByRole('button', { name: 'Stop speech' }))
     expect(h.command).toHaveBeenCalledExactlyOnceWith({ type: 'voice', action: 'stop-speaking' })
   })
 

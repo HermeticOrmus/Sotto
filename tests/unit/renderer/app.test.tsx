@@ -233,8 +233,8 @@ describe('Sotto application onboarding integration', () => {
     const bridge = createBridge({
       getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, onboardingComplete: true })),
       listRecoveryNotices: vi.fn(async () => [
-        { code: 'SETTINGS_RECOVERED' },
-        { code: 'HISTORY_RECOVERED' },
+        { code: 'SETTINGS_RECOVERED' as const },
+        { code: 'HISTORY_RECOVERED' as const },
       ]),
       onRecoveryNotice: vi.fn((listener) => {
         recoveryListener = listener
@@ -353,7 +353,7 @@ describe('Sotto application onboarding integration', () => {
     await user.click(screen.getByRole('link', { name: 'Settings' }))
     const root = document.documentElement
 
-    await user.click(screen.getByRole('tab', { name: 'Appearance', exact: true }))
+    await user.click(screen.getByRole('tab', { name: 'Appearance' }))
     const lightHalf = (): HTMLElement => screen.getByRole('radiogroup', { name: 'Light theme' })
     await user.click(screen.getByRole('radio', { name: 'Light' }))
     expect(root).toHaveAttribute('data-theme', 'light')
@@ -398,7 +398,7 @@ describe('Sotto application onboarding integration', () => {
     await user.click(screen.getByRole('link', { name: 'Settings' }))
     const root = document.documentElement
 
-    await user.click(screen.getByRole('tab', { name: 'Appearance', exact: true }))
+    await user.click(screen.getByRole('tab', { name: 'Appearance' }))
     const lightHalf = (): HTMLElement => screen.getByRole('radiogroup', { name: 'Light theme' })
     await user.click(screen.getByRole('radio', { name: 'Light' }))
     await user.click(within(lightHalf()).getByRole('radio', { name: 'Tropic' }))
@@ -900,7 +900,7 @@ describe('transcription pipeline prewarm', () => {
     expect(screen.getByText(copy.accessibilityHelp ?? '')).toBeVisible()
 
     await user.click(screen.getByRole('link', { name: /settings/i }))
-    await user.click(screen.getByRole('tab', { name: 'Application', exact: true }))
+    await user.click(screen.getByRole('tab', { name: 'Application' }))
     expect(await screen.findByRole('switch', { name: copy.settingsLaunchAtStartupLabel })).toBeVisible()
   })
 })
