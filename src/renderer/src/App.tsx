@@ -250,7 +250,7 @@ export function App({ createMicrophoneTest = () => new BrowserMicrophoneTest() }
       ) {
         setMicrophoneLevel(level)
       }
-    }).catch(() => 'error' as const)
+    }, latestSettingsRef.current?.microphoneId ?? undefined).catch(() => 'error' as const)
     if (
       !microphoneMountedRef.current ||
       microphoneGenerationRef.current !== generation ||

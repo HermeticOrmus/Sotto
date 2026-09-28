@@ -113,7 +113,7 @@ Sotto is a desktop dictation app that is becoming a voice development coordinato
 
 **Terminal.** In Terminal mode, a shell or a provider CLI that Sotto starts in a project folder or in its own worktree, named by the user when it opens. It belongs to a project, never to a thread, and keeps running while its pane is hidden. Distinct from the Tools panel's terminal, which belongs to a thread's working copy. Its first line, printed by Sotto, names the folder and the command.
 
-**Closed.** Terminal mode's counterpart to Settled: the shelf of terminals ended this session, which can be reopened with the same command until Sotto quits.
+**Closed.** Terminal mode's counterpart to Settled: the shelf of terminals explicitly closed this session, which can be reopened with the same command until Sotto quits. Every row stays; its old output is released on Close. Stop and a process exiting leave its output readable. The 64-terminal limit counts terminals outside Closed.
 
 **Thread binding.** The durable relationship between a Sotto thread, its provider session and its project. Historical bindings survive a provider's retirement and never grant a replacement provider authority over that thread.
 
@@ -172,7 +172,7 @@ Answering a question or permission request and creating a project are also part 
 
 **Watched set.** The threads the host keeps in memory and keeps a provider session for: the threads on screen, plus assigned or queued ones. It is what `observeThreads` names. A thread outside it carries its summary alone, so startup and publish cost follow the open panes rather than the whole archive. Avoid: "active threads", "open threads".
 
-**Session reaper.** The host's sweep, every five minutes, that stops a provider session idle for thirty minutes. It never stops a session with a running turn, one with a pending request, one with a confirmed live monitoring task or background work, or one in the watched set, and stopping one costs only a resume because the resume cursor stays on the host.
+**Session reaper.** The host's sweep, every five minutes, that stops a provider session idle for thirty minutes. It never stops a session with a running turn, one with a pending request, one with a confirmed live monitoring task or background work, or one in the watched set, and stopping one costs only a resume because the resume cursor stays on the host. An in-flight history read defers its session's stop without renewing idle age or holding another session open. Empty polls do not count as activity; newly read provider events do.
 
 **Held thread.** A thread whose messages its adapter keeps in memory: it is in the watched set, its provider session is still open, or nothing has yet said what is watched (`ThreadMessageLog.holding`). The session reaper decides how long an idle one stays held, so during a working session most threads are. A held thread's messages still reach the workspace only as thread events, never in the activity snapshots it reads, a thread refresh, or the snapshot a confirmed thread settings change hands back (ADR-0016). Not to be confused with a **held action**, one action of a live turn that has run for twenty seconds or more. Avoid: "loaded thread", "open thread".
 

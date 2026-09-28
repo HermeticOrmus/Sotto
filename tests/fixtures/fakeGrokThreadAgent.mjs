@@ -160,7 +160,7 @@ const control = setInterval(() => {
   const last = entries.at(-1)
   if (last) { sessions[command.sessionId].updates = sessions[command.sessionId].updates.filter(entry => !entries.includes(entry) || entry === last); last.params.update.content.text = text; save() }
  }
- if (command.type === 'activity') update(command.sessionId,command.update,command.extension ?? false)
+ if (command.type === 'activity') update(command.sessionId,command.update,command.extension ?? false,command.notify ?? true)
  if (command.type === 'replay') { const entry = sessions[command.sessionId].updates.at(-1); if (entry) send(entry) }
  if (command.type === 'malformed') process.stdout.write('{bad json}\n')
  if (command.type === 'inherited-exit') {spawn(process.execPath,['-e','setTimeout(()=>{},1000)'],{stdio:['ignore',process.stdout,process.stderr],windowsHide:true});process.exit(0)}
