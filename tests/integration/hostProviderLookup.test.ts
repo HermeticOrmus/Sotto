@@ -3,9 +3,10 @@
  * A headless host connects every provider that is installed and signed in when it starts, finds one a version
  * manager installed, and keeps a provider the user disconnected off across restarts (#459, ADR-0036).
  */
+import { existsSync } from 'node:fs'
 import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { startHeadlessHost } from '../../src/host'
@@ -136,22 +137,33 @@ describe.skipIf(process.platform === 'win32')('a headless host on a machine whos
     const home = join(root, 'home'), data = join(root, 'data'), state = join(root, 'claude-state')
     const installs = join(home, '.local', 'share', 'mise', 'installs')
     await mkdir(state, { recursive: true })
-    // mise keeps each version in its own folder and links `latest` to the newest.
-    await mkdir(join(installs, 'claude', '2.1.281', 'bin'), { recursive: true })
+    const script = async (path: string, body: string): Promise<void> => {
+      await mkdir(dirname(path), { recursive: true }); await writeFile(path, body); await chmod(path, 0o755)
+    }
+    // mise keeps each version in its own folder and links `latest` to the newest. Its Node says it ran, so the
+    // test can tell it from any other Node on the machine.
+    await script(join(installs, 'claude', '2.1.281', 'bin', 'claude'), `#!/usr/bin/env node\nrequire('node:fs').appendFileSync(${JSON.stringify(join(state, 'node.log'))}, (process.env.SOTTO_FAKE_NODE ?? 'another Node') + '\\n')\nprocess.argv.splice(2, 0, ${JSON.stringify(state)})\nimport(${JSON.stringify(pathToFileURL(resolve('tests/fixtures/fakeClaudeThread.mjs')).href)})\n`)
     await symlink('./2.1.281', join(installs, 'claude', 'latest'))
-    await mkdir(join(installs, 'node', '24.21.0', 'bin'), { recursive: true })
-    await symlink(process.execPath, join(installs, 'node', '24.21.0', 'bin', 'node'))
+    await script(join(installs, 'node', '24.21.0', 'bin', 'node'), `#!/bin/sh\nexport SOTTO_FAKE_NODE=installs\nexec ${JSON.stringify(process.execPath)} "$@"\n`)
     await symlink('./24.21.0', join(installs, 'node', 'latest'))
-    // The mise shim is mise itself; the lookup must pass it over for the install.
+    // mise itself, a shim that resolves to it, and forge's ~/.local/bin wrapper that runs `mise x`. Each would run
+    // mise, which says so; the lookup must pass all of them over for the install.
+    const mise = join(root, 'usr', 'bin', 'mise')
+    await script(mise, `#!/bin/sh\necho "$@" >> ${JSON.stringify(join(state, 'mise.log'))}\nexit 1\n`)
     await mkdir(join(home, '.local', 'share', 'mise', 'shims'), { recursive: true })
-    const cli = join(installs, 'claude', '2.1.281', 'bin', 'claude')
-    await writeFile(cli, `#!/usr/bin/env node\nprocess.argv.splice(2, 0, ${JSON.stringify(state)})\nimport(${JSON.stringify(pathToFileURL(resolve('tests/fixtures/fakeClaudeThread.mjs')).href)})\n`)
-    await chmod(cli, 0o755)
+    await symlink(mise, join(home, '.local', 'share', 'mise', 'shims', 'claude'))
+    await script(join(home, '.local', 'bin', 'claude'), `#!/bin/bash\n${mise} use -g --quiet claude || exit 1\nexec ${mise} x claude -- claude "$@"\n`)
+    // forge's login shell puts mise's shims and ~/.local/bin on PATH, as its profile does.
+    const shell = join(root, 'login-shell')
+    await script(shell, '#!/bin/sh\nPATH="$HOME/.local/share/mise/shims:$HOME/.local/bin:$PATH"\nexport PATH\nshift\nexec /bin/sh "$@"\n')
     // Nothing saved names Claude Code. The others are turned off, so the host starts no client this machine has.
     await saved(data, { enabledProviders: [], disconnectedProviders: ['codex', 'grok', 'devin'] })
 
+    // forge's PATH held no Node and no Claude Code; a runner's /usr/local/bin may hold both, so it is left out.
+    const path = ['/usr/local/bin', '/usr/bin', '/bin'].filter(entry => !existsSync(join(entry, 'node')) && !existsSync(join(entry, 'claude')))
+    expect(path).toContain('/usr/bin')
     for (const key of keys) delete process.env[key]
-    Object.assign(process.env, { PATH: '/usr/local/bin:/usr/bin:/bin', HOME: home, SHELL: '/bin/sh' })
+    Object.assign(process.env, { PATH: path.join(':'), HOME: home, SHELL: shell })
     resetCliLookup()
     const host = await startHeadlessHost({ dataDirectory: data, reasoner: e2eAgentReasoner })
     hosts.push(host)
@@ -162,7 +174,11 @@ describe.skipIf(process.platform === 'win32')('a headless host on a machine whos
     const result = await host.service.command({ type: 'create-project', provider: 'claude', title: 'site', path: project }, client)
     expect(result.error).toBeNull()
     expect(host.service.shell().host.projects.map(item => item.path)).toContain(project)
-    // The CLI ran as mise installed it, not as the shim, and found Node through the PATH the host gave it.
     expect(await readFile(join(state, 'violations.jsonl'), 'utf8').catch(() => '')).toBe('')
+    // Every Claude Code process ran as mise installed it, on mise's Node from the PATH the host gave it, and none
+    // went through mise.
+    const nodes = (await readFile(join(state, 'node.log'), 'utf8')).trim().split('\n')
+    expect(new Set(nodes)).toEqual(new Set(['installs']))
+    expect(existsSync(join(state, 'mise.log'))).toBe(false)
   })
 })
