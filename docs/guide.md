@@ -70,6 +70,8 @@ A screenshot is kept once, as a file on the computer that runs the thread (the h
 
 You can create a thread from the Threads page while another thread has a saved coordinator draft. The draft stays with its original thread, including while the voice coordinator is hidden for the beta.
 
+Stop can cancel running work even when the provider has not confirmed the last prompt. That prompt stays unconfirmed until the provider reports receiving it; stopping does not resend it or discard its saved identity.
+
 ### History and copying
 
 A thread's messages and retained activity are Sotto's own record, kept in `threads.sqlite` in the app's data folder rather than rebuilt from the provider each time Sotto starts. A thread pane opens on its newest ten turns; press **Show earlier messages** above the oldest one to read further back. A provider session starts when you open or send to a thread, not at connect, and one left idle for thirty minutes is stopped until the next time it is needed. With **Keep local history** off, no message text or activity output is written to disk; turning it off removes the text already written, and what was not kept cannot be recovered. See [ADR-0016](adr/0016-sotto-owned-history-on-an-event-store.md).
@@ -377,6 +379,7 @@ Builds are ad-hoc signed and not notarized, so anyone installing the disk image 
 - **"Too many requests":** OpenRouter is rate limiting the key. Wait a minute, then dictate again.
 - **"OpenRouter error" or "Couldn't transcribe":** OpenRouter's transcription service failed, or its answer could not be read. Dictate again in a moment. If it keeps happening, `transcription-diagnostics.jsonl` in the app's data folder records each failure's reason and HTTP status, without any of your words.
 - **AI cleanup not applied:** Check that AI cleanup is enabled and that the computer is online. When cleanup fails or times out, Sotto delivers the raw transcript instead of failing the dictation.
+- **Thread messages could not be saved:** Restore access to local storage and refresh. Sotto keeps failed messages in order and retries while it is open, waiting longer between repeated failures. Saving a thread name does not clear this warning. Quitting makes one final attempt, but messages still unsaved cannot survive a restart. Turning Keep local history off keeps pending messages only for this run; turning it back on does not save words from while it was off.
 - **Terminal view could not load:** Press **Reload window** to try again. Terminals keep running and retain their output. Sotto saves thread drafts first and keeps the window open if any thread draft or question answer is not saved. Save those drafts, then try again.
 - **Window disappeared:** Sotto is probably hidden in the Windows notification area or the macOS menu bar. Open it from that icon or start Sotto again; the existing instance will be shown.
 - **A thread never asks:** The provider says a request only you can answer was declined without reaching you. Its client is not routing those requests, so it answers them itself and the thread keeps working. Nothing in the thread is lost. Answer in that client meanwhile, and check **Settings → Providers** for a client update and Sotto for its own.
