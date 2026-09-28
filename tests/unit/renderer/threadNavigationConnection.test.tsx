@@ -335,13 +335,15 @@ describe('thread navigation through the real renderer connection and controller'
     }
   })
 
-  it('queues a follow-up on a running thread with its skill through the real controller and disk, and sends it once after review', async () => {
+  it.each([false, true])('queues a follow-up on a running thread with its skill through the real controller and disk, and sends it once after review (hold queue observation: %s)', async holdObservation => {
     const f = await draftFixture()
     const skill = { name: 'deploy', path: 'C:/sotto-test/.agents/skills/deploy/SKILL.md' }
     let controls!: ReturnType<typeof useAgents>
     function Observer() { controls = useAgents(); return null }
     const executeSpy = vi.spyOn(f.host, 'execute')
     const sends = () => executeSpy.mock.calls.filter(([request]) => request.type === 'send')
+    let deliver = (): void => undefined
+    let releaseObservation = (): void => undefined
     try {
       await f.control.command({ type: 'select-thread', threadId: 'workshop' })
       f.host.event({ type: 'manual', threadId: 'workshop', text: 'Start the long job' })
@@ -367,22 +369,47 @@ describe('thread navigation through the real renderer connection and controller'
       await within(queue).findByText('Paused')
       expect(sends()).toEqual([])
       // Hold the provider while the follow-up is on its way: a newer revision still lines up behind it.
-      let deliver!: () => void
       const provider = new Promise<void>(done => { deliver = done })
       executeSpy.mockImplementation(async request => { if (request.type === 'send') await provider; return E2EAgentHost.prototype.execute.call(f.host, request) })
       fireEvent.click(within(queue).getByRole('button', { name: 'Resume queue' }))
       await waitFor(() => expect(sends()).toEqual([[expect.objectContaining({ threadId: 'workshop', text: 'Then run $deploy', skills: [skill] })]]))
       await within(queue).findByText('Sending')
+      if (holdObservation) {
+        // A separate toolbar refusal can finish while the queue's durable write is being acknowledged.
+        const write = AtomicJsonStore.prototype.write
+        let refusedToolbar = false
+        vi.spyOn(AtomicJsonStore.prototype, 'write').mockImplementation(async function (this: AtomicJsonStore<unknown>, value) {
+          await write.call(this, value)
+          if (!refusedToolbar && (value as { items?: { text: string }[] }).items?.some(item => item.text === 'And then post the link')) {
+            refusedToolbar = true
+            await f.control.command({ type: 'refresh-thread-worktree', threadId: 'workshop' })
+          }
+        })
+        // Model the published shell not having committed yet; the command reply still carries exact ownership.
+        const receive = controls.threadDrafts.receive.bind(controls.threadDrafts)
+        let pending: AgentState | undefined
+        const observation = vi.spyOn(controls.threadDrafts, 'receive').mockImplementation(state => {
+          if (state.followups?.some(item => item.text === 'And then post the link')) { pending = state; return }
+          receive(state)
+        })
+        releaseObservation = () => { observation.mockRestore(); if (pending) receive(pending) }
+      }
       act(() => controls.threadDrafts.edit('workshop', { text: 'And then post the link' }))
+      const secondDraftId = controls.threadDrafts.draft('workshop').draftId
+      const resolved = vi.spyOn(controls.threadDrafts, 'resolve')
       expect(screen.getByRole('button', { name: 'Queue prompt' })).toBeEnabled()
       fireEvent.keyDown(prompt, { key: 'Enter' })
       await waitFor(() => expect(f.control.get().followups?.map(item => [item.text, item.status])).toEqual([['Then run $deploy', 'dispatching'], ['And then post the link', 'queued']]))
+      await waitFor(() => expect(resolved.mock.calls.some(([threadId, draftId]) => threadId === 'workshop' && draftId === secondDraftId)).toBe(true))
       await waitFor(() => expect(prompt).toHaveValue(''))
+      if (holdObservation) expect(f.control.get().error).toBe('Working-copy status is unavailable.')
+      await act(async () => { releaseObservation() })
+      expect(prompt).toHaveValue('')
       await act(async () => { deliver() })
       await waitFor(() => expect(f.control.get().followups?.map(item => item.text)).toEqual(['And then post the link']))
       expect(f.control.get().host.threads.find(thread => thread.id === 'workshop')!.messages.filter(message => message.text === 'Then run $deploy')).toHaveLength(1)
       await act(async () => { await controls.command({ type: 'refresh' }) })
       expect(sends()).toHaveLength(1)
-    } finally { await f.close() }
+    } finally { releaseObservation(); deliver(); await f.close() }
   })
 })
