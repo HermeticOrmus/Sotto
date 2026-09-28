@@ -8,6 +8,11 @@ import { AtomicJsonStore } from '../../../src/main/storage/atomicJsonStore'
 import { SCREENSHOT_NOT_ITS_TYPE, SCREENSHOT_TOO_LARGE, SCREENSHOT_WRONG_TYPE } from '../../../src/shared/agents'
 import { handleOf, PIXEL_PNG, pngOfSize } from '../../fixtures/stagedImages'
 
+vi.mock('node:fs/promises', async importOriginal => {
+  const fs = await importOriginal<typeof import('node:fs/promises')>()
+  return { ...fs, readFile: vi.fn(fs.readFile) }
+})
+
 const roots: string[] = []
 afterEach(async () => {
   vi.restoreAllMocks()
@@ -60,13 +65,15 @@ describe('the attachment store (ADR-0031)', () => {
     const remote = new AttachmentStore(await directory(), { missing: MISSING_REMOTE_ATTACHMENT }); await remote.load()
     expect(() => remote.verify([handle])).toThrow(MISSING_REMOTE_ATTACHMENT)
   })
-  it('treats content changed on disk since it was staged as gone, and writes it afresh when staged again', async () => {
+  it.each(['missing', 'corrupt'] as const)('treats %s content as gone, and writes it afresh when staged again', async condition => {
     const root = await directory(); const store = new AttachmentStore(root); await store.load()
     const handle = await store.stage(png)
     const file = join(folder(root), `${handle.digest}.png`)
-    await writeFile(file, PIXEL_PNG.subarray(0, PIXEL_PNG.length - 4))
+    if (condition === 'missing') await rm(file)
+    else await writeFile(file, PIXEL_PNG.subarray(0, PIXEL_PNG.length - 4))
     expect(await store.read(handle.digest)).toBeNull()
     expect(store.has(handle.digest)).toBe(false)
+    expect(store.keeps(handle)).toBe(false)
     expect(() => store.verify([handle])).toThrow(MISSING_ATTACHMENT)
     // The damaged file and its index entry go too, so a restart does not take it back as the user's image.
     expect(await readdir(folder(root))).toEqual(['index.json'])
@@ -75,6 +82,8 @@ describe('the attachment store (ADR-0031)', () => {
     expect(afterDamage.has(handle.digest)).toBe(false)
     await store.stage(png)
     expect(await store.read(handle.digest)).toEqual(PIXEL_PNG)
+    const restored = new AttachmentStore(root); await restored.load()
+    expect(await restored.read(handle.digest)).toEqual(PIXEL_PNG)
     // Taken back at start the same way: a file that is not its digest's content is never read as it, and is removed once found.
     await writeFile(file, Buffer.concat([PIXEL_PNG, Buffer.from([0])]))
     const restarted = new AttachmentStore(root); await restarted.load()
@@ -83,6 +92,58 @@ describe('the attachment store (ADR-0031)', () => {
     expect(restarted.has(handle.digest)).toBe(false)
     const again = new AttachmentStore(root); await again.load()
     expect(again.has(handle.digest)).toBe(false)
+  })
+  it.each(['missing', 'corrupt'] as const)('leaves concurrently restaged content alone when an older %s read finishes', async condition => {
+    const root = await directory(); const store = new AttachmentStore(root); await store.load()
+    const handle = await store.stage(png)
+    const file = join(folder(root), `${handle.digest}.png`)
+    if (condition === 'missing') await rm(file)
+    else await writeFile(file, Buffer.from('damaged'))
+    // One read observed the bad file but finishes after another read invalidates it and staging repairs it.
+    const stale = Promise.withResolvers<Buffer<ArrayBuffer>>()
+    vi.mocked(readFile).mockReturnValueOnce(stale.promise)
+    const reading = store.read(handle.digest)
+    try {
+      expect(await store.read(handle.digest)).toBeNull()
+      const handles = await Promise.all([store.stage(png), store.stage({ ...png, name: 'Again.png' })])
+      expect(handles.map(item => item.digest)).toEqual([handle.digest, handle.digest])
+      expect(new Set(handles.map(item => item.id)).size).toBe(2)
+    } finally {
+      if (condition === 'missing') stale.reject(Object.assign(new Error('Gone'), { code: 'ENOENT' }))
+      else stale.resolve(Buffer.from('damaged'))
+      await reading
+    }
+    expect(await reading).toBeNull()
+    expect(store.keeps(handle)).toBe(true)
+    expect(await store.read(handle.digest)).toEqual(PIXEL_PNG)
+    expect(await readdir(folder(root))).toEqual(expect.arrayContaining([`${handle.digest}.png`, 'index.json']))
+    expect(await readdir(folder(root))).toHaveLength(2)
+    const restarted = new AttachmentStore(root); await restarted.load()
+    expect(await restarted.read(handle.digest)).toEqual(PIXEL_PNG)
+  })
+  it('propagates a read failure other than missing content without forgetting the image', async () => {
+    const root = await directory(); const store = new AttachmentStore(root); await store.load()
+    const handle = await store.stage(png)
+    const denied = Object.assign(new Error('Read denied'), { code: 'EACCES' })
+    vi.mocked(readFile).mockRejectedValueOnce(denied)
+    await expect(store.read(handle.digest)).rejects.toBe(denied)
+    expect(store.keeps(handle)).toBe(true)
+    expect(await store.read(handle.digest)).toEqual(PIXEL_PNG)
+  })
+  it('keeps a missing image restaged with history off in memory alone', async () => {
+    const root = await directory(); let history = true
+    const store = new AttachmentStore(root, { historyEnabled: () => history }); await store.load()
+    const handle = await store.stage(png)
+    await rm(join(folder(root), `${handle.digest}.png`))
+    expect(await store.read(handle.digest)).toBeNull()
+    history = false
+    await store.stage(png)
+    expect(store.inMemory(handle.digest)).toBe(true)
+    expect(await store.read(handle.digest)).toEqual(PIXEL_PNG)
+    expect(await readdir(folder(root))).toEqual(['index.json'])
+    expect((await index(root)).entries).toEqual([])
+    const restarted = new AttachmentStore(root); await restarted.load()
+    expect(restarted.has(handle.digest)).toBe(false)
   })
   it('converts an image an earlier version kept inline through one path, and answers null for one that is not an image', async () => {
     const root = await directory(); const store = new AttachmentStore(root); await store.load()
