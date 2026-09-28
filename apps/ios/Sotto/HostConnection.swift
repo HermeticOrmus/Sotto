@@ -8,7 +8,7 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
 }
 
 @MainActor final class HostConnection {
-    var onPush: ((JSONValue) -> Void)?
+    var onPush: ((IncomingFrame) -> Void)?
     var onDisconnect: (() -> Void)?
     private let redirects = NoRedirects()
     private var made: URLSession?
@@ -72,7 +72,7 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
                     let message = try await task.receive()
                     let data: Data
                     switch message { case .string(let text): data = Data(text.utf8); case .data(let bytes): data = bytes; @unknown default: throw ClientError.invalidProtocol }
-                    let frame = try Wire.decode(data)
+                    let frame = try await Wire.readFrame(data)
                     guard let self, self.generation == current else { return }
                     self.receive(frame)
                 } catch {
@@ -81,7 +81,8 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
                 }
             }
         }
-        let hello = try await call(["op": .string("hello")]).decode(Hello.self)
+        let helloResult = try await call(Wire.snapshotHello)
+        let hello = try await Wire.readValue(helloResult, as: Hello.self)
         guard hello.hostId == pairing.hostId, hello.clientId == pairing.clientId else { disconnect(); throw ClientError.invalidIdentity }
         try hello.shell.validate(hostID: pairing.hostId)
         return hello
@@ -113,14 +114,12 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
             }
         }
     }
-    private func receive(_ frame: JSONValue) {
-        if frame["event"].string != nil { onPush?(frame); return }
-        guard let id = frame["id"].string else { return }
-        if frame["ok"].bool == true { finish(id: id, result: .success(frame["result"])) }
-        else if let failure = try? frame["error"].decode(WireFailure.self) {
-            // Preserve a typed refusal so the store can distinguish it from lost acknowledgements.
-            finish(id: id, result: .failure(HostRefusal(failure: failure)))
-        } else { finish(id: id, result: .failure(ClientError.invalidProtocol)) }
+    private func receive(_ frame: IncomingFrame) {
+        switch frame {
+        case .reply(let id, let result): finish(id: id, result: .success(result))
+        case .refusal(let id, let failure): finish(id: id, result: .failure(HostRefusal(failure: failure)))
+        default: onPush?(frame)
+        }
     }
     private func finish(id: String, result: Result<JSONValue, Error>) {
         deadlines.removeValue(forKey: id)?.cancel(); pending.removeValue(forKey: id)?.resume(with: result)

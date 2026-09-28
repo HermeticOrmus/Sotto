@@ -1,0 +1,57 @@
+import Foundation
+import SottoCore
+
+/// Scripted dependencies for the real AppModel.swift, compiled into this test target only.
+@MainActor final class KeychainStore {
+    static let failure = ClientError.rejected("Secure storage unavailable")
+    static var items: [String: Data] = [:]
+    func read<T: Decodable>(_ type: T.Type, account: String) throws -> T? {
+        try Self.items[account].map { try JSONDecoder().decode(type, from: $0) }
+    }
+    func write<T: Encodable>(_ value: T, account: String) throws { Self.items[account] = try JSONEncoder().encode(value) }
+    func remove(account: String) throws { Self.items[account] = nil }
+}
+
+struct HostRefusal: Error { let failure: WireFailure }
+
+@MainActor final class HostConnection {
+    static var instances: [HostConnection] = []
+    static var failDetail = false
+    static var holdDetail = false
+    static var shell: JSONValue = .null
+    static var detail: JSONValue = .null
+    var onPush: ((IncomingFrame) -> Void)?
+    var onDisconnect: (() -> Void)?
+    var operations: [String] = []
+    var disconnects = 0
+    var detailStarted: (() -> Void)?
+    var heldDetail: CheckedContinuation<JSONValue, Error>?
+    init() { Self.instances.append(self) }
+    func connect(endpoint: HostEndpoint, pairing: Pairing) async throws -> Hello {
+        try JSONValue.object(["hostId": .string(pairing.hostId), "clientId": .string(pairing.clientId),
+            "shell": Self.shell, "capabilities": .object(["mayAnswer": .bool(false)])]).decode(Hello.self)
+    }
+    func call(_ operation: [String: JSONValue], id: String = UUID().uuidString) async throws -> JSONValue {
+        let op = operation["op"]?.string ?? ""
+        operations.append(op)
+        if op == "observe", case .array(let ids) = operation["threadIds"], let id = ids.first?.string {
+            if Self.failDetail { throw ClientError.rejected("Thread read refused") }
+            onPush?(.detail(threadID: id, value: try Self.detail.decode(ThreadDetail.self)))
+        }
+        if op == "detail" {
+            if Self.holdDetail {
+                return try await withCheckedThrowingContinuation { continuation in
+                    heldDetail = continuation; detailStarted?()
+                }
+            }
+            return Self.detail
+        }
+        if op == "shell" { return Self.shell }
+        return .null
+    }
+    func disconnect() { disconnects += 1 }
+    func close() { disconnect() }
+    func health(endpoint: HostEndpoint) async throws -> Health { throw ClientError.disconnected }
+    func pair(endpoint: HostEndpoint, expectedHostID: String, code: String) async throws -> Pairing { throw ClientError.disconnected }
+    func revoke(endpoint: HostEndpoint, token: String) async throws {}
+}

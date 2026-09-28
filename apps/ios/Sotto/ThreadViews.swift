@@ -61,10 +61,17 @@ private struct MessagesPane: View {
                         Button("Show earlier messages") { Task { await model.earlier(ref) } }
                             .buttonStyle(PlainStyle(compact: true)).frame(maxWidth: .infinity).disabled(!online)
                     }
+                    if let problem = model.detailProblem, online {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(problem).foregroundStyle(Palette.muted)
+                            Button("Try again") { Task { await model.select(ref) } }.buttonStyle(PlainStyle(compact: true))
+                        }.padding(.vertical, 24)
+                    }
                     if let detail {
-                        ForEach(detail.messages) { message in MessageBubble(message: message, provider: Words.provider(thread?.providerId)) }
-                    } else {
-                        Text(online ? "Reading this thread…" : "Reconnect to read this thread.").foregroundStyle(Palette.muted).padding(.vertical, 24)
+                        ForEach(detail.messages) { message in MessageBubble(message: message, provider: Words.provider(thread?.providerId)).equatable() }
+                    } else if model.detailProblem == nil || !online {
+                        Text(model.status(ref.hostID) == .unreachable ? "Reconnect to read this thread." : "Reading this thread…")
+                            .foregroundStyle(Palette.muted).padding(.vertical, 24)
                     }
                     ForEach(model.pending(for: ref)) { item in UnconfirmedRow(item: item, text: model.submitted[item.id]) { dismissMarker = item } }
                     if let text = model.failedReplies[ref.id] {
@@ -95,7 +102,7 @@ private struct MessagesPane: View {
     }
 }
 
-private struct MessageBubble: View {
+private struct MessageBubble: View, Equatable {
     let message: Message
     let provider: String
     var body: some View {
