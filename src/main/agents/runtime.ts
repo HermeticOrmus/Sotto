@@ -55,6 +55,7 @@ export interface AgentRuntimeOptions {
   /** Native process overrides keep tests on the production coordinator path. */
   providers?: Partial<Record<ProviderId, NativeHost>>
   reasoner?: ControlDependencies['reasoner']
+  installedProviders?: ControlDependencies['installedProviders']
   /**
    * Git status the way T3 reads it: how often a project's origin may be fetched in the background, and
    * whether a window is in front to read for. Absent, thread records carry no Git status.
@@ -137,6 +138,7 @@ export async function createAgentRuntime(options: AgentRuntimeOptions) {
     ...(options.logFailure ? { logFailure: options.logFailure } : {}),
     ...(options.releaseClient ? { releaseClient: options.releaseClient } : {}),
     ...(options.missingAttachment ? { missingAttachment: options.missingAttachment } : {}),
+    ...(options.installedProviders ? { installedProviders: options.installedProviders } : {}),
     writeThreadTitle: threadTitleWriter(shortTextWriter, options.writingSettings),
     reasoner,
   })
