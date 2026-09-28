@@ -135,16 +135,25 @@ createInterface({ input: process.stdin }).on('line', line => {
   if (session.messages.length === 0) { reject(frame.id, -32016); return }
   if (script.rejectLoadAfterPrompt && session.messages.some(message => message.role === 'user')) { reject(frame.id); return }
   applyScriptedPolicyChange(script, 'load')
+  // Synthetic: a restored session announces the mode it was left on, which may no longer be the thread's.
+  update(p.sessionId, { sessionUpdate: 'current_mode_update', currentModeId: session.mode ?? 'accept-edits' })
   if (script.replayModel) update(p.sessionId, { sessionUpdate: 'config_option_update', configOptions: configOptions({ ...session, model: script.replayModel }) })
   replay(p.sessionId)
-  if (!acquire(p.sessionId)) reject(frame.id, -32015)
-  else result(frame.id, sessionInfo(script.loadModel ? { ...session, model: script.loadModel } : session))
+  if (!acquire(p.sessionId)) { reject(frame.id, -32015); return }
+  const loaded = () => result(frame.id, sessionInfo(script.loadModel ? { ...session, model: script.loadModel } : session))
+  // A slow reply holds the session open but not yet confirmed, as a reopen is while Sotto waits on it.
+  if (script.delayLoad) setTimeout(loaded, script.delayLoad); else loaded()
  } else if (frame.method === 'session/set_config_option') {
   const session = read(nativePath(p.sessionId), null)
   const known = p.configId === 'model' ? p.value === 'fixture-model' : p.configId === 'mode' && MODES.some(mode => mode.value === p.value)
   if (!session || owner(p.sessionId) !== process.pid || !known) { reject(frame.id); return }
   if (p.configId === 'mode') session.mode = p.value; else session.model = p.value
   write(nativePath(p.sessionId), session)
+  // Native 3000.10.31 announces a mode change before it answers the request that made it.
+  if (p.configId === 'mode') {
+   update(p.sessionId, { sessionUpdate: 'current_mode_update', currentModeId: p.value })
+   update(p.sessionId, { sessionUpdate: 'config_option_update', configOptions: configOptions(session) })
+  }
   result(frame.id, { configOptions: configOptions(session) })
  } else if (frame.method === 'session/prompt') {
   if (owner(p.sessionId) !== process.pid || active.has(p.sessionId)) { reject(frame.id, -32015); return }
@@ -174,6 +183,7 @@ const control = setInterval(() => {
   seen.add(command.id)
   if (command.type === 'malformed') process.stdout.write('{invalid json}\n')
   if (command.type === 'complete') complete(sessionId, command.text, command.reason)
+  if (command.type === 'mode') update(sessionId, { sessionUpdate: 'current_mode_update', currentModeId: command.mode })
   if (command.type === 'changed-permission') {
    const prior = [...pending].find(([, value]) => value.kind === 'permission' && value.sessionId === sessionId)
    if (prior) {
