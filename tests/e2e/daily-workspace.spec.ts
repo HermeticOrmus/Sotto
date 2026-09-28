@@ -126,7 +126,8 @@ test('daily mixed-provider workspace joins independent work, tools, reviewed com
     await panel.getByRole('tab', { name: 'Terminal', exact: true }).click()
     await panel.getByRole('button', { name: 'Start terminal' }).click()
     await panel.locator('.xterm').click()
-    await page.keyboard.type("Set-Content -LiteralPath greeting.txt -Value 'Hello, daily workspace' -Encoding utf8; Write-Output SOTTO_DAILY_TERMINAL")
+    // The completed marker is absent from echoed input: only PowerShell execution can produce it.
+    await page.keyboard.type("Set-Content -LiteralPath greeting.txt -Value 'Hello, daily workspace' -Encoding utf8; Write-Output ('SOTTO_DAILY_' + 'TERMINAL')")
     await page.keyboard.press('Enter')
     await expect.poll(() => terminalOutput(page, first)).toContain('SOTTO_DAILY_TERMINAL')
     await expect.poll(() => readFile(join(working, 'greeting.txt'), 'utf8')).toContain('Hello, daily workspace')
@@ -149,6 +150,7 @@ test('daily mixed-provider workspace joins independent work, tools, reviewed com
     }, url)).toEqual({ title: 'Daily local preview', bridge: 'undefined', require: 'undefined' })
     await panel.getByRole('tab', { name: 'Changes', exact: true }).click()
     // Changes reads the working tree against HEAD; there is no staging to do first (ADR-0027).
+    await panel.getByRole('button', { name: 'Expand greeting.txt', exact: true }).click()
     await expect(panel.getByRole('group', { name: 'greeting.txt' })).toContainText('Hello, daily workspace')
     await expect(panel.getByRole('button', { name: 'Stage file', exact: true })).toHaveCount(0)
     // The commit is the pane header's Git action (ADR-0027): Commit from its menu, the message typed in the dialog.
