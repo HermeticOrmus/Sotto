@@ -1,37 +1,40 @@
 <!doctype html>
 <!--
   PROTOTYPE, throwaway. Not part of the app; never imported.
-  Question: what should Add host look like when it walks the user through connecting, step by step?
-  Three variants of the Add host dialog (Settings > Hosts), switchable from the bar at the bottom:
-    A  The checklist takes over the dialog once you press Add host.
-    B  The form stays; a progress strip and one card for the current step sit under it.
-    C  Check first: a Check connection pass runs the checks, and Add host turns on when they pass.
-  Each shows three moments: waiting for Tailscale approval, a failed step (Node too new), and success.
-  Colours approximate the default dark theme and a light theme through the same --tt-* names.
-  Open this file in a browser. Arrow keys switch variant, 1 2 3 switch moment, T switches theme.
+  Round 2. Round 1 (checklist takes over / progress strip / check first) picked A, the checklist.
+  Question now: where does "Have my agent set this up" sit in Add host, and how does the dialog read
+  while a thread sets the machine up? Two placements, switchable from the bar at the bottom:
+    A1  The button sits under the form, beside Add host's own path.
+    A2  Choose first: after the host name, two ways to add it.
+  Moments: 1 Start, 2 Agent working (a command waits for your answer in the thread),
+  3 A step failed on the do-it-yourself path (offers the agent), 4 Done by the agent.
+  Decided already: the work runs in a normal thread named "Set up forge", linked from the dialog; the
+  agent adds the host itself through a Sotto tool; the model is picked in the dialog; the host files are
+  copied from this computer. Colours approximate the dark theme and a light theme via the --tt-* names.
+  Keys: arrow keys switch placement, 1 to 4 switch moment, T switches theme.
 -->
 <html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
-<title>PROTOTYPE · Add host as a setup checklist</title>
+<title>PROTOTYPE · Add host with an agent</title>
 <style>
 @font-face { font-family: Figtree; src: url('../../assets/fonts/figtree-latin.woff2') format('woff2'); font-weight: 300 900; }
 :root, [data-theme='dark'] {
-  --tt-room: #111214; --tt-surface: #16171a; --tt-surface-elevated: #1c1d20; --tt-surface-sunken: #0f1012;
+  --tt-room: #111214; --tt-surface-elevated: #1c1d20; --tt-surface-sunken: #0f1012;
   --tt-hairline: rgba(255,255,255,.09); --tt-border: rgba(255,255,255,.16); --tt-border-faint: rgba(255,255,255,.08);
   --tt-text: #f3f3f4; --tt-text-2: #d6d7da; --tt-text-muted: #a3a5ab; --tt-text-faint: #8a8d94;
-  --tt-accent: #8fb4ff; --tt-accent-text: #a9c4ff; --tt-success: #6fcf97; --tt-success-text: #8fdcae;
-  --tt-error: #e8868f; --tt-error-text: #f2a3aa; --tt-pill: #f5f5f6; --tt-pill-ink: #111214;
-  --tt-overlay: rgba(0,0,0,.55); --tt-focus-ring: #8fb4ff; --tt-hover: rgba(255,255,255,.06);
+  --tt-accent: #8fb4ff; --tt-accent-text: #a9c4ff; --tt-success: #6fcf97;
+  --tt-error: #e8868f; --tt-pill: #f5f5f6; --tt-pill-ink: #111214;
+  --tt-overlay: rgba(0,0,0,.55); --tt-focus-ring: #8fb4ff; --tt-hover: rgba(255,255,255,.06); --tt-selected: rgba(143,180,255,.12);
   --tt-shadow-lg: 0 24px 60px rgba(0,0,0,.5);
 }
 [data-theme='light'] {
-  --tt-room: #eceae6; --tt-surface: #f6f5f2; --tt-surface-elevated: #ffffff; --tt-surface-sunken: #f1f0ec;
+  --tt-room: #eceae6; --tt-surface-elevated: #ffffff; --tt-surface-sunken: #f1f0ec;
   --tt-hairline: rgba(0,0,0,.1); --tt-border: rgba(0,0,0,.2); --tt-border-faint: rgba(0,0,0,.1);
   --tt-text: #17181a; --tt-text-2: #2c2d30; --tt-text-muted: #55585f; --tt-text-faint: #65686f;
-  --tt-accent: #2f5fcf; --tt-accent-text: #2451b8; --tt-success: #1f8a4c; --tt-success-text: #1a7a43;
-  --tt-error: #c23b47; --tt-error-text: #a8313c; --tt-pill: #17181a; --tt-pill-ink: #ffffff;
-  --tt-overlay: rgba(20,20,20,.35); --tt-focus-ring: #2f5fcf; --tt-hover: rgba(0,0,0,.05);
+  --tt-accent: #2f5fcf; --tt-accent-text: #2451b8; --tt-success: #1f8a4c;
+  --tt-error: #c23b47; --tt-pill: #17181a; --tt-pill-ink: #ffffff;
+  --tt-overlay: rgba(20,20,20,.35); --tt-focus-ring: #2f5fcf; --tt-hover: rgba(0,0,0,.05); --tt-selected: rgba(47,95,207,.08);
   --tt-shadow-lg: 0 24px 60px rgba(0,0,0,.18);
 }
 :root { --tt-radius-sm: 6px; --tt-radius-md: 10px; --tt-radius-pill: 999px; --tt-font-mono: ui-monospace, 'Cascadia Mono', Consolas, monospace; }
@@ -40,23 +43,20 @@ body { margin: 0; min-height: 100vh; background: var(--tt-room); color: var(--tt
 :focus-visible { outline: 3px solid var(--tt-focus-ring); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) { .spin { animation: none !important; } }
 
-/* The Settings > Hosts page behind the dialog, for context only. */
 .page { max-width: 760px; margin: 0 auto; padding: 56px 32px; opacity: .55; }
 .page h3 { margin: 0; font-size: 18px; } .page p { margin: 6px 0 0; color: var(--tt-text-muted); }
 .page .row { margin-top: 22px; padding: 14px 0; border-block: 1px solid var(--tt-hairline); }
 
-/* The real dialog's styles, trimmed from global.css and hosts.css. */
 .backdrop { position: fixed; inset: 0; display: grid; place-items: center; background: var(--tt-overlay); padding: 20px 20px 90px; }
 .dialog { width: min(480px, 100%); max-height: calc(100vh - 110px); overflow-y: auto; border: 1px solid var(--tt-hairline); border-radius: var(--tt-radius-md); background: var(--tt-surface-elevated); box-shadow: var(--tt-shadow-lg); padding: 24px; }
-.dialog.wide { width: min(760px, 100%); }
 .dialog h2 { margin: 0 0 4px; font-size: 16px; font-weight: 600; letter-spacing: -.01em; }
 .intro { margin: 0; color: var(--tt-text-muted); font-size: 13px; }
 .fields { display: grid; gap: 14px; margin-top: 14px; }
 .field { display: grid; gap: 5px; min-width: 0; }
 .label { font-size: 13px; font-weight: 600; } .optional { color: var(--tt-text-faint); font-weight: 400; }
 .desc { margin: 0; color: var(--tt-text-muted); font-size: 12px; }
-.input { width: 100%; min-height: 36px; border: 1px solid var(--tt-border-faint); border-radius: var(--tt-radius-md); background: var(--tt-surface-sunken); padding: 4px 12px; color: var(--tt-text); font: 500 13.5px Figtree, system-ui, sans-serif; }
-.input:disabled { opacity: .62; }
+.input, .select { width: 100%; min-height: 36px; border: 1px solid var(--tt-border-faint); border-radius: var(--tt-radius-md); background: var(--tt-surface-sunken); padding: 4px 12px; color: var(--tt-text); font: 500 13.5px Figtree, system-ui, sans-serif; }
+.select { width: auto; min-height: 34px; padding-right: 8px; }
 .pair { display: grid; grid-template-columns: minmax(0,1fr) 110px; gap: 12px; }
 .advanced { color: var(--tt-text-muted); font-size: 13px; }
 .actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
@@ -72,45 +72,44 @@ body { margin: 0; min-height: 100vh; background: var(--tt-room); color: var(--tt
 .notice.error { border-left-color: var(--tt-error); } .notice.done { border-left-color: var(--tt-success); }
 .notice p { margin: 0; }
 .notice .row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.or { display: flex; align-items: center; gap: 10px; margin: 6px 0 0; color: var(--tt-text-faint); font-size: 12px; }
 .command { display: flex; align-items: center; gap: 8px; border: 1px solid var(--tt-border-faint); border-radius: var(--tt-radius-sm); background: var(--tt-surface-elevated); padding: 4px 4px 4px 10px; }
 .command code { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; font: 12.5px/1.6 var(--tt-font-mono); color: var(--tt-text); }
 .muted { color: var(--tt-text-muted); } .faint { color: var(--tt-text-faint); }
 .spin { animation: spin 1s linear infinite; } @keyframes spin { to { transform: rotate(360deg); } }
 
-/* Step icons. */
 .icon { display: inline-grid; flex: 0 0 auto; place-items: center; width: 20px; height: 20px; }
 .icon svg { width: 16px; height: 16px; }
-.icon.done { color: var(--tt-success); } .icon.active { color: var(--tt-accent-text); } .icon.fail { color: var(--tt-error); } .icon.todo { color: var(--tt-text-faint); }
-
-/* A: the checklist. */
+.icon.done { color: var(--tt-success); } .icon.active, .icon.waiting { color: var(--tt-accent-text); } .icon.fail { color: var(--tt-error); } .icon.todo { color: var(--tt-text-faint); }
 .summary { display: flex; align-items: center; gap: 10px; margin-top: 12px; border: 1px solid var(--tt-hairline); border-radius: var(--tt-radius-md); padding: 8px 8px 8px 12px; font-size: 13px; }
-.summary b { font-weight: 600; } .summary span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.summary b { font-weight: 600; } .summary > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .steps { display: grid; gap: 2px; margin: 16px 0 0; padding: 0; list-style: none; }
 .step { display: grid; grid-template-columns: 20px 1fr; gap: 4px 10px; align-items: start; padding: 7px 0; }
 .step .title { font-size: 13.5px; line-height: 20px; } .step.todo .title { color: var(--tt-text-muted); }
-.step .detail { grid-column: 2; }
-.step .detail .notice { margin-top: 4px; }
-.step .note { grid-column: 2; margin: -2px 0 0; color: var(--tt-text-muted); font-size: 12px; }
+.step .by { color: var(--tt-text-faint); font-size: 12px; }
+.step .detail { grid-column: 2; } .step .detail .notice { margin-top: 4px; }
 
-/* B: the progress strip. */
-.strip { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; margin-top: 16px; }
-.strip i { height: 4px; border-radius: 2px; background: var(--tt-hairline); }
-.strip i.done { background: var(--tt-success); } .strip i.active { background: var(--tt-accent); } .strip i.fail { background: var(--tt-error); }
-.strip-label { display: flex; justify-content: space-between; margin-top: 8px; font-size: 12.5px; }
+/* The agent's line: who is doing the setup and where to watch it. */
+.agent { display: flex; align-items: center; gap: 10px; margin-top: 12px; border: 1px solid var(--tt-hairline); border-radius: var(--tt-radius-md); padding: 10px 10px 10px 12px; font-size: 13px; }
+.agent p { flex: 1; margin: 0; }
+.agent-offer { display: grid; gap: 10px; margin-top: 18px; border-top: 1px solid var(--tt-hairline); padding-top: 16px; }
+.agent-offer h3, .choice h3 { margin: 0; font-size: 13.5px; font-weight: 600; }
+.agent-offer p { margin: 0; color: var(--tt-text-muted); font-size: 12.5px; }
+.agent-offer .row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 
-/* C: check first, two columns. */
-.columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; margin-top: 4px; }
-.checks { border-left: 1px solid var(--tt-hairline); padding-left: 24px; }
-.checks h3 { margin: 14px 0 4px; font-size: 13px; font-weight: 600; }
-.checks .steps { margin-top: 8px; }
-.checks .empty { margin-top: 8px; color: var(--tt-text-muted); font-size: 13px; }
-@media (max-width: 760px) { .columns { grid-template-columns: 1fr; } .checks { border-left: 0; padding-left: 0; border-top: 1px solid var(--tt-hairline); } }
+/* A2: two ways to add the host. */
+.choices { display: grid; gap: 10px; margin-top: 16px; }
+.choice { display: grid; grid-template-columns: 18px 1fr; gap: 4px 10px; border: 1px solid var(--tt-hairline); border-radius: var(--tt-radius-md); padding: 12px; cursor: pointer; }
+.choice[aria-checked='true'] { border-color: var(--tt-accent); background: var(--tt-selected); }
+.choice .dot { width: 16px; height: 16px; margin-top: 1px; border: 1.5px solid var(--tt-text-faint); border-radius: 50%; }
+.choice[aria-checked='true'] .dot { border: 5px solid var(--tt-accent); }
+.choice p { grid-column: 2; margin: 0; color: var(--tt-text-muted); font-size: 12.5px; }
+.choice .row { grid-column: 2; display: flex; align-items: center; gap: 8px; margin-top: 6px; }
 
-/* The prototype's own bar: deliberately not Sotto's look. */
-.proto-bar { position: fixed; z-index: 100; left: 50%; bottom: 16px; transform: translateX(-50%); display: flex; align-items: center; gap: 6px; border-radius: 999px; background: #ffd84d; color: #111; padding: 6px; box-shadow: 0 8px 24px rgba(0,0,0,.4); font: 600 13px system-ui, sans-serif; }
-.proto-bar button { border: 0; border-radius: 999px; background: transparent; color: #111; padding: 6px 10px; font: inherit; cursor: pointer; }
+.proto-bar { position: fixed; z-index: 100; left: 50%; bottom: 16px; transform: translateX(-50%); display: flex; align-items: center; gap: 4px; border-radius: 999px; background: #ffd84d; color: #111; padding: 6px; box-shadow: 0 8px 24px rgba(0,0,0,.4); font: 600 13px system-ui, sans-serif; white-space: nowrap; }
+.proto-bar button { border: 0; border-radius: 999px; background: transparent; color: #111; padding: 6px 9px; font: inherit; cursor: pointer; }
 .proto-bar button[aria-pressed='true'] { background: #111; color: #ffd84d; }
-.proto-bar .label { min-width: 250px; text-align: center; }
+.proto-bar .label { min-width: 200px; text-align: center; }
 .proto-bar .sep { width: 1px; height: 20px; background: rgba(0,0,0,.25); }
 </style>
 </head>
@@ -121,115 +120,118 @@ body { margin: 0; min-height: 100vh; background: var(--tt-room); color: var(--tt
 </main>
 <div class="backdrop" role="presentation"><section class="dialog" id="dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title"></section></div>
 <nav class="proto-bar" aria-label="Prototype controls">
-  <button id="prev" aria-label="Previous variant">←</button><span class="label" id="variant-label"></span><button id="next" aria-label="Next variant">→</button>
+  <button id="prev" aria-label="Previous placement">←</button><span class="label" id="variant-label"></span><button id="next" aria-label="Next placement">→</button>
   <span class="sep"></span>
-  <button data-moment="waiting">1 Waiting</button><button data-moment="failed">2 Failed</button><button data-moment="success">3 Success</button>
+  <button data-moment="start">1 Start</button><button data-moment="working">2 Agent working</button><button data-moment="failed">3 Step failed</button><button data-moment="done">4 Done</button>
   <span class="sep"></span>
   <button id="theme">T Light</button>
 </nav>
 <script>
-const VARIANTS = { A: 'Checklist takes over', B: 'Form stays, progress strip', C: 'Check first, then add' }
+const VARIANTS = { A1: 'Button under the form', A2: 'Choose first' }
+const MOMENTS = ['start', 'working', 'failed', 'done']
 const params = new URLSearchParams(location.search)
-let variant = VARIANTS[params.get('variant')] ? params.get('variant') : 'A'
-let moment = ['waiting', 'failed', 'success'].includes(params.get('moment')) ? params.get('moment') : 'waiting'
+let variant = VARIANTS[params.get('variant')] ? params.get('variant') : 'A1'
+let moment = MOMENTS.includes(params.get('moment')) ? params.get('moment') : 'start'
 let theme = params.get('theme') === 'light' ? 'light' : 'dark'
+let choice = 'agent'
+const MODEL = 'Claude Opus 5.5'
 
 const ICONS = {
   done: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5l3 3 6-7"/></svg>',
   active: '<svg class="spin" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 2a6 6 0 1 1-6 6"/></svg>',
+  waiting: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="8" cy="8" r="6"/><path d="M8 5v3.5l2 1.5"/></svg>',
   fail: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/></svg>',
   todo: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="5"/></svg>',
 }
-const WORD = { done: 'Done', active: 'In progress', fail: 'Failed', todo: 'Not started' }
+const WORD = { done: 'Done', active: 'In progress', waiting: 'Waiting for you', fail: 'Failed', todo: 'Not started' }
 const icon = status => `<span class="icon ${status}" role="img" aria-label="${WORD[status]}">${ICONS[status]}</span>`
 const command = text => `<div class="command"><code>${text}</code><button class="button small" data-copy="${text}" aria-label="Copy the command ${text}">Copy</button></div>`
+const picker = id => `<label class="sr" for="${id}" style="position:absolute;left:-9999px">Model for the setup thread</label>
+  <select class="select" id="${id}"><option>${MODEL}</option><option>GPT-6 (Codex)</option><option>Grok Build</option></select>`
+const openThread = '<button class="button small" data-thread>Open thread</button>'
 
-// What each moment knows about each step. The Tailscale step appears only because forge asked for it.
-function steps(checkOnly) {
+// Steps as the agent path sees them: it installs what is missing, so Node and the host files are its steps too.
+function agentSteps() {
   const all = [
-    { key: 'reach', todo: 'Reach forge', active: 'Reaching forge…', done: 'Reached forge' },
-    { key: 'tailscale', todo: 'Approve in Tailscale', active: 'Waiting for your approval in Tailscale', done: 'Approved in Tailscale' },
-    { key: 'signin', todo: 'Sign in', active: 'Signing in…', done: 'Signed in as zach' },
-    { key: 'node', todo: 'Find Node 24', active: 'Looking for Node 24…', done: 'Found Node 24.9.0', fail: 'forge has Node 26.1.0, and the host needs Node 24' },
-    { key: 'host', todo: checkOnly ? 'Find the host files' : 'Start the host', active: 'Starting the host…', done: checkOnly ? 'Found the host files' : 'Host started' },
-    { key: 'pair', todo: 'Pair this computer', active: 'Pairing…', done: 'Paired this computer' },
-  ].filter(step => !checkOnly || step.key !== 'pair')
-  const reached = { waiting: 1, failed: 3, success: all.length }[moment]
+    { title: 'Reached forge', by: '' },
+    { title: 'Approved in Tailscale', by: '' },
+    { title: 'Signed in as zach', by: '' },
+    { title: 'Installed Node 24', by: 'by the agent' },
+    { key: 'copy', title: 'Copy the host files', active: 'Copying the host files', done: 'Copied the host files', by: 'by the agent' },
+    { title: 'Start the host', done: 'Host started' },
+    { title: 'Pair this computer', done: 'Paired this computer' },
+  ]
   return all.map((step, index) => {
-    const status = index < reached ? 'done' : index === reached ? (moment === 'failed' ? 'fail' : 'active') : 'todo'
-    return { ...step, status, title: step[status] ?? step.todo }
+    const status = moment === 'done' || index < 4 ? 'done' : index === 4 ? 'waiting' : 'todo'
+    return { ...step, status, title: status === 'done' ? (step.done ?? step.title) : status === 'waiting' ? step.active : step.title }
   })
 }
-
+function selfSteps() {
+  return [
+    { title: 'Reached forge', status: 'done' }, { title: 'Approved in Tailscale', status: 'done' }, { title: 'Signed in as zach', status: 'done' },
+    { key: 'node', title: 'forge has Node 26.1.0, and the host needs Node 24', status: 'fail' },
+    { title: 'Start the host', status: 'todo' }, { title: 'Pair this computer', status: 'todo' },
+  ]
+}
 function detail(step) {
-  if (step.key === 'tailscale' && step.status === 'active') return `<div class="notice" role="status">
-      <p>forge uses Tailscale SSH, which asks you to approve new connections in your browser. Sotto waits up to 5 minutes and carries on when you approve.</p>
-      <div class="row"><button class="button primary small" data-open>Open approval page</button><a class="link" href="#" data-guide>Why Tailscale asks</a></div></div>`
-  if (step.key === 'node' && step.status === 'fail') return `<div class="notice error" role="alert">
-      <p>Nothing was saved. Install Node 24 for zach on forge, then try again. Sotto finds it where nvm, fnm, mise, asdf, Volta or Homebrew keep it, so it can sit beside Node 26.</p>
+  if (step.key === 'copy' && step.status === 'waiting') return `<div class="notice" role="status">
+      <p>The agent wants to run a command on forge. Answer it in the thread to carry on.</p>
+      <div class="row">${openThread}</div></div>`
+  if (step.key === 'node') return `<div class="notice error" role="alert">
+      <p>Nothing was saved. Install Node 24 for zach on forge, then try again. Sotto finds it beside Node 26.</p>
       ${command('mise install node@24')}
-      <p class="muted">This is the command for mise, which forge uses for Node now.</p></div>`
+      <div class="row"><span class="muted">Or let an agent do it:</span>${picker('fix-model')}<button class="button small primary" data-agent>Have my agent fix this</button></div></div>`
   return ''
 }
+const list = items => `<ol class="steps" aria-label="Setup steps">${items.map(step => `
+  <li class="step ${step.status}"${step.status === 'waiting' ? ' aria-current="step"' : ''}>${icon(step.status)}<span class="title">${step.title}${step.by && step.status === 'done' ? ` <span class="by">${step.by}</span>` : ''}</span>
+  ${detail(step) ? `<div class="detail">${detail(step)}</div>` : ''}</li>`).join('')}</ol>`
 
-const list = (items, withDetail) => `<ol class="steps" aria-label="Connection steps">${items.map(step => `
-  <li class="step ${step.status}"${step.status === 'active' ? ' aria-current="step"' : ''}>${icon(step.status)}<span class="title">${step.title}</span>
-  ${withDetail && detail(step) ? `<div class="detail">${detail(step)}</div>` : ''}</li>`).join('')}</ol>`
+const hostField = `<div class="field"><label class="label" for="host">SSH host or alias</label><input class="input" id="host" value="forge"><p class="desc">Suggestions come from your SSH configuration and Tailscale devices you can reach.</p></div>`
+const moreFields = `<div class="pair"><div class="field"><label class="label" for="user">Username <span class="optional">(optional)</span></label><input class="input" id="user" placeholder="From your SSH configuration"></div>
+  <div class="field"><label class="label" for="port">Port <span class="optional">(optional)</span></label><input class="input" id="port" placeholder="22"></div></div>
+  <details class="advanced"><summary>Folders on the host</summary></details>`
+const agentLine = `<div class="agent"><p><b>${MODEL}</b> is setting up forge in the thread <b>Set up forge</b>. You answer each command it wants to run.</p>${openThread}</div>`
 
-const form = disabled => `<form class="fields" onsubmit="return false">
-  <div class="field"><label class="label" for="host">SSH host or alias</label><input class="input" id="host" value="forge" ${disabled}><p class="desc">Suggestions come from your SSH configuration and known hosts.</p></div>
-  <div class="pair"><div class="field"><label class="label" for="user">Username <span class="optional">(optional)</span></label><input class="input" id="user" placeholder="From your SSH configuration" ${disabled}></div>
-  <div class="field"><label class="label" for="port">Port <span class="optional">(optional)</span></label><input class="input" id="port" placeholder="22" ${disabled}></div></div>
-  <details class="advanced"><summary>Folders on the host</summary></details></form>`
-
-function footer(options) {
-  const cancel = `<button class="button" data-close>${moment === 'success' ? 'Close' : 'Cancel'}</button>`
-  if (options.check) {
-    const checkLabel = moment === 'waiting' ? 'Checking…' : 'Check again'
-    return `<div class="actions"><button class="button" ${moment === 'waiting' ? 'disabled' : ''}>${checkLabel}</button>${cancel}
-      <button class="button primary" ${moment === 'success' ? '' : 'disabled'} aria-describedby="add-why">Add host</button></div>`
-  }
-  if (moment === 'success') return `<div class="actions"><button class="button primary" data-close>Done</button></div>`
-  if (moment === 'failed') return `<div class="actions">${cancel}<button class="button primary">Try again</button></div>`
-  return `<div class="actions">${cancel}<button class="button primary" disabled>Connecting…</button></div>`
-}
-
-const successNote = '<div class="notice done" role="status"><p>forge is added and connected. Its threads show in the Threads sidebar under forge.</p></div>'
-
-function variantA() {
-  const items = steps(false)
-  const title = moment === 'success' ? 'forge is connected' : moment === 'failed' ? 'forge could not be added' : 'Connecting to forge'
+function progress(kind) {
+  const title = moment === 'done' ? 'forge is connected' : moment === 'failed' ? 'forge could not be added' : 'Setting up forge'
+  const items = kind === 'self' ? selfSteps() : agentSteps()
+  const done = moment === 'done' ? `<div class="notice done" role="status"><p>forge is added and connected. ${MODEL} set it up in <a class="link" href="#" data-thread>Set up forge</a>; the thread stays in your Threads list until you archive it.</p></div>` : ''
+  const footer = moment === 'done' ? '<div class="actions"><button class="button primary" data-close>Done</button></div>'
+    : moment === 'failed' ? '<div class="actions"><button class="button">Cancel</button><button class="button primary">Try again</button></div>'
+    : '<div class="actions"><button class="button" title="Closes this dialog. The thread keeps going; stop it there.">Close</button><button class="button" data-stop>Stop setup</button></div>'
   return `<h2 id="dialog-title">${title}</h2>
-    <div class="summary"><span><b>forge</b> <span class="muted">· user and port from your SSH configuration</span></span>${moment === 'success' ? '' : '<button class="button ghost small">Change</button>'}</div>
-    ${list(items, true)}${moment === 'success' ? successNote : ''}${footer({})}`
+    <div class="summary"><span><b>forge</b> <span class="muted">· user and port from your SSH configuration</span></span></div>
+    ${kind === 'agent' && moment !== 'done' ? agentLine : ''}${list(items)}${done}${footer}`
 }
 
-function variantB() {
-  const items = steps(false)
-  const current = items.find(step => step.status !== 'done')
-  const number = current ? items.indexOf(current) + 1 : items.length
-  return `<h2 id="dialog-title">Add host</h2><p class="intro">Sotto connects as soon as you add it.</p>${form('disabled')}
-    <div class="strip" role="progressbar" aria-label="Connecting to forge" aria-valuemin="0" aria-valuemax="${items.length}" aria-valuenow="${items.filter(s => s.status === 'done').length}" aria-valuetext="${current ? `Step ${number} of ${items.length}: ${current.title}` : 'Connected'}">
-      ${items.map(step => `<i class="${step.status}"></i>`).join('')}</div>
-    <div class="strip-label"><span>${current ? current.title : 'Connected and paired'}</span><span class="faint">${current ? `Step ${number} of ${items.length}` : `${items.length} of ${items.length}`}</span></div>
-    ${current ? detail(current) : successNote}${footer({})}`
+function startA1() {
+  return `<h2 id="dialog-title">Add host</h2><p class="intro">Sotto connects as soon as you add it.</p>
+    <form class="fields" onsubmit="return false">${hostField}${moreFields}</form>
+    <div class="agent-offer"><h3>Not set up yet?</h3>
+      <p>An agent can install the host on forge, fix what is missing and add it here. It works in a new thread, and you answer each command it wants to run.</p>
+      <div class="row">${picker('start-model')}<button class="button" data-agent>Have my agent set this up</button></div></div>
+    <div class="actions"><button class="button">Cancel</button><button class="button primary">Add host</button></div>`
 }
-
-function variantC() {
-  const items = steps(true)
-  const failed = items.find(step => step.status === 'fail')
-  const status = moment === 'success' ? '<p class="desc" id="add-why">Every check passed. Add host starts the host on forge and pairs this computer.</p>'
-    : failed ? '<p class="desc" id="add-why">Add host turns on when every check passes.</p>' : '<p class="desc" id="add-why">Add host turns on when every check passes.</p>'
-  return `<h2 id="dialog-title">Add host</h2><p class="intro">Check the connection first. Nothing is saved until you add the host.</p>
-    <div class="columns"><div>${form(moment === 'waiting' ? 'disabled' : '')}</div>
-    <div class="checks"><h3>Checks for forge</h3>${list(items, true)}${status}</div></div>${footer({ check: true })}`
+function startA2() {
+  const agent = choice === 'agent'
+  return `<h2 id="dialog-title">Add host</h2><p class="intro">Connect a machine you reach over SSH, such as a device on your tailnet.</p>
+    <form class="fields" onsubmit="return false">${hostField}</form>
+    <div class="choices" role="radiogroup" aria-label="How to add forge">
+      <div class="choice" role="radio" tabindex="${agent ? 0 : -1}" aria-checked="${agent}" data-choice="agent"><span class="dot"></span><h3>Have my agent set this up</h3>
+        <p>For a machine without the host yet. The agent installs it, fixes what is missing and adds forge. It works in a new thread, and you answer each command it wants to run.</p>
+        ${agent ? `<div class="row"><span class="muted" style="font-size:12.5px">Model</span>${picker('choice-model')}</div>` : ''}</div>
+      <div class="choice" role="radio" tabindex="${agent ? -1 : 0}" aria-checked="${!agent}" data-choice="self"><span class="dot"></span><h3>Add it</h3>
+        <p>For a machine that already has the host. Sotto connects now and says what to fix if a step fails.</p></div>
+    </div>
+    ${agent ? '' : `<form class="fields" onsubmit="return false">${moreFields}</form>`}
+    <div class="actions"><button class="button">Cancel</button><button class="button primary">${agent ? 'Start setup' : 'Add host'}</button></div>`
 }
 
 function render() {
   document.documentElement.dataset.theme = theme
   const dialog = document.getElementById('dialog')
-  dialog.classList.toggle('wide', variant === 'C')
-  dialog.innerHTML = { A: variantA, B: variantB, C: variantC }[variant]()
+  dialog.innerHTML = moment === 'start' ? (variant === 'A1' ? startA1() : startA2()) : progress(moment === 'failed' ? 'self' : 'agent')
   document.getElementById('variant-label').textContent = `${variant} — ${VARIANTS[variant]}`
   document.querySelectorAll('[data-moment]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.moment === moment)))
   document.getElementById('theme').textContent = theme === 'dark' ? 'T Light' : 'T Dark'
@@ -244,15 +246,19 @@ document.querySelectorAll('[data-moment]').forEach(button => button.onclick = ()
 document.addEventListener('click', event => {
   const copy = event.target.closest('[data-copy]')
   if (copy) { navigator.clipboard?.writeText(copy.dataset.copy); copy.textContent = 'Copied'; setTimeout(() => { copy.textContent = 'Copy' }, 1500) }
-  if (event.target.closest('[data-open]')) event.target.closest('[data-open]').textContent = 'Opened in your browser'
-  if (event.target.closest('[data-guide]')) { event.preventDefault(); alert('Opens the guide at "Hosts over Tailscale SSH": what check and accept mean in a tailnet policy.') }
+  const picked = event.target.closest('[data-choice]')
+  if (picked && !event.target.closest('select')) { choice = picked.dataset.choice; render() }
+  if (event.target.closest('[data-agent]')) { moment = 'working'; render() }
+  if (event.target.closest('[data-thread]')) { event.preventDefault(); alert('Opens the thread "Set up forge" on the Threads page. The dialog stays open behind it.') }
+  if (event.target.closest('[data-stop]')) alert('Stops the thread. Nothing is saved as a host; what the agent already installed on forge stays.')
 })
 document.addEventListener('keydown', event => {
-  if (event.target.closest('input, textarea, [contenteditable]')) return
+  if (event.target.closest('input, textarea, select, [contenteditable]')) return
   if (event.key === 'ArrowLeft') step(-1)
   else if (event.key === 'ArrowRight') step(1)
-  else if (event.key === '1' || event.key === '2' || event.key === '3') { moment = ['waiting', 'failed', 'success'][Number(event.key) - 1]; render() }
+  else if (['1', '2', '3', '4'].includes(event.key)) { moment = MOMENTS[Number(event.key) - 1]; render() }
   else if (event.key.toLowerCase() === 't') { theme = theme === 'dark' ? 'light' : 'dark'; render() }
+  else if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') && event.target.closest('[data-choice]')) { choice = choice === 'agent' ? 'self' : 'agent'; render(); document.querySelector('[aria-checked="true"]')?.focus() }
 })
 render()
 </script>
