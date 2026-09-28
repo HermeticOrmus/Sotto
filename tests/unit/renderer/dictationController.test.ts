@@ -82,6 +82,7 @@ function createHarness(options: HarnessOptions = {}) {
     options.deliverOutput ?? (async () => 'pasted' as const),
   )
   const addHistory = vi.fn(options.addHistory ?? (async () => []))
+  const retainOutput = vi.fn()
   const publishWidgetState = vi.fn(options.publishWidgetState ?? (() => undefined))
   const timers = new Map<number, () => void>()
   let nextTimer = 1
@@ -101,6 +102,7 @@ function createHarness(options: HarnessOptions = {}) {
     getSettings: options.getSettings ?? (() => currentSettings),
     deliverOutput,
     addHistory,
+    retainOutput,
     publishWidgetState,
     ...(polishTranscript === undefined ? {} : { polishTranscript }),
     ...(options.cuePlayer === undefined ? {} : { cuePlayer: options.cuePlayer }),
@@ -112,6 +114,7 @@ function createHarness(options: HarnessOptions = {}) {
   }
   return {
     addHistory,
+    retainOutput,
     clearTimer,
     controller: new DictationController(dependencies),
     createRecorder,
@@ -524,7 +527,38 @@ describe('DictationController', () => {
 
     expect(harness.controller.getState()).toMatchObject({ status: 'error', code })
     expect(JSON.stringify(harness.controller.getState())).not.toContain('raw clipboard internals')
+    expect(harness.retainOutput).toHaveBeenCalledWith(expect.objectContaining({ id: 'session', text: 'hello world' }))
+    expect(harness.addHistory).toHaveBeenCalledWith(expect.objectContaining({ id: 'session', text: 'hello world' }))
+  })
+
+  it('retains each failed completed transcript in memory when history is off', async () => {
+    const harness = createHarness({
+      currentSettings: settings({ historyEnabled: false }),
+      ids: ['first', 'second'],
+      deliverOutput: async () => { throw new Error('clipboard unavailable') },
+    })
+    await harness.controller.start()
+    await harness.controller.stop()
+    await harness.controller.start()
+    await harness.controller.stop()
+    expect(harness.retainOutput.mock.calls.map(([entry]) => entry)).toEqual([
+      expect.objectContaining({ id: 'first', text: 'hello world' }),
+      expect.objectContaining({ id: 'second', text: 'hello world' }),
+    ])
     expect(harness.addHistory).not.toHaveBeenCalled()
+    expect(harness.transcriber.transcribe).toHaveBeenCalledTimes(2)
+    expect(JSON.stringify(snapshots(harness))).not.toContain('hello world')
+  })
+
+  it('retains text despite both output and history failure without masking the output error', async () => {
+    const harness = createHarness({
+      deliverOutput: async () => { throw new Error('clipboard unavailable') },
+      addHistory: async () => { throw new Error('history unavailable') },
+    })
+    await harness.controller.start()
+    await harness.controller.stop()
+    expect(harness.retainOutput).toHaveBeenCalledWith(expect.objectContaining({ text: 'hello world' }))
+    expect(harness.controller.getState()).toMatchObject({ status: 'error', code: 'OUTPUT_FAILED' })
   })
 
   it('reports history failure without exposing transcript or thrown details to the widget', async () => {

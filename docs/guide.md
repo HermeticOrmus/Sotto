@@ -372,6 +372,7 @@ Builds are ad-hoc signed and not notarized, so anyone installing the disk image 
 
 ### Either platform
 
+- **Completed text could not be copied:** Open Dictate. The selectable text below the wave stays through page changes and later dictations. **Copy text** retries copying without transcribing or pasting again; if it still fails, select and copy the text yourself. **Dismiss text** removes that recovery entry. With local history off, recovery is only in memory and closing Sotto clears it. With history on, the completed transcript is also saved unless history storage fails. A paste-helper failure still leaves the normal copied result in the clipboard.
 - **Shortcut conflict:** Choose another accelerator in Settings. Sotto keeps the last working shortcut if registration fails.
 - **No speech detected:** Move closer to the microphone and confirm the level meter responds. Silence does not replace the clipboard or create history.
 - **"Add your OpenRouter API key":** Transcription needs a key. Paste one under Settings → Transcription and press **Verify key**.
