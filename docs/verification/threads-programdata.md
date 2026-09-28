@@ -37,6 +37,12 @@ The adapters' environment functions were bundled with esbuild into a throwaway s
 
 The first row is the failure from the issue: take `ProgramData` away and `ssh -V` says nothing and exits 255.
 
-## Not checked live
+## In a real Claude thread, before the fix
 
-There are no screenshots, because nothing a user sees changed. A tool run in a thread prints the same output it would in a terminal. `ssh -V` was not run from a real Claude thread in the built app. That would mean a turn on the owner's Claude subscription and the owner approving the shell command, so the check above runs the same executable under the same environment the adapter builds, without the model in between. The first Claude thread on Windows that runs `ssh`, `ssh-keygen`, `ssh-add` or `scp` after this merges is the live check.
+The shell that finished this change was itself a Claude thread in the installed Sotto 0.1.20 (`Sotto.exe` started `claude.exe`, which started the shell). Its environment has no `ProgramData`. There, `ssh -V` exited 255 with no output, and `ProgramData='C:\ProgramData' ssh -V` in the same shell printed `OpenSSH_for_Windows_9.5p2, LibreSSL 3.8.2` and exited 0. That is the issue's failure, seen live in a thread rather than rebuilt.
+
+## Still to check live
+
+There are no screenshots, because nothing a user sees changed. A tool run in a thread prints the same output it would in a terminal. `ssh -V` has not yet been run from a Claude thread in a build that has this fix. That needs a turn on the owner's Claude subscription and the owner approving the shell command, so the table above runs the same executable under the environment `ClaudeSubscriptionClient.environment()` builds, the one `claude.ts` hands to the Claude process, without the model in between.
+
+The live check, before merge: start the branch with `npm run dev`, open a Claude thread on Windows, ask it to run `ssh -V`, and record the output here. It should print `OpenSSH_for_Windows_9.5p2, LibreSSL 3.8.2`, or whatever version is installed, and exit 0.
