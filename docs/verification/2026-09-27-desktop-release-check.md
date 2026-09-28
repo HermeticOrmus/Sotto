@@ -21,3 +21,9 @@ Typecheck, lint and notices passed. A narrow post-review observation intercepted
 
 - [Restored queue and newer draft at minimum size](../../artifacts/review-393/restart-minimum-light.png)
 - [Settings at minimum size](../../artifacts/review-393/settings-minimum-dark.png)
+
+## Final combined candidate
+
+The integration candidate includes current main `22c8e90b`, including the independently merged thread-defaults change #433, and the reviewed remaining remediation branches. Optimized worktree coordination #441 removes the extra Git subprocesses from its primary lifecycle paths and passed fresh Standards and Spec reviews; its paired timing measurement remains pending. It is not accepted on latency yet.
+
+The earlier local command result above belongs to `bfadb348`. Final integrated desktop verification is still pending. Previous serial local full suites in other review lanes hit native allocation errors; on September 28 the host again reached 95?97% committed memory with no owned verification process running. The combined full gate therefore runs on an isolated hosted Windows runner through the draft implementation PR for issue #393. This is not a claim of a local full-suite pass. Each component keeps its own issue, PR and exact-head hosted gate; this integration PR merges last.
