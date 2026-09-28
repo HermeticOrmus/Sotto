@@ -8,6 +8,7 @@ The [README](../README.md) says what Sotto is and how to install it. This guide 
 - [Tools](#tools)
 - [Git, branches and worktrees](#git-branches-and-worktrees)
 - [Remote hosts](#remote-hosts)
+- [Phones](#phones)
 - [Headless host](#headless-host)
 - [Dictation and settings](#dictation-and-settings)
 - [Updates](#updates)
@@ -151,7 +152,38 @@ Threads from connected hosts share one sidebar. When a remote host is connected,
 
 After an interrupted command, reconnect and check its result before choosing to send again; Sotto never automatically repeats it.
 
-An iPhone client is planned in its own pull request ([#225](https://github.com/millZach/Sotto/pull/225)) and is not part of this build. Its setup, including the private address it reaches the host through, arrives with it.
+### iPhone app
+
+*In development. Builds reach iPhones through TestFlight; [the app's README](../apps/ios/README.md) says how to set that up and how to build it yourself.*
+
+The iPhone app reads and answers threads on your computers over Tailscale. It pairs with every computer running Sotto, and with any host without a screen, and shows their threads together; each computer shares only its own threads. Install Tailscale on the iPhone and on each computer. On a computer running Sotto, turn on phone access in **Settings › Phones** ([Phones](#phones)), which serves Sotto to your tailnet through Tailscale Serve on port 8443. For a host without a screen, point Tailscale Serve on its machine at the host's loopback port. Then add the computer:
+
+1. Type the computer's name on your tailnet, such as `forge`. The app finds its full private address through Tailscale's MagicDNS and checks that Sotto answers there, on port 8443 and then on 443. You can type the full address ending in `.ts.net` instead, with a port if you want only that one.
+2. Type the eight-character code from **Settings › Phones** on that computer, or the code a host's pairing command above prints.
+
+The first time, the app opens on these two steps. After that, **Add computer** at the top of **Computers** opens them as a sheet.
+
+The app has three tabs. **Needs you** lists every question and permission waiting on you on every computer, and you can answer each on its card: one tap on a choice, or **Allow once** or **Deny**. Longer questions and other permission choices open in their thread. Working threads are listed below. **Threads** lists every thread on every computer, most recent first, with **All**, **Working** and **Done**. Each card and row names its computer, and with more than one computer paired a strip at the top of both tabs, **All** and then one per computer, narrows them to one. A computer the iPhone can't reach says so without hiding the others: Needs you shows a line for it, and Threads keeps its threads, as it last saw them, marked **Can’t reach it**. A thread shows its messages as a conversation, or its **Activity**: files read and changed, commands and results. You can reply, and stop a turn that is working; each goes to the thread's own computer. **Computers** lists every computer with whether it is online, and each opens to its name on the tailnet, whether this iPhone may answer there, its client ID, **Rename** and **Remove this computer**. A computer is named by the name its Sotto gives, or by its name on the tailnet; Rename changes it on the iPhone only.
+
+Pairing lets the iPhone read threads and reply. It answers questions and permissions on a computer only after you turn on **Can answer** for the iPhone in that computer's **Settings › Phones**, or run `--allow-answers` with its client ID on a host; until then each card says so. A reply the computer didn't confirm is marked and never sent again on its own. New threads, terminals, files, voice and notifications are not part of the first version.
+
+## Phones
+
+*Development feature.*
+
+**Settings > Phones** lets Sotto on your iPhone reach the threads this computer runs, over your own tailnet. It needs Tailscale installed and signed in on both, and the local host running (**Settings > Hosts**); with the local host off, the page says so and offers **Go to Hosts**. Each computer shares only its own threads: a phone paired with this computer sees what this window's local host runs, and not your remote hosts.
+
+Turn on **Let phones connect**. Sotto then works down a checklist, and each row says whether its step worked, failed, or is still to come:
+
+1. **Tailscale is running.** Sotto asks the `tailscale` command on this computer (on the PATH, or where the Windows installer or the macOS app puts it) whether Tailscale is signed in, and shows this computer's name on your tailnet. If it is not running, the row says so, nothing is changed, and Sotto looks again every half minute; **Try again** looks now.
+2. **Tailscale Serve on port 8443.** Sotto opens a listener on this computer's loopback address only and asks Tailscale Serve to carry HTTPS on port 8443, on your tailnet, to it. It never uses Funnel, and it leaves port 443 to other apps. If another app already has something on 8443, Sotto leaves it alone and says so. If your tailnet has not turned Serve on, the row says so and **Turn on Serve in Tailscale** opens the page Tailscale gave for it.
+3. **Address phones use.** The private address, such as `https://laptop.tail1234.ts.net:8443`, with **Copy address**.
+
+Then pair a phone: on the iPhone, open Sotto, tap **Add computer** ([iPhone app](#iphone-app)), enter this computer's name on your tailnet, then press **Show a pairing code** here and type the code. A code is eight characters, works once and lasts five minutes, with a countdown; **Make a new code** replaces it and **Cancel code** (or Escape) withdraws it. Only one code is live at a time, and it is never written down or logged. When the phone pairs, the code closes and the phone appears under **Paired phones**.
+
+Each paired phone shows its name as the phone sent it, when it paired and whether it is connected now. A paired phone reads threads and replies. It answers questions and permissions only after you turn on its **Can answer** switch, which records your permission for that phone and nothing else (ADR-0004); turning it off takes that back. **Remove** asks first, then unpairs the phone and closes its connection at once. **Name on phones** is what phones list this computer's threads under; left empty, it is this computer's name on your tailnet.
+
+Turning **Let phones connect** off removes Sotto's Serve setting on 8443 and closes the listener, which drops every phone's connection; paired phones stay paired for next time. Quitting Sotto removes the Serve setting too, and starting it puts the setting back while phone access is on. See [ADR-0033](adr/0033-the-desktop-lets-paired-phones-reach-its-threads.md).
 
 ## Headless host
 
@@ -252,6 +284,10 @@ The Tools browser contacts the HTTP(S) pages you open, including local developme
 ### Remote hosts
 
 When you connect a remote host, Sotto sends your thread reads, prompts and explicit request answers to the host you configured. When you browse a host's folders to add a project, the host sends back the names and paths of the folders you open, and nothing about any file; they are not logged on either computer. The host socket listens only on its own loopback address. The desktop reaches it through your SSH connection. Pairing identifies each client and can be revoked. Provider credentials stay on the host, and pairing does not approve permission requests. No public listener, relay account, analytics or new provider service is enabled by connecting a client.
+
+### Phones
+
+With phone access on, your threads, and the replies and answers you send from a phone, travel between this computer and the iPhones you paired, over your tailnet through Tailscale Serve. Sotto's listener binds this computer's loopback address only; Serve carries tailnet traffic to it, and Funnel, which would reach the internet, is never used. Sotto runs the `tailscale` command with fixed arguments and reads what it prints; that command talks to the local Tailscale service, so no new host is contacted. Pairing codes and tokens are never logged, and the listener has no administrative routes: codes, answers and removals are handled inside Sotto, from the Phones page.
 
 ### Themes and the natural voice
 

@@ -126,6 +126,8 @@ const settingKeys = [
   'webLinkDestination',
   'responseStreaming',
   'localHostEnabled',
+  'phoneAccess',
+  'phoneAccessName',
   'showBrowserPreviews',
   'browserWithoutAsking',
   'voiceCoordinatorEnabled',

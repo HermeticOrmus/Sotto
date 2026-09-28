@@ -1,0 +1,482 @@
+import Foundation
+import SwiftUI
+import SottoCore
+
+/// A computer step 1 of adding found at a private address, with the health it answered.
+struct FoundHost: Equatable {
+    let endpoint: HostEndpoint; let health: Health
+    /// The computer's own name, or its name on the tailnet from a host that sends none.
+    var name: String { health.computerName ?? endpoint.machine }
+}
+
+/// What this iPhone knows about one paired computer while the app runs. Nothing here is saved.
+struct Live {
+    var status = ComputerStatus.connecting
+    var shell: Shell?
+    var mayAnswer = false
+    /// Why the last connection ended, for the computer's own page.
+    var problem: String?
+}
+
+/// Every paired computer, each with its own connection, session and state. A computer that can't be
+/// reached, or fails, never holds up the others. Everything that names a thread names its computer too.
+@MainActor final class AppModel: ObservableObject {
+    /// In the order they were added. Credentials live in the Keychain, one item per host ID.
+    @Published private(set) var computers: [SavedComputer] = []
+    @Published private(set) var live: [String: Live] = [:]
+    @Published private(set) var selected: ThreadRef?
+    @Published private(set) var pending: [PendingOperation] = []
+    /// Finding or pairing a computer.
+    @Published private(set) var working = false
+    @Published private(set) var storageReady = false
+    /// The computer being removed, while its pairing is revoked.
+    @Published private(set) var removing: String?
+    /// What just happened on the tabs.
+    @Published var feedback: String?
+    /// What went wrong while finding or pairing a computer.
+    @Published var pairFeedback: String?
+    /// Unsent replies, by `ThreadRef.id`.
+    @Published var drafts: [String: String] = [:]
+    @Published private(set) var submitted: [String: String] = [:]
+    @Published private(set) var failedReplies: [String: String] = [:]
+    /// The computer step 1 of adding found, waiting for its code in step 2.
+    @Published private(set) var found: FoundHost?
+    /// Whether the Add computer sheet is over the tabs.
+    @Published var adding = false
+    /// The strip on Needs you and Threads.
+    @Published var show = ComputerFilter.all
+    @Published private var openDetail: ThreadDetail?
+    private let keychain = KeychainStore()
+    /// Finds and pairs computers; each paired computer gets its own connection.
+    private let finder = HostConnection()
+    private var connections: [String: HostConnection] = [:]
+    private var generations: [String: UUID] = [:]
+    private var connecting: Set<String> = []
+    private var active = false
+    private var pairGeneration = UUID()
+    private var detailVersion = 0
+
+    // MARK: Reading
+
+    func computer(_ hostID: String) -> SavedComputer? { computers.first { $0.hostID == hostID } }
+    func name(_ hostID: String) -> String { computer(hostID)?.name ?? "the computer" }
+    func status(_ hostID: String) -> ComputerStatus { live[hostID]?.status ?? .connecting }
+    func online(_ hostID: String) -> Bool { status(hostID) == .online }
+    func mayAnswer(_ hostID: String) -> Bool { live[hostID]?.mayAnswer ?? false }
+    func problem(_ hostID: String) -> String? { live[hostID]?.problem }
+    var anyConnecting: Bool { computers.contains { status($0.hostID) == .connecting } }
+    /// Every computer as the lists read it, in the order they were added.
+    var lists: [ComputerThreads] {
+        computers.map { computer in
+            let state = live[computer.hostID]
+            return ComputerThreads(hostID: computer.hostID, name: computer.name, status: state?.status ?? .connecting,
+                                   threads: state?.shell?.host.threads ?? [], projects: state?.shell?.host.projects ?? [])
+        }
+    }
+    func thread(_ ref: ThreadRef) -> ThreadSummary? { live[ref.hostID]?.shell?.host.threads.first { $0.id == ref.threadID } }
+    func detail(for ref: ThreadRef) -> ThreadDetail? { selected == ref && openDetail?.threadId == ref.threadID ? openDetail : nil }
+    private func scoped(_ hostID: String) -> [PendingOperation] {
+        guard let computer = self.computer(hostID) else { return [] }
+        return pending.filter { $0.matches(hostID: hostID, clientID: computer.pairing.clientId) }
+    }
+    func pending(for ref: ThreadRef) -> [PendingOperation] { scoped(ref.hostID).filter { $0.threadID == ref.threadID } }
+    func provider(for ref: ThreadRef) -> Provider? {
+        let providerID = thread(ref)?.providerId
+        return live[ref.hostID]?.shell?.host.providers?.first { $0.id == providerID }
+    }
+    private func capabilities(for ref: ThreadRef) -> ProviderCapabilities? { provider(for: ref)?.capabilities ?? live[ref.hostID]?.shell?.host.capabilities }
+    /// An answer this iPhone sent to that computer that it hasn't confirmed. Cards wait for it, so a card that
+    /// moves under a finger after the first answer can't take a second tap meant for the first.
+    func answering(_ hostID: String) -> Bool { scoped(hostID).contains { $0.kind == "answer" } }
+    private func canAct(on ref: ThreadRef) -> Bool { online(ref.hostID) && thread(ref) != nil && pending(for: ref).isEmpty }
+    func canSend(_ ref: ThreadRef) -> Bool {
+        guard canAct(on: ref), let thread = self.thread(ref), thread.status != "running", thread.requests.isEmpty else { return false }
+        let source = provider(for: ref)
+        return (capabilities(for: ref)?.submit ?? false) && (source == nil || source?.connection == "connected")
+    }
+    func canInterrupt(_ ref: ThreadRef) -> Bool {
+        canAct(on: ref) && thread(ref)?.status == "running" && (capabilities(for: ref)?.interrupt ?? false)
+    }
+    func canAnswer(_ request: AgentRequest, in ref: ThreadRef) -> Bool {
+        guard canAct(on: ref), mayAnswer(ref.hostID), request.supported else { return false }
+        let allowed = capabilities(for: ref)
+        return request.kind == "permission" ? (allowed?.permissions ?? false) : (allowed?.questions ?? false)
+    }
+
+    // MARK: Starting and stopping
+
+    init() {
+        do {
+            let index = try keychain.read([String].self, account: ComputerStore.indexAccount)
+            let legacy = try readComputer(ComputerStore.legacyAccount)
+            let plan = ComputerStore.plan(index: index, legacy: legacy)
+            // The single pairing from before many computers becomes the first computer: its own item
+            // first, then the index naming it, then the old item goes.
+            if let adopt = plan.adopt { try keychain.write(adopt, account: ComputerStore.account(adopt.hostID)) }
+            if plan.index != index { try keychain.write(plan.index, account: ComputerStore.indexAccount) }
+            if plan.removeLegacy { try keychain.remove(account: ComputerStore.legacyAccount) }
+            var kept: [SavedComputer] = []
+            for hostID in plan.index {
+                if let computer = try readComputer(ComputerStore.account(hostID)), computer.hostID == hostID { kept.append(computer) }
+            }
+            let markers = try keychain.read([PendingOperation].self, account: ComputerStore.pendingAccount) ?? []
+            pending = markers.filter { marker in kept.contains { marker.matches(hostID: $0.hostID, clientID: $0.pairing.clientId) } }
+            computers = kept
+            for computer in kept { live[computer.hostID] = Live() }
+            storageReady = true
+        } catch {
+            feedback = "Secure connection details could not be read. Unlock this iPhone and reopen Sotto."
+            pairFeedback = feedback
+        }
+    }
+    /// A computer's item, or nil when it is missing or can't be read as one. Secure storage that can't
+    /// be opened still throws, so a locked iPhone isn't mistaken for one with nothing paired.
+    private func readComputer(_ account: String) throws -> SavedComputer? {
+        do {
+            guard let computer = try keychain.read(SavedComputer.self, account: account) else { return nil }
+            try computer.validate()
+            return computer
+        } catch let error as ClientError where error == KeychainStore.failure { throw error }
+        catch { return nil }
+    }
+    func phase(_ phase: ScenePhase) {
+        if phase == .active {
+            guard !active else { return }; active = true
+            Task { await reconnectAll() }
+        } else if phase == .background {
+            active = false; pairGeneration = UUID(); working = false; openDetail = nil
+            for (hostID, connection) in connections { generations[hostID] = UUID(); connection.disconnect() }
+            connecting.removeAll()
+            live = live.mapValues { (state: Live) -> Live in var next = state; next.status = .connecting; next.mayAnswer = false; return next }
+        }
+    }
+    func reconnectAll() async {
+        let ids = computers.map(\.hostID)
+        await withTaskGroup(of: Void.self) { group in
+            for hostID in ids { group.addTask { await self.connect(hostID) } }
+        }
+    }
+    /// Pull to refresh: reconnects every computer, but returns once the ones that were reachable are
+    /// back, rather than waiting out one that can't be reached. With none reachable, it waits for all.
+    func refresh() async {
+        let started = computers.map { computer in
+            (reachable: online(computer.hostID), task: Task { await connect(computer.hostID) })
+        }
+        let awaited = started.contains { $0.reachable } ? started.filter { $0.reachable } : started
+        for item in awaited { await item.task.value }
+    }
+    /// A fresh session, shell and open-thread detail from one computer. Only that computer's state changes.
+    func connect(_ hostID: String) async {
+        guard storageReady, active, !connecting.contains(hostID), let saved = computer(hostID) else { return }
+        let current = UUID(); generations[hostID] = current; connecting.insert(hostID)
+        defer { if generations[hostID] == current { connecting.remove(hostID) } }
+        update(hostID) { $0.status = .connecting; $0.mayAnswer = false; $0.problem = nil }
+        if selected?.hostID == hostID { openDetail = nil }
+        do {
+            guard let endpoint = saved.endpoint else { throw ClientError.invalidHost }
+            let hello = try await connection(hostID).connect(endpoint: endpoint, pairing: saved.pairing)
+            guard generations[hostID] == current else { return }
+            update(hostID) { $0.shell = hello.shell; $0.mayAnswer = hello.capabilities.mayAnswer; $0.status = .online }
+            if let selected, selected.hostID == hostID, thread(selected) == nil { self.selected = nil }
+            try await observeAndRead(hostID)
+            await checkDelivery(hostID)
+        } catch {
+            guard generations[hostID] == current else { return }
+            update(hostID) { $0.status = .unreachable; $0.mayAnswer = false; $0.problem = error.localizedDescription }
+            connections[hostID]?.disconnect()
+        }
+    }
+    private func connection(_ hostID: String) -> HostConnection {
+        if let existing = connections[hostID] { return existing }
+        let made = HostConnection()
+        made.onPush = { [weak self] frame in self?.push(frame, from: hostID) }
+        made.onDisconnect = { [weak self] in
+            self?.update(hostID) { $0.status = .unreachable; $0.mayAnswer = false; $0.problem = ClientError.disconnected.localizedDescription }
+        }
+        connections[hostID] = made
+        return made
+    }
+    private func update(_ hostID: String, _ change: (inout Live) -> Void) {
+        guard computer(hostID) != nil else { return }
+        var state = live[hostID] ?? Live(); change(&state); live[hostID] = state
+    }
+
+    // MARK: Adding a computer
+
+    func startAdding() { found = nil; pairFeedback = nil; adding = true }
+    /// The sheet closed. A code already spent still finishes pairing; anything else is dropped.
+    func closeAdding() { adding = false; pairGeneration = UUID(); working = false; found = nil; pairFeedback = nil }
+    /// Step 1: find the computer from its machine name (or full address) and confirm Sotto answers there:
+    /// on 8443, where the desktop serves it, then on 443.
+    func find(_ typed: String) async {
+        guard !working, storageReady else { return }; working = true; pairFeedback = nil
+        let current = pairGeneration
+        defer { if current == pairGeneration { working = false } }
+        do {
+            let candidates = try await HostFinder.candidates(typed)
+            let finder = self.finder
+            let hit = try await HostFinder.probe(candidates) { endpoint in try await finder.health(endpoint: endpoint) }
+            guard current == pairGeneration else { return }
+            if let existing = computer(hit.found.hostId) {
+                pairFeedback = "This iPhone is already paired with \(existing.name). To pair it again, remove it in Computers first."
+                return
+            }
+            found = FoundHost(endpoint: hit.endpoint, health: hit.found)
+        } catch { if current == pairGeneration { pairFeedback = error.localizedDescription } }
+    }
+    func changeComputer() { found = nil; pairFeedback = nil }
+    /// Step 2: spend the code on the computer step 1 found.
+    func pair(code typed: String) async {
+        guard !working, storageReady, let found else { return }; working = true; pairFeedback = nil
+        let current = pairGeneration
+        do {
+            let code = try PairingCode.normalized(typed)
+            // Kept even if the sheet closed or the app went to the background meanwhile: the code is spent
+            // and the computer holds this client.
+            let pairing = try await finder.pair(endpoint: found.endpoint, expectedHostID: found.health.hostId, code: code)
+            let computer = SavedComputer(address: found.endpoint.url.absoluteString, pairing: pairing, reportedName: found.health.computerName)
+            try keychain.write(computer, account: ComputerStore.account(computer.hostID))
+            try keychain.write(computers.map(\.hostID).filter { $0 != computer.hostID } + [computer.hostID], account: ComputerStore.indexAccount)
+            // Markers from an earlier pairing with this computer must never attach to the new client.
+            let markers = pending.filter { $0.hostID != computer.hostID }
+            try keychain.write(markers, account: ComputerStore.pendingAccount)
+            pending = markers
+            computers = computers.filter { $0.hostID != computer.hostID } + [computer]
+            live[computer.hostID] = Live()
+            // Sheet state belongs to whichever Add computer is open now; a pairing that finishes after
+            // Cancel is saved but leaves a newer sheet alone.
+            if current == pairGeneration { self.found = nil; working = false; adding = false }
+            await connect(computer.hostID)
+        } catch { if current == pairGeneration { pairFeedback = error.localizedDescription; working = false } }
+    }
+
+    // MARK: Looking after a computer
+
+    func rename(_ hostID: String, to typed: String) {
+        guard var computer = self.computer(hostID) else { return }
+        computer.localName = ComputerName.cleaned(typed)
+        do {
+            try keychain.write(computer, account: ComputerStore.account(hostID))
+            computers = computers.map { $0.hostID == hostID ? computer : $0 }
+        } catch { feedback = error.localizedDescription }
+    }
+    /// Revokes this iPhone on the computer where it can be reached, then forgets the computer here either way.
+    func remove(_ hostID: String) async {
+        guard storageReady, removing == nil, let saved = computer(hostID) else { return }
+        removing = hostID
+        defer { removing = nil }
+        var outcome = Revocation.confirmed
+        if let endpoint = saved.endpoint {
+            do { try await connection(hostID).revoke(endpoint: endpoint, token: saved.pairing.token) }
+            catch is URLError { outcome = .unreachable }
+            catch { outcome = .unconfirmed }
+        } else { outcome = .unconfirmed }
+        // The item goes first: an index entry without its item is skipped at launch, and markers for a
+        // computer that isn't there are dropped then too, so the later writes can fail without harm.
+        do { try keychain.remove(account: ComputerStore.account(hostID)) } catch { feedback = error.localizedDescription; return }
+        let rest = computers.filter { $0.hostID != hostID }
+        let markers = pending.filter { $0.hostID != hostID }
+        try? keychain.write(rest.map(\.hostID), account: ComputerStore.indexAccount)
+        try? keychain.write(markers, account: ComputerStore.pendingAccount)
+        generations[hostID] = UUID(); connecting.remove(hostID)
+        connections[hostID]?.close(); connections[hostID] = nil
+        let gone = Set(pending.filter { $0.hostID == hostID }.map(\.id))
+        computers = rest; live[hostID] = nil; pending = markers
+        if selected?.hostID == hostID { selected = nil; openDetail = nil }
+        if show == .only(hostID) { show = .all }
+        let prefix = hostID + "/"
+        drafts = drafts.filter { !$0.key.hasPrefix(prefix) }
+        failedReplies = failedReplies.filter { !$0.key.hasPrefix(prefix) }
+        submitted = submitted.filter { !gone.contains($0.key) }
+        let words = outcome.words(name: saved.name, clientID: saved.pairing.clientId)
+        feedback = words
+        // With nothing left paired the app goes back to the pairing steps, which show this instead.
+        if rest.isEmpty { pairFeedback = words }
+    }
+    private enum Revocation {
+        case confirmed, unreachable, unconfirmed
+        func words(name: String, clientID: String) -> String {
+            let there = "Remove it there too: in Settings › Phones on \(name), or on a host without a screen with its --revoke-client \(clientID) command."
+            switch self {
+            case .confirmed: return "Removed \(name)."
+            case .unreachable: return "Removed \(name) from this iPhone. It couldn’t be reached, so it still lists this iPhone. " + there
+            case .unconfirmed: return "Removed \(name) from this iPhone, but couldn’t confirm removal there, so it may still list this iPhone. " + there
+            }
+        }
+    }
+
+    // MARK: The open thread
+
+    func select(_ ref: ThreadRef?) async {
+        let previous = selected
+        selected = ref; openDetail = nil; detailVersion += 1
+        if let previous, previous.hostID != ref?.hostID, online(previous.hostID), let before = connections[previous.hostID] {
+            _ = try? await before.call(["op": .string("observe"), "threadIds": .array([])])
+        }
+        // Another thread may have been opened, or its computer reconnected, while the last one was let go.
+        guard let ref, selected == ref, online(ref.hostID) else { return }
+        let current = generations[ref.hostID]
+        do { try await observeAndRead(ref.hostID) }
+        catch { if generations[ref.hostID] == current, selected == ref { feedback = error.localizedDescription } }
+    }
+    /// Tells one computer which of its threads is open here, and reads that thread.
+    private func observeAndRead(_ hostID: String) async throws {
+        guard let connection = connections[hostID], let current = generations[hostID] else { return }
+        let ref = selected?.hostID == hostID ? selected : nil
+        _ = try await connection.call(["op": .string("observe"), "threadIds": .array(ref.map { [.string($0.threadID)] } ?? [])])
+        guard generations[hostID] == current, let ref, ref == selected else { return }
+        let version = detailVersion
+        let result = try await connection.call(["op": .string("detail"), "threadId": .string(ref.threadID)])
+        try applyDetail(result, ref: ref, epoch: current, versionAtRead: version)
+    }
+    private func applyDetail(_ value: JSONValue, ref: ThreadRef, epoch: UUID, versionAtRead: Int? = nil) throws {
+        guard let now = generations[ref.hostID], epoch == now, ref == selected else { return }
+        let next: ThreadDetail?
+        if value == .null { next = nil } else { next = try value.decode(ThreadDetail.self) }
+        if let next, next.threadId != ref.threadID { throw ClientError.invalidIdentity }
+        guard SnapshotGuard.accepts(requestGeneration: epoch, currentGeneration: now,
+                                    requestedThread: ref.id, selectedThread: selected?.id,
+                                    incomingRevision: next?.revision, currentRevision: openDetail?.revision,
+                                    changedSinceRead: versionAtRead.map { $0 != detailVersion } ?? false) else { return }
+        openDetail = next; detailVersion += 1
+    }
+    func earlier(_ ref: ThreadRef) async {
+        guard online(ref.hostID), selected == ref, let connection = connections[ref.hostID] else { return }
+        let current = generations[ref.hostID]
+        do {
+            let command = try Commands.loadEarlier(threadID: ref.threadID)
+            _ = try await connection.call(["op": .string("command"), "command": command])
+            guard generations[ref.hostID] == current, selected == ref else { return }
+            try await observeAndRead(ref.hostID)
+        } catch { if generations[ref.hostID] == current { feedback = error.localizedDescription } }
+    }
+
+    // MARK: Replies, answers and stops, each to its thread's own computer
+
+    func send(_ ref: ThreadRef) async {
+        guard canSend(ref), let text = drafts[ref.id], let computer = self.computer(ref.hostID) else { return }
+        let draft = UUID().uuidString
+        do {
+            let command = try Commands.prompt(threadID: ref.threadID, text: text, draftID: draft)
+            let operation = PendingOperation(hostID: ref.hostID, clientID: computer.pairing.clientId, threadID: ref.threadID, draftID: draft, kind: "reply")
+            try remember(operation); submitted[operation.id] = text; drafts[ref.id] = ""
+            await dispatch(command, operation: operation)
+        } catch { feedback = error.localizedDescription }
+    }
+    /// Answers a request in any thread: from its card on Needs you, or from the open thread's sheet.
+    func answer(_ request: AgentRequest, in ref: ThreadRef, choice: String? = nil, text: String = "", answers: [String: QuestionAnswer] = [:]) async {
+        guard let thread = self.thread(ref), canAnswer(request, in: ref), let computer = self.computer(ref.hostID) else { return }
+        do {
+            let command = try Commands.answer(threadID: ref.threadID, request: request, currentRequests: thread.requests, choice: choice, text: text, answers: answers)
+            let operation = PendingOperation(hostID: ref.hostID, clientID: computer.pairing.clientId, threadID: ref.threadID, requestID: request.id, kind: "answer")
+            try remember(operation); await dispatch(command, operation: operation)
+        } catch { feedback = error.localizedDescription }
+    }
+    func interrupt(_ ref: ThreadRef) async {
+        guard canInterrupt(ref), let computer = self.computer(ref.hostID) else { return }
+        do {
+            let command = try Commands.interrupt(threadID: ref.threadID)
+            let operation = PendingOperation(hostID: ref.hostID, clientID: computer.pairing.clientId, threadID: ref.threadID, kind: "interrupt")
+            try remember(operation)
+            await dispatch(command, operation: operation)
+        } catch { feedback = error.localizedDescription }
+    }
+    private func remember(_ operation: PendingOperation) throws {
+        guard pending.count < 100 else { throw ClientError.rejected("Check the unconfirmed actions before sending more.") }
+        let next = pending + [operation]; try keychain.write(next, account: ComputerStore.pendingAccount); pending = next
+    }
+    private func forgetMarker(_ id: String) throws {
+        let next = pending.filter { $0.id != id }; try keychain.write(next, account: ComputerStore.pendingAccount); pending = next; submitted.removeValue(forKey: id)
+    }
+    private func dispatch(_ command: JSONValue, operation: PendingOperation) async {
+        let hostID = operation.hostID, current = generations[hostID]
+        guard let connection = connections[hostID] else { feedback = ClientError.uncertain.localizedDescription; return }
+        do {
+            let result = try await connection.call(["op": .string("command"), "command": command], id: operation.id)
+            guard generations[hostID] == current else { return }
+            try applyShell(result, from: hostID)
+            await checkDelivery(hostID)
+        } catch let error as HostRefusal {
+            guard generations[hostID] == current else { return }
+            // Revocation can replace an acknowledgement AFTER the action ran.
+            // Generic unavailable failures may also follow provider side effects.
+            if ["invalid_request", "stale_request", "forbidden", "busy"].contains(error.failure.code) {
+                do { try rejectOperation(operation) } catch { feedback = error.localizedDescription; return }
+            }
+            if error.failure.code == "forbidden" { update(hostID) { $0.mayAnswer = false } }
+            if error.failure.code == "unauthenticated" { update(hostID) { $0.status = .unreachable; $0.problem = error.localizedDescription } }
+            feedback = error.localizedDescription
+        } catch { if generations[hostID] == current { feedback = "Delivery is unconfirmed. Reconnect and check the thread before sending again." } }
+    }
+    func checkDelivery(_ hostID: String) async {
+        guard online(hostID), let connection = connections[hostID] else { return }
+        let current = generations[hostID]
+        do {
+            let fresh = try await connection.call(["op": .string("shell")])
+            guard generations[hostID] == current else { return }
+            try applyShell(fresh, from: hostID)
+            for item in scoped(hostID) {
+                let receipt = try await connection.call(["op": .string("receipt"), "commandId": .string(item.id)]).decode(Receipt.self)
+                guard generations[hostID] == current else { return }
+                guard scoped(hostID).contains(where: { $0.id == item.id }) else { continue }
+                try settle(item, receipt: receipt, shell: live[hostID]?.shell)
+            }
+        } catch { if generations[hostID] == current { feedback = "Delivery to \(name(hostID)) could not be checked. Nothing was resent. Reconnect to try again." } }
+    }
+    private func settle(_ item: PendingOperation, receipt: Receipt, shell: Shell?) throws {
+        let delivery = shell?.deliveries?.first { $0.threadId == item.threadID && $0.draftId == item.draftID }
+        let delivered = shell?.deliveredDrafts?.contains { $0.threadId == item.threadID && $0.draftId == item.draftID } == true
+        let accepted = delivered || delivery?.status == "accepted"
+        let thread = shell?.host.threads.first { $0.id == item.threadID }
+        let uncertainRequest = thread?.requests.contains { $0.id == item.requestID && $0.delivery == "uncertain" } == true
+        if delivery?.status == "failed" {
+            try rejectOperation(item)
+            // Named, because the thread open now may be another one, on another computer.
+            let title = thread.map { "“\($0.title)”" } ?? "a thread"
+            feedback = "Your reply to \(title) on \(name(item.hostID)) wasn’t sent. Its text is back in that thread."
+        } else if accepted || (shell?.error == nil && !uncertainRequest && item.reconciled(receipt: receipt, deliveries: shell?.deliveries ?? [])) {
+            try forgetMarker(item.id)
+            feedback = item.kind == "answer" ? "Answer sent." : nil
+        }
+    }
+    private func rejectOperation(_ operation: PendingOperation) throws {
+        if let text = submitted[operation.id], operation.kind == "reply" {
+            failedReplies[ThreadRef(hostID: operation.hostID, threadID: operation.threadID).id] = text
+        }
+        try forgetMarker(operation.id)
+    }
+    func restoreReply(_ ref: ThreadRef) {
+        guard (drafts[ref.id] ?? "").isEmpty, let text = failedReplies[ref.id] else { return }
+        drafts[ref.id] = text; failedReplies.removeValue(forKey: ref.id)
+    }
+    func acknowledgeUnknown(_ id: String) {
+        do { try forgetMarker(id); feedback = "Unconfirmed action dismissed. Nothing was resent." }
+        catch { feedback = error.localizedDescription }
+    }
+
+    // MARK: Updates from a computer
+
+    private func applyShell(_ value: JSONValue, from hostID: String) throws {
+        guard computer(hostID) != nil else { throw ClientError.invalidIdentity }
+        let next = try value.decode(Shell.self); try next.validate(hostID: hostID)
+        update(hostID) { $0.shell = next }
+        if let selected, selected.hostID == hostID, !next.host.threads.contains(where: { $0.id == selected.threadID }) {
+            self.selected = nil; openDetail = nil
+        }
+    }
+    private func push(_ frame: JSONValue, from hostID: String) {
+        do {
+            if frame["event"].string == "shell" { try applyShell(frame["state"], from: hostID) }
+            else if frame["event"].string == "detail", let id = frame["threadId"].string {
+                if let epoch = generations[hostID] { try applyDetail(frame["detail"], ref: ThreadRef(hostID: hostID, threadID: id), epoch: epoch) }
+            } else if frame["event"].string == "error" {
+                // The host sends this in place of an update too large for one frame; the connection stays open.
+                feedback = try frame["error"].decode(WireFailure.self).message
+            } else { throw ClientError.invalidProtocol }
+        } catch {
+            let words = "The update from \(name(hostID)) could not be read. Reconnect to refresh it."
+            update(hostID) { $0.status = .unreachable; $0.mayAnswer = false; $0.problem = words }
+            connections[hostID]?.disconnect(); feedback = words
+        }
+    }
+}

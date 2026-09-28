@@ -54,10 +54,13 @@ Sotto has no account of its own and collects nothing about you: no analytics, no
 - **Screenshots** you attach to a thread, or add from Sotto's browser as feedback, are scaled down, in the same format, to 2576 pixels on their longer side before they go anywhere, because that is the most any model Sotto sends them to reads: Claude 4.7 and later read up to 2576 and Codex up to 2048. The pixels past it would cost transfer and storage and change nothing the model reads. Smaller images, animated ones, GIFs, and any the smaller copy would not make smaller in bytes, go as you attached them; nothing is scaled up.
 - **Sotto's browser** is used by agents without asking, by default: they can open pages, click and type there, including on sites you are signed in to in it. Turn that off in Settings → Application, or stop it for one thread in Tools → Browser.
 - **Git** talks to your own remotes, including a background fetch every 30 seconds while the window is in front (you can change or turn it off in Settings → Git), and to GitHub through `gh` on your own sign-in for pull requests.
+- **Phone access**, once you turn it on in Settings → Phones, sends your threads, and the replies you send from a phone, to the iPhones you pair, over your own tailnet. Sotto runs the `tailscale` command on this computer to set up Tailscale Serve on port 8443; that command talks to the Tailscale app already running here, so no new service is contacted. If your tailnet has not turned Serve on, Settings → Phones offers to open the `login.tailscale.com` page Tailscale gives for it, in your browser, only when you press it. Only phones you pair can connect, and a phone answers questions and permissions only after you turn on Can answer for it. Turning it off, or quitting Sotto, removes the Serve setting.
 - **Update checks** ask GitHub for new Sotto versions (Windows) and `registry.npmjs.org` for new agent client versions. Both can be turned off.
 - **Only if you use them:** `api.openai.com` and `api.x.ai` for optional reasoning and reply voices, `open-vsx.org` (with `openvsxorg.blob.core.windows.net` and `openvsx.eclipsecontent.org`) for themes, `huggingface.co` for the natural voice download, SSH hosts you add, and pages you open in Sotto's browser.
 
 Dictation history stays on your computer, and you can turn it off. Screenshots you attach to a thread are kept as files on the computer that runs the thread, only while an unsent draft, a queued message or a recent message's preview needs them and for an hour after; with history off, new ones stay in memory and are not written to disk. Keys are kept in your operating system's credential store.
+
+The iPhone app, in development, talks only to your own Sotto host, through your private Tailscale address. It looks the host's name up through Tailscale's own name service on the phone, pairs with a code the host prints, and never answers a permission unless you have allowed it on the host.
 
 ## Build from source
 
@@ -75,6 +78,7 @@ npm run dev
 
 - [Guide](docs/guide.md): every feature, settings, remote hosts and troubleshooting
 - [Agent control](docs/agent-control.md): providers and threads in depth
+- [iPhone app](apps/ios/README.md): building, pairing and installing the iPhone client (in development)
 - [Contributing](AGENTS.md)
 
 ## License
