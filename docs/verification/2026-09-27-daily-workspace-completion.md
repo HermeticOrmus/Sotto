@@ -1,0 +1,9 @@
+# Daily workspace completion assertions (#391)
+
+The terminal completion marker is assembled by PowerShell so echoed input cannot satisfy the assertion. The existing poll of the actual changed file remains authoritative. Changes now explicitly expands `greeting.txt` before checking its contents, matching its collapsed default.
+
+The unchanged test failed at the collapsed diff. Repeated corrected runs then found a separate terminal input ordering bug: `Set-Content` became `Ste-tent`, and the actual file-content assertion correctly failed even though the later marker ran. Issue #408 owns that production fix; this branch remains test-only. An earlier overlapping Electron run also lost a native menu to window blur. No product menu behavior, keyboard path, deadline or file assertion was weakened.
+
+Frozen test commit `c05d7f68` was repeated against the #408 build at `4fdeee7f`, selected using `SOTTO_E2E_MAIN_ENTRY`. With a single worker and exclusive desktop access, all six tests passed: three full daily journeys and three restart/recovery journeys. The daily path uses real keyboard input, a real PowerShell process and temporary files, then checks isolated worktrees, Files, Browser, Changes, commit and an owned scripted PR flow. The restart path checks newer drafts, persisted queue ownership, settlement and preferences without automatic replay. The previous isolated draft/hover symptoms did not recur in these three repetitions; this is not a claim to have established their cause.
+
+The [minimum light restart capture](../../artifacts/review-391/restart-minimum-light.png) was inspected; the newer draft and queue controls remain available. Pre-existing captures and generated runtime files were restored. `SOTTO_PERF_DATA` was set to a verified-absent owned path. No paid provider turn or production profile was used. Static/full-suite gates and independent review are pending.
