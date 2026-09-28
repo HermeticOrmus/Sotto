@@ -1,0 +1,31 @@
+# Archive startup reads
+
+Issue #390. Windows, Node 24.14.1. Baseline `d6db0dac`; the candidate changes only how `WorkspaceHost` restores message windows for an event-sourced provider. It reads each thread's summary at startup and uses the existing observation path to load a pane's messages. Pending requests, activity recovery and legacy provider restoration keep their existing paths.
+
+## Controlled workload
+
+Run `node scripts/archive-startup-bench.mjs` from the repository root after `npm ci`. This explicit command bundles `tests/perf/archiveStartup.bench.ts` and launches fresh Node processes with `--expose-gc`. It creates and removes owned temporary SQLite workspaces; it never opens a personal profile, provider, account or network connection.
+
+Each archive contains 1, 50 or 200 saved, settled threads. Each thread has 80 synthetic messages of about 1 KiB and 100 completed command activities of about 1 KiB. Seeding finishes before measurement. Three fresh processes per size measure `WorkspaceHost.initialize()` and retained JavaScript heap after a forced collection. A fourth process separately counts rows and UTF-8 JSON bytes returned by `ThreadStore.readMessages` and `readActivities`; serialization is excluded from the timing samples. These are logical detail reads, not physical disk I/O or every internal SQLite query. Filesystem caches are warm.
+
+Other verification jobs were running on this machine. The elapsed times below are provisional shared-load observations, not a latency improvement claim. This is host initialization, not complete Electron startup or a measurement of a user's archive.
+
+| Saved threads | Startup median, baseline / candidate | Retained heap after initialize, baseline / candidate | Heap after observing no threads, baseline / candidate |
+| --- | --- | --- | --- |
+| 1 | 71.51 / 57.31 ms | 546,840 / 517,112 bytes | 525,096 / 517,296 bytes |
+| 50 | 230.48 / 226.61 ms | 9,786,856 / 8,561,320 bytes | 8,497,720 / 8,440,944 bytes |
+| 200 | 556.86 / 689.79 ms | 37,517,328 / 32,641,368 bytes | 32,720,280 / 32,540,224 bytes |
+
+The structural change is stable: startup message-window calls fall from one per thread to zero. At 200 threads, 4,000 returned message rows and 4,417,800 logical message bytes disappear, and retained startup heap falls by 4,875,960 bytes. Opening one thread still reads its newest ten turns; Show earlier messages widens that window normally. The two-workload timing result does not establish a startup speedup.
+
+## Why the change stays narrow
+
+Activities dominate the remaining cost: both versions return 20,000 activity rows, totaling 25,295,200 logical bytes at 200 threads. `ThreadStore.hasActivities()` itself populates the internal activity cache, before `readActivities()` returns a copy. Skipping only that latter call would misrepresent the retained work.
+
+The activity path also validates message-reset generations, recovers subagent classification and supplies historical activity to resumed provider cursors. Deferring it would require a separate summary and recovery design. This patch takes the measured message-window reduction without changing those semantics or adding a speculative cache. Activity loading remains eager and startup still grows with the number of saved threads.
+
+## Verification
+
+The new regression fails on the baseline with eight unexpected message-window reads. With the change, startup reads none; observing one thread reads exactly one ten-turn window. It checks pending permissions, last-user/assistant excerpts, counts, activity epochs and retained activity, earlier-history paging, and closing the observed pane. Eighty focused workspace, event-store, activity-window and subagent tests pass.
+
+Typecheck, lint and notices (174 components) pass. The full two-worker suite, built Electron restart/history verification and independent review are pending. Raw [baseline](../../artifacts/review-390/startup-baseline.json) and [candidate](../../artifacts/review-390/startup-candidate.json) samples are retained with this note; intermediate logs and regenerated runner output remain ignored.
