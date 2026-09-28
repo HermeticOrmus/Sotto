@@ -60,6 +60,10 @@ Codex can see and operate the apps on your computer with its Computer Use, as it
 
 Ask for it by name ("use Computer Use to…") or with Codex's `$computer-use` skill. Its calls show in the thread's activity as **Computer Use**. When one fails because either condition is missing, the activity says which, and nothing was changed.
 
+### Terminal mode
+
+In Terminal mode, **Close** releases the terminal's output and keeps its row on **Closed** until Sotto quits. **Reopen** starts the same command with fresh output. **Stop**, a command finishing, or hiding its pane keeps the output readable. Up to 64 terminals can be open at once; Closed rows do not count toward that limit.
+
 ### Sending, steering and screenshots
 
 While a thread is running, **Steer now** beside a queued message sends that message into the current turn when the provider supports steering. The rest of the queue and any newer composer draft stay in place. An unconfirmed message cannot be steered again; use **Check again** to reconcile its delivery.
@@ -70,7 +74,11 @@ A screenshot longer than 2576 pixels on either side is scaled down to that as it
 
 A screenshot is kept once, as a file on the computer that runs the thread (the host, for a thread on a remote host), from the moment you attach it until nothing needs it: not an unsent draft, not a queued message, and not a sent message's preview, which lasts seven days. An hour after that it is removed. With **Keep local history** off, a newly attached screenshot stays in memory instead, so an unsent draft or queued message comes back from a restart without it; a queued message that lost one waits, paused, and says so.
 
+If a kept screenshot disappears or is damaged, sending stops and asks you to remove it and attach it again. Attaching the same image restores its copy before you send.
+
 You can create a thread from the Threads page while another thread has a saved coordinator draft. The draft stays with its original thread, including while the voice coordinator is hidden for the beta.
+
+Stop can cancel running work even when the provider has not confirmed the last prompt. That prompt stays unconfirmed until the provider reports receiving it; stopping does not resend it or discard its saved identity.
 
 ### History and copying
 
@@ -218,7 +226,7 @@ Settings:
 
 - Dictation: microphone, global shortcut, recording limit, local sound cues, and streaming transcription so long dictations finish almost immediately after you stop
 - Transcription: MAI-Transcribe-2 through OpenRouter (the only model), your OpenRouter API key with a verify button, language, and conservative whitespace formatting
-- Cleanup: optional AI cleanup with quality tiers and the personal dictionary that also feeds transcription spelling hints; and the switches for generated thread titles, commit messages and pull request text
+- Cleanup: optional AI cleanup with quality tiers and the personal dictionary that also feeds transcription spelling hints; and the switches for generated thread titles, commit messages and pull request text. The dictionary saves when you leave its field. An older save finishing while you type keeps your newer draft in place; if a save fails, leave the field again to retry.
 - Output: mandatory clipboard safety copy, optional automatic paste, paste delay, and success-message duration
 - Appearance: the color scheme (Light, Dark, or match the system), then one theme for light mode and one for dark, chosen in two columns. Sotto ships six themes of its own: Sotto, Hush, Linen, Nocturne, Tropic and Citrine. Sotto is the default, with an almost-black dark room and the app icon's teal (a deeper teal in light mode, so text and links stay readable). You can create a theme, import a T3 Code or VS Code theme file, or install one from Open VSX. Below the themes: the effort color, contrast and glass.
 - Updates: the version you are running and, on Windows, an automatic GitHub release check that is on by default and can be turned off, plus a manual check
@@ -370,6 +378,7 @@ Builds are ad-hoc signed and not notarized, so anyone installing the disk image 
 
 ### Either platform
 
+- **Completed text could not be copied:** Open Dictate. The selectable text below the wave stays through page changes and later dictations. **Copy text** retries copying without transcribing or pasting again; if it still fails, select and copy the text yourself. **Dismiss text** removes that recovery entry. With local history off, recovery is only in memory and closing Sotto clears it. With history on, the completed transcript is also saved unless history storage fails. A paste-helper failure still leaves the normal copied result in the clipboard.
 - **Shortcut conflict:** Choose another accelerator in Settings. Sotto keeps the last working shortcut if registration fails.
 - **No speech detected:** Move closer to the microphone and confirm the level meter responds. Silence does not replace the clipboard or create history.
 - **"Add your OpenRouter API key":** Transcription needs a key. Paste one under Settings → Transcription and press **Verify key**.
@@ -379,6 +388,7 @@ Builds are ad-hoc signed and not notarized, so anyone installing the disk image 
 - **"Too many requests":** OpenRouter is rate limiting the key. Wait a minute, then dictate again.
 - **"OpenRouter error" or "Couldn't transcribe":** OpenRouter's transcription service failed, or its answer could not be read. Dictate again in a moment. If it keeps happening, `transcription-diagnostics.jsonl` in the app's data folder records each failure's reason and HTTP status, without any of your words.
 - **AI cleanup not applied:** Check that AI cleanup is enabled and that the computer is online. When cleanup fails or times out, Sotto delivers the raw transcript instead of failing the dictation.
+- **Thread messages could not be saved:** Restore access to local storage and refresh. Sotto keeps failed messages in order and retries while it is open, waiting longer between repeated failures. Saving a thread name does not clear this warning. Quitting makes one final attempt, but messages still unsaved cannot survive a restart. Turning Keep local history off keeps pending messages only for this run; turning it back on does not save words from while it was off.
 - **Terminal view could not load:** Press **Reload window** to try again. Terminals keep running and retain their output. Sotto saves thread drafts first and keeps the window open if any thread draft or question answer is not saved. Save those drafts, then try again.
 - **Window disappeared:** Sotto is probably hidden in the Windows notification area or the macOS menu bar. Open it from that icon or start Sotto again; the existing instance will be shown.
 - **A thread never asks:** The provider says a request only you can answer was declined without reaching you. Its client is not routing those requests, so it answers them itself and the thread keeps working. Nothing in the thread is lost. Answer in that client meanwhile, and check **Settings → Providers** for a client update and Sotto for its own.

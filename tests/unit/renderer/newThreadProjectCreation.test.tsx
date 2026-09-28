@@ -180,7 +180,7 @@ describe('working copy default', () => {
 
   it('honors a project override ahead of the global default and sends the worktree with its origin start', async () => {
     const state = fixture([actual])
-    const command = vi.fn(async () => state)
+    const command = vi.fn<(request: AgentCommand) => Promise<AgentState>>(async () => state)
     vi.stubGlobal('sotto', {
       agents: { chooseProjectDirectory: vi.fn(async () => path) },
       getSettings: vi.fn(async () => ({ threadWorkingCopyDefault: 'shared', projectThreadWorkingCopyDefaults: { [actual.id]: 'independent' } })),

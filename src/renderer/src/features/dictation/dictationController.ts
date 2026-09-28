@@ -68,6 +68,8 @@ export interface DictationControllerDependencies {
     request: OutputDeliveryRequest,
   ) => DictationOutputResult | Promise<DictationOutputResult>
   readonly addHistory: (entry: HistoryEntry) => unknown | Promise<unknown>
+  /** Completed words that output could not deliver. Kept by the app in memory until dismissed. */
+  readonly retainOutput?: (entry: HistoryEntry) => void
   readonly publishWidgetState: (snapshot: WidgetSnapshot) => unknown | Promise<unknown>
   /** Optional LLM cleanup pass; any failure falls back to the raw transcript. */
   readonly polishTranscript?: (
@@ -530,7 +532,16 @@ export class DictationController {
     session.progress = 1
     this.publish(session)
 
-    let output: DictationOutputResult
+    const entry: HistoryEntry = {
+      id: session.id,
+      text,
+      createdAt: Math.round(finiteTimestamp(this.now())),
+      durationMs: historyDuration(recording.durationMs),
+      language: result.language,
+      modelPreset: 'mai',
+    }
+    let output: DictationOutputResult = 'empty'
+    let outputFailure: 'OUTPUT_FAILED' | 'OUTPUT_UNAVAILABLE' | undefined
     try {
       output = await session.deliverOutput({
         text,
@@ -538,35 +549,25 @@ export class DictationController {
         pasteDelayMs: session.settings.pasteDelayMs,
       })
     } catch {
-      if (this.isCurrent(session)) this.fail(session, 'OUTPUT_FAILED')
-      return
+      outputFailure = 'OUTPUT_FAILED'
     }
     if (!this.isCurrent(session)) return
-    if (typeof output === 'object') {
-      this.fail(session, 'OUTPUT_UNAVAILABLE')
-      return
-    }
-    if (output === 'empty') {
-      this.fail(session, 'OUTPUT_FAILED')
-      return
-    }
+    if (typeof output === 'object') outputFailure = 'OUTPUT_UNAVAILABLE'
+    else if (output === 'empty') outputFailure = 'OUTPUT_FAILED'
+    if (outputFailure) this.dependencies.retainOutput?.(entry)
 
     if (session.settings.historyEnabled) {
       try {
-        await this.dependencies.addHistory({
-          id: session.id,
-          text,
-          createdAt: Math.round(finiteTimestamp(this.now())),
-          durationMs: historyDuration(recording.durationMs),
-          language: result.language,
-          modelPreset: 'mai',
-        })
+        await this.dependencies.addHistory(entry)
       } catch {
-        if (this.isCurrent(session)) this.fail(session, 'HISTORY_FAILED')
+        if (this.isCurrent(session)) this.fail(session, outputFailure ?? 'HISTORY_FAILED')
         return
       }
       if (!this.isCurrent(session)) return
     }
+
+    if (outputFailure) { this.fail(session, outputFailure); return }
+    if (typeof output === 'object' || output === 'empty') return
 
     this.dispatch(
       { type: 'TRANSCRIBED', sessionId: session.id, text, output },

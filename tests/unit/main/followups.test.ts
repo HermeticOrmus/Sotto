@@ -6,6 +6,7 @@ import { dirname, join, resolve } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import { AgentControl } from '../../../src/main/agents/control'
 import { AgentCredentials } from '../../../src/main/agents/credentials'
+import { AttachmentStore } from '../../../src/main/agents/attachmentStore'
 import { FollowupStore } from '../../../src/main/agents/followups'
 import type { AgentHost, AgentHostCommand, AgentHostResult } from '../../../src/main/agents/host'
 import { E2EAgentHost, e2eAgentReasoner } from '../../../src/main/e2e/agentEffects'
@@ -227,9 +228,9 @@ it('does not dispatch a stale queue head after an edit operation has reordered i
   expect(store.get().items.map(i => i.status)).toEqual(['queued', 'queued'])
 })
 
-it('clears an accepted selected-skill revision from both draft representations and disk', async () => {
+it('clears an accepted selected-skill and file revision from both draft representations and disk', async () => {
   const f = await fixture()
-  const command = { ...queued('$build run'), type: 'manual-send' as const, skills: [{ name: 'build', path: 'C:/synthetic/SKILL.md' }] }
+  const command = { ...queued('$build run'), type: 'manual-send' as const, skills: [{ name: 'build', path: 'C:/synthetic/SKILL.md' }], files: [{ path: 'README.md' }] }
   const state = await f.control.command(command)
   expect(state.deliveredDrafts).toContainEqual({ threadId: command.threadId, draftId: command.draftId })
   expect(state.draft).toBe('')
@@ -253,9 +254,72 @@ it('does not queue a revision whose manual acknowledgement is still pending', as
   } finally { release(); await first }
 })
 
+it.each(['manual-send', 'steer'] as const)('reconciles an identical uncertain file prompt through %s before and after restart without dispatching again', async type => {
+  const f = await fixture(); f.host.state.capabilities.steer = true
+  if (type === 'steer') f.host.update('workshop', { status: 'running', lastTurn: { id: 'active-turn', status: 'running' } })
+  f.host.result = { accepted: false, uncertain: true }
+  const command = { ...queued('Read @README.md'), type, files: [{ path: 'README.md' }],
+    attachments: [handleOf(PIXEL_PNG)], skills: [{ name: 'build', path: 'C:/skills/build/SKILL.md' }] }
+  await f.control.command(command)
+  expect(f.control.get().deliveries).toContainEqual(expect.objectContaining({ draftId: command.draftId, status: 'uncertain' }))
+  const refresh = vi.spyOn(f.host, 'snapshot')
+  for (const restart of [false, true]) {
+    if (restart) { f.control.dispose(); await f.control.privacyChanged() }
+    const control = restart ? f.create() : f.control
+    if (restart) { await control.start(); await control.command({ type: 'connect' }) }
+    refresh.mockClear()
+    const retry = await control.command(command)
+    expect(retry.error).not.toMatch(/new draft revision/)
+    expect(refresh).toHaveBeenCalled()
+    expect(f.host.attempts).toHaveLength(1)
+    expect(retry.followups).toEqual([])
+    expect(retry.deliveries).toContainEqual(expect.objectContaining({ draftId: command.draftId, status: 'uncertain' }))
+    if (restart) {
+      const sent = f.host.attempts[0]!
+      if (sent.type !== 'send' && sent.type !== 'steer') throw new Error('Expected a prompt')
+      f.host.update('workshop', { messages: [{ id: sent.messageId, commandId: sent.commandId, role: 'user', text: sent.text, createdAt: new Date().toISOString() }] })
+      expect(control.get().deliveries).toContainEqual(expect.objectContaining({ draftId: command.draftId, status: 'accepted' }))
+      expect(control.get().draft).toBe('')
+      expect(control.get().threadDrafts).toEqual([])
+      expect(f.host.attempts).toHaveLength(1)
+    }
+  }
+})
+
+it('keeps file prompt admission and retries bounded by image handles with one dispatch and no content reads', async () => {
+  const f = await fixture()
+  const image = await f.control.stageAttachment({ name: 'large.png', mimeType: 'image/png', bytes: pngOfSize(8 * 1024 * 1024) })
+  const reads = vi.spyOn(AttachmentStore.prototype, 'read')
+  const command = { ...queued('Read @README.md with this image'), type: 'manual-send' as const,
+    files: [{ path: 'README.md' }], attachments: [image], skills: [{ name: 'build', path: 'C:/skills/build/SKILL.md' }] }
+  let release!: () => void
+  f.host.gate = new Promise<void>(done => { release = done })
+  f.host.result = { accepted: false, uncertain: true }
+  const sending = f.control.command(command)
+  const bytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value))
+  try {
+    await expect.poll(() => f.host.attempts.length).toBe(1)
+    for (let index = 0; index < 10; index++) expect(f.control.command(command)).toBe(sending)
+    release(); await sending
+    for (let index = 0; index < 3; index++) {
+      const state = await f.control.command(command)
+      expect(state.error).not.toMatch(/new draft revision/)
+      expect(bytes(state)).toBeLessThan(64 * 1024)
+    }
+    for (const changed of [{ attachments: [handleOf(PIXEL_PNG)] }, { skills: [{ name: 'build', path: 'C:/other/SKILL.md' }] }]) {
+      expect((await f.control.command({ ...command, ...changed })).error).toMatch(/new draft revision/)
+    }
+    expect(f.host.attempts).toHaveLength(1)
+    expect(reads).not.toHaveBeenCalled()
+    expect(bytes(command)).toBeLessThan(64 * 1024)
+    expect(bytes(f.host.attempts[0])).toBeLessThan(64 * 1024)
+    expect(Buffer.byteLength(await readFile(join(f.root, 'agents.json'), 'utf8'))).toBeLessThan(64 * 1024)
+  } finally { release(); await sending }
+})
+
 it.each(['manual-send', 'steer', 'queue-followup'] as const)('reserves queue ownership against %s while its durable write is pending', async type => {
   const f = await fixture(); f.host.update('workshop', { status: 'running' })
-  const command = queued('owned once')
+  const command = { ...queued('owned once'), files: [{ path: 'README.md' }] }
   let release!: () => void; let entered!: () => void
   const gate = new Promise<void>(done => { release = done }); const ready = new Promise<void>(done => { entered = done })
   const original = AtomicJsonStore.prototype.write
@@ -267,6 +331,7 @@ it.each(['manual-send', 'steer', 'queue-followup'] as const)('reserves queue own
   try {
     await ready
     const duplicate = f.control.command({ ...command, type })
+    expect(duplicate).toBe(first)
     release(); await first
     expect((await duplicate).error).toBeNull()
     expect(f.host.attempts).toEqual([])
@@ -285,7 +350,7 @@ it.each(['manual-send', 'steer', 'queue-followup'] as const)('rejects different 
 })
 
 it.each(['manual-send', 'steer', 'queue-followup'] as const)('keeps an accepted manual revision owned across restart when retried through %s', async type => {
-  const f = await fixture(); const command = queued('accepted once')
+  const f = await fixture(); const command = { ...queued('accepted once'), files: [{ path: 'README.md' }] }
   await f.control.command({ ...command, type: 'manual-send' })
   f.control.dispose(); await f.control.privacyChanged()
   const restored = f.create(); await restored.start(); await restored.command({ type: 'connect' })
@@ -293,13 +358,14 @@ it.each(['manual-send', 'steer', 'queue-followup'] as const)('keeps an accepted 
   expect(restored.get().followups).toEqual([])
   const conflict = await restored.command({ ...command, type, skills: [{ name: 'build', path: 'C:/different/SKILL.md' }] })
   expect(conflict.error).toMatch(/new draft revision/)
+  expect((await restored.command({ ...command, type, files: [{ path: 'src/main.ts' }] })).error).toMatch(/new draft revision/)
   complete(f.host); await restored.command({ type: 'refresh' })
   expect(f.host.attempts).toHaveLength(1)
 })
 
 it.each(['manual-send', 'steer', 'queue-followup'] as const)('keeps queue admission identity after an edit/removal and restart through %s', async type => {
   const f = await fixture(); f.host.update('workshop', { status: 'running' })
-  const command = queued('original'); await f.control.command(command)
+  const command = { ...queued('original'), files: [{ path: 'README.md' }] }; await f.control.command(command)
   const item = f.control.get().followups![0]!
   await f.control.command({ type: 'edit-followup', threadId: item.threadId, itemId: item.id, text: 'edited in queue' })
   await f.control.command({ type: 'remove-followup', threadId: item.threadId, itemId: item.id })
@@ -307,6 +373,7 @@ it.each(['manual-send', 'steer', 'queue-followup'] as const)('keeps queue admiss
   const restored = f.create(); await restored.start(); await restored.command({ type: 'connect' })
   expect((await restored.command({ ...command, type })).error).toBeNull()
   expect((await restored.command({ ...command, type, text: 'new content needs its own revision' })).error).toMatch(/new draft revision/)
+  expect((await restored.command({ ...command, type, files: [{ path: 'src/main.ts' }] })).error).toMatch(/new draft revision/)
   expect(restored.get().followups).toEqual([])
   expect(f.host.attempts).toEqual([])
 })
@@ -332,7 +399,7 @@ it('never queues uncertain manual intent, while retaining newer revisions and th
   expect(f.host.attempts.filter(c => 'threadId' in c && c.threadId === 'workshop')).toHaveLength(1)
 })
 
-it('rejects conflicting content during manual admission before any outbox write', async () => {
+it('rejects conflicting file selections during manual admission before any outbox write', async () => {
   const f = await fixture(); let release!: () => void; let entered!: () => void
   const gate = new Promise<void>(done => { release = done }); const ready = new Promise<void>(done => { entered = done })
   const original = AtomicJsonStore.prototype.write
@@ -341,13 +408,16 @@ it('rejects conflicting content during manual admission before any outbox write'
     if (!blocked && (value as { deliveries?: unknown[] }).deliveries?.length) { blocked = true; entered(); await gate }
     await original.call(this, value)
   })
-  const command = queued('reserved before persistence')
+  const command = { ...queued('reserved before persistence'), files: [{ path: 'README.md' }] }
   const sending = f.control.command({ ...command, type: 'manual-send' })
   try {
     await ready
     expect(f.host.attempts).toEqual([])
     for (const type of ['manual-send', 'steer', 'queue-followup'] as const) {
       expect(f.control.command({ ...command, type })).toBe(sending)
+      const conflict = f.control.command({ ...command, type, files: [{ path: 'src/main.ts' }] })
+      expect(conflict).not.toBe(sending)
+      expect((await conflict).error).toMatch(/new draft revision/)
       expect((await f.control.command({ ...command, type, text: 'conflict' })).error).toMatch(/new draft revision/)
     }
   } finally { release(); await sending }
