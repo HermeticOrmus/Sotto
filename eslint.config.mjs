@@ -14,6 +14,7 @@ export default tseslint.config(
       'artifacts/review-385/**',
       'artifacts/review-379/**',
       'artifacts/review-402/**',
+      'artifacts/review-410/**',
       'artifacts/review-411/**',
       'artifacts/review-422/**',
       'artifacts/phase-three-themes/**',
