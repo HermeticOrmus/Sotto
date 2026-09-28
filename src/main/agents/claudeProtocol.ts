@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { AGENT_MAX_ATTACHMENT_BYTES } from '../../shared/agents'
+import { withCliPath } from './cliLookup'
 
 export type ClaudeFrame = Record<string, unknown>
 class ClaudeUncertain extends Error {}
@@ -22,7 +23,7 @@ export class ClaudeProtocol {
   readonly closed: Promise<void>
   constructor(executable: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, private readonly timeout: number,
     onFrame: (frame: ClaudeFrame) => void, onExit: () => void) {
-    this.child = spawn(executable, args, { cwd, env, windowsHide: true, shell: false, stdio: 'pipe' })
+    this.child = spawn(executable, args, { cwd, env: withCliPath(env, executable), windowsHide: true, shell: false, stdio: 'pipe' })
     this.closed = new Promise(resolve => this.child.once('close', () => { this.fail(); resolve(); if (!this.stopping) onExit() }))
     // The unfinished line is kept as fragments with a running byte count, so a large frame arriving in
     // many chunks costs one pass over each chunk and one join, not a rescan of everything so far.

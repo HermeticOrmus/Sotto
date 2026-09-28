@@ -9,6 +9,7 @@ import { installerDetail } from './installerDetail'
 import { findDevinExecutable } from './devinRpc'
 import { findGrokExecutable } from './grokRpc'
 import { findClaudeExecutable } from './subscriptionClaude'
+import { withCliPath } from './cliLookup'
 import { findExecutable as findCodexExecutable } from './subscriptionCodex'
 
 /** The package whose `latest` tag says what each client has published. Devin ships inside its own app. */
@@ -27,7 +28,8 @@ export interface RunResult { readonly ok: boolean; readonly detail?: string }
 export type RunLike = (executable: string, args: readonly string[], asNode?: boolean) => Promise<RunResult>
 
 
-const MANAGED_ELSEWHERE = [`${sep}.bun${sep}`, `${sep}pnpm${sep}`, `${sep}.pnpm${sep}`, `${sep}.volta${sep}`, `${sep}.mise${sep}`, 'homebrew', 'linuxbrew']
+// A client a version manager installed is that manager's to update: npm here would install a second copy elsewhere.
+const MANAGED_ELSEWHERE = [`${sep}.bun${sep}`, `${sep}pnpm${sep}`, `${sep}.pnpm${sep}`, `${sep}.volta${sep}`, `${sep}.mise${sep}`, `${sep}mise${sep}installs${sep}`, `${sep}.asdf${sep}`, 'homebrew', 'linuxbrew']
 
 /** The client's own home, when its own installer owns the binary there: `~/.local/bin/claude.exe`. */
 function ownHome(provider: ProviderId, environment: NodeJS.ProcessEnv): readonly string[] {
@@ -130,7 +132,8 @@ const defaultNpmPath = async (): Promise<string | undefined> => {
 
 const defaultRun: RunLike = (executable, args, asNode) => new Promise(resolve => {
   // ELECTRON_RUN_AS_NODE turns this app's own binary into the Node that runs npm's CLI.
-  const env = asNode ? { ...process.env, ELECTRON_RUN_AS_NODE: '1' } : process.env
+  // A client's own updater gets the PATH the CLI lookup gave the client (ADR-0036): a wrapper may need its manager.
+  const env = asNode ? { ...process.env, ELECTRON_RUN_AS_NODE: '1' } : withCliPath(process.env, executable)
   execFile(executable, [...args], { env, windowsHide: true, shell: false, timeout: UPDATE_TIMEOUT_MS, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024, encoding: 'utf8' },
     (error, _stdout, stderr) => {
       if (!error) { resolve({ ok: true }); return }

@@ -1,13 +1,12 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { constants } from 'node:fs'
-import { access, mkdir, stat } from 'node:fs/promises'
-import { homedir } from 'node:os'
-import { delimiter, isAbsolute, join } from 'node:path'
+import { mkdir } from 'node:fs/promises'
+import { isAbsolute } from 'node:path'
 import { z } from 'zod'
 import { resolveModel } from '../../shared/modelCatalog'
 import { orderReasoningEfforts } from '../../shared/reasoningEfforts'
 import type { SubscriptionAccount, SubscriptionClient } from './subscriptionTypes'
+import { executableFile, findCli, withCliPath, type CliLookupOptions } from './cliLookup'
 
 interface ClaudeSubscriptionOptions {
   executable?: string
@@ -53,23 +52,14 @@ const ENVIRONMENT_KEYS = new Set([
 ])
 
 /** Runs the user's unmodified Claude CLI; OAuth credentials never enter Sotto. */
-/** Claude Code's own installer owns ~/.local/bin; PATH follows it. Used by the client and by the update check. */
-export async function findClaudeExecutable(environment: NodeJS.ProcessEnv = process.env, override?: string): Promise<string | null> {
-  const path = Object.entries(environment).find(([key]) => key.toLowerCase() === 'path')?.[1] ?? ''
-  const filename = process.platform === 'win32' ? 'claude.exe' : 'claude'
-  const candidates = override ? [override] : [
-    join(homedir(), '.local', 'bin', filename),
-    ...path.split(delimiter).map(directory => directory.replace(/^"|"$/gu, '')).filter(isAbsolute).map(directory => join(directory, filename)),
-  ]
-  for (const candidate of candidates) {
-    if (!isAbsolute(candidate)) continue
-    try {
-      if (!(await stat(candidate)).isFile()) continue
-      await access(candidate, constants.X_OK)
-      return candidate
-    } catch { /* Try the next user-installed native executable. */ }
-  }
-  return null
+/**
+ * Where Claude Code is, through the shared CLI lookup (ADR-0036): PATH, the login shell's PATH, then
+ * `~/.local/bin`, where Claude Code's own installer puts it, then the version managers. Used by the client
+ * and by the update check.
+ */
+export async function findClaudeExecutable(environment: NodeJS.ProcessEnv = process.env, override?: string, lookup: Omit<CliLookupOptions, 'environment'> = {}): Promise<string | null> {
+  if (override) return isAbsolute(override) ? await executableFile(override) ?? null : null
+  return await findCli({ name: 'claude' }, { ...lookup, environment }) ?? null
 }
 
 export class ClaudeSubscriptionClient implements SubscriptionClient {
@@ -200,7 +190,7 @@ export class ClaudeSubscriptionClient implements SubscriptionClient {
       let child: ChildProcessWithoutNullStreams
       try {
         child = spawn(executable, [...(this.options.prefixArgs ?? []), ...args], {
-          cwd, env: this.environment(), shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
+          cwd, env: withCliPath(this.environment(), executable), shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
         })
       } catch {
         reject(new Error('Could not start Claude Code. Check its installation and try again.'))

@@ -1,10 +1,12 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { access, constants, mkdir, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path'
+import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { z } from 'zod'
 import { orderReasoningEfforts } from '../../shared/reasoningEfforts'
 import type { SubscriptionAccount, SubscriptionClient } from './subscriptionTypes'
+import { withCliPath } from './cliLookup'
+import { findGrokExecutable } from './grokRpc'
 
 interface GrokSubscriptionOptions {
   executable?: string
@@ -191,7 +193,7 @@ export class GrokSubscriptionClient implements SubscriptionClient {
     const stop = () => rpc?.cancel()
     try {
       signal?.throwIfAborted()
-      rpc = new GrokRpc(spawn(executable, args, { cwd: cwd ?? directory, env, shell: false, windowsHide: true, stdio: 'pipe' }), timeoutMs, this.options.outputLimitBytes ?? 2_000_000)
+      rpc = new GrokRpc(spawn(executable, args, { cwd: cwd ?? directory, env: withCliPath(env, executable), shell: false, windowsHide: true, stdio: 'pipe' }), timeoutMs, this.options.outputLimitBytes ?? 2_000_000)
       signal?.addEventListener('abort', stop, { once: true })
       return await work(rpc, directory)
     } finally {
@@ -203,12 +205,7 @@ export class GrokSubscriptionClient implements SubscriptionClient {
 
   private async findExecutable(): Promise<string | null> {
     if (this.options.executable) return isAbsolute(this.options.executable) ? this.options.executable : null
-    const environment = this.options.environment ?? process.env
-    const nativeHome = environment.GROK_HOME && isAbsolute(environment.GROK_HOME) ? environment.GROK_HOME : join(homedir(), '.grok')
-    const name = process.platform === 'win32' ? 'grok.exe' : 'grok'
-    const candidates = [join(nativeHome, 'bin', name), ...(environment.PATH ?? '').split(delimiter).filter(isAbsolute).map(directory => join(directory, name))]
-    for (const candidate of new Set(candidates)) { try { if ((await stat(candidate)).isFile()) { await access(candidate, constants.X_OK); return candidate } } catch { /* Native executable only; never invoke a shell wrapper. */ } }
-    return null
+    return await findGrokExecutable(this.options.environment ?? process.env) ?? null
   }
 }
 
