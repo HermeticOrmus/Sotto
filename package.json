@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
-    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json && tsc --noEmit -p tsconfig.tests.json",
     "lint": "eslint .",
     "test": "vitest run",
     "test:recovery": "vitest run tests/integration/workspaceControl.test.ts tests/integration/workspaceHistoryRetry.test.ts tests/unit/main/workspacePaneActivity.test.ts tests/unit/main/threadNavigationDelivery.test.ts tests/unit/renderer/dictationController.test.ts tests/unit/renderer/app.test.tsx tests/unit/main/outputService.test.ts --maxWorkers=2 && npm run build && playwright test tests/e2e/dictation-recovery.spec.ts tests/e2e/command-receipt.spec.ts tests/e2e/queued-steering.spec.ts --workers=1",

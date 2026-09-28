@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { AgentBridge, AgentState } from '../../../src/shared/agents'
 import type {
+  CommandResult,
   SottoWidgetBridge,
   WidgetPresentation,
 } from '../../../src/shared/contracts'
@@ -26,19 +27,25 @@ import {
 
 const win32Copy = platformCopy('win32')
 
-const metadata = {
+type SnapshotDefaults = Pick<WidgetSnapshot, 'theme' | 'palette' | 'reducedMotion' | 'shortcut' | 'cancellable'>
+
+const metadata: SnapshotDefaults = {
   theme: 'dark',
   palette: DEFAULT_WIDGET_PALETTE,
   reducedMotion: 'system',
   shortcut: 'Ctrl+Shift+Space',
   cancellable: false,
-} as const
-
-function snapshot(
-  state: Omit<WidgetSnapshot, keyof typeof metadata> & Partial<typeof metadata>,
-): WidgetSnapshot {
-  return { ...metadata, ...state } as WidgetSnapshot
 }
+
+type SnapshotInput = {
+  [Status in WidgetSnapshot['status']]: Omit<Extract<WidgetSnapshot, { status: Status }>, keyof SnapshotDefaults> & Partial<SnapshotDefaults>
+}[WidgetSnapshot['status']]
+
+function snapshot(state: SnapshotInput): WidgetSnapshot {
+  return { ...metadata, ...state }
+}
+
+const commandSucceeded = async (): Promise<CommandResult> => ({ ok: true })
 
 function setWindowSize(width: number, height: number): void {
   Object.defineProperty(window, 'innerWidth', { configurable: true, writable: true, value: width })
@@ -197,11 +204,12 @@ describe('WidgetApp', () => {
     ['HISTORY_FAILED', 'Saved to clipboard', 'Local history was not updated.'],
     ['SETTINGS_UNAVAILABLE', 'Settings unavailable', 'Open Sotto to restore settings.'],
   ])('maps %s to finite safe recovery copy', (code, title, recovery) => {
+    const privateFields = { message: 'C:\\Users\\private\\raw-model-error' }
     const { container } = render(
       <WidgetApp
         snapshot={snapshot({
           status: 'error', sessionId: 'error', code,
-          message: 'C:\\Users\\private\\raw-model-error',
+          ...privateFields,
         })}
         platform="win32" now={0}
       />,
@@ -787,11 +795,11 @@ describe('WidgetEntry', () => {
         return () => { listener = null }
       },
       onWidgetVisibilityChange: () => () => undefined,
-      requestToggle: vi.fn(async () => ({ ok: true })),
-      requestStop: vi.fn(async () => ({ ok: true })),
-      requestCancel: vi.fn(async () => ({ ok: true })),
-      setPresentation: vi.fn(async () => ({ ok: true })),
-      reportDrag: vi.fn(async () => ({ ok: true })),
+      requestToggle: vi.fn(commandSucceeded),
+      requestStop: vi.fn(commandSucceeded),
+      requestCancel: vi.fn(commandSucceeded),
+      setPresentation: vi.fn(commandSucceeded),
+      reportDrag: vi.fn(commandSucceeded),
     }
     return { bridge, emit: (next: WidgetSnapshot) => act(() => listener?.(next)) }
   }
@@ -861,11 +869,11 @@ describe('WidgetEntry', () => {
         return unsubscribe
       }),
       onWidgetVisibilityChange: () => () => undefined,
-      requestToggle: vi.fn(async () => ({ ok: true })),
-      requestStop: vi.fn(async () => ({ ok: true })),
-      requestCancel: vi.fn(async () => ({ ok: true })),
-      setPresentation: vi.fn(async () => ({ ok: true })),
-      reportDrag: vi.fn(async () => ({ ok: true })),
+      requestToggle: vi.fn(commandSucceeded),
+      requestStop: vi.fn(commandSucceeded),
+      requestCancel: vi.fn(commandSucceeded),
+      setPresentation: vi.fn(commandSucceeded),
+      reportDrag: vi.fn(commandSucceeded),
     }
     const view = render(
       <StrictMode><WidgetEntry bridge={bridge} platform="win32" preview={null} /></StrictMode>,
@@ -893,11 +901,11 @@ describe('WidgetEntry', () => {
         return () => { listener = null }
       },
       onWidgetVisibilityChange: () => () => undefined,
-      requestToggle: vi.fn(async () => ({ ok: true })),
-      requestStop: vi.fn(async () => ({ ok: true })),
-      requestCancel: vi.fn(async () => ({ ok: true })),
-      setPresentation: vi.fn(async () => ({ ok: true })),
-      reportDrag: vi.fn(async () => ({ ok: true })),
+      requestToggle: vi.fn(commandSucceeded),
+      requestStop: vi.fn(commandSucceeded),
+      requestCancel: vi.fn(commandSucceeded),
+      setPresentation: vi.fn(commandSucceeded),
+      reportDrag: vi.fn(commandSucceeded),
     }
     const { container } = render(<WidgetEntry bridge={bridge} platform="win32" preview={null} />)
 
@@ -937,11 +945,11 @@ describe('WidgetEntry', () => {
         return () => { listener = null }
       },
       onWidgetVisibilityChange: () => () => undefined,
-      requestToggle: vi.fn(async () => ({ ok: true })),
-      requestStop: vi.fn(async () => ({ ok: true })),
-      requestCancel: vi.fn(async () => ({ ok: true })),
-      setPresentation: vi.fn(async () => ({ ok: true })),
-      reportDrag: vi.fn(async () => ({ ok: true })),
+      requestToggle: vi.fn(commandSucceeded),
+      requestStop: vi.fn(commandSucceeded),
+      requestCancel: vi.fn(commandSucceeded),
+      setPresentation: vi.fn(commandSucceeded),
+      reportDrag: vi.fn(commandSucceeded),
     }
     render(<WidgetEntry bridge={bridge} platform="win32" preview={null} />)
 
@@ -971,11 +979,11 @@ describe('WidgetEntry', () => {
         visibilityListener = next
         return () => { visibilityListener = null }
       }) as unknown as SottoWidgetBridge['onWidgetVisibilityChange'],
-      requestToggle: vi.fn(async () => ({ ok: true })),
-      requestStop: vi.fn(async () => ({ ok: true })),
-      requestCancel: vi.fn(async () => ({ ok: true })),
-      setPresentation: vi.fn(async () => ({ ok: true })),
-      reportDrag: vi.fn(async () => ({ ok: true })),
+      requestToggle: vi.fn(commandSucceeded),
+      requestStop: vi.fn(commandSucceeded),
+      requestCancel: vi.fn(commandSucceeded),
+      setPresentation: vi.fn(commandSucceeded),
+      reportDrag: vi.fn(commandSucceeded),
     }
     render(<WidgetEntry bridge={bridge} platform="win32" preview={null} />)
     act(() => stateListener?.(snapshot({ status: 'idle' })))
@@ -1003,11 +1011,11 @@ describe('WidgetEntry', () => {
         visibilityListener = next
         return () => { visibilityListener = null }
       }) as unknown as SottoWidgetBridge['onWidgetVisibilityChange'],
-      requestToggle: vi.fn(async () => ({ ok: true })),
-      requestStop: vi.fn(async () => ({ ok: true })),
-      requestCancel: vi.fn(async () => ({ ok: true })),
-      setPresentation: vi.fn(async () => ({ ok: true })),
-      reportDrag: vi.fn(async () => ({ ok: true })),
+      requestToggle: vi.fn(commandSucceeded),
+      requestStop: vi.fn(commandSucceeded),
+      requestCancel: vi.fn(commandSucceeded),
+      setPresentation: vi.fn(commandSucceeded),
+      reportDrag: vi.fn(commandSucceeded),
     }
     render(<WidgetEntry bridge={bridge} platform="win32" preview={null} />)
     act(() => visibilityListener?.({ visible: true, generation: 7 }))
@@ -1041,11 +1049,11 @@ describe('WidgetEntry', () => {
         visibilityListener = next
         return () => { visibilityListener = null }
       },
-      requestToggle: vi.fn(async () => ({ ok: true })),
-      requestStop: vi.fn(async () => ({ ok: true })),
-      requestCancel: vi.fn(async () => ({ ok: true })),
-      setPresentation: vi.fn(async () => ({ ok: true })),
-      reportDrag: vi.fn(async () => ({ ok: true })),
+      requestToggle: vi.fn(commandSucceeded),
+      requestStop: vi.fn(commandSucceeded),
+      requestCancel: vi.fn(commandSucceeded),
+      setPresentation: vi.fn(commandSucceeded),
+      reportDrag: vi.fn(commandSucceeded),
     }
     render(<WidgetEntry bridge={bridge} platform="win32" preview={null} />)
 
@@ -1093,11 +1101,11 @@ describe('WidgetEntry', () => {
         visibilityListener = next
         return () => { visibilityListener = null }
       },
-      requestToggle: vi.fn(async () => ({ ok: true })),
-      requestStop: vi.fn(async () => ({ ok: true })),
-      requestCancel: vi.fn(async () => ({ ok: true })),
-      setPresentation: vi.fn(async () => ({ ok: true })),
-      reportDrag: vi.fn(async () => ({ ok: true })),
+      requestToggle: vi.fn(commandSucceeded),
+      requestStop: vi.fn(commandSucceeded),
+      requestCancel: vi.fn(commandSucceeded),
+      setPresentation: vi.fn(commandSucceeded),
+      reportDrag: vi.fn(commandSucceeded),
     }
     const { container } = render(<WidgetEntry bridge={bridge} platform="win32" preview={null} />)
 
@@ -1154,11 +1162,11 @@ describe('WidgetEntry', () => {
         return () => { listener = null }
       },
       onWidgetVisibilityChange: () => () => undefined,
-      requestToggle: vi.fn(async () => ({ ok: true })),
-      requestStop: vi.fn(async () => ({ ok: true })),
-      requestCancel: vi.fn(async () => ({ ok: true })),
-      setPresentation: vi.fn(async () => ({ ok: true })),
-      reportDrag: vi.fn(async () => ({ ok: true })),
+      requestToggle: vi.fn(commandSucceeded),
+      requestStop: vi.fn(commandSucceeded),
+      requestCancel: vi.fn(commandSucceeded),
+      setPresentation: vi.fn(commandSucceeded),
+      reportDrag: vi.fn(commandSucceeded),
     }
     const { container } = render(<WidgetEntry bridge={bridge} platform="win32" preview={null} />)
     const polite = screen.getByRole('status')
@@ -1230,11 +1238,11 @@ describe('WidgetEntry', () => {
         return () => { listener = null }
       },
       onWidgetVisibilityChange: () => () => undefined,
-      requestToggle: vi.fn(async () => ({ ok: true })),
-      requestStop: vi.fn(async () => ({ ok: true })),
-      requestCancel: vi.fn(async () => ({ ok: true })),
-      setPresentation: vi.fn(async () => ({ ok: true })),
-      reportDrag: vi.fn(async () => ({ ok: true })),
+      requestToggle: vi.fn(commandSucceeded),
+      requestStop: vi.fn(commandSucceeded),
+      requestCancel: vi.fn(commandSucceeded),
+      setPresentation: vi.fn(commandSucceeded),
+      reportDrag: vi.fn(commandSucceeded),
     }
     render(<WidgetEntry bridge={bridge} platform="win32" preview={null} />)
     act(() => listener?.(state))
@@ -1256,8 +1264,8 @@ describe('WidgetEntry', () => {
       requestToggle: vi.fn(async () => Promise.reject(new Error('private toggle failure'))),
       requestStop: vi.fn(async () => Promise.reject(new Error('private stop failure'))),
       requestCancel: vi.fn(async () => Promise.reject(new Error('private cancel failure'))),
-      setPresentation: vi.fn(async () => ({ ok: true })),
-      reportDrag: vi.fn(async () => ({ ok: true })),
+      setPresentation: vi.fn(commandSucceeded),
+      reportDrag: vi.fn(commandSucceeded),
     }
     const { container } = render(<WidgetEntry bridge={bridge} platform="win32" preview={null} />)
     act(() => listener?.(snapshot({

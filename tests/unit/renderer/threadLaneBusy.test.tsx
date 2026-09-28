@@ -54,7 +54,7 @@ describe('a busy thread beside an idle one in the same window', () => {
     expect(within(busyPane()).getByRole('menuitem', { name: 'Settle' })).toBeDisabled()
     const idle = within(idlePane())
     expect(idle.getByRole('menuitem', { name: 'Settle' })).toBeEnabled()
-    const prompt = idle.getByRole('textbox', { name: 'Prompt', exact: true })
+    const prompt = idle.getByRole('textbox', { name: 'Prompt' })
     expect(prompt).toBeEnabled()
     fireEvent.change(prompt, { target: { value: 'Keep working here' } })
     expect(idle.getByRole('button', { name: 'Send prompt' })).toBeEnabled()

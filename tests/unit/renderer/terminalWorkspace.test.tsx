@@ -189,7 +189,7 @@ afterEach(() => { cleanup(); localStorage.clear() })
 describe('Terminal mode', () => {
   it('reports a failed terminal view without restarting the running terminal', async () => {
     const view = mount([terminal(ID_1)], { lazy: true })
-    fireEvent.click(await within(sidebar()).findByRole('button', { name: 'Build', exact: true }))
+    fireEvent.click(await within(sidebar()).findByRole('button', { name: 'Build' }))
     expect(await screen.findByText('The terminal view could not load. Your terminal and its output are still here.')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Reload window' })).toBeEnabled()
     expect(screen.getByLabelText('Build, terminal')).not.toHaveAttribute('aria-busy', 'true')

@@ -140,7 +140,7 @@ describe('a working row counts up', () => {
     const state = threadsStateFixture()
     const thread = state.host.threads.find(entry => entry.id === 'footer-links')!
     expect(rowFor(state, 'footer-links').workingSince).toBe(Date.parse(thread.messages.find(message => message.role === 'user')!.createdAt))
-    thread.activities = [{ id: 'turn', turnId: 'turn', kind: 'turn', sequence: 1, status: 'running', title: 'Turn', startedAt: new Date(NOW - 90_000).toISOString(), createdAt: new Date(NOW - 90_000).toISOString() }]
+    thread.activities = [{ id: 'turn', turnId: 'turn', kind: 'turn', sequence: 1, status: 'running', title: 'Turn', startedAt: new Date(NOW - 90_000).toISOString() }]
     expect(rowFor(state, 'footer-links')).toMatchObject({ workingSince: NOW - 90_000, when: '1m 30s' })
     expect(workingLabel(NOW - 45_000, NOW)).toBe('45s')
     expect(workingLabel(NOW - 3_930_000, NOW)).toBe('1h 05m')
