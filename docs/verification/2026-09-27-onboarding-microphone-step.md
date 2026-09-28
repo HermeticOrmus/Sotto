@@ -19,3 +19,9 @@ The full two-worker suite at `2265e87d` completed with 5,864 passed, 140 skipped
 Separate issue #435 established a controlled fixture-budget gap: a valid acknowledgement delayed beyond the functional fixture's two-second budget could return uncertain even though both native proof files matched. That issue uses the normal adapter budget for functional checks and preserves the explicit short deadline and unchanged scripted lost-creation/no-replay coverage. Its controlled evidence does not establish the original full-run failure's cause.
 
 Composition `f9b44df2` includes current main, the reviewed selected-microphone fix #383/PR #434 and the reviewed fixture correction #435. Onboarding's own copy and Continue prerequisite are unchanged. These are explicit dependencies; the composed hosted gate and #435's own full verification remain pending. No new local heavy check was launched during the resource hold.
+
+## Current-main integration
+
+Hosted verification on `f196163c4c15c9abbdda2eaa16821c8a6ded7c95` passed all three checks, including 5,888 tests with 140 skipped in the Windows gate (835.67 seconds). Both prerequisites are now merged: #383/PR #434 and #435/PR #442. The historical failed local run above remains a separate result.
+
+Integration `c7116c5f` includes main at `22c8e90b`, including the independently merged new-thread defaults in PR #433 and Grok idle handling in PR #444. The merge was automatic and changed none of this issue's onboarding source. Exact-head hosted verification of this final integration is pending; combined desktop acceptance is tracked separately in #393.
