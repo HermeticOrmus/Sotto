@@ -1,0 +1,59 @@
+/* A connected host's providers, under its row (ADR-0037): the disclosure, the tiles and the line under them. */
+.host-providers { display: grid; flex: 1 0 100%; gap: 10px; min-width: 0; padding-left: 48px; }
+.host-providers__toggle.tt-button { justify-self: start; margin-left: -12px; }
+.host-providers__panel { display: grid; gap: 10px; min-width: 0; container-type: inline-size; }
+/* Four tiles in a row where they fit, else two by two, and one above another only in the narrowest room. */
+.host-providers__grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 0; padding: 0; list-style: none; }
+@container (min-width: 700px) { .host-providers__grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@container (max-width: 340px) { .host-providers__grid { grid-template-columns: minmax(0, 1fr); } }
+.hosts-settings .host-providers__foot { margin: 0 0 4px; color: var(--tt-text-muted); font-size: 12px; }
+
+/* One provider: its mark and name, a state line with a dot, a detail line and one action. */
+.host-provider { display: grid; grid-template-rows: auto auto auto 1fr auto; gap: 6px; min-width: 0; min-height: 132px; border: 1px solid var(--tt-hairline); border-radius: var(--tt-radius-md); background: var(--tt-surface-elevated); padding: 12px; }
+.host-provider[data-kind='not-installed'] { border-style: dashed; background: transparent; }
+.host-provider__top { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.host-provider__top h5 { margin: 0; overflow-wrap: anywhere; color: var(--tt-text); font-size: 14px; font-weight: 600; }
+.host-provider__mark { display: grid; flex: 0 0 auto; place-items: center; width: 28px; height: 28px; border-radius: var(--tt-radius-sm); background: var(--tt-surface-sunken); color: var(--tt-text-2); }
+.host-provider__mark .provider-mark { fill: currentColor; }
+.host-provider__mark .provider-mark[data-provider='codex'] { color: var(--tt-provider-codex); }
+.host-provider__mark .provider-mark[data-provider='claude'] { color: var(--tt-provider-claude); }
+.host-provider__mark .provider-mark[data-provider='grok'] { color: var(--tt-provider-grok); }
+.host-provider__mark .provider-mark[data-provider='devin'] { color: var(--tt-provider-devin); }
+.hosts-settings .host-provider__state { display: flex; align-items: center; gap: 7px; margin: 0; color: var(--tt-text); font-size: 13px; }
+.hosts-settings .host-provider__detail { margin: 0; color: var(--tt-text-muted); font-size: 12px; overflow-wrap: anywhere; }
+.host-provider__act { align-self: end; min-width: 0; }
+.host-provider__actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.hosts-settings .host-provider__note { margin: 0; color: var(--tt-text-muted); font-size: 12px; }
+.hosts-settings .host-provider__note:empty { display: none; }
+
+/* The dot says the state at a glance; the words beside it say it for everyone. */
+.host-provider__dot { flex: 0 0 auto; width: 8px; height: 8px; border: 1.5px solid var(--tt-text-faint); border-radius: 50%; }
+.host-provider[data-kind='connected'] .host-provider__dot { border-color: var(--tt-success); background: var(--tt-success); }
+/* Not signed in needs the user, as a thread that needs them does in the sidebar; connecting is on its way. */
+.host-provider[data-kind='signed-out'] .host-provider__dot { border-color: var(--tt-attention); background: var(--tt-attention); }
+.host-provider[data-kind='connecting'] .host-provider__dot { border-color: var(--tt-accent); }
+.host-provider:is([data-kind='not-installed'], [data-kind='too-old'], [data-kind='cannot-start']) .host-provider__dot { border-color: var(--tt-text-faint); background: var(--tt-text-faint); }
+
+/* Devin signs in from a terminal on the host: the command, with Copy. */
+.host-provider__command { display: grid; gap: 6px; min-width: 0; }
+.hosts-settings .host-provider__command p { margin: 0; color: var(--tt-text-muted); font-size: 12px; }
+.host-provider__command code { display: block; overflow-wrap: anywhere; border-radius: var(--tt-radius-sm); background: var(--tt-code-bg); padding: 6px 8px; color: var(--tt-code-text); font: 12px/1.5 var(--tt-font-mono); }
+.host-provider__command .tt-button { justify-self: start; gap: 6px; }
+
+/* Sign in to a provider on a host: the dialog's two shapes. */
+.host-sign-in-dialog { width: min(460px, 100%); }
+.host-sign-in { display: grid; gap: 12px; margin-top: 10px; }
+.hosts-settings .host-sign-in p { margin: 0; color: var(--tt-text); font-size: 13px; }
+.host-sign-in__row, .host-sign-in__code-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; min-width: 0; }
+.host-sign-in__row .tt-input { flex: 1 1 200px; min-width: 0; min-height: 36px; }
+.host-sign-in__code { color: var(--tt-text); font: 600 22px/1.2 var(--tt-font-mono); letter-spacing: .12em; overflow-wrap: anywhere; }
+.host-sign-in .tt-button { gap: 6px; }
+.hosts-settings .host-sign-in__waiting { display: flex; align-items: center; gap: 8px; color: var(--tt-text-muted); }
+.hosts-settings .host-sign-in__quiet { color: var(--tt-text-muted); font-size: 12px; }
+.host-sign-in__field { display: grid; gap: 6px; }
+.hosts-settings .host-sign-in__field .tt-field__description { margin: 0; font-size: 12px; }
+.hosts-settings .host-sign-in__error { color: var(--tt-error-text); font-size: 12px; }
+.host-sign-in__done { border-left-color: var(--tt-success); }
+.host-sign-in__done > svg { color: var(--tt-success); }
+
+@media (max-width: 700px) { .host-providers { padding-left: 0; } .host-providers__toggle.tt-button { margin-left: 0; } }
