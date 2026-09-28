@@ -1270,6 +1270,23 @@ textarea.tt-input {
   text-align: center;
 }
 
+.dictate:has(.dictate__recovery) { grid-template-rows: minmax(260px, 1fr) auto auto; }
+.dictate__recovery { width: min(100%, 760px); justify-self: center; padding: 16px 0; border-top: 1px solid var(--tt-border); }
+.dictate__recovery h2 { margin: 0 0 6px; font-size: 16px; font-weight: 600; }
+.dictate__recovery > p { margin: 0 0 12px; color: var(--tt-text-muted); font-size: 13px; }
+.dictate__recovered + .dictate__recovered { margin-top: 16px; }
+.dictate__recovered textarea { width: 100%; min-height: 76px; max-height: 240px; resize: vertical; padding: 12px; border: 1px solid var(--tt-border); border-radius: var(--tt-radius-md); color: var(--tt-text); background: var(--tt-surface); font: inherit; line-height: 1.5; user-select: text; }
+.dictate__recovery-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.dictate__recovery-actions [role="status"] { font-size: 13px; color: var(--tt-text-muted); }
+
+@media (max-height: 680px) {
+  .dictate:has(.dictate__recovery) { grid-template-rows: auto auto auto; align-content: start; }
+  .dictate:has(.dictate__recovery) .dictate__hero { gap: 12px; padding: 12px 0 18px; }
+  .dictate:has(.dictate__recovery) .dictate__hero .voice-wave { height: 60px; }
+  .dictate:has(.dictate__recovery) .dictate__sentence { font-size: 30px; letter-spacing: -0.6px; }
+  .dictate:has(.dictate__recovery) .dictate__state { gap: 8px; }
+}
+
 .dictate__hero .voice-wave {
   margin-bottom: -10px;
 }

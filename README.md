@@ -60,7 +60,7 @@ Sotto has no account of its own and collects nothing about you: no analytics, no
 - **Update checks** ask GitHub for new Sotto versions (Windows) and `registry.npmjs.org` for new agent client versions. Both can be turned off.
 - **Only if you use them:** `api.openai.com` and `api.x.ai` for optional reasoning and reply voices, `open-vsx.org` (with `openvsxorg.blob.core.windows.net` and `openvsx.eclipsecontent.org`) for themes, `huggingface.co` for the natural voice download, SSH hosts you add, and pages you open in Sotto's browser.
 
-Dictation history stays on your computer, and you can turn it off. Screenshots you attach to a thread are kept as files on the computer that runs the thread, only while an unsent draft, a queued message or a recent message's preview needs them and for an hour after; with history off, new ones stay in memory and are not written to disk. Keys are kept in your operating system's credential store.
+Dictation history stays on your computer, and you can turn it off. If completed dictation cannot reach the clipboard, Dictate keeps selectable text with **Copy text** until you dismiss it or close Sotto. With history off, that recovery stays in memory. Screenshots you attach to a thread are kept as files on the computer that runs the thread, only while an unsent draft, a queued message or a recent message's preview needs them and for an hour after; with history off, new ones stay in memory and are not written to disk. Keys are kept in your operating system's credential store.
 
 If thread messages cannot be saved, Sotto keeps them in memory and retries while it is open. The warning stays until they are saved. Restore storage access before quitting; unsaved messages cannot survive a restart.
 
