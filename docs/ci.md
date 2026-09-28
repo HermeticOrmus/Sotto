@@ -290,6 +290,10 @@ Electron journeys run serially with one worker. Do not run another Electron jour
 
 This command complements the full suite. Its fake provider boundary proves Sotto's recovery contract, not a paid provider's availability. The broader repeatable desktop workflow is tracked separately in #393.
 
+## Grok request-log observations
+
+`tests/integration/grokFixtureReadErrors.test.ts` requires the fake Grok request and violation observers to distinguish absent initial logs from unreadable logs. A known start remains a known start after a temporary fault is removed; EACCES and EBUSY surface as read errors, while malformed JSON remains a parse error. An unreadable violation log cannot silently pass its protocol check. The fixture does not turn these failures into missing provider work or evidence (#420).
+
 ## Stale host-lock test processes
 
 `hostLock.test.ts` waits for its synthetic holder process to exit, then fixes only that PID's zero-signal liveness probe to `ESRCH` for the test. Windows may reuse a PID during repeated acquisition rounds; a newly live PID would correctly make every contender refuse the supposedly crashed lease. Other PID/signal probes still use the real process API. Filesystem contention, exact single-owner and winner-lock checks, cleanup, live-owner refusals and the separate `ESRCH`/`EPERM` policy tests remain real and unchanged (#406). No production lock rule or deadline is relaxed.
