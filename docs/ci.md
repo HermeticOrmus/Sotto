@@ -260,6 +260,10 @@ npx vitest run tests/integration/codexComputerUseLive.test.ts --maxWorkers=1
 
 Build and run `npx playwright test tests/e2e/agent-browser.spec.ts tests/e2e/tools-sidecar.spec.ts tests/e2e/phase-three-tools-bridge.spec.ts` to exercise the real Electron browser, permission continuation, feedback drafts and the Tools pane. The agent test uses a local page and test-only provider entry point; it needs no provider account. Screenshots and a geometry report are written to ignored `artifacts/agent-browser/`. Native-provider compatibility and actual desktop results are recorded separately in `docs/verification/`.
 
+## Stale host-lock test processes
+
+`hostLock.test.ts` waits for its synthetic holder process to exit, then fixes only that PID's zero-signal liveness probe to `ESRCH` for the test. Windows may reuse a PID during repeated acquisition rounds; a newly live PID would correctly make every contender refuse the supposedly crashed lease. Other PID/signal probes still use the real process API. Filesystem contention, exact single-owner and winner-lock checks, cleanup, live-owner refusals and the separate `ESRCH`/`EPERM` policy tests remain real and unchanged (#406). No production lock rule or deadline is relaxed.
+
 ## Fake Claude event timestamps
 
 `tests/integration/claudeFixtureTimestamp.test.ts` runs the scripted Claude child and compares live messages with its saved transcript. Completion, persisted raw frames, bursts and user echoes must carry the same event timestamp on both paths; explicit timestamps remain unchanged. The regression fails deterministically on the earlier fixture because its live replies omit timestamps. `personalChatProviders.test.ts` retains full history equality across restart; the fixture supplies consistent events rather than relaxing that assertion.
@@ -275,3 +279,7 @@ The workflow journey in `tests/unit/renderer/subagents.test.tsx` holds the first
 **Native iOS client (macOS)** runs `sh apps/ios/Scripts/verify.sh` on `macos-26`, selecting `/Applications/Xcode_26.6.app/Contents/Developer` explicitly: the same Xcode as the TestFlight workflow, because App Store Connect refuses a build made with an SDK older than iOS 26, and a gate on an older Xcode would pass code the upload cannot build. [The runner inventory](https://github.com/actions/runner-images/blob/main/images/macos/macos-26-arm64-Readme.md) lists that toolchain and its iOS 26 SDKs, which satisfy the package's Swift 5.9 tools and app's iOS 17 minimum. The job prints its actual Xcode/Swift versions, runs the native SottoCore package tests, and builds the unsigned iOS simulator app with the shared Xcode scheme. It needs no signing secrets, never uploads to TestFlight, and does not run npm or Electron.
 
 The workflow has no path filters, so changes under `apps/ios` and the host protocol both run this gate. Passing establishes native tests and compilation, not simulator interaction, VoiceOver/design inspection, real-device networking, signing or Forge availability. On a Windows-only development machine this job's result remains unverified until GitHub actually runs it; adding the job is not a green CI result. It is not a required check until it has been green once.
+
+## Current-session reaper observations
+
+The Claude fixture's stopped check reads its current child ownership marker and probes that PID. Grok records residency after an accepted load or close; a historical or rejected close is not evidence that its current session stopped. `sessionFixtureObservation.test.ts` covers a real resumed Claude child and a Grok close/reload, including a rejected close. The host contracts keep their existing deadlines and assert actual session ownership rather than elapsed time.
