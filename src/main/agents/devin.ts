@@ -401,6 +401,10 @@ export class DevinAcpHost implements AgentHost {
     const alias = this.aliases[id]!
     if (!alias?.devinSessionId) throw new Error('Devin did not confirm this thread’s creation. Your thread is kept; do not repeat the creation automatically.')
     const mode = modeOf(alias.providerMode)
+    // A history read loads the session in a process of its own, and Devin lets one process hold a session at a
+    // time. Opening alongside a read in flight would find the session taken by Sotto itself, so the open waits.
+    await this.reading.get(id)?.catch(() => undefined)
+    if (generation !== this.generation) throw new DevinUncertain('Devin connection changed.')
     const connection = await this.start(await existingWorkingDirectory(alias.cwd), mode.allows, id, false)
     if (generation !== this.generation) { connection.intentionalClose = true; connection.rpc.close(); throw new DevinUncertain('Devin connection changed.') }
     connection.replaying = true
@@ -481,7 +485,8 @@ export class DevinAcpHost implements AgentHost {
   private poll(): Promise<void> {
     if (this.polling) return this.polling
     const now = Date.now()
-    const ids = [...this.connections.keys()].filter(id => {
+    // A session still opening or stopping is left alone: a read then could take the session from its own open.
+    const ids = [...this.connections.keys()].filter(id => !this.loading.has(id) && !this.stopping.has(id)).filter(id => {
       const busy = this.active.has(id) || this.thread(id).requests.length > 0
       const interval = this.options.pollIntervalMs ?? (busy ? 1_500 : 15_000)
       return (this.observed.has(id) || busy) && now - (this.lastReadAt.get(id) ?? 0) >= interval
