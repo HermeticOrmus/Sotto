@@ -44,14 +44,22 @@ export class NativeUsage {
   private readonly store: AtomicJsonStore<Record<string, Ledger>>
   private data: Record<string, Ledger> = {}
   private readonly streaming = new Map<string, string>()
-  private writing = Promise.resolve()
+  private writing: Promise<void> | undefined
+  private readonly dirty = new Set<string>()
+  private readonly failed = new Set<string>()
   constructor(directory: string, private readonly provider: 'codex' | 'claude' | 'grok') {
     this.store = new AtomicJsonStore(join(directory, `${provider}-usage.json`), z.record(z.string(), ledgerSchema).parse, () => ({}))
   }
   async load(): Promise<void> {
-    await this.writing; this.data = await this.store.read(); this.streaming.clear()
-    let changed = false
-    for (const ledger of Object.values(this.data)) {
+    await this.flushed()
+    this.streaming.clear()
+    // A reconnect must not replace newer, unsaved observations with the old archive.
+    if (this.failed.size) return
+    this.data = await this.store.read()
+    for (const [id, ledger] of Object.entries(this.data)) {
+      let changed = false
+      // A successfully read archive is durable; an old process's failure flag is not.
+      if (ledger.view.persistenceError) { delete ledger.view.persistenceError; changed = true }
       for (const [key, entry] of Object.entries(ledger.entries)) {
         // Claude's own local notices carry no billed work.
         if (entry.model === SYNTHETIC) { delete ledger.entries[key]; changed = true; continue }
@@ -63,17 +71,23 @@ export class NativeUsage {
       const before = JSON.stringify(ledger.view)
       this.summarize(ledger)
       changed ||= JSON.stringify(ledger.view) !== before
+      if (changed) this.dirty.add(id)
     }
-    if (changed) this.writing = this.store.write(structuredClone(this.data)).catch(() => undefined)
+    this.writePending()
   }
-  async flushed(): Promise<void> { await this.writing }
+  /** Drain the latest observations, retrying a prior failure once without spinning on a broken disk. */
+  async flushed(): Promise<void> {
+    this.writePending()
+    while (this.writing) await this.writing
+  }
   get(id: string): ThreadUsage | undefined { return this.data[id]?.view }
   compacted(id: string, used: unknown, updatedAt = new Date().toISOString()): void {
     const ledger = this.ledger(id)
+    const changed = ledger.view.contextUsed !== count(used) || ledger.view.contextUpdatedAt !== updatedAt || ledger.contextCompacted !== true
     ledger.view.contextUsed = count(used)
     ledger.view.contextUpdatedAt = updatedAt
     ledger.contextCompacted = true
-    this.save(id)
+    this.save(id, changed)
   }
   private ledger(id: string): Ledger {
     return this.data[id] ??= { view: { rateVersions: [], partial: false, updatedAt: new Date().toISOString() }, entries: {}, seen: [], incomplete: false }
@@ -92,18 +106,52 @@ export class NativeUsage {
     }
     ledger.view.total = Object.keys(total).length ? total : undefined
   }
-  private save(id: string): void {
-    const ledger = this.data[id]!
-    this.summarize(ledger)
-    this.writing = this.store.write(structuredClone(this.data)).then(() => { delete ledger.view.persistenceError }, () => { ledger.view.persistenceError = true })
+  private save(id: string, changed = true): void {
+    if (changed) {
+      this.summarize(this.data[id]!)
+      this.dirty.add(id)
+    }
+    // Even an unchanged observation can retry a failed archive write.
+    this.writePending()
   }
-  private record(ledger: Ledger, key: string, model: string, tokens: UsageTokens, reported?: { readonly usd: number; readonly rate: string }): void {
-    if (model === SYNTHETIC || !Object.values(tokens).some(value => value !== undefined)) return
+  private writePending(): void {
+    if (this.writing || !this.dirty.size && !this.failed.size) return
+    // Defer the clone as well as the write: a replay batch makes one snapshot, and
+    // changes arriving during I/O share one pending snapshot of the latest totals.
+    this.writing = Promise.resolve().then(async () => {
+      try {
+        do {
+          const ids = new Set([...this.failed, ...this.dirty])
+          this.dirty.clear()
+          try {
+            const snapshot = structuredClone(this.data)
+            for (const ledger of Object.values(snapshot)) delete ledger.view.persistenceError
+            await this.store.write(snapshot)
+            for (const id of ids) {
+              // An older successful snapshot cannot clear a newer failed/unsaved state.
+              if (this.dirty.has(id)) continue
+              this.failed.delete(id)
+              delete this.data[id]!.view.persistenceError
+            }
+          } catch {
+            for (const id of ids) {
+              this.failed.add(id)
+              this.data[id]!.view.persistenceError = true
+            }
+          }
+        } while (this.dirty.size)
+      } finally { this.writing = undefined }
+    })
+  }
+  private record(ledger: Ledger, key: string, model: string, tokens: UsageTokens, reported?: { readonly usd: number; readonly rate: string }): boolean {
+    if (model === SYNTHETIC || !Object.values(tokens).some(value => value !== undefined)) return false
     const previous = ledger.entries[key]
-    if (previous && previous.model === model && JSON.stringify(previous.tokens) === JSON.stringify(tokens)) return
-    if (reported) { ledger.entries[key] = { tokens, model, usd: reported.usd, rate: reported.rate }; return }
+    if (previous && previous.model === model && JSON.stringify(previous.tokens) === JSON.stringify(tokens)
+      && (!reported || previous.usd === reported.usd && previous.rate === reported.rate)) return false
+    if (reported) { ledger.entries[key] = { tokens, model, usd: reported.usd, rate: reported.rate }; return true }
     const estimate = estimateUsage(this.provider, model, tokens)
     ledger.entries[key] = { tokens, model, usd: estimate?.usd, ...(estimate?.lowerBound ? { lowerBound: true } : {}), rate: USAGE_RATE_VERSION }
+    return true
   }
   codex(id: string, model: string, value: unknown): void {
     const params = object(value); const usage = object(params.tokenUsage)
@@ -112,7 +160,7 @@ export class NativeUsage {
     if (!Object.values(last).some(value => value !== undefined)) return
     const ledger = this.ledger(id)
     const key = createHash('sha256').update(JSON.stringify([params.turnId, total])).digest('hex')
-    if (ledger.seen.includes(key)) return
+    if (ledger.seen.includes(key)) { this.writePending(); return }
     ledger.seen.push(key)
     const previous = ledger.total
     let delta = last
@@ -157,9 +205,9 @@ export class NativeUsage {
         const output = count(object(event.usage).output_tokens)
         if (ledger && key && entry && output !== undefined && output >= (entry.tokens.output ?? 0)) {
           const tokens = { ...entry.tokens, output }
-          this.record(ledger, key, entry.model, tokens)
-          if (ledger.latestId === key) ledger.view.latest = tokens
-          this.save(id)
+          const changed = this.record(ledger, key, entry.model, tokens)
+          if (changed && ledger.latestId === key) ledger.view.latest = tokens
+          this.save(id, changed)
         }
       }
       return
@@ -175,7 +223,8 @@ export class NativeUsage {
       const old = previous?.tokens[field]
       if (old !== undefined && (merged[field] === undefined || merged[field]! < old)) merged[field] = old
     }
-    this.record(ledger, message.id, typeof message.model === 'string' ? message.model : '', merged)
+    const changed = this.record(ledger, message.id, typeof message.model === 'string' ? message.model : '', merged)
+    const before = JSON.stringify([ledger.view, ledger.latestId, ledger.contextCompacted])
     const isNew = !previous
     const older = typeof frame.timestamp === 'string' && Number.isFinite(Date.parse(frame.timestamp)) && Date.parse(frame.timestamp) < Math.max(Date.parse(ledger.view.updatedAt), Date.parse(ledger.view.contextUpdatedAt ?? ledger.view.updatedAt))
     if (ledger.latestId === message.id && !ledger.contextCompacted && !older || isNew && (!ledger.view.latest && !ledger.contextCompacted || !older)) {
@@ -184,18 +233,22 @@ export class NativeUsage {
       const contextChanged = ledger.latestId !== message.id || ledger.view.contextUsed !== merged.input
       ledger.latestId = message.id; ledger.view.latest = merged; ledger.view.contextUsed = merged.input
       if (isNew || ledger.view.modelId === undefined) ledger.view.modelId = nextModel
-      ledger.view.updatedAt = typeof frame.timestamp === 'string' ? frame.timestamp : new Date().toISOString()
+      // A timestamp-less replay is not a new observation of the context's age.
+      if (changed || before !== JSON.stringify([ledger.view, ledger.latestId, ledger.contextCompacted]) || typeof frame.timestamp === 'string') {
+        ledger.view.updatedAt = typeof frame.timestamp === 'string' ? frame.timestamp : new Date().toISOString()
+      }
       if (contextChanged) ledger.view.contextUpdatedAt = ledger.view.updatedAt
       ledger.contextCompacted = false
     }
-    this.save(id)
+    this.save(id, changed || before !== JSON.stringify([ledger.view, ledger.latestId, ledger.contextCompacted]))
   }
   elapsed(id: string, elapsed: unknown, contextWindow?: unknown): void {
     if (count(elapsed) === undefined && !count(contextWindow)) return
     const ledger = this.ledger(id)
+    const changed = ledger.view.elapsedMs !== count(elapsed) || ledger.view.contextWindow !== (count(contextWindow) || ledger.view.contextWindow)
     ledger.view.elapsedMs = count(elapsed)
     ledger.view.contextWindow = count(contextWindow) || ledger.view.contextWindow
-    this.save(id)
+    this.save(id, changed)
   }
   claudeResult(id: string, value: unknown): void {
     const frame = object(value); const ledger = this.data[id]
@@ -210,7 +263,8 @@ export class NativeUsage {
       : typeof meta.eventId === 'string' && count(meta.agentTimestampMs) !== undefined ? `${meta.eventId}:${meta.agentTimestampMs}` : undefined
     const tokens = (row: Record<string, unknown>): UsageTokens => ({ input: count(row.inputTokens), output: count(row.outputTokens), cached: count(row.cachedReadTokens), cacheWrite: count(row.cacheCreationTokens) })
     const ledger = this.ledger(id)
-    if (identity && ledger.seen.includes(identity)) return
+    if (identity && ledger.seen.includes(identity)) { this.writePending(); return }
+    const before = JSON.stringify([ledger.view, ledger.incomplete])
     if (identity) {
       ledger.seen.push(identity)
       const models = Object.entries(object(usage.modelUsage))
@@ -226,8 +280,10 @@ export class NativeUsage {
       // Native turn usage aggregates model calls. It is not a current context size.
       ledger.view.contextUsed = undefined; ledger.view.contextWindow = undefined
       ledger.view.elapsedMs = count(usage.apiDurationMs); ledger.view.elapsedKind = 'api'
-      ledger.view.updatedAt = new Date(timestamp ?? Date.now()).toISOString()
+      if (identity || timestamp !== undefined || before !== JSON.stringify([ledger.view, ledger.incomplete])) {
+        ledger.view.updatedAt = new Date(timestamp ?? Date.now()).toISOString()
+      }
     }
-    this.save(id)
+    this.save(id, identity !== undefined || before !== JSON.stringify([ledger.view, ledger.incomplete]))
   }
 }
