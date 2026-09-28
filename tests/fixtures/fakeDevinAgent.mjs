@@ -145,6 +145,11 @@ createInterface({ input: process.stdin }).on('line', line => {
   if (!session || owner(p.sessionId) !== process.pid || !known) { reject(frame.id); return }
   if (p.configId === 'mode') session.mode = p.value; else session.model = p.value
   write(nativePath(p.sessionId), session)
+  // Native 3000.10.31 announces a mode change before it answers the request that made it.
+  if (p.configId === 'mode') {
+   update(p.sessionId, { sessionUpdate: 'current_mode_update', currentModeId: p.value })
+   update(p.sessionId, { sessionUpdate: 'config_option_update', configOptions: configOptions(session) })
+  }
   result(frame.id, { configOptions: configOptions(session) })
  } else if (frame.method === 'session/prompt') {
   if (owner(p.sessionId) !== process.pid || active.has(p.sessionId)) { reject(frame.id, -32015); return }
@@ -174,6 +179,7 @@ const control = setInterval(() => {
   seen.add(command.id)
   if (command.type === 'malformed') process.stdout.write('{invalid json}\n')
   if (command.type === 'complete') complete(sessionId, command.text, command.reason)
+  if (command.type === 'mode') update(sessionId, { sessionUpdate: 'current_mode_update', currentModeId: command.mode })
   if (command.type === 'changed-permission') {
    const prior = [...pending].find(([, value]) => value.kind === 'permission' && value.sessionId === sessionId)
    if (prior) {

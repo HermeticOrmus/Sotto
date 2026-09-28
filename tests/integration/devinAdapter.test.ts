@@ -332,6 +332,23 @@ describe('Devin dispatch and decision boundaries', () => {
     expect(await thread()).toMatchObject({ providerMode: 'bypass' })
   })
 
+  it('creates and sends to a thread started on a mode other than Devin’s default', async () => {
+    // Devin announces the mode Sotto sets; that announcement is the thread's own choice, not a change.
+    for (const providerMode of ['smart', 'bypass']) {
+      const id = randomUUID()
+      expect(await f.host.execute({ type: 'create-thread', commandId: randomUUID(), threadId: id,
+        projectId: f.projectId, modelId: f.modelId, title: 'Synthetic thread', providerMode })).toEqual({ accepted: true })
+      expect(await thread(id)).toMatchObject({ providerMode, status: 'idle' })
+      expect(await send(id)).toMatchObject({ accepted: true })
+    }
+  })
+
+  it('still fails a session whose mode Devin changes on its own', async () => {
+    await send()
+    await f.action(threadId, { type: 'mode', mode: 'bypass' })
+    await expect.poll(async () => (await thread()).status).toBe('error')
+  })
+
   it('refuses a permission change while a turn is running, and leaves the recorded mode alone', async () => {
     await send()
     // The running turn already chose its profile; changing the mode under it would leave the two out of step.

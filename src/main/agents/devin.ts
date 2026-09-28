@@ -585,7 +585,10 @@ export class DevinAcpHost implements AgentHost {
       const update = record(params.update)
       if (!update) throw new Error('Invalid Devin update.')
       if (!connection.replaying && alias.settingsConfirmed && update.sessionUpdate === 'config_option_update' && modelConfig(update).current !== alias.modelId) throw new Error('Devin changed the selected model.')
-      if (update.sessionUpdate === 'current_mode_update' && update.currentModeId !== 'accept-edits') throw new Error('Devin changed the session mode.')
+      // Devin announces every mode it is set to, the thread's own included. A session also opens on Devin's
+      // default mode before Sotto sets the recorded one back, so that is expected while it replays.
+      if (update.sessionUpdate === 'current_mode_update' && update.currentModeId !== modeOf(alias.providerMode).devinMode
+        && !(connection.replaying && update.currentModeId === DEVIN_MODES[0].devinMode)) throw new Error('Devin changed the session mode.')
       if (connection.replaying) { this.consume(id, connection.transcript, update); return }
       if (typeof update.toolCallId === 'string') {
         if (connection.tools.size >= 1000 && !connection.tools.has(update.toolCallId)) throw new Error('Too many pending Devin tools.')
