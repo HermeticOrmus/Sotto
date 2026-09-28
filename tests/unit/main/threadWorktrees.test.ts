@@ -1,9 +1,9 @@
 // @vitest-environment node
 import { lstat, mkdir, mkdtemp, readFile, rm, symlink, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { existingWorkingDirectory, runWorktreeGit as git, ThreadWorktrees } from '../../../src/main/agents/threadWorktrees'
+import { existingWorkingDirectory, runWorktreeGit as git, ThreadWorktrees, type RunGit } from '../../../src/main/agents/threadWorktrees'
 import { resolveThreadWorkingDirectory } from '../../../src/shared/threadWorkingDirectory'
 
 const roots: string[] = []
@@ -30,6 +30,74 @@ async function removeTestCheckout(root: string, path: string) {
   await rm(path, { recursive: true })
 }
 describe('independent working-copy allocation', () => {
+  it('coordinates registry access across service instances and linked project roots while another repository progresses', async () => {
+    const f = await fixture()
+    const other = await fixture()
+    const linked = join(f.root, 'linked-project')
+    await git(f.project, ['worktree', 'add', '-b', 'linked-project', '--', linked, 'HEAD'])
+    await writeFile(join(f.project, 'tracked.txt'), 'source user edits')
+    await writeFile(join(linked, 'tracked.txt'), 'linked user edits')
+    const first = await f.service.allocate(f.project, 'independent')
+    const second = await f.service.allocate(linked, 'independent')
+    const independent = await other.service.allocate(other.project, 'independent')
+    let started!: () => void
+    const staged = new Promise<void>(resolve => { started = resolve })
+    let release!: () => void
+    const held = new Promise<void>(resolve => { release = resolve })
+    let firstAdd = true
+    const run: RunGit = async (cwd, args) => {
+      if (cwd !== f.project || args[0] !== 'worktree' || args[1] !== 'add' || !firstAdd) return git(cwd, args)
+      firstAdd = false
+      const path = args[args.indexOf('--') + 1]!
+      const admin = join(f.project, '.git', 'worktrees', basename(path))
+      // Git creates these files before filling commondir. Hold that real registry state,
+      // so an uncoordinated peer reads the same empty file as the captured failure.
+      await mkdir(admin, { recursive: true }); await mkdir(path, { recursive: true })
+      await writeFile(join(admin, 'locked'), 'initializing\n')
+      await writeFile(join(admin, 'gitdir'), join(path, '.git') + '\n')
+      await writeFile(join(path, '.git'), `gitdir: ${admin}\n`)
+      await writeFile(join(admin, 'commondir'), '')
+      started()
+      await held
+      expect(dirname(admin)).toBe(join(f.project, '.git', 'worktrees'))
+      await rm(admin, { recursive: true, force: true })
+      await removeTestCheckout(f.root, path)
+      return git(cwd, args)
+    }
+    const creating = new ThreadWorktrees(f.root, run).ensure(first)
+    await staged
+    const queued = new ThreadWorktrees(f.root, run).ensure(second)
+    // Observe rejections immediately; the assertion is the final outcomes, not elapsed time.
+    const outcomes = Promise.allSettled([creating, queued])
+    try {
+      const separate = await new ThreadWorktrees(other.root, run).ensure(independent)
+      expect(separate.status).toBe('ready')
+    } finally { release() }
+    const results = await outcomes
+    expect(results.map(result => result.status)).toEqual(['fulfilled', 'fulfilled'])
+    expect(await readFile(join(first.path!, 'tracked.txt'), 'utf8')).toBe('committed baseline')
+    expect(await readFile(join(second.path!, 'tracked.txt'), 'utf8')).toBe('committed baseline')
+    expect(await readFile(join(f.project, 'tracked.txt'), 'utf8')).toBe('source user edits')
+    expect(await readFile(join(linked, 'tracked.txt'), 'utf8')).toBe('linked user edits')
+  })
+
+  it('releases registry ownership after a rejected add without retrying or changing its refusal', async () => {
+    const f = await fixture()
+    const refused = await f.service.allocate(f.project, 'independent')
+    const next = await f.service.allocate(f.project, 'independent')
+    await git(f.project, ['branch', refused.branch!])
+    let attempts = 0
+    const run: RunGit = async (cwd, args) => {
+      if (args[0] === 'worktree' && args[1] === 'add') attempts += 1
+      return git(cwd, args)
+    }
+    await expect(new ThreadWorktrees(f.root, run).ensure(refused)).rejects.toThrow('already exists')
+    expect(attempts).toBe(1)
+    expect((await new ThreadWorktrees(f.root, run).ensure(next)).status).toBe('ready')
+    expect(attempts).toBe(2)
+    expect((await git(f.project, ['rev-parse', refused.branch!])).trim()).toBe(refused.baseCommit)
+  })
+
   it('isolates concurrent allocations from a dirty source and retains user edits on reuse', async () => {
     const f = await fixture()
     await writeFile(join(f.project, 'tracked.txt'), 'source user edits')
