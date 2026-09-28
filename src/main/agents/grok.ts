@@ -454,7 +454,7 @@ export class GrokAcpHost implements AgentHost {
           const key = eventKey(parsed.data, `${entry.timestamp}-${ordinal}`)
           if (history.events.has(key)) continue
           history.events.add(key)
-          this.reaper.touch(id)
+          if (this.loaded.has(id)) this.reaper.touch(id)
           const createdAt = new Date(parsed.data._meta?.agentTimestampMs ?? (typeof entry.timestamp === 'number' ? entry.timestamp * 1000 : entry.timestamp)).toISOString()
           const update = parsed.data.update; const content = object(update.content)
           this.usage.grok(id, this.thread(id).modelId, parsed.data); this.thread(id)

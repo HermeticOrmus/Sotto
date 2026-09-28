@@ -59,7 +59,10 @@ export class SessionReaper {
   }
 
   private async run(): Promise<void> {
-    for (const [id, last] of [...this.activity]) {
+    for (const id of [...this.activity.keys()]) {
+      // An earlier stop may have awaited a provider while this session changed or was forgotten.
+      const last = this.activity.get(id)
+      if (last === undefined) continue
       const now = this.now()
       // A watched or working session keeps its full idle window from the moment it stops being either.
       if (this.options.isWatched(id) || this.options.isBusy(id)) { this.activity.set(id, now); continue }

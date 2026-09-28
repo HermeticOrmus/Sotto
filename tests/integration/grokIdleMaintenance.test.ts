@@ -6,6 +6,30 @@ import { grokFixture } from '../fixtures/fakeGrokThreadFixture'
 
 type Request = (method: string, params: unknown, accept: (value: unknown) => unknown) => Promise<unknown>
 
+it('does not enroll an unloaded unconfirmed session when its durable history is read', async () => {
+  let now = 1_000_000
+  vi.spyOn(Date, 'now').mockImplementation(() => now)
+  const f = await grokFixture(undefined, undefined, 60_000, { reaperSweepMs: 60_000, sessionIdleMs: 150 })
+  const id = randomUUID()
+  try {
+    await f.host.connect()
+    expect(await f.host.execute({ type: 'create-project', commandId: randomUUID(), projectId: f.projectId, title: 'Synthetic project', path: f.root })).toEqual({ accepted: true })
+    await f.script({ rejectModel: true })
+    await expect(f.host.execute({ type: 'create-thread', commandId: randomUUID(), threadId: id, projectId: f.projectId, modelId: f.modelId, title: 'Synthetic unconfirmed thread' })).rejects.toThrow('rejected')
+    f.adapter.disconnect(); await f.adapter.closed()
+    await f.host.connect()
+    const reaper = (f.adapter as unknown as { reaper: SessionReaper }).reaper
+    expect(reaper.tracked()).toEqual([])
+    await f.action(id, { type: 'activity', notify: false, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Synthetic archived update' } } })
+    await expect.poll(async () => (await f.adapter.refreshThread(id)).threads.find(thread => thread.id === id)?.messages.some(message => message.text === 'Synthetic archived update')).toBe(true)
+    expect(await f.sessions.starts(id)).toBe(0)
+    expect(reaper.tracked()).toEqual([])
+    now += 150
+    await reaper.sweep()
+    expect((await f.driver.requests()).filter(frame => frame.method === '_x.ai/session/close')).toHaveLength(0)
+  } finally { vi.restoreAllMocks(); await f.cleanup() }
+})
+
 it.each(['history', 'refresh'] as const)('keeps the full idle window after actual %s activity', async activity => {
   let now = 1_000_000
   vi.spyOn(Date, 'now').mockImplementation(() => now)

@@ -21,6 +21,42 @@ function reaper(overrides: Partial<{ busy: Set<string>; watched: Set<string>; re
 }
 
 describe('SessionReaper', () => {
+  it.each(['activity', 'forgotten'] as const)('rechecks later session %s while another close is held', async change => {
+    let now = 0
+    const entered = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    const reading = new Set(['second'])
+    const stopped: string[] = []
+    const subject = new SessionReaper({
+      idleAfterMs: 1_000, now: () => now, isBusy: () => false, isWatched: () => false,
+      isReading: id => reading.has(id),
+      stop: async id => {
+        stopped.push(id)
+        if (id === 'first') { entered.resolve(); await release.promise }
+      },
+    })
+    subject.touch('first'); subject.touch('second')
+    now = 1_000
+    const sweeping = subject.sweep()
+    try {
+      await entered.promise
+      reading.clear()
+      if (change === 'activity') subject.touch('second')
+      else subject.forget('second')
+      release.resolve()
+      await sweeping
+      expect(stopped).toEqual(['first'])
+      if (change === 'activity') {
+        now += 999
+        await subject.sweep()
+        expect(stopped).toEqual(['first'])
+        now += 1
+        await subject.sweep()
+        expect(stopped).toEqual(['first', 'second'])
+      } else expect(subject.tracked()).toEqual([])
+    } finally { release.resolve(); await sweeping; subject.dispose() }
+  })
+
   it('defers an owned read without renewing idle age or holding another session open', async () => {
     const r = reaper({ reading: new Set(['reading']) })
     r.subject.touch('reading')
