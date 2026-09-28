@@ -2,13 +2,13 @@ import React, { useEffect, useId, useRef, useState, type ReactNode } from 'react
 import { Check, Copy } from 'lucide-react'
 import { PROVIDER_LABELS, type AgentProviderStatus, type ProviderId } from '../../../../shared/agents'
 import type { HostSetupChoice, HostsBridge, HostStatus } from '../../../../shared/hosts'
-import { DEVIN_SIGN_IN_COMMAND, hostProviderJobCase, PROVIDER_SIGN_IN_SHAPES, type HostProviderAction, type HostProviderJobCase, type HostProviderJobState } from '../../../../shared/hostProviders'
+import { DEVIN_SIGN_IN_COMMAND, HOST_PROVIDER_JOB_WORDS, hostProviderJobCase, PROVIDER_SIGN_IN_SHAPES, type HostProviderAction, type HostProviderJobCase, type HostProviderJobState } from '../../../../shared/hostProviders'
 import { Button } from '../../components/Button'
 import { ProviderMark } from '../../agents/ProviderMark'
 import { useOptionalAgents } from '../../agents/AgentContext'
 import { useOptionalApp } from '../../state/AppContext'
 import { HostProviderSignIn } from './HostProviderSignIn'
-import { AGENT_BUTTONS, HostProviderAgent } from './HostProviderAgent'
+import { HostProviderAgent } from './HostProviderAgent'
 import './hostProviders.css'
 
 /** The order the tiles are in: the providers the prototype drew, in its order (ADR-0037). */
@@ -67,7 +67,6 @@ function SignInCommand({ host }: { readonly host: string }): ReactNode {
   </div>
 }
 
-const WORKING: Readonly<Record<HostProviderJobCase, string>> = { install: 'Agent is installing it', update: 'Agent is updating it', fix: 'Agent is fixing it' }
 const running = (job: HostProviderJobState): boolean => job.phase === 'starting' || job.phase === 'running'
 
 /**
@@ -91,7 +90,7 @@ function ProviderTile({ host, provider, status, bridge, job, onSignIn, onAgent }
   const name = PROVIDER_LABELS[provider]
   const working = job && running(job) ? job : undefined
   const shown = hostProviderTile(status, host.name)
-  const tile: HostProviderTile = working ? { kind: 'working', state: WORKING[working.case], detail: '' } : shown
+  const tile: HostProviderTile = working ? { kind: 'working', state: HOST_PROVIDER_JOB_WORDS[working.case].working, detail: '' } : shown
   const agents = useOptionalAgents()
   const app = useOptionalApp()
   const [pending, setPending] = useState<Pending | null>(null)
@@ -150,7 +149,7 @@ function ProviderTile({ host, provider, status, bridge, job, onSignIn, onAgent }
     if (jobCase) {
       // Have my agent install it (update it, fix it), with Check again beside it (ADR-0035).
       return <div className="host-provider__actions">
-        <Button key="agent" variant="primary" aria-label={`${AGENT_BUTTONS[jobCase].replace(/ it$/u, ` ${name}`)} on ${host.name}`} onClick={() => onAgent(provider, jobCase)}>{AGENT_BUTTONS[jobCase]}</Button>
+        <Button key="agent" variant="primary" aria-label={`${HOST_PROVIDER_JOB_WORDS[jobCase].button.replace(/ it$/u, ` ${name}`)} on ${host.name}`} onClick={() => onAgent(provider, jobCase)}>{HOST_PROVIDER_JOB_WORDS[jobCase].button}</Button>
         <Button key="check" variant="ghost" disabled={pending !== null} aria-label={`Check ${host.name} for ${name} again`} onClick={() => void act('refresh')}>{pending ? PENDING_LABEL[pending] : 'Check again'}</Button>
       </div>
     }

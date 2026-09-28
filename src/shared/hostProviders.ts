@@ -105,10 +105,20 @@ export function hostProviderJobCase(problem: ProviderProblem | undefined): HostP
 export function hostProviderFound(status: AgentProviderStatus | undefined): boolean {
   return status?.connection === 'connected' || status?.connection === 'error' && status.problem === 'signed-out'
 }
-const JOB_VERBS: Readonly<Record<HostProviderJobCase, string>> = { install: 'Install', update: 'Update', fix: 'Fix' }
+/**
+ * Every word a provider job's case puts in the app, in one place: the thread's and the dialog's title, what the agent
+ * does and is doing, the tile's button, the dialog's main button and the working tile's state line.
+ */
+export const HOST_PROVIDER_JOB_WORDS: Readonly<Record<HostProviderJobCase, {
+  readonly title: string; readonly does: string; readonly doing: string; readonly button: string; readonly start: string; readonly working: string
+}>> = {
+  install: { title: 'Install', does: 'installs', doing: 'installing', button: 'Have my agent install it', start: 'Start install', working: 'Agent is installing it' },
+  update: { title: 'Update', does: 'updates', doing: 'updating', button: 'Have my agent update it', start: 'Start update', working: 'Agent is updating it' },
+  fix: { title: 'Fix', does: 'fixes', doing: 'fixing', button: 'Have my agent fix it', start: 'Start fix', working: 'Agent is fixing it' },
+}
 /** The job's thread and dialog title: "Install Devin on forge". */
 export function hostProviderJobTitle(jobCase: HostProviderJobCase, provider: ProviderId, host: string): string {
-  return `${JOB_VERBS[jobCase]} ${PROVIDER_LABELS[provider]} on ${host}`
+  return `${HOST_PROVIDER_JOB_WORDS[jobCase].title} ${PROVIDER_LABELS[provider]} on ${host}`
 }
 /**
  * A provider job as Settings > Hosts shows it: which saved host (`hostId`, its saved ID) and provider, the thread working

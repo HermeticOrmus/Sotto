@@ -2,15 +2,11 @@ import React, { useId, useState, type ReactNode } from 'react'
 import { LoaderCircle } from 'lucide-react'
 import { PROVIDER_LABELS, type ProviderId } from '../../../../shared/agents'
 import type { HostSetupChoice, HostsBridge, HostStatus } from '../../../../shared/hosts'
-import { hostProviderJobTitle, type HostProviderJobCase } from '../../../../shared/hostProviders'
+import { HOST_PROVIDER_JOB_WORDS, hostProviderJobTitle, type HostProviderJobCase } from '../../../../shared/hostProviders'
 import { Button } from '../../components/Button'
 import { HostsModal } from './HostDialog'
 import { SetupModelSelect } from './HostSetupView'
 
-/** What the tile's button says for each job, and what the dialog's main button starts. */
-export const AGENT_BUTTONS: Readonly<Record<HostProviderJobCase, string>> = { install: 'Have my agent install it', update: 'Have my agent update it', fix: 'Have my agent fix it' }
-const VERBS: Readonly<Record<HostProviderJobCase, string>> = { install: 'installs', update: 'updates', fix: 'fixes' }
-const STARTS: Readonly<Record<HostProviderJobCase, string>> = { install: 'Start install', update: 'Start update', fix: 'Start fix' }
 const clean = (failure: unknown, fallback: string): string =>
   failure instanceof Error ? failure.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/u, '').trim() || fallback : fallback
 
@@ -25,6 +21,7 @@ export function HostProviderAgent({ host, provider, jobCase, choice, bridge, onC
 }): ReactNode {
   const name = PROVIDER_LABELS[provider]
   const title = hostProviderJobTitle(jobCase, provider, host.name)
+  const words = HOST_PROVIDER_JOB_WORDS[jobCase]
   const available = choice !== undefined && !choice.unavailable && choice.models.length > 0
   const [modelId, setModelId] = useState('')
   const model = choice?.models.some(item => item.id === modelId) ? modelId : choice?.modelId ?? choice?.models[0]?.id ?? ''
@@ -42,10 +39,10 @@ export function HostProviderAgent({ host, provider, jobCase, choice, bridge, onC
     footer={<>
       <Button variant="secondary" onClick={onClose}>Cancel</Button>
       {/* Not disabled while it starts, so focus stays on it; a second press does nothing. */}
-      <Button data-autofocus disabled={!available || !model} aria-disabled={starting || undefined} onClick={() => void start()}>{starting ? 'Starting…' : STARTS[jobCase]}</Button>
+      <Button data-autofocus disabled={!available || !model} aria-disabled={starting || undefined} onClick={() => void start()}>{starting ? 'Starting…' : words.start}</Button>
     </>}>
     <div className="host-agent">
-      <p>An agent {VERBS[jobCase]} {name} on {host.name} from this computer, in a thread you can watch. It reaches {host.name} through this computer's SSH, and its tool works only on {host.name}. It stops once {host.name}'s host finds {name}; you then sign in.</p>
+      <p>An agent {words.does} {name} on {host.name} from this computer, in a thread you can watch. It reaches {host.name} through this computer's SSH, and its tool works only on {host.name}. It stops once {host.name}'s host finds {name}; you then sign in.</p>
       {available ? <div className="host-agent__model">
         <SetupModelSelect choice={choice} value={model} onChange={setModelId} disabled={starting} label="Model" describedBy={modelHint} />
         <p id={modelHint} className="host-agent__quiet">The thread runs on this computer. Its provider receives the brief and what the agent's commands print on {host.name}. You answer each command it wants to run.</p>

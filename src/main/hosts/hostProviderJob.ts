@@ -1,6 +1,6 @@
 import { PROVIDER_LABELS, type AgentProviderStatus, type ProviderId } from '../../shared/agents'
 import type { HostsCommand } from '../../shared/hosts'
-import { hostProviderFound, hostProviderJobCase, hostProviderJobTitle, type HostProviderJobCase, type HostProviderJobState } from '../../shared/hostProviders'
+import { HOST_PROVIDER_JOB_WORDS, hostProviderFound, hostProviderJobCase, hostProviderJobTitle, type HostProviderJobCase, type HostProviderJobState } from '../../shared/hostProviders'
 import { hostProviderBrief, PROVIDER_COMMANDS, PROVIDER_INSTALL_METHODS, providerLookupOrder } from './hostProviderBrief'
 import type { HostSetupThreads } from './hostSetup'
 import { PROVIDER_JOB_TOOL_NAMES, type AgentJobToolName, type HostSetupToolReply } from './hostSetupTools'
@@ -38,8 +38,8 @@ interface Job {
   checking: boolean
 }
 const running = (job: Job | undefined): job is Job => job !== undefined && (job.phase === 'starting' || job.phase === 'running')
-const INGS: Readonly<Record<HostProviderJobCase, string>> = { install: 'installing', update: 'updating', fix: 'fixing' }
-const workingOn = (job: Job): string => `An agent is ${INGS[job.case]} ${PROVIDER_LABELS[job.provider]} on ${job.host} now.`
+/** "An agent is installing Devin on forge now.", which refuses a second agent job while this one runs. */
+const workingOn = (job: Job): string => `An agent is ${HOST_PROVIDER_JOB_WORDS[job.case].doing} ${PROVIDER_LABELS[job.provider]} on ${job.host} now.`
 
 /**
  * Have my agent install it, update it or fix it (ADR-0035, amended for #461): one provider job at a time, for one
