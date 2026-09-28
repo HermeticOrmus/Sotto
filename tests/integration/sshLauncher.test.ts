@@ -80,11 +80,15 @@ it('turns multiplexing and any configured remote command off and asks through as
 it('asks for a password once per connect although three ssh processes sign in, and never records it', async () => {
   const { launcher, events } = await fixture('password')
   const prompts: SshPrompt[] = []
+  const promptReady = Promise.withResolvers<SshPrompt>()
   let waiting: SshPrompt | null = null
-  const connecting = launcher.connect(configuration, { onPrompt: prompt => { waiting = prompt; if (prompt) prompts.push(prompt) } })
-  await vi.waitFor(() => expect(waiting?.kind).toBe('password'))
-  expect(waiting!.text).toBe("user@forge's password:")
-  launcher.answerPrompt(waiting!.id, 'test-secret')
+  const connecting = launcher.connect(configuration, { onPrompt: prompt => { waiting = prompt; if (prompt) { prompts.push(prompt); promptReady.resolve(prompt) } } })
+  // Observe rejection immediately, including cleanup after an assertion fails before connecting is awaited.
+  void connecting.then(() => promptReady.reject(new Error('SSH connected without asking for a password.')), error => promptReady.reject(error))
+  const prompt = await promptReady.promise
+  expect(prompt.kind).toBe('password')
+  expect(prompt.text).toBe("user@forge's password:")
+  launcher.answerPrompt(prompt.id, 'test-secret')
   const connection = await connecting
   await connection.showHostPairingCode()
   expect(prompts).toHaveLength(1)

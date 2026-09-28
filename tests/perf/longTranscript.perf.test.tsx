@@ -1,19 +1,19 @@
 /**
  * Measures what a long thread costs: the Threads page opened on a thread of 400 messages, built by repeating a
  * real thread's messages with fresh ids and timestamps. Reports the mount, one streaming update at the default
- * page of messages, and the same once the reader has shown every earlier message. Skips without a real folder.
+ * page of messages, and the same once the reader has shown every earlier message. Requires an explicitly selected folder.
  *
  * Rows on screen are not the measure of how much history a page holds: a finished turn folds its work away, and
  * how many rows that costs depends on where the page starts. The page is asked what it holds by opening the folds.
  *
- *   npx vitest run tests/perf/longTranscript.perf.test.tsx --disable-console-intercept
- *   SOTTO_PERF_DATA=<folder with workspace.json> to point elsewhere.
+ *   Set SOTTO_PERF_BENCH=1 and SOTTO_PERF_DATA=<folder with workspace.json>.
+ *   npx vitest run tests/perf/longTranscript.perf.test.tsx --maxWorkers=1 --disable-console-intercept
  */
 import React, { Profiler, type ReactNode } from 'react'
-import { mkdtemp, readFile, copyFile, access, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, copyFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { copyPerfHistory, hydratePerfHistory } from '../fixtures/perfWorkspace'
+import { copyPerfHistory, hydratePerfHistory, perfDataDirectory } from '../fixtures/perfWorkspace'
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
@@ -34,12 +34,6 @@ const MOUNT_WARMUP = 2
 const NOW = Date.parse('2026-09-16T12:00:00Z')
 /** Opening every turn fold takes one pass; the rest are headroom against a fold that holds another. */
 const FOLD_PASSES = 5
-const dataDirectory = process.env.SOTTO_PERF_DATA ?? (process.env.APPDATA ? join(process.env.APPDATA, 'sotto') : '')
-
-async function available(): Promise<boolean> {
-  if (!dataDirectory) return false
-  try { await access(join(dataDirectory, 'workspace.json')); return true } catch { return false }
-}
 
 function median(samples: number[]): number {
   const sorted = [...samples].sort((a, b) => a - b)
@@ -100,10 +94,11 @@ function receive(previous: AgentState, next: AgentState): AgentState {
 }
 
 describe('long transcript cost', async () => {
-  const present = await available()
+  const dataDirectory = await perfDataDirectory()
+  const present = dataDirectory !== null
   let directory = ''
   beforeAll(async () => {
-    if (!present) return
+    if (!dataDirectory) return
     // The measurement never touches the live folder.
     directory = await mkdtemp(join(tmpdir(), 'sotto-perf-'))
     await copyFile(join(dataDirectory, 'workspace.json'), join(directory, 'workspace.json'))
