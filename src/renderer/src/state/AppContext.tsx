@@ -63,6 +63,7 @@ export interface AppControllerFactoryBindings {
   readonly getSettings: () => AppSettings
   readonly deliverOutput: SottoBridge['deliverOutput']
   readonly addHistory: SottoBridge['addHistory']
+  readonly retainOutput?: (entry: HistoryEntry) => void
   readonly publishWidgetState: (snapshot: WidgetSnapshot) => ReturnType<SottoBridge['publishWidgetState']>
   readonly polishTranscript?: SottoBridge['polishTranscript']
   /** Present when the preload bridge exposes hosted transcription. */
@@ -107,6 +108,7 @@ export function createProductionDictationController(
     deliverOutput: bindings.deliverOutput,
     captureOutput: captureDictationDestination,
     addHistory: bindings.addHistory,
+    ...(bindings.retainOutput ? { retainOutput: bindings.retainOutput } : {}),
     publishWidgetState: bindings.publishWidgetState,
     ...(platform === undefined ? {} : { platform }),
     ...(polish === undefined
@@ -134,6 +136,7 @@ export interface AppActions {
   deleteHistory(id: string): Promise<boolean>
   clearHistory(): Promise<boolean>
   copyHistory(text: string): Promise<boolean>
+  dismissDictationRecovery(id: string): void
   checkTranscriptionKey(): Promise<TranscriptionKeyCheck>
   checkForUpdates(): Promise<UpdateStatus | null>
   downloadUpdate(): Promise<boolean>
@@ -154,6 +157,7 @@ export interface AppContextValue {
   readonly failure: AppFailureCode | null
   readonly settings: AppSettings | null
   readonly history: readonly HistoryEntry[]
+  readonly dictationRecovery: readonly HistoryEntry[]
   readonly dictation: DictationState
   readonly navigation: AppNavigation
   readonly recoveryNotices: readonly RecoveryNotice[]
@@ -196,6 +200,7 @@ export function AppProvider({
   const [failure, setFailure] = useState<AppFailureCode | null>(null)
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const [history, setHistory] = useState<readonly HistoryEntry[]>([])
+  const [dictationRecovery, setDictationRecovery] = useState<readonly HistoryEntry[]>([])
   const [dictation, setDictation] = useState<DictationState>(initialDictationState)
   const [navigation, setNavigation] = useState<AppNavigation>('onboarding')
   const [recoveryNotices, setRecoveryNotices] = useState<readonly RecoveryNotice[]>([])
@@ -423,6 +428,9 @@ export function AppProvider({
             return current
           },
           deliverOutput: (request) => bridge.deliverOutput(request),
+          retainOutput: entry => {
+            if (isCurrentGeneration(generation)) setDictationRecovery(entries => [...entries, entry])
+          },
           polishTranscript: (request) => bridge.polishTranscript(request),
           transcription: {
             transcribe: (request) => bridge.transcribe(request),
@@ -574,6 +582,7 @@ export function AppProvider({
         return []
       })
     },
+    dismissDictationRecovery: id => setDictationRecovery(entries => entries.filter(entry => entry.id !== id)),
     copyHistory: async (text) => {
       if (bridge === undefined || activeGenerationRef.current === 0) return false
       const current = settingsRef.current
@@ -664,13 +673,14 @@ export function AppProvider({
     failure,
     settings,
     history,
+    dictationRecovery,
     dictation,
     navigation,
     recoveryNotices,
     update,
     updateCheckRequest,
     actions,
-  }), [windowMaximized, actions, copy, dictation, failure, history, historyStatus, navigation, platform, recoveryNotices, settings, status, update, updateCheckRequest])
+  }), [windowMaximized, actions, copy, dictation, dictationRecovery, failure, history, historyStatus, navigation, platform, recoveryNotices, settings, status, update, updateCheckRequest])
 
   return createElement(AppContext.Provider, { value }, children)
 }
