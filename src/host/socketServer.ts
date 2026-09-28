@@ -11,6 +11,7 @@ import type { AgentCommand, AgentThreadDetail } from '../shared/agents'
 import { isAgentThreadDetailDelta } from '../shared/agentThreadDetail'
 import { resolveModel } from '../shared/modelCatalog'
 import { version as packageVersion } from '../../package.json'
+import { REMOTE_PERMISSION_DENIED } from '../main/agents/authority'
 import { remoteCommandRefusal } from './remoteCommands'
 import { SocketFrames } from './socketFrames'
 
@@ -18,7 +19,7 @@ const errors: Record<HostErrorCode, string> = {
   unauthenticated: HOST_SESSION_REJECTED,
   invalid_request: 'This request is not supported. Update this client and try again.',
   stale_request: 'This request has already changed or been answered. Refresh the thread before answering.',
-  forbidden: 'This action is not allowed from this device. Check its permission policy or complete the action on the host.',
+  forbidden: REMOTE_PERMISSION_DENIED,
   unavailable: 'The host could not complete this request. Refresh the thread before trying again.',
   busy: 'The host has too many pending requests. Wait for them to finish and try again.',
   too_large: 'A thread on this host is too large to send to this device. Nothing on the host was lost, and the thread keeps working there. Your other threads still load here.',
@@ -46,6 +47,17 @@ export interface SocketServerOptions {
   receipts?: { lifetimeMs?: number; limit?: number; now?: () => number }
   /** Tests stand in for a host of another Sotto version; the host advertises its own. */
   sottoVersion?: string
+  /**
+   * False turns the administrative routes off. The desktop administers its phone listener in-process, so
+   * it has no admin token to keep; only the headless host, whose own command line uses them, needs them.
+   */
+  admin?: boolean
+  /** The computer's name as paired phones show it, read on each health request (ADR-0033). Health omits it when absent. */
+  name?: () => string | undefined
+  /** Told once a pairing code is redeemed, so a desktop showing the code can close it and list the new client. */
+  onPaired?: (clientId: string) => void
+  /** Told when a paired client's socket opens or closes, or a client unpairs itself. */
+  onPeersChanged?: () => void
 }
 /**
  * A settled receipt answers a retried command for this long, which covers a reconnect after a lost
@@ -318,9 +330,10 @@ export async function startSocketServer(options: SocketServerOptions) {
       try {
         if (closing) throw new Refusal('unavailable')
         if (request.headers.origin && !originAllowed(request.headers.origin, options.origins)) throw new Refusal('unauthenticated')
-        if (request.method === 'GET' && request.url === '/v1/health') { respond(response, 200, { ...descriptor, status: 'ready' }); return }
+        if (request.method === 'GET' && request.url === '/v1/health') { const name = options.name?.()?.trim(); respond(response, 200, { ...descriptor, status: 'ready', ...(name ? { name } : {}) }); return }
         if (request.method !== 'POST') throw new Refusal('invalid_request')
         if (request.url?.startsWith('/v1/admin/')) {
+          if (options.admin === false) throw new Refusal('invalid_request')
           const token = Buffer.from(bearer(request)), expected = Buffer.from(adminToken)
           if (token.length !== expected.length || !timingSafeEqual(token, expected)) throw new Refusal('unauthenticated')
           spend('admin', HTTP_BUDGETS.admin)
@@ -338,7 +351,7 @@ export async function startSocketServer(options: SocketServerOptions) {
           const input = z.object({ v: z.literal(1), code: z.string().min(1).max(32), name: z.string().min(1).max(256) }).strict().parse(await body(request))
           let paired: Awaited<ReturnType<PairedClients['redeem']>>
           try { paired = await pairing.redeem(input.code, input.name) } catch { throw new Refusal('unauthenticated') }
-          respond(response, 200, { v: 1, hostId, ...paired }); return
+          respond(response, 200, { v: 1, hostId, ...paired }); options.onPaired?.(paired.clientId); return
         }
         if (request.url === '/v1/revoke') {
           const clientId = pairing.verifyToken(bearer(request))
@@ -346,7 +359,7 @@ export async function startSocketServer(options: SocketServerOptions) {
           spend('client:' + clientId, HTTP_BUDGETS.client)
           const revoked = await pairing.revoke(clientId)
           for (const peer of peers) if (!authenticated(peer)) peer.frames.close()
-          respond(response, 200, { v: 1, hostId, revoked }); return
+          respond(response, 200, { v: 1, hostId, revoked }); options.onPeersChanged?.(); return
         }
         if (request.url === '/v1/session') {
           const clientId = pairing.verifyToken(bearer(request))
@@ -373,8 +386,9 @@ export async function startSocketServer(options: SocketServerOptions) {
     const frames = new SocketFrames(stream, false, text => onMessage(peer, text))
     const peer: Peer = { frames, client: identity(clientId), session, observed: new Set(), inFlight: 0, window: Date.now(), count: 0, pageWindow: 0, pages: 0, preview: false, afterSeq: 0, selectedThreadId: null, selectedProjectId: null, deltas: false }
     peers.add(peer)
-    frames.onClose(() => { peers.delete(peer); if (!closing) track(observe().catch(() => undefined)) })
+    frames.onClose(() => { peers.delete(peer); if (!closing) { track(observe().catch(() => undefined)); options.onPeersChanged?.() } })
     frames.feed(head)
+    options.onPeersChanged?.()
   })
   await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(options.port ?? 0, '127.0.0.1', () => { server.removeListener('error', reject); resolve() }) })
   const address = server.address()
@@ -388,6 +402,10 @@ export async function startSocketServer(options: SocketServerOptions) {
     descriptor, adminToken,
     /** How many paired clients hold an open socket: the host's measure of a window being in front. */
     peers: (): number => peers.size,
+    /** The paired clients holding an open socket now, each once. */
+    connectedClients: (): string[] => [...new Set([...peers].map(peer => peer.client.clientId))],
+    /** Closes at once every socket whose client is no longer paired, after a revocation made outside this listener. */
+    dropRevoked: (): void => { for (const peer of peers) if (!authenticated(peer)) peer.frames.close() },
     close: async (): Promise<void> => {
       closing = true; clearInterval(expiry); unsubscribe(); unsubscribeDetails?.(); shellPublisher.dispose(); detailPublisher.dispose()
       for (const peer of peers) peer.frames.close()

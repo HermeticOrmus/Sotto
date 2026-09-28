@@ -37,10 +37,18 @@ if (!metadata && value('--permission-prompt-tool') !== 'stdio') throw new Error(
 // The native CLI refuses bypassPermissions unless bypassing was explicitly allowed at launch; never allow it for other modes.
 if (!metadata && (value('--permission-mode') === 'bypassPermissions') !== args.includes('--allow-dangerously-skip-permissions')) throw new Error('bypassPermissions requires --allow-dangerously-skip-permissions, and only that mode may carry it')
 record(args.includes('--resume') ? 'resume' : 'launch', { source: 'child-process-argv', args, cwd: process.cwd(), compactionEnvironment: Object.fromEntries(['DISABLE_AUTO_COMPACT', 'DISABLE_COMPACT', 'CLAUDE_AUTOCOMPACT_PCT_OVERRIDE', 'CLAUDE_CODE_AUTO_COMPACT_WINDOW'].filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]])) })
-const folder = join(root, 'home', 'projects', process.cwd().replace(/[^a-zA-Z0-9]/gu, '-'))
+// The isolated Electron journey uses the adapter's normal ~/.claude discovery path.
+const folder = join(process.env.SOTTO_FAKE_CLAUDE_HOME ?? join(root, 'home'), 'projects', process.cwd().replace(/[^a-zA-Z0-9]/gu, '-'))
 const log = join(folder, session + '.jsonl')
 let parentUuid = existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line)).findLast(frame => frame.uuid)?.uuid ?? null : null
-const persist = frame => { mkdirSync(folder, { recursive: true }); appendFileSync(log, JSON.stringify({ ...frame, parentUuid, isSidechain: false, cwd: process.cwd(), sessionId: session, timestamp: frame.timestamp ?? new Date().toISOString() }) + '\n'); parentUuid = frame.uuid ?? parentUuid }
+// Live output and replay describe the same event, even when the script omitted its timestamp.
+const persist = frame => {
+  const stamped = { ...frame, timestamp: frame.timestamp ?? new Date().toISOString() }
+  mkdirSync(folder, { recursive: true })
+  appendFileSync(log, JSON.stringify({ ...stamped, parentUuid, isSidechain: false, cwd: process.cwd(), sessionId: session }) + '\n')
+  parentUuid = frame.uuid ?? parentUuid
+  return stamped
+}
 const pending = new Map()
 const violation = reason => appendFileSync(join(root, 'violations.jsonl'), reason + '\n')
 // One CLI per session. Two would both write the session's transcript, so Sotto must not start one while another it
@@ -71,8 +79,13 @@ const timer = setInterval(() => {
   // Consume before delivery so a resumed process cannot replay this as a new live event.
   unlinkSync(control)
   if (action.type === 'exit') { process.exit(1) }
-  if (action.type === 'raw-burst') { process.stdout.write(action.frames.map(frame => JSON.stringify(frame) + '\n').join('')); return }
-  if (action.type === 'raw') { if (action.persist) persist(action.frame); output(action.frame); return }
+  // `persist` also writes the burst to the session log first, as the CLI records what it streams.
+  if (action.type === 'raw-burst') {
+    const frames = action.persist ? action.frames.map(persist) : action.frames
+    process.stdout.write(frames.map(frame => JSON.stringify(frame) + '\n').join(''))
+    return
+  }
+  if (action.type === 'raw') { output(action.persist ? persist(action.frame) : action.frame); return }
   if (action.type === 'subagent') {
     // Claude Code 2.1.280: a workflow (with `runId`) or a background Agent call reports one task and no
     // sidechain message. The real launch result names a background agent's `resolvedModel`; this one
@@ -112,7 +125,7 @@ const timer = setInterval(() => {
     const frame = { type: 'assistant', uuid: randomUUID(), session_id: session, message: { id, role: 'assistant', content: [{ type: 'text', text: action.text }] } }
     if (agent) output({ type: 'system', subtype: 'task_started', session_id: session, uuid: randomUUID(), task_id: agent.task, tool_use_id: agent.tool,
       description: action.background.description, subagent_type: 'general-purpose', is_backgrounded: true, spawn_depth: 1, task_type: 'local_agent' })
-    persist(frame); output(frame); output({ type: 'result', subtype: 'success', session_id: session, is_error: false, result: action.text }); return
+    output(persist(frame)); output({ type: 'result', subtype: 'success', session_id: session, is_error: false, result: action.text }); return
   }
   if (action.type === 'permission' || action.type === 'question') {
     const request = { subtype: 'can_use_tool', tool_name: action.type === 'question' ? 'AskUserQuestion' : 'Bash', tool_use_id: randomUUID(), input: action.type === 'question' ? { questions: [{ question: action.text, header: 'Choice', options: [{ label: 'Blue', description: 'Blue color' }], multiSelect: false }] } : { command: 'npm run build', description: action.text } }
@@ -181,11 +194,11 @@ lines.on('line', line => {
   } else if (frame.type === 'user') {
     if (!initialized) violation('User prompt arrived before successful initialization')
     if (!frame.uuid || frame.session_id !== session || frame.message?.role !== 'user' || frame.parent_tool_use_id !== null) violation('Malformed native user frame')
-    persist(frame)
+    const reply = persist(frame)
     const scriptPath = join(root, 'script.json')
     const script = existsSync(scriptPath) ? JSON.parse(readFileSync(scriptPath, 'utf8')) : {}
     if (script.writeCwd) writeFileSync(join(process.cwd(), 'native-cwd-proof.txt'), typeof frame.message.content === 'string' ? frame.message.content : frame.message.content.find(item => item.type === 'text')?.text ?? '')
-    if (script.delay) { writeFileSync(scriptPath, '{}'); setTimeout(() => output(frame), script.delay) } else output(frame)
+    if (script.delay) { writeFileSync(scriptPath, '{}'); setTimeout(() => output(reply), script.delay) } else output(reply)
   } else if (frame.type === 'control_response') {
     const envelope = frame.response; const request = pending.get(envelope?.request_id); const answer = envelope?.response
     if (envelope?.subtype === 'error' && typeof envelope.error === 'string') { pending.delete(envelope.request_id); return }

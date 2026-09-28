@@ -32,6 +32,7 @@ export interface Authority {
 }
 
 /** Said to a client whose answer is refused. Plain words: what happened, and what to do next. */
+export const REMOTE_PERMISSION_DENIED = 'This action is not allowed from this device. Check its permission policy or complete the action on the host.'
 export const UNPAIRED_CLIENT_ERROR = 'This client is not paired with Sotto. Pair it on this PC first.'
 
 /** The scope a `remote-answer` policy record is written under, so one record names exactly one client. */
