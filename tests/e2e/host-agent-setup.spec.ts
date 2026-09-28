@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { expect, test, type Page } from '@playwright/test'
 import { build } from 'vite'
+import type { SottoE2EBridge } from '../../src/shared/e2e'
 import { DEFAULT_SETTINGS } from '../../src/shared/settings'
 import { requireOwnedE2EProfile } from '../../scripts/e2e-profile-policy.mjs'
 import { closeSotto, launchSotto, openPage, openThreads, type LaunchedSotto } from './support/sottoLaunch'
@@ -78,9 +79,12 @@ async function capture(launched: LaunchedSotto, name: string): Promise<void> {
   }
 }
 const titles = (page: Page) => page.getByRole('list', { name: 'Connection steps' }).locator('.host-setup__title')
-type ToolReply = { content: { type: string; text: string }[]; isError?: boolean }
+type ToolReply = Awaited<ReturnType<NonNullable<SottoE2EBridge['hostSetupTool']>>>
 const tool = (page: Page, name: string): Promise<ToolReply> => page.evaluate(value => window.sottoE2E!.hostSetupTool!({ name: value }), name)
-const reply = (value: ToolReply): Record<string, unknown> => JSON.parse(value.content[0]!.text) as Record<string, unknown>
+const reply = (value: ToolReply): Record<string, unknown> => {
+  const text = value.content.find(item => item.type === 'text')
+  return JSON.parse(text?.type === 'text' ? text.text : '{}') as Record<string, unknown>
+}
 
 async function prepare(): Promise<{ profile: string; root: string; modeFile: string; restore: () => void }> {
   const profile = await mkdtemp(join(tmpdir(), 'sotto-e2e-host-agent-setup-'))
