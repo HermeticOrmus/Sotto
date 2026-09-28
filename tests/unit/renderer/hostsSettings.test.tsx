@@ -218,7 +218,8 @@ it('turns Add host into the setup checklist once pressed, asks SSH questions on 
   expect(steps().slice(0, 4)).toEqual(['Done: Reached forge', 'Done: Signed in', 'Done: Host installed', 'In progress: Starting the host…'])
   expect(progress()).toBe('Starting the host…')
   // Saved and connected: the dialog says so, and Done closes it.
-  push({ adding: undefined, hosts: [{ ...adding, phase: 'connected', step: 'pair' }] })
+  delete state().adding
+  push({ hosts: [{ ...adding, phase: 'connected', step: 'pair' }] })
   resolveAdd!(state())
   await waitFor(() => expect(screen.getByRole('dialog', { name: 'forge is connected' })).toBeTruthy())
   expect(steps()).toEqual(['Done: Reached forge', 'Done: Signed in', 'Done: Host installed', 'Done: Host started', 'Done: Paired'])

@@ -21,7 +21,9 @@ The [README](../README.md) says what Sotto is and how to install it. This guide 
 
 ### Starting a thread
 
-A thread in a project opens at once, named "New thread" and ready for your first message: the pen beside a project row, the empty Threads page's own button, and choosing a project from the sidebar's top **New thread** button (or **Ctrl+Shift+N**, **Cmd+Shift+N** on a Mac) all open one this way. Only the top button and the shortcut with no thread focused ask which project first; the pen and the empty page's button already know it. The shortcut opens a thread in the focused pane's project, or asks which project when none is focused; it does nothing while a dialog is open or a terminal has focus. If the project already has a new thread you never wrote in, it takes you back to that one instead of opening another. A creation the provider refuses says why where the sidebar shows other such errors, and nothing else is lost.
+New work starts in Unsettled. Pressing **New thread** can reuse an empty thread only if it is still unsettled, its known model, effort and permission choices match the current defaults in Settings, and no setting change is pending. If the saved effort or permission default cannot be resolved from the model catalog, a new thread opens instead. Settled threads and empty threads with older choices stay as they were.
+
+A thread in a project opens at once, named "New thread" and ready for your first message: the pen beside a project row, the empty Threads page's own button, and choosing a project from the sidebar's top **New thread** button (or **Ctrl+Shift+N**, **Cmd+Shift+N** on a Mac) all open one this way. Only the top button and the shortcut with no thread focused ask which project first; the pen and the empty page's button already know it. The shortcut opens a thread in the focused pane's project, or asks which project when none is focused; it does nothing while a dialog is open or a terminal has focus. If the project already has an unused thread that meets those reuse conditions, it takes you back to that one instead of opening another. A creation the provider refuses says why where the sidebar shows other such errors, and nothing else is lost.
 
 A new thread starts on **New threads start with** in **Settings → Agents**: a model, a reasoning effort and a permission mode, the same chips the composer itself shows. Change any of them for one thread from its own composer once it is open; the setting only chooses what a thread starts on. A model or provider that does not offer the chosen effort or permission starts on the nearest one it does — the closest safer permission mode, and the effort at the same position among the levels offered — and Settings says so under the row when that applies to the model chosen there. A provider with its own permission profiles, such as Devin, always starts on its first profile. Personal chats and the coordinator keep their own reasoning account, model and effort, under their own heading in the same page.
 
@@ -57,6 +59,10 @@ Codex can see and operate the apps on your computer with its Computer Use, as it
 - The Codex desktop app is open. Computer Use talks to a helper the Codex app runs.
 
 Ask for it by name ("use Computer Use to…") or with Codex's `$computer-use` skill. Its calls show in the thread's activity as **Computer Use**. When one fails because either condition is missing, the activity says which, and nothing was changed.
+
+### Terminal mode
+
+In Terminal mode, **Close** releases the terminal's output and keeps its row on **Closed** until Sotto quits. **Reopen** starts the same command with fresh output. **Stop**, a command finishing, or hiding its pane keeps the output readable. Up to 64 terminals can be open at once; Closed rows do not count toward that limit.
 
 ### Sending, steering and screenshots
 
@@ -232,8 +238,10 @@ Press the global shortcut once to start and again to stop and transcribe. The de
 Settings:
 
 - Dictation: microphone, global shortcut, recording limit, local sound cues, and streaming transcription so long dictations finish almost immediately after you stop
+
+**Test microphone** checks the input selected for dictation. Changing that input clears the previous test and stops its meter. A missing selected microphone is reported as missing; Sotto does not silently test the default input instead.
 - Transcription: MAI-Transcribe-2 through OpenRouter (the only model), your OpenRouter API key with a verify button, language, and conservative whitespace formatting
-- Cleanup: optional AI cleanup with quality tiers and the personal dictionary that also feeds transcription spelling hints; and the switches for generated thread titles, commit messages and pull request text
+- Cleanup: optional AI cleanup with quality tiers and the personal dictionary that also feeds transcription spelling hints; and the switches for generated thread titles, commit messages and pull request text. The dictionary saves when you leave its field. An older save finishing while you type keeps your newer draft in place; if a save fails, leave the field again to retry.
 - Output: mandatory clipboard safety copy, optional automatic paste, paste delay, and success-message duration
 - Appearance: the color scheme (Light, Dark, or match the system), then one theme for light mode and one for dark, chosen in two columns. Sotto ships six themes of its own: Sotto, Hush, Linen, Nocturne, Tropic and Citrine. Sotto is the default, with an almost-black dark room and the app icon's teal (a deeper teal in light mode, so text and links stay readable). You can create a theme, import a T3 Code or VS Code theme file, or install one from Open VSX. Below the themes: the effort color, contrast and glass.
 - Updates: the version you are running and, on Windows, an automatic GitHub release check that is on by default and can be turned off, plus a manual check

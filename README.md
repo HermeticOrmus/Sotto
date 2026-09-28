@@ -30,6 +30,12 @@ Sotto runs the Claude Code, Codex, Grok Build and Devin clients you already have
 
 Thread drafts save automatically while you type, including while other threads are working.
 
+New threads open in Unsettled with the defaults saved in Settings → Agents. An existing empty thread is reused only while it is unsettled, its known model, effort and permission choices match those defaults, and no setting change is pending.
+
+In Settings, **Test microphone** checks the same input selected for dictation. Changing the input clears the previous test.
+
+Terminal mode keeps closed terminals on its Closed shelf until you quit. Reopen starts the same command with fresh output; Stop keeps the output readable.
+
 ## Install
 
 You need Windows 10 or 11 (x64), or an Apple silicon Mac with macOS 12 or newer.

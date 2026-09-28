@@ -113,7 +113,7 @@ Sotto is a desktop dictation app that is becoming a voice development coordinato
 
 **Terminal.** In Terminal mode, a shell or a provider CLI that Sotto starts in a project folder or in its own worktree, named by the user when it opens. It belongs to a project, never to a thread, and keeps running while its pane is hidden. Distinct from the Tools panel's terminal, which belongs to a thread's working copy. Its first line, printed by Sotto, names the folder and the command.
 
-**Closed.** Terminal mode's counterpart to Settled: the shelf of terminals ended this session, which can be reopened with the same command until Sotto quits.
+**Closed.** Terminal mode's counterpart to Settled: the shelf of terminals explicitly closed this session, which can be reopened with the same command until Sotto quits. Every row stays; its old output is released on Close. Stop and a process exiting leave its output readable. The 64-terminal limit counts terminals outside Closed.
 
 **Thread binding.** The durable relationship between a Sotto thread, its provider session and its project. Historical bindings survive a provider's retirement and never grant a replacement provider authority over that thread.
 
