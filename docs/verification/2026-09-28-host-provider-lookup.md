@@ -35,4 +35,4 @@ In `artifacts/host-provider-lookup/`:
 
 ## Design gate
 
-No surface changed its look: the refusal is new wording in an alert the folder dialog already has. `npm run design:verify` was not regenerated.
+No surface changed its look: the refusal is new wording in an alert the folder dialog already has. `npm run design:verify` fails on this branch only where it fails on `main`: the onboarding, dictate, focus and feedback capture differs from its baseline, and the serial captures after it do not run. No baseline was regenerated.
