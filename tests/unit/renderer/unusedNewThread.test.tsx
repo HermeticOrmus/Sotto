@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { unusedNewThread } from '../../../src/renderer/src/agents/newThread'
 import { defaultAgentConfiguration, type AgentState, type AgentThread } from '../../../src/shared/agents'
+import { pendingSettingsStore, settingValues } from '../../../src/renderer/src/agents/pendingSettings'
 
 const project = { id: 'project', title: 'Project', path: 'C:/project' }
 const thread = (patch: Partial<AgentThread>): AgentThread => ({ id: 'thread', projectId: project.id, title: 'New thread', titleSource: 'default',
@@ -10,6 +11,7 @@ const state = (threads: AgentThread[]): AgentState => ({
     models: [{ id: 'codex:model', name: 'Model', provider: 'Codex', providerId: 'codex', ready: true }] } } as unknown as AgentState)
 
 /** Pressing New thread twice, or by accident, should not leave empty threads behind (#347). */
+afterEach(() => pendingSettingsStore.clear())
 describe('an unused new thread', () => {
   it('is found when the project already has one that was never used', () => {
     expect(unusedNewThread(state([thread({})]), project)?.id).toBe('thread')
@@ -31,6 +33,29 @@ describe('an unused new thread', () => {
     expect(unusedNewThread(current, project)).toBeUndefined()
     current.configuration.newThreadReasoningEffort = 'low'
     expect(unusedNewThread(current, project)?.id).toBe('thread')
+  })
+
+  it.each(['model', 'effort'] as const)('does not reuse a thread while its %s change is in flight', kind => {
+    const candidate = thread({ reasoningEffort: 'low' })
+    const current = state([candidate])
+    pendingSettingsStore.press(candidate.id, kind, kind === 'model' ? 'codex:other' : 'high',
+      kind === 'model' ? { modelId: 'codex:other' } : { reasoningEffort: 'high' },
+      () => new Promise(() => undefined), settingValues(current, candidate))
+    expect(unusedNewThread(current, project)).toBeUndefined()
+  })
+
+  it.each([{ modelId: 'codex:other' }, { reasoningEffort: 'high' }])('does not reuse a thread with an unconfirmed change: %j', patch => {
+    const current = state([thread({})])
+    current.unconfirmedSettings = [{ threadId: 'thread', ...patch }]
+    expect(unusedNewThread(current, project)).toBeUndefined()
+  })
+
+  it('does not reuse a thread when its saved effort cannot be resolved from the catalog', () => {
+    const current = state([thread({ reasoningEffort: 'low' })])
+    current.configuration.newThreadModelId = 'codex:model'
+    current.configuration.newThreadReasoningEffort = 'high'
+    current.host.models = []
+    expect(unusedNewThread(current, project)).toBeUndefined()
   })
 
   it('is not a thread that has been used, renamed, is running, settled or elsewhere', () => {

@@ -32,8 +32,14 @@ Standards: existing theme tokens and lifecycle helpers retained; no permission g
 
 Spec: new work is unsettled; reused empty work must match the current default model and known effort; managed creation uses the same model setting; Settings effort remains visible and editable. Existing settled threads are preserved.
 
+Independent review of PR #433 found two additional reuse cases: pending or unconfirmed model/effort changes could land after reuse, and a missing catalog could leave a saved effort unresolved. Five regression cases failed before the follow-up fix; the four focused files then passed all 41 tests. Reuse now declines both cases. The guide's older unconditional reuse sentence was corrected too. The repeated CSS exclusion across the two existing Settings scopes was retained rather than introducing a broader text-field refactor.
+
+After rebasing onto main and applying the review fixes, typecheck, lint and build passed again. The three related Electron specs ran together with all six tests passing. The retained screenshots were refreshed to match the current app, including the Phones navigation entry already on main.
+
 Passed: `npm run typecheck`, `npm run lint`, `npm run notices:verify` (174 components), and `npm run build`. The four focused unit files passed (35 tests); after adding the managed regression, the two affected files passed (24 tests). The two new Electron journeys passed three consecutive runs (six tests), and the Settings journey passed again with track-click coverage. All three existing effort-picker tests and the settled-folder test passed.
 
 The final `npm test -- --maxWorkers=2` run finished with 5,740 passed, 128 skipped and one failed test (437 passed files, 35 skipped, one failed). The failure was `tests/unit/main/hostLock.test.ts:112`, "gives the folder to exactly one of three hosts started together over a crashed lock": no contender acquired the lock where one was expected. `npx vitest run tests/unit/main/hostLock.test.ts --maxWorkers=2` then passed all 16 tests in isolation. Both that test and `src/host/lock.ts` are unchanged from HEAD. The failure is intermittent and unresolved; the full gate is not green.
 
-macOS and live provider behavior were not exercised; this change is in renderer selection and styling. The implementation is local and has not been installed or released.
+The same host-lock file was also run on main at `53bb7910859ac6989f8fc71fd58204e44aaabeef`, where all 16 tests passed. The failure was not reproduced on that baseline; unchanged files and a passing isolated rerun do not prove its cause. PR CI records the full gate for the published revision.
+
+macOS and live provider behavior were not exercised locally; this change is in renderer selection and styling. The implementation has not been installed or released.

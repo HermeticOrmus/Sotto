@@ -5,6 +5,7 @@ import { nearestReasoningEffort, resolveNewThreadPermission } from '../../../sha
 import { isThreadClosed, isWorkspaceThreadSettled } from '../../../shared/threadActivity'
 import type { AgentConnection } from './AgentContext'
 import { draftThread, UNCONFIRMED_CREATION } from './draftThreads'
+import { pendingSettingsStore, unconfirmedKinds } from './pendingSettings'
 
 /** A creation on its way, handed over the moment it is issued so the thread can be shown without waiting. */
 export interface ThreadCreationStart {
@@ -41,8 +42,10 @@ export async function projectWorkingCopy(state: AgentState, project: AgentProjec
  */
 export function unusedNewThread(state: AgentState, project: AgentProject): AgentThread | undefined {
   const { modelId, selectedModel, reasoningEffort, permission } = newThreadOptions(state, project)
+  if (state.configuration.newThreadReasoningEffort && reasoningEffort === undefined) return undefined
   return state.host.threads.find(thread => thread.projectId === project.id && thread.titleSource === 'default' && thread.status === 'idle'
     && !isThreadClosed(thread) && !isWorkspaceThreadSettled(thread, project)
+    && Object.keys(pendingSettingsStore.view(thread.id).pending).length === 0 && unconfirmedKinds(state, thread.id).size === 0
     && thread.modelId === modelId && (reasoningEffort === undefined || (thread.reasoningEffort ?? selectedModel?.defaultReasoningEffort) === reasoningEffort)
     && (permission.runtimeMode === undefined || thread.runtimeMode === permission.runtimeMode)
     && (permission.providerMode === undefined || thread.providerMode === permission.providerMode)

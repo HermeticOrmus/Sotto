@@ -30,7 +30,7 @@ Sotto runs the Claude Code, Codex, Grok Build and Devin clients you already have
 
 Thread drafts save automatically while you type, including while other threads are working.
 
-New threads open in Unsettled with the model and effort saved in Settings → Agents. An existing empty thread is reused only while it is unsettled and still matches those defaults.
+New threads open in Unsettled with the defaults saved in Settings → Agents. An existing empty thread is reused only while it is unsettled, its known model, effort and permission choices match those defaults, and no setting change is pending.
 
 ## Install
 
