@@ -36,8 +36,16 @@ documented `npm run typecheck` command. The file was then removed.
   (174 notice components).
 - All six cases in the three edited opt-in benchmarks pass (16.94 seconds), using
   scripted providers and synthetic input. No absolute timing budget was enabled.
-- The full two-worker suite, build, independent review and a representative
-  Electron journey are pending. They must pass before merge.
+- `npm run build` passes on integrated head `26145ffa`. The existing command
+  receipt and queued-steering Electron journeys pass: two tests, 19.4 seconds.
+  Draft saving, settings, model selection after reconnect, keyboard steering and
+  preserving a newer draft all cross the preload/main boundaries. Typing causes
+  zero whole-state reads; reconnect causes one.
+- Minimum-size queue captures were visually inspected in light and dark themes.
+  Existing design baselines were restored. Selected evidence is
+  `artifacts/review-392/queue-820-light.png` and `queue-820-dark.png`.
+- The full two-worker suite and independent review are pending. They must pass
+  before merge.
 - Timing benchmarks use synthetic providers and owned temporary data. Shared-load
   measurements will be reported as such; this test-only change claims no app
   performance improvement.
