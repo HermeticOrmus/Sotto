@@ -778,10 +778,10 @@ export class ClaudeStreamJsonHost implements AgentHost {
     const setup = alias.kind !== 'personal' ? await this.hostSetupTools?.mcpServer(id) : undefined
     const servers = [...(browser ? [{ server: browser, definitions: this.browserTools?.definitions ?? [] }] : []),
       ...(setup ? [{ server: setup, definitions: this.hostSetupTools?.definitions ?? [] }] : [])]
-    const browserArguments = servers.length ? ['--mcp-config', JSON.stringify({ mcpServers: Object.fromEntries(servers.map(({ server }) => [server.name, {
+    const toolArguments = servers.length ? ['--mcp-config', JSON.stringify({ mcpServers: Object.fromEntries(servers.map(({ server }) => [server.name, {
       type: server.type, url: server.url, headers: Object.fromEntries(server.headers.map(header => [header.name, header.value])),
     }])) }), ...toolAllowance(servers)] : []
-    const args = [...(this.options.args ?? []), ...browserArguments, '--print', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
+    const args = [...(this.options.args ?? []), ...toolArguments, '--print', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
       '--include-partial-messages', '--replay-user-messages', ...permissionArguments(alias.runtimeMode),
       ...(alias.kind === 'personal' ? ['--append-system-prompt', this.personalContexts.get(id) ?? personalContext()] : []),
       resume ? '--resume' : '--session-id', alias.sessionId, '--model', alias.modelId, ...(alias.reasoningEffort ? ['--effort', alias.reasoningEffort] : [])]

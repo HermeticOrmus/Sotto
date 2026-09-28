@@ -234,6 +234,14 @@ export class HostSetup implements HostSetupSource, HostSetupToolHandlers {
       this.end(run); this.emit()
       return { result: { added: true, message: `${run.name} is added and connected. It is in Settings > Hosts, and its threads show in the Threads sidebar. There is nothing more to set up.` } }
     }
+    // A host that answered with another Sotto version is saved, as Add host saves it, so the setup ends there: its
+    // row says what to update, and the dialog must not go on saying nothing was saved.
+    if (status && this.options.hosts.savedAs(run.connection.target, run.connection.sshPort)) {
+      run.phase = 'failed'
+      run.error = `${run.name} was saved as a host but is not connected. ${status.error ?? 'Its row in Settings > Hosts says what to do.'}`
+      this.end(run); this.emit()
+      return { isError: true, result: { added: true, connected: false, message: run.error } }
+    }
     this.emit()
     return { isError: true, result: status ? { added: false, ...this.failure(status) } : { added: false, message: 'The add was cancelled before it finished. Nothing was saved.' } }
   }

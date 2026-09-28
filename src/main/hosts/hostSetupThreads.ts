@@ -60,6 +60,8 @@ export function coordinatorSetupThreads(options: { coordinator: HostSetupCoordin
       const asking = model.providerModes?.find(mode => mode.allows === 'nothing')
       const permission = asking ? { providerMode: asking.id } : model.runtimeModes?.includes('approval-required') ? { runtimeMode: 'approval-required' as const } : {}
       const threadId = randomUUID()
+      // Creating a thread only records it in the workspace; the provider's own session starts with the first send
+      // (WorkspaceHost), which is when a client reads its tool servers. So the tool is admitted between the two.
       await coordinator.command({ type: 'create-thread', threadId, projectId: home.id, title, titleSource: 'user', modelId: model.id, workingCopy: 'shared', managed: false, ...permission })
       created(threadId)
       await coordinator.command({ type: 'manual-send', threadId, text: brief })

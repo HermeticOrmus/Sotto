@@ -139,6 +139,19 @@ describe('HostSetup', () => {
     expect(f.setup.admits('thread-1')).toBe(false)
   })
 
+  it('ends the setup when the add saves a host that answers with another Sotto version, rather than saying nothing was saved', async () => {
+    const f = fixture()
+    f.hosts.add.mockImplementationOnce(async connection => { f.saved.push(connection.id); f.statuses.set(connection.id, { ...host, id: connection.id, enabled: true, phase: 'error', step: 'pair', error: 'This host is running a different version of Sotto.' }) })
+    f.hosts.savedAs.mockImplementation(() => (f.saved.length ? 'forge' : undefined))
+    await f.setup.command(start())
+    const adding = f.setup.run('thread-1', 'host_add')
+    await vi.waitFor(() => expect(f.setup.requests().size).toBe(1))
+    f.setup.answer('thread-1', f.setup.requests().get('thread-1')![0]!.id, true)
+    expect(await adding).toMatchObject({ isError: true, result: { added: true, connected: false } })
+    expect(f.setup.state()).toMatchObject({ phase: 'failed', error: expect.stringContaining('forge was saved as a host but is not connected. This host is running a different version of Sotto.') })
+    expect(f.revoked).toEqual(['thread-1'])
+  })
+
   it('adds nothing when the user declines', async () => {
     const f = fixture()
     await f.setup.command(start())

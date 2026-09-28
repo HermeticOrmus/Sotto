@@ -131,7 +131,7 @@ export class GrokAcpHost implements AgentHost {
   private hostSetupTools: ScopedThreadTools | undefined
   useHostSetupTools(tools: ScopedThreadTools): void { this.hostSetupTools = tools }
   /** Sotto's own tool servers for this thread: the browser's, and the host setup tools while its setup runs (ADR-0035). */
-  private async browserServers(id: string) {
+  private async toolServers(id: string) {
     if (this.aliases[id]?.kind === 'personal' || !this.browserHttp) return []
     const setup = await this.hostSetupTools?.mcpServer(id)
     return [...(this.browserTools ? [await this.browserTools.mcpServer(id)] : []), ...(setup ? [setup] : [])]
@@ -140,8 +140,8 @@ export class GrokAcpHost implements AgentHost {
     if (this.aliases[pending.threadId]!.answeredRequestIds.includes(pending.request.id)) { pending.answering = true; pending.request.delivery = 'uncertain'; this.answeredRequests.add(pending.request.id) }
     this.pending.set(pending.request.id, pending); this.thread(pending.threadId).requests.push(pending.request); this.emit()
   }
-  /** Grok's prompt for this thread's own browser server, answered here rather than shown (ADR-0020). */
-  private browserAdmission(pending: Pending): unknown {
+  /** Grok's prompt for one of this thread's own Sotto tool servers, answered here rather than shown (ADR-0020, ADR-0035). */
+  private toolAdmission(pending: Pending): unknown {
     if (!pending.permission || !this.browserHttp || this.aliases[pending.threadId]?.kind === 'personal') return undefined
     // The host setup tools are answered the same way: adding asks the user in the thread itself (ADR-0035).
     return (this.browserTools ? grokBrowserAdmission(pending, BROWSER_MCP_SERVER, this.browserTools.definitions.map(tool => tool.name)) : undefined)
@@ -222,7 +222,7 @@ export class GrokAcpHost implements AgentHost {
     if (this.loaded.has(id)) return Promise.resolve()
     const pending = this.loading.get(id); if (pending) return pending
     const rpc = this.rpc
-    const work = this.browserServers(id).then(mcpServers => rpc.request('session/load', { sessionId: alias.grokSessionId, cwd: alias.cwd, mcpServers, _meta: sessionPolicy(alias.pendingRuntimeMode ?? alias.runtimeMode) }, async value => {
+    const work = this.toolServers(id).then(mcpServers => rpc.request('session/load', { sessionId: alias.grokSessionId, cwd: alias.cwd, mcpServers, _meta: sessionPolicy(alias.pendingRuntimeMode ?? alias.runtimeMode) }, async value => {
       this.confirmLoad(id, alias, value); await this.persist()
     })).then(() => {
       if (rpc !== this.rpc) return
@@ -574,7 +574,7 @@ export class GrokAcpHost implements AgentHost {
         const reasoningEffort = command.reasoningEffort ?? this.state.models.find(model => model.id === command.modelId)?.defaultReasoningEffort
         const alias: Alias = { ...(command.type === 'create-personal' ? { kind: 'personal' as const } : { projectId: project!.id }), cwd: await existingWorkingDirectory(command.workingDirectory ?? project!.path), title: command.title, modelId: command.modelId, settingsConfirmed: false, createdAt: new Date().toISOString(), origins: [], answeredRequestIds: [], ...(reasoningEffort ? { reasoningEffort } : {}), ...(command.runtimeMode ? { runtimeMode: grokRuntimeMode(command.runtimeMode) } : {}) }
         this.aliases[command.threadId] = alias; await this.persist()
-        await rpc.request('session/new', { cwd: alias.cwd, mcpServers: await this.browserServers(command.threadId), _meta: sessionPolicy(alias.runtimeMode) }, async value => {
+        await rpc.request('session/new', { cwd: alias.cwd, mcpServers: await this.toolServers(command.threadId), _meta: sessionPolicy(alias.runtimeMode) }, async value => {
           const response = z.object({ sessionId: z.string().uuid(), models: catalogSchema }).parse(value)
           alias.grokSessionId = response.sessionId; alias.nativeModelId = response.models.currentModelId; await this.persist(); this.thread(command.threadId).status = 'error'; this.emit()
         })
@@ -583,7 +583,7 @@ export class GrokAcpHost implements AgentHost {
         })
         if (alias.reasoningEffort && this.selections.get(alias.grokSessionId!)?.effort !== alias.reasoningEffort) {
           // Grok can reply before model_changed. Read its owned session's native state; never infer success.
-          await rpc.request('session/load', { sessionId: alias.grokSessionId, cwd: alias.cwd, mcpServers: await this.browserServers(command.threadId), _meta: sessionPolicy(alias.runtimeMode) }, value => {
+          await rpc.request('session/load', { sessionId: alias.grokSessionId, cwd: alias.cwd, mcpServers: await this.toolServers(command.threadId), _meta: sessionPolicy(alias.runtimeMode) }, value => {
             const response = z.object({ models: catalogSchema, _meta: z.object({ sessionId: z.literal(alias.grokSessionId!) }) }).parse(value)
             if (response.models.currentModelId !== alias.modelId || response.models.availableModels.find(model => model.modelId === alias.modelId)?._meta?.reasoningEffort !== alias.reasoningEffort) throw new Error('Grok did not confirm the requested reasoning effort.')
           })
@@ -610,7 +610,7 @@ export class GrokAcpHost implements AgentHost {
               // Until the reload is confirmed, sends are blocked and reconnect finishes the change.
               alias.pendingRuntimeMode = mode; alias.settingsConfirmed = false; thread.status = 'error'; await this.persist(); this.emit()
               await this.closeSession(rpc, alias)
-              await rpc.request('session/load', { sessionId: alias.grokSessionId, cwd: alias.cwd, mcpServers: await this.browserServers(command.threadId), _meta: sessionPolicy(mode) }, async value => {
+              await rpc.request('session/load', { sessionId: alias.grokSessionId, cwd: alias.cwd, mcpServers: await this.toolServers(command.threadId), _meta: sessionPolicy(mode) }, async value => {
                 this.confirmLoad(command.threadId, alias, value); await this.persist()
               })
               thread.status = alias.settingsConfirmed ? 'idle' : 'error'
@@ -707,7 +707,7 @@ export class GrokAcpHost implements AgentHost {
         pending.request.id = `grok-request-${digest(JSON.stringify([threadId, pending.toolCallId, pending.request.kind]))}`
         this.reaper.touch(pending.threadId)
         if (this.answeredRequests.has(pending.request.id) || this.pending.has(pending.request.id)) return
-        const admission = this.browserAdmission(pending); const rpc = this.rpc
+        const admission = this.toolAdmission(pending); const rpc = this.rpc
         // An admission that fails to arrive is shown instead, so a request never goes unanswered and unseen.
         if (admission !== undefined && rpc) { rpc.reply(pending.wireId, admission).catch(() => { if (rpc === this.rpc) this.showRequest(pending) }); return }
         this.showRequest(pending)
