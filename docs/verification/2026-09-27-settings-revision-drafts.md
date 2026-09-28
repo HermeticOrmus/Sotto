@@ -13,11 +13,11 @@ The OpenRouter key field is deliberately unchanged. Its stored-credential placeh
 - Final typecheck, lint, notices and production build passed.
 - Final real Electron `settings-index.spec.ts` passed one test (24.3 seconds) against `ea8773aa`, with exclusive desktop access and one worker: 1600x1000, 1280x800 and 820x560, both themes, reduced motion, keyboard/focus, normal save/reload and failure feedback.
 - Independent native Astra Standards and Spec reviews of the final settlement delta both reported zero findings. Root independently reviewed the final source with zero findings.
-- The full two-worker suite is queued; this branch is not yet ready to merge.
+- The branch's isolated hosted two-worker suite is pending; this branch is not yet ready to merge. No local full-suite pass is claimed.
 
 All tests use synthetic data. `SOTTO_PERF_DATA` pointed to a verified-absent owned path; no paid provider or personal profile was used.
 
-The final [Cleanup dark view](../../artifacts/review-394/cleanup-dark.png) and [minimum light Output view](../../artifacts/review-394/output-minimum-light.png) were visually inspected. Dictionary and numeric controls remain readable and fit the existing layout. The pre-existing sidebar mode-row overflow belongs to #388. Generated runtime and unrelated Settings captures were restored; no design baseline changed.
+The final [Cleanup dark view](../../artifacts/review-394/cleanup-dark.png) and [minimum light Output view](../../artifacts/review-394/output-minimum-light.png) were visually inspected. Dictionary and numeric controls remain readable and fit the existing layout. The sidebar mode-row overflow seen at that earlier capture belongs to #388, now merged and included in this branch. Generated runtime and unrelated Settings captures were restored; no design baseline changed.
 
 ## Review corrections
 
@@ -29,4 +29,6 @@ Spec review identified three related accepted-authority cases. Desired-behavior 
 
 A diagnostic also considered success followed by an external update and then an older publication. No reachable application sequence established that ordering, so the diagnostic and extra retention were removed. `NativeSettingsCoordinator.updateSettings` awaits publication before returning; `AppContext.enqueueSettings` commits the returned snapshot before resolving success and rejects stale returned snapshots when `onSettingsChanged` advances its version. The retained regressions preserve #382's existing pending-save/external/late-ack contract.
 
-The strengthened semantic renderer-test gate from #392 passed on the integrated draft branch. Two hook-test calls now explicitly name their editable number/string domains; every runtime assertion is unchanged. Root reviewed this narrow typing correction at `95352089` with zero findings and carried the prior Standards/Spec approvals. Current main integration `5f616a36` preserves the hook and caller implementation. The full gate remains queued.
+The strengthened semantic renderer-test gate from #392 passed on the integrated draft branch. Two hook-test calls now explicitly name their editable number/string domains; every runtime assertion is unchanged. Root reviewed this narrow typing correction at `95352089` with zero findings and carried the prior Standards/Spec approvals. Subsequent main and explicit #441 dependency composition at `3b707399` preserves the reviewed hook and caller implementation.
+
+The coordinating agent's composed desktop run at `1698` passed the Settings journey in 19.0 seconds with this same Settings source, plus selected-microphone, mode-row and defaults neighbors in the broader 23-journey verification. The separate composed candidate in PR #447 failed a #390 observation-transition regression; that #390 source is not part of this branch and the result is not a Settings full-suite pass. The draft remains dependent on #441/PR #448 and its own exact-head hosted gates before merge.
