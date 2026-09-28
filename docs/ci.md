@@ -262,7 +262,7 @@ Build and run `npx playwright test tests/e2e/agent-browser.spec.ts tests/e2e/too
 
 ## Grok request-log observations
 
-`tests/integration/grokFixtureReadErrors.test.ts` requires the fake Grok request observer to distinguish an absent initial log from an unreadable log. A known start remains a known start after a temporary fault is removed; EACCES and EBUSY surface as read errors, while malformed JSON remains a parse error. The fixture does not turn these failures into zero observed provider starts (#420).
+`tests/integration/grokFixtureReadErrors.test.ts` requires the fake Grok request and violation observers to distinguish absent initial logs from unreadable logs. A known start remains a known start after a temporary fault is removed; EACCES and EBUSY surface as read errors, while malformed JSON remains a parse error. An unreadable violation log cannot silently pass its protocol check. The fixture does not turn these failures into missing provider work or evidence (#420).
 
 ## Fake Claude event timestamps
 

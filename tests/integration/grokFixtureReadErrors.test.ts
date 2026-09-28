@@ -38,6 +38,20 @@ it('treats only a genuinely missing initial request log as empty', async () => {
   } finally { await f.cleanup() }
 })
 
+it('reports an unreadable violation log instead of silently accepting the protocol trace', async () => {
+  const f = await grokFixture()
+  const path = join(f.root, 'violations.jsonl')
+  const content = JSON.stringify({ reason: 'Synthetic invalid provider reply' }) + '\n'
+  try {
+    await writeFile(path, content)
+    fault.path = path; fault.code = 'EACCES'
+    await expect(f.driver.requests()).rejects.toMatchObject({ code: 'EACCES' })
+    fault.path = ''
+    expect(await readFile(path, 'utf8')).toBe(content)
+    await expect(f.driver.requests()).rejects.toThrow('Invalid Grok reply')
+  } finally { fault.path = ''; await writeFile(path, ''); await f.cleanup() }
+})
+
 it('keeps malformed trailing JSON visible instead of discarding the recorded prefix', async () => {
   const f = await grokFixture()
   const path = join(f.root, 'requests.jsonl')
