@@ -112,3 +112,12 @@ it('uses an accepted receipt as the rollback target while a newer edit is still 
   act(() => { result.current.fail(next, true) })
   expect(result.current.value).toBe('A')
 })
+
+it('commits an explicit return to a value whose old receipt was superseded', () => {
+  const { result, rerender } = draft()
+  act(() => { result.current.edit('A'); result.current.begin('A', true) })
+  rerender({ authoritative: 'External' })
+  rerender({ authoritative: 'A' })
+  act(() => { result.current.edit('A') })
+  expect(result.current.begin('A', true)).not.toBeNull()
+})

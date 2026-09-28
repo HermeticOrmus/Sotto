@@ -1172,6 +1172,15 @@ describe('Personal dictionary draft acknowledgements', () => {
     expect(f.update).toHaveBeenLastCalledWith({ llmDictionary: 'External' })
   })
 
+  it('commits an explicit dictionary return to the value of an ignored older receipt', async () => {
+    const f = await dictionary()
+    f.edit('A'); fireEvent.blur(f.input)
+    f.publish('External')
+    f.publish('A'); await act(async () => f.answers[0]!.resolve(true))
+    expect(f.input).toHaveValue('External')
+    f.edit('A'); fireEvent.blur(f.input)
+    expect(f.update.mock.calls).toEqual([[{ llmDictionary: 'A' }], [{ llmDictionary: 'A' }]])
+  })
   it('retains the draft when the update rejects and retries it on the next blur', async () => {
     const f = await dictionary()
     f.update.mockRejectedValueOnce(new Error('Synthetic save rejection'))

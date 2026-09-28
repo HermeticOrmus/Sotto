@@ -11,7 +11,7 @@ interface DraftSubmission<T> {
 export function useRevisionDraft<T extends string | number>(authoritative: T, display: string, onAccept?: () => void) {
   const [value, setValue] = useState(display)
   const current = useRef(value)
-  const acceptedDisplay = useRef(display)
+  const accepted = useRef({ authoritative, display })
   const revision = useRef(0)
   const token = useRef(0)
   const authorityVersion = useRef(0)
@@ -29,13 +29,13 @@ export function useRevisionDraft<T extends string | number>(authoritative: T, di
     if (submission) {
       pending.current = pending.current.filter(item => item.token > submission.token)
       // A receipt can advance rollback authority while newer typing stays visible, but never after an external replacement.
-      if (submission.authorityVersion === authorityVersion.current) acceptedDisplay.current = display
+      if (submission.authorityVersion === authorityVersion.current) accepted.current = { authoritative, display }
       if (revision.current !== submission.editVersion) return
     } else {
       // External authority wins now, and an older pending acknowledgement cannot undo it later.
       revision.current += 1
       authorityVersion.current += 1
-      acceptedDisplay.current = display
+      accepted.current = { authoritative, display }
     }
     current.current = display
     setValue(display)
@@ -46,10 +46,10 @@ export function useRevisionDraft<T extends string | number>(authoritative: T, di
     value,
     read: (): string => current.current,
     edit: (next: string): void => { revision.current += 1; replace(next) },
-    reset: (): void => { replace(acceptedDisplay.current) },
+    reset: (): void => { replace(accepted.current.display) },
     begin: (submitted: T, skipUnchanged = false): DraftSubmission<T> | null => {
       if (skipUnchanged && (
-        (submitted === source.current.authoritative && !pending.current.some(item => item.submitted !== submitted)) ||
+        (submitted === source.current.authoritative && submitted === accepted.current.authoritative && !pending.current.some(item => item.submitted !== submitted)) ||
         pending.current.some(item => item.editVersion === revision.current)
       )) return null
       const submission = { token: ++token.current, submitted, editVersion: revision.current, authorityVersion: authorityVersion.current }
@@ -62,7 +62,7 @@ export function useRevisionDraft<T extends string | number>(authoritative: T, di
     fail: (submission: DraftSubmission<T>, restore: boolean): void => {
       const latest = pending.current.at(-1)?.token === submission.token
       pending.current = pending.current.filter(item => item.token !== submission.token)
-      if (restore && latest && revision.current === submission.editVersion) replace(acceptedDisplay.current)
+      if (restore && latest && revision.current === submission.editVersion) replace(accepted.current.display)
     },
   }
 }
