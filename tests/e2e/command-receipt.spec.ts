@@ -17,6 +17,8 @@ interface AgentTraffic {
   readonly lastReply: { readonly bytes: number; readonly activeThreadId: string | null; readonly models: { readonly revision?: number; readonly omitted?: boolean; readonly models?: unknown } } | null
   /** The text of the last `save-thread-draft` main answered. */
   readonly lastDraft: string | null
+  /** The exact creation request and its own receipt, independent of later observation commands. */
+  readonly lastCreation: { readonly threadId: string; readonly activeThreadId: string | null; readonly createdThreadId: string | null; readonly modelId: string | null; readonly error: string | null } | null
 }
 
 /**
@@ -32,7 +34,7 @@ async function watchAgentTraffic(launched: LaunchedSotto): Promise<() => Promise
     const get = handlers?.get('sotto:agents:get')
     const command = handlers?.get('sotto:agents:command')
     if (!handlers || !get || !command) throw new Error('This Electron keeps its invoke handlers elsewhere; update the watcher.')
-    const traffic = { reads: 0, lastReadBytes: 0, inFlight: 0, answered: {} as Record<string, number>, lastReply: null as unknown, lastDraft: null as string | null }
+    const traffic = { reads: 0, lastReadBytes: 0, inFlight: 0, answered: {} as Record<string, number>, lastReply: null as unknown, lastDraft: null as string | null, lastCreation: null as AgentTraffic['lastCreation'] }
     ;(globalThis as unknown as { agentTraffic: typeof traffic }).agentTraffic = traffic
     handlers.set('sotto:agents:get', async (...args: unknown[]) => {
       traffic.reads++
@@ -41,12 +43,17 @@ async function watchAgentTraffic(launched: LaunchedSotto): Promise<() => Promise
       return state
     })
     handlers.set('sotto:agents:command', async (...args: unknown[]) => {
-      const request = args[1] as { type?: string; text?: string } | undefined
+      const request = args[1] as { type?: string; text?: string; threadId?: string } | undefined
       traffic.inFlight++
       try {
-        const receipt = await command(...args) as { activeThreadId: string | null; host: { models: unknown } }
+        const receipt = await command(...args) as { activeThreadId: string | null; error: string | null; host: { models: unknown; threads: { id: string; modelId: string }[] } }
         traffic.lastReply = { bytes: JSON.stringify(receipt).length, activeThreadId: receipt.activeThreadId, models: receipt.host.models }
         if (request?.type === 'save-thread-draft') traffic.lastDraft = request.text ?? ''
+        if (request?.type === 'create-thread' && request.threadId) {
+          const thread = receipt.host.threads.find(thread => thread.id === request.threadId)
+          traffic.lastCreation = { threadId: request.threadId, activeThreadId: receipt.activeThreadId,
+            createdThreadId: thread?.id ?? null, modelId: thread?.modelId ?? null, error: receipt.error }
+        }
         return receipt
       } finally {
         traffic.inFlight--
@@ -141,15 +148,24 @@ test('drafts save, settings stay and a model can be picked after a reconnect, wi
     const reconnectedRevision = replyRevision(reconnected)
     console.info(`catalog revisions across a reconnect: ${JSON.stringify({ connectedRevision, disconnectedRevision, reconnectedRevision, reconnectReads })}`)
     // The Reasoning account chosen in step 2 is a subscription whose own model the fixture does not list, and
-    // an unset "New threads start with" follows it, so name a model the fixture has.
-    await page.evaluate(async () => { await window.sotto!.agents!.command({ type: 'configure', patch: { newThreadModelId: 'codex:gpt' } }) })
+    // an unset "New threads start with" follows it, so choose a model the fixture has. A main-process receipt
+    // alone does not show that the renderer has accepted a direct bridge configuration.
+    await openPage(page, 'Settings')
+    await page.getByRole('tab', { name: 'Agents', exact: true }).click()
+    const defaultModel = page.getByRole('combobox', { name: 'Thread model', exact: true })
+    await defaultModel.click()
+    await page.getByRole('tab', { name: 'Codex', exact: true }).click()
+    await page.getByRole('option', { name: 'GPT-5.4', exact: true }).click()
+    await expect(defaultModel).toHaveText(/GPT-5.4/)
     await openThreads(page)
     const beforePick = await settled(page, traffic, seen => answered(seen, 'configure') > answered(reconnected, 'configure'))
     // The pen opens a thread at once on the new-thread defaults (issue #347); its model is then picked from
     // the composer's model chip.
     await page.getByRole('button', { name: /^New thread in / }).first().click()
     const created = await settled(page, traffic, seen => answered(seen, 'create-thread') > answered(beforePick, 'create-thread'))
-    const newThreadId = created.lastReply!.activeThreadId!
+    expect(created.lastCreation?.threadId).toBeTruthy()
+    const newThreadId = created.lastCreation!.threadId
+    expect(created.lastCreation).toMatchObject({ activeThreadId: newThreadId, createdThreadId: newThreadId, modelId: 'codex:gpt', error: null })
     const chip = page.locator(`form.thread-prompt[data-thread-id="${newThreadId}"]`).getByRole('combobox', { name: 'Thread model', exact: true })
     await expect(chip).toBeEnabled()
     await chip.click()

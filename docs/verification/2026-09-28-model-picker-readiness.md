@@ -1,0 +1,9 @@
+# Model selection after reconnect
+
+Issue #455 corrects the command-receipt Electron journey. It now chooses GPT-5.4 through Settings and waits for the displayed default before pressing New thread. The main-process watcher records that exact create request and its receipt; the journey requires the returned thread and active ID to match the requested ID, with the intended model and no refusal, before opening its chip. This guard adds no whole-state reads.
+
+The controlled native witness held only AGENT_STATE broadcasts across the old direct configuration call until the real create command settled. The renderer requested its older, unavailable subscription model. Main refused creation and retained the previous active thread; the test then opened that existing thread's provider-locked picker. The original Grok-tab click failed after its unchanged 30-second deadline (34.3-second journey). Replacing only default selection with the real Settings picker passed the same ordering in 6.5 seconds, retaining all original assertions and whole-state read counts of 0 while typing, 1 while reconnecting and 0 while picking.
+
+The original final desktop smoke failed the same tab click but had no captured thread state. Its exact ordering remains unobserved. An authoritative reload control showed `nativeSessionStarted:false` and a working picker, disproving a suspected fake-provider lifecycle omission for this pre-send journey. Production code and conservative provider locking are unchanged. PR #433 repaired an adjacent direct-configuration race in the new-thread-defaults journey; this issue covers the remaining command-receipt fixture.
+
+Controlled logs, synthetic request/receipt captures and archived `.probe.txt` source are retained under ignored `artifacts/review-455/`. No diagnostic test modules remain discoverable. Final static, native and hosted checks are pending; no local full-suite pass is claimed.
