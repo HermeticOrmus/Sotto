@@ -124,7 +124,9 @@ describe('screenshot attachment input', () => {
   it('does not attach an in-flight staging to a thread after the input unmounts', async () => {
     const change = vi.fn()
     const handedOn = vi.fn()
-    const view = render(<ScreenshotInput target="workshop" attachments={[]} onChange={change} reads={port({ begin: () => handedOn, addLate: undefined })} disabled={false} supported><textarea /></ScreenshotInput>)
+    const reads = port({ begin: () => handedOn })
+    delete reads.addLate
+    const view = render(<ScreenshotInput target="workshop" attachments={[]} onChange={change} reads={reads} disabled={false} supported><textarea /></ScreenshotInput>)
     fireEvent.change(screen.getByLabelText('Screenshot files'), { target: { files: [file()] } })
     view.unmount()
     // The read is over only once its screenshots have been handed on, or dropped for want of a draft to take them.
