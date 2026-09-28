@@ -68,6 +68,8 @@ A screenshot longer than 2576 pixels on either side is scaled down to that as it
 
 A screenshot is kept once, as a file on the computer that runs the thread (the host, for a thread on a remote host), from the moment you attach it until nothing needs it: not an unsent draft, not a queued message, and not a sent message's preview, which lasts seven days. An hour after that it is removed. With **Keep local history** off, a newly attached screenshot stays in memory instead, so an unsent draft or queued message comes back from a restart without it; a queued message that lost one waits, paused, and says so.
 
+If a kept screenshot disappears or is damaged, sending stops and asks you to remove it and attach it again. Attaching the same image restores its copy before you send.
+
 You can create a thread from the Threads page while another thread has a saved coordinator draft. The draft stays with its original thread, including while the voice coordinator is hidden for the beta.
 
 Stop can cancel running work even when the provider has not confirmed the last prompt. That prompt stays unconfirmed until the provider reports receiving it; stopping does not resend it or discard its saved identity.
