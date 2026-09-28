@@ -1,6 +1,6 @@
 # A host connects every signed-in provider it can find (#459)
 
-September 28, 2026. Branch `fix/host-provider-lookup` from `main` at ef5ee727 (Sotto 0.1.22), on the Windows development machine. The running-app journey is `tests/e2e/host-provider-lookup.spec.ts` against the built app (1 passed). It adds a host named forge through a scripted ssh that runs the real launch script, which starts a real headless host with scripted providers. The local host is off and reduced motion is on in that profile, and the host's home is a throwaway folder, so no real account or provider is touched.
+September 28, 2026. Branch `fix/host-provider-lookup` from `main` at ef5ee727 (Sotto 0.1.22), with `main` at 27e2f697 merged in after review, on the Windows development machine. The running-app journey is `tests/e2e/host-provider-lookup.spec.ts` against the built app (1 passed, run again after the review fixes, when the four no-provider captures were retaken). It adds a host named forge through a scripted ssh that runs the real launch script, which starts a real headless host with scripted providers. The local host is off and reduced motion is on in that profile, and the host's home is a throwaway folder, so no real account or provider is touched.
 
 ## What was proved in the running app
 
