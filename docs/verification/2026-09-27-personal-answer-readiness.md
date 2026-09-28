@@ -21,6 +21,7 @@ This delivers the notification at the next microtask, exposing the same store-be
 ## Verification
 
 - Original personal-chat file plus request-card neighbors: 47 passed, two files (7.06 seconds), `--maxWorkers=2`.
-- Typecheck, lint and notices passed. The protected full gate is queued.
-- Independent Standards and Spec review: pending.
+- Typecheck, lint and notices passed, including the latest main integration. The protected full two-worker gate at `ebc307db` passed 445 files and 5,846 tests, with 39 files and 140 tests skipped (930.60 seconds). Live provider flags were unset.
+- Independent native Astra Standards and Spec reviews reported zero findings.
 - This changes only a test fixture. No Electron surface, design baseline, live provider, paid turn or personal profile was used. `SOTTO_PERF_DATA` pointed to a verified-absent owned path.
+Final integration includes main `91d6dada` with the separately verified host-lock, current-session and benchmark-privacy fixture corrections. Only additive artifact-ignore conflicts needed manual resolution; the five-line refusal-test delta did not change. The final original chat file passed all 22 tests (7.45 seconds). Integrated PR CI remains pending.
