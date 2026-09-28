@@ -47,7 +47,18 @@ documented `npm run typecheck` command. The file was then removed.
 - Independent native Astra Standards and Spec reviews of `26145ffa`: zero
   findings. The post-review evidence commit changes only this note and captures.
 - The integrated renderer semantic check passes after the new Stop regression
-  from main. The full two-worker suite remains queued and must pass before merge.
+  from main. The protected full two-worker suite at `684d59ad` passed 5,857 tests
+  with 140 skipped across 447 passing files and 39 skipped files (897.29 seconds).
+  Its performance-data path was explicitly verified absent and live flags were cleared.
+- Final integration `41a25ee6` includes the merged file-reference identity repair
+  and shared generated-artifact ignore rules. Typecheck, lint and notices passed
+  again; 50 affected follow-up identity and benchmark-guard tests passed.
+- The shared ignore rules replace per-issue generated-folder entries with one
+  scoped review-artifact pattern, avoiding repeated conflicts between independent
+  fixes. Native Standards and Spec reviews found no issues. Direct Git and ESLint
+  checks confirm generated review folders are ignored, production and test files
+  remain included, and committed screenshots remain tracked. Vitest discovery is
+  unchanged.
 - Timing benchmarks use synthetic providers and owned temporary data. Shared-load
   measurements will be reported as such; this test-only change claims no app
   performance improvement.
