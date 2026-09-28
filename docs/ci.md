@@ -8,12 +8,20 @@
 | --- | --- | --- |
 | Install dependencies | `npm ci` | Exact `package-lock.json` install, including the native modules (node-pty, sharp, sherpa-onnx). The npm cache is keyed on the lockfile by `actions/setup-node`. |
 | Prepare runtime assets | `npm run runtime:prepare` | Copies the hash-locked ONNX WASM files out of `node_modules/onnxruntime-web` into `resources/runtime`, which the checkout does not carry. No network access, about a second. |
-| Typecheck | `npm run typecheck` | `tsc --noEmit` over the node and web projects. |
+| Typecheck | `npm run typecheck` | `tsc --noEmit` over the node, web and renderer-test projects. |
 | Lint | `npm run lint` | `eslint .`. |
 | Unit and integration tests | `npm test -- --maxWorkers=2` | `vitest run` — the whole suite except the Playwright end-to-end specs, which the vitest config excludes. The worker cap keeps the jsdom and child-process heavy files inside a small runner's memory; unpinned parallelism has produced "Worker exited unexpectedly" crashes on a loaded machine. Main-process and integration files run under node rather than jsdom, declared by a `@vitest-environment node` header on each file; a file in those folders that needs a DOM says `jsdom` instead. |
 | Third-party notices | `npm run notices:verify` | Checks `THIRD_PARTY_NOTICES.md` against the installed dependency tree. |
 
 Each gate is its own named step, so a red check names the gate that failed.
+
+`tsconfig.tests.json` checks every `tests/**/*.tsx` file, including renderer tests,
+benchmarks and fixture views, with the web project's JSX and DOM assumptions plus
+Node, Vitest and Testing Library types. Vitest executes these files but does not
+replace this semantic check. The node and web projects keep their existing source
+boundaries. Test fixtures must satisfy the current bridge and component contracts;
+an ignored query option or an incomplete mock is an error in the normal typecheck
+gate, even if the test happens to run.
 
 The job cancels a superseded run on the same ref (`concurrency` with `cancel-in-progress`), has a 30-minute safety timeout, and requests only `contents: read`.
 

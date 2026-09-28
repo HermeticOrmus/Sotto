@@ -15,6 +15,7 @@ import { draftThreads } from '../../../src/renderer/src/agents/draftThreads'
 import { requestAnswerStore } from '../../../src/renderer/src/agents/requests/requestAnswers'
 import { handleOf } from '../../fixtures/stagedImages'
 import type { AgentAttachmentStageRequest } from '../../../src/shared/agents'
+import { agentContextFixture } from '../../fixtures/agentContext'
 
 vi.mock('../../../src/renderer/src/agents/AgentContext', () => ({ useAgents: vi.fn() }))
 
@@ -53,7 +54,7 @@ function connection(state: AgentState | null, command = vi.fn(async () => state)
   let threadDrafts = connectionStores.get(command)
   if (!threadDrafts) { threadDrafts = new ThreadDraftStore(command); connectionStores.set(command, threadDrafts) }
   if (state) threadDrafts.receive(state)
-  return { state, command, threadDrafts, error: null, voice: { status: 'off' }, muteVoice: vi.fn(), stopSpeech: vi.fn(), retryVoice: vi.fn(), attention: { items: state?.queue ?? [], show: false, dismiss: vi.fn(), reopen: vi.fn(), next: vi.fn(async () => undefined) } }
+  return { ...agentContextFixture(state, command), threadDrafts }
 }
 
 function renderThreads(state: AgentState | null, command = vi.fn(async () => state)) {
@@ -196,7 +197,7 @@ describe('ThreadsView workspace', () => {
     state.assignments = []; state.activeThreadId = 'grok-previews'
     state.draft = 'Keep the saved draft'; state.draftThreadId = 'visual-gate'
     const { rerender } = renderThreads(state)
-    expect(screen.getByRole('textbox', { name: 'Prompt', exact: true })).toBeEnabled()
+    expect(screen.getByRole('textbox', { name: 'Prompt' })).toBeEnabled()
     fireEvent.change(screen.getByRole('textbox', { name: 'Prompt' }), { target: { value: 'My next prompt' } })
     state.host.threads.find(thread => thread.id === 'grok-previews')!.status = 'running'
     rerender(<ThreadsView onOpenAgents={vi.fn()} now={NOW} />)
@@ -356,7 +357,7 @@ describe('ThreadsView workspace', () => {
     state.host.models = [{ id: thread.modelId, provider: 'Grok', name: 'Current', ready: true, reasoningEfforts: ['low', 'high'], defaultReasoningEffort: 'low', runtimeModes: ['approval-required', 'full-access'] }, { id: 'alternate', name: 'Alternate', provider: 'Codex', ready: true }]
     const { command } = renderThreads(state)
     fireEvent.click(screen.getByRole('combobox', { name: 'Thread model' }))
-    fireEvent.click(screen.getByRole('tab', { name: 'Codex', exact: true }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Codex' }))
     fireEvent.click(screen.getByRole('option', { name: 'Alternate' }))
     await waitFor(() => expect(screen.getByRole('combobox', { name: 'Thread reasoning' })).toBeEnabled())
     expect(command).toHaveBeenLastCalledWith({ type: 'configure-thread', threadId: thread.id, modelId: 'alternate' })
@@ -392,16 +393,16 @@ describe('ThreadsView workspace', () => {
     const state = stateFixture()
     const { command, rerender } = renderThreads(state)
     expect(screen.getByRole('complementary', { name: 'Thread sidebar' })).toBeVisible()
-    expect(screen.getByRole('button', { name: 'Footer links', exact: true })).toBeVisible()
-    expect(screen.queryByRole('button', { name: 'Release notes 1.4', exact: true })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Footer links' })).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'Release notes 1.4' })).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /Settled 4/ }))
-    fireEvent.click(screen.getByRole('button', { name: 'Release notes 1.4', exact: true }))
+    fireEvent.click(screen.getByRole('button', { name: 'Release notes 1.4' }))
     state.activeThreadId = 'release-notes'
     rerender(<ThreadsView onOpenAgents={vi.fn()} now={NOW} />)
-    await screen.findByRole('heading', { name: 'Release notes 1.4', exact: true })
+    await screen.findByRole('heading', { name: 'Release notes 1.4' })
     expect(screen.getByLabelText('Thread transcript')).toHaveTextContent('Release notes are in the draft release.')
     expect(command).toHaveBeenCalledExactlyOnceWith({ type: 'select-thread', threadId: 'release-notes' })
-    expect(screen.getByRole('textbox', { name: 'Prompt', exact: true })).toBeEnabled()
+    expect(screen.getByRole('textbox', { name: 'Prompt' })).toBeEnabled()
   })
 
   it('follows the coordinator selection and protects a saved draft from another thread', () => {
@@ -410,28 +411,28 @@ describe('ThreadsView workspace', () => {
     const view = renderThreads(state)
     state.activeThreadId = 'footer-links'
     view.rerender(<ThreadsView onOpenAgents={vi.fn()} now={NOW} />)
-    expect(screen.getByRole('heading', { name: 'Footer links', exact: true })).toBeVisible()
+    expect(screen.getByRole('heading', { name: 'Footer links' })).toBeVisible()
     state.draft = 'Bound to the first thread'; state.draftThreadId = 'visual-gate'
     view.rerender(<ThreadsView onOpenAgents={vi.fn()} now={NOW} />)
-    expect(screen.queryByRole('textbox', { name: 'Prompt', exact: true })).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Open draft thread', exact: true })).toBeVisible()
+    expect(screen.queryByRole('textbox', { name: 'Prompt' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Open draft thread' })).toBeVisible()
   })
 
   it('keeps an unconfirmed manual prompt in its message, with the composer empty and blocked', async () => {
     const state = stateFixture(); state.assignments = []; state.activeThreadId = 'grok-previews'
     const { command } = renderThreads(state)
-    fireEvent.change(screen.getByRole('textbox', { name: 'Prompt', exact: true }), { target: { value: 'An edited unsent prompt' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Send prompt', exact: true }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Prompt' }), { target: { value: 'An edited unsent prompt' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send prompt' }))
     await screen.findByRole('button', { name: 'Check again' })
-    expect(screen.getByRole('button', { name: 'Send prompt', exact: true })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Send prompt' })).toBeDisabled()
     expect(command).toHaveBeenCalledWith({ type: 'manual-send', threadId: 'grok-previews', draftId: expect.any(String), text: 'An edited unsent prompt' })
     expect(screen.getByLabelText('Pending message')).toHaveTextContent('An edited unsent prompt')
-    expect(screen.getByRole('textbox', { name: 'Prompt', exact: true })).toHaveValue('')
+    expect(screen.getByRole('textbox', { name: 'Prompt' })).toHaveValue('')
   })
 
   it('offers New thread without submitting or assigning any work', () => {
     const { command, onOpenAgents } = renderThreads(stateFixture())
-    fireEvent.click(screen.getByRole('button', { name: 'New thread', exact: true }))
+    fireEvent.click(screen.getByRole('button', { name: 'New thread' }))
     expect(onOpenAgents).not.toHaveBeenCalled()
     expect(screen.getByRole('dialog', { name: 'New thread' })).toBeVisible()
     expect(command).not.toHaveBeenCalled()
@@ -441,7 +442,7 @@ describe('ThreadsView workspace', () => {
     const state = stateFixture(); state.host.threads = []; state.queue = []
     renderThreads(state)
     expect(screen.getByRole('heading', { name: 'No threads yet.' })).toBeVisible()
-    expect(screen.getByRole('region', { name: 'Projects', exact: true })).toHaveTextContent('No open threads.')
+    expect(screen.getByRole('region', { name: 'Projects' })).toHaveTextContent('No open threads.')
   })
 
   it('opens a thread in the active project at once from the empty workspace’s own button', async () => {
@@ -449,7 +450,7 @@ describe('ThreadsView workspace', () => {
     const { command } = renderThreads(state)
     const emptyPageButton = screen.getAllByRole('button', { name: 'New thread' }).find(button => button.closest('.thread-workspace__empty'))!
     fireEvent.click(emptyPageButton)
-    await waitFor(() => expect(screen.getByRole('heading', { name: 'New thread', exact: true })).toBeVisible())
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'New thread' })).toBeVisible())
     expect(screen.queryByRole('dialog', { name: 'New thread' })).not.toBeInTheDocument()
     expect(command).toHaveBeenCalledWith(expect.objectContaining({ type: 'create-thread', projectId: 'workshop' }))
     // The fixture's command never carries the draft into main's own state, so it is forgotten by hand here.
@@ -459,12 +460,12 @@ describe('ThreadsView workspace', () => {
   it('searches settled history while preserving live attention in the sidebar', () => {
     renderThreads(stateFixture())
     fireEvent.change(screen.getByRole('searchbox', { name: 'Search threads' }), { target: { value: 'codex' } })
-    expect(screen.getByRole('button', { name: 'Visual gate flake', exact: true })).toBeVisible()
-    expect(screen.getByRole('button', { name: 'Release notes 1.4', exact: true })).toBeVisible()
-    expect(screen.queryByRole('button', { name: 'Weekly note', exact: true })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Visual gate flake' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Release notes 1.4' })).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'Weekly note' })).not.toBeInTheDocument()
     fireEvent.change(screen.getByRole('searchbox', { name: 'Search threads' }), { target: { value: 'not-found' } })
     expect(screen.getByText('Nothing matches "not-found".')).toBeVisible()
-    expect(screen.getByRole('button', { name: 'Visual gate flake', exact: true })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Visual gate flake' })).toBeVisible()
   })
 
   it.each([
@@ -475,16 +476,16 @@ describe('ThreadsView workspace', () => {
     voice.enabled = true
     const state = stateFixture()
     const { command, rerender } = renderThreads(state)
-    fireEvent.click(screen.getByRole('button', { name: choice, exact: true }))
+    fireEvent.click(screen.getByRole('button', { name: choice }))
     expect(command).toHaveBeenLastCalledWith({ type: 'answer', threadId: 'visual-gate', requestId: 'visual-gate-permission', answer, approved })
-    expect(screen.getByRole('button', { name: 'Allow', exact: true })).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Deny', exact: true })).toBeDisabled()
-    fireEvent.click(screen.getByRole('button', { name: 'Deny', exact: true }))
+    expect(screen.getByRole('button', { name: 'Allow' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Deny' })).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: 'Deny' }))
     expect(command).toHaveBeenCalledTimes(1)
     await act(async () => { await Promise.resolve() })
     vi.mocked(useAgents).mockReturnValue(connection({ ...state, globalLaneBusy: true }, command))
     rerender(<ThreadsView onOpenAgents={vi.fn()} now={NOW} />)
-    expect(screen.getByRole('button', { name: 'Allow', exact: true })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Allow' })).toBeDisabled()
     expect(paneMenuItem(document.body, 'Pause managing')).toBeDisabled()
   })
 
@@ -494,8 +495,8 @@ describe('ThreadsView workspace', () => {
     state.queue[0] = { ...state.queue[0]!, kind: 'question', text: 'Which direction?' }
     state.host.threads.find(thread => thread.id === state.activeThreadId)!.requests = [{ id: 'visual-gate-permission', kind: 'question', text: 'Which direction?', options: [] }]
     const { command, onOpenAgents } = renderThreads(state)
-    fireEvent.click(screen.getByRole('button', { name: 'Write an answer', exact: true }))
-    expect(screen.getByRole('textbox', { name: 'Your answer', exact: true })).toHaveFocus()
+    fireEvent.click(screen.getByRole('button', { name: 'Write an answer' }))
+    expect(screen.getByRole('textbox', { name: 'Your answer' })).toHaveFocus()
     expect(command).not.toHaveBeenCalled()
     expect(onOpenAgents).not.toHaveBeenCalled()
   })
@@ -526,12 +527,12 @@ describe('a thread created without a round trip', () => {
     createThread()
     // Nothing is typed and no dialog opens: the thread is on screen, named and focused, before main answers.
     expect(screen.queryByRole('dialog', { name: 'New thread' })).not.toBeInTheDocument()
-    await waitFor(() => expect(screen.getByRole('heading', { name: 'New thread', exact: true })).toBeVisible())
-    expect(screen.getByRole('textbox', { name: 'Prompt', exact: true })).toBeEnabled()
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'New thread' })).toBeVisible())
+    expect(screen.getByRole('textbox', { name: 'Prompt' })).toBeEnabled()
     const request = await waitFor(() => { const found = createRequest(command); expect(found).toBeDefined(); return found! })
     expect(request).toMatchObject({ type: 'create-thread', projectId: 'workshop', title: 'New thread', titleSource: 'default', managed: false, threadId: expect.any(String) })
     const threadId = request.threadId!
-    fireEvent.change(screen.getByRole('textbox', { name: 'Prompt', exact: true }), { target: { value: 'Start on the failing test.' } })
+    fireEvent.change(screen.getByRole('textbox', { name: 'Prompt' }), { target: { value: 'Start on the failing test.' } })
     const arrived: AgentState['host']['threads'][number] = { id: threadId, projectId: 'workshop', title: 'New thread', modelId: 'claude:sonnet',
       status: 'idle', messages: [], requests: [], nativeSessionStarted: false, worktree: { mode: 'independent', status: 'ready', path: 'C:/workshop-1' } }
     const published: AgentState = { ...state, activeThreadId: threadId, host: { ...state.host, threads: [...state.host.threads, arrived] } }
@@ -544,9 +545,9 @@ describe('a thread created without a round trip', () => {
     await waitFor(() => expect(draftThreads.get()).toEqual([]))
     rerender(view())
     expect(observed.at(-1)).toEqual([threadId])
-    expect(within(screen.getByRole('region', { name: 'Projects' })).getAllByRole('button', { name: 'New thread', exact: true })).toHaveLength(1)
-    expect(screen.getByRole('heading', { name: 'New thread', exact: true })).toBeVisible()
-    expect(screen.getByRole('textbox', { name: 'Prompt', exact: true })).toHaveValue('Start on the failing test.')
+    expect(within(screen.getByRole('region', { name: 'Projects' })).getAllByRole('button', { name: 'New thread' })).toHaveLength(1)
+    expect(screen.getByRole('heading', { name: 'New thread' })).toBeVisible()
+    expect(screen.getByRole('textbox', { name: 'Prompt' })).toHaveValue('Start on the failing test.')
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 
@@ -558,13 +559,13 @@ describe('a thread created without a round trip', () => {
     })
     renderThreads(state, command)
     createThread()
-    await waitFor(() => expect(screen.getByRole('heading', { name: 'New thread', exact: true })).toBeVisible())
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'New thread' })).toBeVisible())
     expect(screen.queryByRole('dialog', { name: 'New thread' })).not.toBeInTheDocument()
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Send or clear your draft before creating another thread.'))
-    expect(screen.queryByRole('heading', { name: 'New thread', exact: true })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'New thread' })).not.toBeInTheDocument()
     expect(draftThreads.get()).toEqual([])
     // The selection returns to the thread that had it, and creation is never repeated on its own.
-    expect(screen.getByRole('heading', { name: 'Visual gate flake', exact: true })).toBeVisible()
+    expect(screen.getByRole('heading', { name: 'Visual gate flake' })).toBeVisible()
     expect(command.mock.calls.filter(([request]) => (request as AgentCommand).type === 'create-thread')).toHaveLength(1)
   })
 
@@ -581,16 +582,16 @@ describe('a thread created without a round trip', () => {
     })
     renderThreads(state, command)
     createThread()
-    await waitFor(() => expect(screen.getByRole('heading', { name: 'New thread', exact: true })).toBeVisible())
-    expect(screen.getByRole('textbox', { name: 'Prompt', exact: true })).toBeEnabled()
-    fireEvent.change(screen.getByRole('textbox', { name: 'Prompt', exact: true }), { target: { value: 'Do not lose this.' } })
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'New thread' })).toBeVisible())
+    expect(screen.getByRole('textbox', { name: 'Prompt' })).toBeEnabled()
+    fireEvent.change(screen.getByRole('textbox', { name: 'Prompt' }), { target: { value: 'Do not lose this.' } })
     await act(async () => { settle({ ...state, error: 'Send or clear your draft before creating another thread.' }) })
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Send or clear your draft before creating another thread.'))
-    expect(screen.queryByRole('heading', { name: 'New thread', exact: true })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'New thread' })).not.toBeInTheDocument()
     // The refused draft's own pane is gone, but its text opens with the project's next new thread.
     createThread()
-    await waitFor(() => expect(screen.getByRole('heading', { name: 'New thread', exact: true })).toBeVisible())
-    expect(screen.getByRole('textbox', { name: 'Prompt', exact: true })).toHaveValue('Do not lose this.')
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'New thread' })).toBeVisible())
+    expect(screen.getByRole('textbox', { name: 'Prompt' })).toHaveValue('Do not lose this.')
   })
 })
 
@@ -601,7 +602,7 @@ describe('Ctrl+Shift+N opens a new thread (issue #347)', () => {
     const state = stateFixture()
     const { command } = renderThreads(state)
     fireEvent.keyDown(window, { key: 'n', ctrlKey: true, shiftKey: true })
-    await waitFor(() => expect(screen.getByRole('heading', { name: 'New thread', exact: true })).toBeVisible())
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'New thread' })).toBeVisible())
     expect(screen.queryByRole('dialog', { name: 'New thread' })).not.toBeInTheDocument()
     expect(command).toHaveBeenCalledWith(expect.objectContaining({ type: 'create-thread', projectId: 'workshop' }))
   })
@@ -659,7 +660,7 @@ describe('monitoring in the thread composer', () => {
     const thread = state.host.threads.find(item => item.id === 'footer-links')!
     thread.monitoring = [{ id: '56d13d2c-f6d0-4968-a9ed-18c87a7d5b5a', label: 'Watch the build' }]
     const view = renderThreads(state)
-    const prompt = screen.getByRole('textbox', { name: 'Prompt', exact: true })
+    const prompt = screen.getByRole('textbox', { name: 'Prompt' })
     fireEvent.change(prompt, { target: { value: 'Keep my draft' } })
     const creature = view.container.querySelector('.thread-monitor__creature')
     expect(creature).not.toBeNull()

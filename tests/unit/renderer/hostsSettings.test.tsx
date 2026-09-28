@@ -204,7 +204,8 @@ it('connects from inside Add host, asks SSH questions there, and closes once the
   expect(document.activeElement).toBe(passphrase)
   await user.type(passphrase, 'synthetic{Enter}')
   expect(command).toHaveBeenCalledWith({ type: 'ssh-answer', id: sent.host.id, promptId: 'prompt-1', answer: 'synthetic' })
-  push({ adding: undefined, hosts: [{ ...adding, phase: 'connected' }] })
+  delete state().adding
+  push({ hosts: [{ ...adding, phase: 'connected' }] })
   resolveAdd!(state())
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
   expect(screen.getByRole('region', { name: 'forge' })).toBeTruthy()
