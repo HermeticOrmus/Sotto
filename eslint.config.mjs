@@ -4,6 +4,7 @@ import tseslint from 'typescript-eslint'
 export default tseslint.config(
   {
     ignores: [
+      'artifacts/review-416/**',
       'artifacts/review-378/**',
       'artifacts/review-403/**',
       'artifacts/review-389/**',
