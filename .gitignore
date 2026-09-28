@@ -94,11 +94,4 @@ artifacts/screenshot-resize-run/
 # A workflow's agents in the roster (#339): every e2e capture; the note cites a copy in artifacts/workflow-agent-rows/
 artifacts/workflow-agent-rows-run/
 
-artifacts/review-378/
-artifacts/review-389/
-artifacts/review-377/
-artifacts/review-379/
-artifacts/review-403/
-artifacts/review-402/
-artifacts/review-380/
-artifacts/review-395/
+artifacts/review-*/
