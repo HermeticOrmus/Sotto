@@ -189,13 +189,14 @@ export class GrokAcpHost implements AgentHost {
       ...(options.sessionIdleMs !== undefined ? { idleAfterMs: options.sessionIdleMs } : {}),
       isWatched: id => this.observed.has(id) || this.aliases[id]?.kind === 'personal',
       isBusy: id => this.busy(id),
+      isReading: id => this.historyReads.has(id),
       stop: id => this.stopSession(id),
     })
   }
   /** A prompt in flight, a running turn or an unanswered request all hold a session open. */
   private busy(id: string): boolean {
     const thread = this.threads.get(id)
-    return this.activePrompts.has(id) || this.loading.has(id) || this.historyReads.has(id)
+    return this.activePrompts.has(id) || this.loading.has(id)
       || !!thread && (thread.status === 'running' || thread.requests.length > 0)
       || !!this.aliases[id]?.pendingRuntimeMode
   }
@@ -453,6 +454,7 @@ export class GrokAcpHost implements AgentHost {
           const key = eventKey(parsed.data, `${entry.timestamp}-${ordinal}`)
           if (history.events.has(key)) continue
           history.events.add(key)
+          this.reaper.touch(id)
           const createdAt = new Date(parsed.data._meta?.agentTimestampMs ?? (typeof entry.timestamp === 'number' ? entry.timestamp * 1000 : entry.timestamp)).toISOString()
           const update = parsed.data.update; const content = object(update.content)
           this.usage.grok(id, this.thread(id).modelId, parsed.data); this.thread(id)

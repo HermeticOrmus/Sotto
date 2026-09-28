@@ -16,6 +16,8 @@ export interface SessionReaperOptions {
   isBusy(id: string): boolean
   /** The thread is in the watched set: on screen now, or assigned, queued or awaiting a follow-up. */
   isWatched(id: string): boolean
+  /** An owned maintenance read defers closing this session, but does not renew its idle age. */
+  isReading?(id: string): boolean
   /** End this thread's provider session. Anything durable it holds is flushed first by the adapter. */
   stop(id: string): void | Promise<void>
 }
@@ -61,7 +63,7 @@ export class SessionReaper {
       const now = this.now()
       // A watched or working session keeps its full idle window from the moment it stops being either.
       if (this.options.isWatched(id) || this.options.isBusy(id)) { this.activity.set(id, now); continue }
-      if (now - last < this.idleAfterMs) continue
+      if (now - last < this.idleAfterMs || this.options.isReading?.(id)) continue
       this.activity.delete(id)
       // A stop that did not take leaves the session tracked, so a later sweep can try again.
       try { await this.options.stop(id) } catch { this.activity.set(id, this.now()) }
