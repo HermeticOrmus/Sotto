@@ -165,6 +165,10 @@ const loginPaths = new Map<string, Promise<string | undefined>>()
 /**
  * The PATH the account's login shell sets up, asked once per shell and home for the life of the process. The
  * shell is given nothing on stdin and five seconds; a profile that prints is ignored up to the marker line.
+ *
+ * PATH is printed by `printenv`, the variable the shell exports, so fish, whose own `$PATH` is a list, answers the
+ * same as sh. The answer is taken as soon as the marker line is complete: a profile that starts a background
+ * process holding stdout (ssh-agent, keychain) keeps the pipe open long after the shell exits.
  */
 export function loginShellPath(environment: NodeJS.ProcessEnv = process.env): Promise<string | undefined> {
   const shell = absolute(environment.SHELL) ?? '/bin/sh'
@@ -173,21 +177,33 @@ export function loginShellPath(environment: NodeJS.ProcessEnv = process.env): Pr
   if (!pending) {
     pending = new Promise<string | undefined>(resolve => {
       let output = ''
+      let settled = false
       let child: ReturnType<typeof spawn>
       try {
-        child = spawn(shell, ['-l', '-c', `printf '\\n${MARKER}%s\\n' "$PATH"`], { env: environment, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true, shell: false })
+        child = spawn(shell, ['-l', '-c', `printf '\\n${MARKER}'; printenv PATH`], { env: environment, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true, shell: false })
       } catch { resolve(undefined); return }
-      const timer = setTimeout(() => { child.kill('SIGKILL'); resolve(undefined) }, LOGIN_SHELL_TIMEOUT_MS)
+      /** The PATH from the last complete marker line that has arrived, if one has. */
+      const answer = (): string | undefined => {
+        const line = output.split('\n').slice(0, -1).reverse().find(entry => entry.startsWith(MARKER))
+        return line ? line.slice(MARKER.length).trim() || undefined : undefined
+      }
+      const settle = (value: string | undefined): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        // Whatever still holds the pipe is the profile's, not Sotto's: stop reading so it cannot keep this process busy.
+        child.stdout?.destroy()
+        resolve(value)
+      }
+      const timer = setTimeout(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); settle(answer()) }, LOGIN_SHELL_TIMEOUT_MS)
       child.stdout?.on('data', (chunk: Buffer) => {
         output += chunk.toString('utf8')
-        if (output.length > LOGIN_SHELL_MAX_BYTES) { child.kill('SIGKILL'); output = '' }
+        if (output.length > LOGIN_SHELL_MAX_BYTES) { child.kill('SIGKILL'); output = ''; settle(undefined); return }
+        const path = answer()
+        if (path) settle(path)
       })
-      child.on('error', () => { clearTimeout(timer); resolve(undefined) })
-      child.on('close', () => {
-        clearTimeout(timer)
-        const line = output.split('\n').reverse().find(entry => entry.startsWith(MARKER))
-        resolve(line ? line.slice(MARKER.length).trim() || undefined : undefined)
-      })
+      child.on('error', () => settle(undefined))
+      child.on('close', () => settle(answer()))
     })
     loginPaths.set(key, pending)
   }

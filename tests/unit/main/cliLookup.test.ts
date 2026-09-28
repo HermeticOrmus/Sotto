@@ -272,6 +272,14 @@ describe.skipIf(process.platform === 'win32')('the login shell\'s PATH', () => {
     expect(await loginShellPath({ SHELL: join(root, 'no-such-shell'), HOME: home, PATH: '/usr/bin:/bin' })).toBeUndefined()
   })
 
+  it('is read while a process the profile started still holds the output open', async () => {
+    // ssh-agent or keychain started from a profile inherits stdout and outlives the shell, so the pipe stays open
+    // past the five seconds the shell is given; the PATH printed before then is still the answer.
+    await writeFile(join(home, '.profile'), 'PATH="$HOME/from-profile:$PATH"\nexport PATH\nsleep 8 &\n')
+    const path = await loginShellPath({ SHELL: '/bin/sh', HOME: home, PATH: '/usr/bin:/bin' })
+    expect(path?.split(':')[0]).toBe(join(home, 'from-profile'))
+  })
+
   it('finds a client the login shell puts on PATH', async () => {
     await writeFile(join(home, '.profile'), 'PATH="$HOME/tools:$PATH"\nexport PATH\n')
     const claude = await native(join(home, 'tools', 'claude'))
