@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { PROVIDER_LABELS, type ProviderId } from '../shared/agents'
-import { PROVIDER_SIGN_IN_LIFETIME_MS, PROVIDER_SIGN_IN_SHAPES, isProviderSignInPage, type HostSignIn, type ProviderSignInShape } from '../shared/hostProviders'
+import { PROVIDER_SIGN_IN_LIFETIME_MS, PROVIDER_SIGN_IN_SHAPES, SIGN_IN_MESSAGE_MAX, isProviderSignInPage, type HostSignIn, type ProviderSignInShape } from '../shared/hostProviders'
 import { withCliPath } from '../main/agents/cliLookup'
 import { findExecutable as findCodex, nativeEnvironment as codexEnvironment } from '../main/agents/subscriptionCodex'
 import { claudeEnvironment, findClaudeExecutable } from '../main/agents/subscriptionClaude'
@@ -224,7 +224,9 @@ export class ProviderSignIns {
     if (child && child.exitCode === null && child.signalCode === null) child.kill()
     for (const timer of entry.timers) clearTimeout(timer)
     entry.output = ''; entry.codeSent = false
-    entry.view = { id, provider: entry.view.provider, shape: entry.shape, stage, ...(message ? { message } : {}) }
+    // The provider's own error can make the sentence long; a message the client's schema refuses would leave it waiting.
+    const said = message && message.length > SIGN_IN_MESSAGE_MAX ? message.slice(0, SIGN_IN_MESSAGE_MAX - 1).trimEnd() + '…' : message
+    entry.view = { id, provider: entry.view.provider, shape: entry.shape, stage, ...(said ? { message: said } : {}) }
     entry.ready?.(); entry.ready = undefined
     const forget = setTimeout(() => { if (this.entries.get(id) === entry) this.entries.delete(id) }, this.options.keepEndedMs ?? KEEP_ENDED_MS)
     forget.unref()

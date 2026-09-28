@@ -163,3 +163,20 @@ it('stops the sign-in on the host when the dialog closes before the host has ans
   answer({ id: SIGN_IN, provider: 'codex', shape: 'device-code', stage: 'waiting', code: 'WDJB-MJHT', page: 'auth.openai.com' })
   await waitFor(() => expect(signIn).toHaveBeenCalledWith({ type: 'cancel', id: HOST, signInId: SIGN_IN }))
 })
+
+it('says the host stopped answering when it fails to answer twice in a row, and offers Try again', async () => {
+  const user = userEvent.setup()
+  const waiting: ProviderSignInView = { id: SIGN_IN, provider: 'grok', shape: 'device-code', stage: 'waiting', code: 'K7PX-2QRM', page: 'accounts.x.ai' }
+  const { bridge: hosts } = bridge(async request => {
+    if (request.type === 'read') throw new Error('forge is not connected.')
+    return request.type === 'cancel' ? null : waiting
+  })
+  render(<div className="hosts-settings"><HostProviders host={forge} bridge={hosts}
+    providers={[status('grok', { connection: 'error', problem: 'signed-out', version: '1.0.41' })]} /></div>)
+  await user.click(screen.getByRole('button', { name: 'Show providers on forge' }))
+  await user.click(screen.getByRole('button', { name: 'Sign in to Grok Build on forge from this computer' }))
+  const dialog = screen.getByRole('dialog', { name: 'Sign in to Grok Build on forge' })
+  expect(await within(dialog).findByRole('alert', {}, { timeout: 10_000 }))
+    .toHaveTextContent('forge stopped answering while Grok Build was signing in. If its tile still says Not signed in, try again.')
+  await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Try again' })).toHaveFocus())
+})

@@ -8,6 +8,8 @@ import { HostsModal } from './HostDialog'
 
 /** How often the dialog asks the host where a sign-in stands while it waits for the user or the client. */
 const READ_EVERY_MS = 1500
+/** Reads in a row a host can fail to answer before the dialog says it stopped answering. */
+const READ_MISSES = 2
 const clean = (failure: unknown, fallback: string): string =>
   failure instanceof Error ? failure.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/u, '').trim() || fallback : fallback
 const running = (view: ProviderSignInView | null): boolean => view !== null && (view.stage === 'starting' || view.stage === 'waiting' || view.stage === 'finishing')
@@ -51,18 +53,23 @@ export function HostProviderSignIn({ host, provider, bridge, onClose }: {
   useEffect(() => () => { const last = current.current; if (last && running(last)) void bridge.signIn({ type: 'cancel', id: host.id, signInId: last.id }).catch(() => undefined) }, [bridge, host.id])
 
   // While it runs, follow it: a device code is finished on the page, and a pasted code by the client on the host.
+  // A host that fails to answer twice in a row is said to have stopped answering, rather than left waiting for ever.
   const signInId = view?.id, stage = view?.stage
   useEffect(() => {
-    if (!signInId || !stage || !running(view)) return
-    let alive = true
+    if (!signInId || !stage || !running(view) || error) return
+    let alive = true, missed = 0
     const timer = setInterval(() => {
       void bridge.signIn({ type: 'read', id: host.id, signInId }).then(next => {
         if (!alive) return
+        missed = 0
         setView(next ?? { id: signInId, provider, shape: view!.shape, stage: 'ended' })
-      }, () => undefined)
+      }, () => {
+        if (!alive || ++missed < READ_MISSES) return
+        setError(`${host.name} stopped answering while ${name} was signing in. If its tile still says Not signed in, try again.`)
+      })
     }, READ_EVERY_MS)
     return () => { alive = false; clearInterval(timer) }
-  }, [bridge, host.id, provider, signInId, stage])
+  }, [bridge, error, host.id, host.name, name, provider, signInId, stage])
 
   useEffect(() => { if (!copied) return; const timer = setTimeout(() => setCopied(null), 1500); return () => clearTimeout(timer) }, [copied])
   useEffect(() => { if (opened) field.current?.focus() }, [opened])

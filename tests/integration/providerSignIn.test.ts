@@ -10,7 +10,7 @@ import { startSocketServer } from '../../src/host/socketServer'
 import { SocketHostService } from '../../src/main/agents/socketHostService'
 import { e2eAgentReasoner } from '../../src/main/e2e/agentEffects'
 import type { ProviderId } from '../../src/shared/agents'
-import type { HostSignIn } from '../../src/shared/hostProviders'
+import { hostSignInSchema, type HostSignIn } from '../../src/shared/hostProviders'
 import { fakeSignInCommand, signInProviders } from '../fixtures/signInProviders'
 
 /**
@@ -97,6 +97,18 @@ describe('the sign-in on the host', () => {
       expect(service.read(older.id, 'desktop')?.stage).toBe('ended')
       expect(service.read(newer.id, 'desktop')?.stage).toBe('waiting')
       await expect(service.start('devin', 'desktop')).rejects.toThrow('Devin signs in from a terminal on the host. Nothing was changed.')
+    } finally { service.close() }
+  })
+
+  it('shortens a long reason the provider did not connect, so the client can still read how it ended', async () => {
+    const service = new ProviderSignIns({ command: fakeSignInCommand(root), connect: async () => 'The provider said: ' + 'no '.repeat(400) })
+    try {
+      const started = await service.start('codex', 'desktop')
+      await writeFile(join(root, 'codex.approved'), '')
+      await expect.poll(() => service.read(started.id, 'desktop')?.stage).toBe('failed')
+      const ended = service.read(started.id, 'desktop')!
+      expect(ended.message).toMatch(/^Codex signed in, but did not connect: The provider said: no .*…$/u)
+      expect(hostSignInSchema.safeParse(ended).success).toBe(true)
     } finally { service.close() }
   })
 

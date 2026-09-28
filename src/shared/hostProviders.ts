@@ -55,10 +55,12 @@ export function isProviderSignInPage(provider: ProviderId, value: string): boole
  * waits for the user and are never logged or written down on either side; `page` is the name of the page's host, which
  * the dialog says the user is awaited on. `message` says what happened when it did not end connected.
  */
+/** The longest sentence a sign-in's `message` carries; the host shortens a longer one rather than send what fails the schema. */
+export const SIGN_IN_MESSAGE_MAX = 600
 export const hostSignInSchema = z.object({
   id: z.uuid(), provider: providerIdSchema, shape: providerSignInShapeSchema, stage: providerSignInStageSchema,
   url: z.string().min(1).max(4096).optional(), code: z.string().min(1).max(64).optional(), page: z.string().min(1).max(253).optional(),
-  expiresInMinutes: z.number().int().min(1).max(60).optional(), message: z.string().min(1).max(600).optional(),
+  expiresInMinutes: z.number().int().min(1).max(60).optional(), message: z.string().min(1).max(SIGN_IN_MESSAGE_MAX).optional(),
 }).strict()
 export type HostSignIn = z.infer<typeof hostSignInSchema>
 /** What the window is given: the host's view without the page's address, which only main holds, and only to open it. */
