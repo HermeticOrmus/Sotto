@@ -9,6 +9,8 @@ import { SshFailure, SshHostLauncher, type SshCallbacks, type SshFailureCode, ty
 import { failureStep } from './sshFailure'
 import { isTailscaleApprovalUrl } from './tailscaleApproval'
 import type { DesktopHostRouter } from './desktopHostRouter'
+import { nameHostInRefusal } from '../../shared/agents'
+import { isProviderSignInPage, type HostProviderAction, type HostProviderActionResult, type HostSignIn, type HostSignInRequest, type ProviderSignInView } from '../../shared/hostProviders'
 
 /** Files from before the switch have no `sshPort` or `enabled` and still read: both are optional, and no `enabled` means on. */
 const savedHostSchema = remoteHostSchema.extend({ hostId: z.uuid().optional(), clientId: z.string().optional() })
@@ -314,6 +316,48 @@ export class DesktopHosts {
     if (!this.options.openExternal) throw new Error('The approval page could not be opened from this window. Approve the connection in Tailscale on this computer.')
     try { await this.options.openExternal(url) }
     catch { throw new Error('The approval page could not open in your browser. Nothing was changed. Try Open approval page again.') }
+  }
+  /**
+   * The host's own connect, disconnect or refresh for one of its providers, from its tile in Settings > Hosts (ADR-0037).
+   * It goes to that host and nowhere else: nothing about this computer's providers changes. A refusal comes back to the
+   * tile, named for the host, rather than to the Threads page.
+   */
+  async providerAction(action: HostProviderAction): Promise<HostProviderActionResult> {
+    const { host, socket } = this.connectedSocket(action.id)
+    const state = await socket.command({ type: action.action, provider: action.provider })
+    return state.error ? { error: nameHostInRefusal(state.error, host.name) } : {}
+  }
+  /**
+   * A provider's sign-in on a connected host (ADR-0037), for Settings > Hosts. The host runs the client and holds what it
+   * printed; the window gets the code to show and never the page's address. Open sign-in page asks the host for the page
+   * again, checks it is one of that provider's own, and opens it in the default browser, keeping nothing here.
+   */
+  async signIn(request: HostSignInRequest): Promise<ProviderSignInView | null> {
+    const { host, socket } = this.connectedSocket(request.id)
+    if (!socket.offersSignIn()) throw new Error(`The host on ${host.name} cannot sign in its providers from here. Nothing was changed. Put this computer's version of the host on ${host.name}, stop the host and connect again.`)
+    let view: HostSignIn | null
+    if (request.type === 'start') view = await socket.signIn({ op: 'sign-in-start', provider: request.provider })
+    else if (request.type === 'read') view = await socket.signIn({ op: 'sign-in-read', signInId: request.signInId })
+    else if (request.type === 'code') view = await socket.signIn({ op: 'sign-in-code', signInId: request.signInId, code: request.code })
+    else if (request.type === 'cancel') { await socket.signIn({ op: 'sign-in-cancel', signInId: request.signInId }); return null }
+    else {
+      view = await socket.signIn({ op: 'sign-in-read', signInId: request.signInId })
+      if (!view || view.stage !== 'waiting' || !view.url || !isProviderSignInPage(view.provider, view.url)) throw new Error('This sign-in is no longer waiting for you. Nothing was opened. Start it again.')
+      if (!this.options.openExternal) throw new Error('The sign-in page could not be opened from this window. Nothing was changed.')
+      try { await this.options.openExternal(view.url) }
+      catch { throw new Error('The sign-in page could not open in your browser. Nothing was changed. Try Open sign-in page again.') }
+    }
+    if (!view) return null
+    const shown: HostSignIn = { ...view }
+    delete shown.url
+    return shown
+  }
+  /** The live connection to a saved host that is connected now, for what its tiles ask of it. */
+  private connectedSocket(id: string): { host: SavedHost; socket: SocketHostService } {
+    const host = this.saved.find(item => item.id === id)
+    const socket = this.live.get(id)?.socket
+    if (!host || !socket || this.status.get(id)?.phase !== 'connected') throw new Error(`${host?.name ?? 'This host'} is not connected. Nothing was changed. Switch it on, then try again.`)
+    return { host, socket }
   }
   /** Removes a credential a failed or cancelled add left behind; the desktop keeps nothing for a host it did not save. */
   private async forgetCredential(id: string): Promise<void> {

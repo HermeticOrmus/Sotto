@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import type { HostDeviceList, TailscaleConnectOutcome, TailscaleSummary } from './hostDevices'
+import type { HostProviderAction, HostProviderActionResult, HostSignInRequest, ProviderSignInView } from './hostProviders'
 
 export const HOSTS_GET = 'hosts:get'
 export const HOSTS_COMMAND = 'hosts:command'
@@ -158,6 +159,10 @@ export interface HostsBridge {
   connectTailscale(): Promise<TailscaleConnectOutcome>
   /** Opens Tailscale's download page in the default browser. */
   openTailscaleDownload(): Promise<void>
+  /** The host's own connect, disconnect or refresh for one of its providers (ADR-0037). */
+  providerAction(action: HostProviderAction): Promise<HostProviderActionResult>
+  /** A provider's sign-in on a connected host: start, read, hand in a pasted code, cancel, or open its page (ADR-0037). */
+  signIn(request: HostSignInRequest): Promise<ProviderSignInView | null>
 }
 
 /** Client projection only; remote wire payloads keep their original host-local IDs. */

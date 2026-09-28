@@ -12,7 +12,8 @@ import { isAgentThreadDetailDelta } from '../shared/agentThreadDetail'
 import { resolveModel } from '../shared/modelCatalog'
 import { version as packageVersion } from '../../package.json'
 import { REMOTE_PERMISSION_DENIED } from '../main/agents/authority'
-import { remoteCommandRefusal } from './remoteCommands'
+import { REMOTE_SIGN_IN_OPERATIONS, remoteCommandRefusal } from './remoteCommands'
+import { ProviderSignInRefusal, type ProviderSignIns } from './providerSignIn'
 import { SocketFrames } from './socketFrames'
 
 const errors: Record<HostErrorCode, string> = {
@@ -58,6 +59,11 @@ export interface SocketServerOptions {
   onPaired?: (clientId: string) => void
   /** Told when a paired client's socket opens or closes, or a client unpairs itself. */
   onPeersChanged?: () => void
+  /**
+   * A headless host's providers' own sign-ins, run here for the paired client that asks (ADR-0037). Absent on the
+   * desktop's phone listener, which then neither lists `provider-sign-in` nor answers its requests.
+   */
+  signIns?: Pick<ProviderSignIns, 'start' | 'read' | 'code' | 'cancel'>
 }
 /**
  * A settled receipt answers a retried command for this long, which covers a reconnect after a lost
@@ -88,6 +94,13 @@ export async function startSocketServer(options: SocketServerOptions) {
   const sottoVersion = options.sottoVersion ?? packageVersion
   const hostId = service.shell().hostId
   if (!hostId) throw new Error('The host must have an identity before listening.')
+  const features = HOST_FEATURES.filter(feature => feature !== 'provider-sign-in' || options.signIns !== undefined)
+  const { signIns } = options
+  /** A sign-in's own refusal keeps its sentence; anything else is the host's failure to run it. */
+  const signingIn = async <T>(op: HostRequest['op'], run: () => T | Promise<T>): Promise<T> => {
+    if (!signIns || !(REMOTE_SIGN_IN_OPERATIONS as readonly string[]).includes(op)) throw new Refusal('invalid_request')
+    try { return await run() } catch (error) { throw error instanceof ProviderSignInRefusal ? new Refusal('unavailable', error.message) : new Refusal('unavailable') }
+  }
   const adminToken = randomBytes(32).toString('base64url')
   const peers = new Set<Peer>(), operations = new Set<Promise<unknown>>()
   const receipts = new Map<string, { digest: string; receipt: HostReceipt; task: Promise<unknown>; settledAt?: number }>()
@@ -231,7 +244,7 @@ export async function startSocketServer(options: SocketServerOptions) {
     switch (request.op) {
       case 'hello':
         peer.afterSeq = request.afterSeq ?? 0; peer.deltas = request.accepts?.includes('detail-delta') ?? false
-        return { hostId, clientId: peer.client.clientId, shell: shell(peer), capabilities: { mayAnswer: options.mayAnswer?.(peer.client) ?? false }, sottoVersion, features: [...HOST_FEATURES], ...events(request.afterSeq ?? 0) }
+        return { hostId, clientId: peer.client.clientId, shell: shell(peer), capabilities: { mayAnswer: options.mayAnswer?.(peer.client) ?? false }, sottoVersion, features: [...features], ...events(request.afterSeq ?? 0) }
       case 'shell': return shell(peer)
       case 'detail': return service.threadDetail(request.threadId)
       case 'events': return events(request.afterSeq, request.threadId)
@@ -275,6 +288,11 @@ export async function startSocketServer(options: SocketServerOptions) {
           return content && { mimeType: content.mimeType, data: Buffer.from(content.bytes).toString('base64') }
         } finally { peer.preview = false }
       }
+      // Only the client that started a sign-in reads it, sends its code or cancels it (ADR-0037).
+      case 'sign-in-start': return signingIn(request.op, () => signIns!.start(request.provider, peer.client.clientId))
+      case 'sign-in-read': return signingIn(request.op, () => signIns!.read(request.signInId, peer.client.clientId))
+      case 'sign-in-code': return signingIn(request.op, () => signIns!.code(request.signInId, peer.client.clientId, request.code))
+      case 'sign-in-cancel': return signingIn(request.op, () => { signIns!.cancel(request.signInId, peer.client.clientId); return null })
       case 'preview':
         if (peer.preview) throw new Refusal('busy')
         peer.preview = true
@@ -395,7 +413,7 @@ export async function startSocketServer(options: SocketServerOptions) {
   if (!address || typeof address === 'string') throw new Error('The host listener did not receive a loopback port.')
   // The descriptor is also the body of /v1/health: a client reads the host's Sotto version and features
   // there before it opens a session, so it never has to find out what the host supports by trying it.
-  const descriptor: HostDescriptor = { v: 1, hostId, pid: process.pid, port: address.port, sottoVersion, features: [...HOST_FEATURES] }
+  const descriptor: HostDescriptor = { v: 1, hostId, pid: process.pid, port: address.port, sottoVersion, features: [...features] }
   const expiry = setInterval(() => { for (const peer of peers) if (!authenticated(peer)) peer.frames.close() }, 1000)
   expiry.unref()
   return {
