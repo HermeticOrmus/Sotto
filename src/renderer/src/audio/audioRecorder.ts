@@ -1,5 +1,7 @@
 import { TRANSCRIPTION_SAMPLE_RATE } from '../../../shared/audio'
 import { calculateRms, resampleMono } from './audioMath'
+import { microphoneConstraints, type MicrophoneConstraints } from './microphoneConstraints'
+export type { MicrophoneConstraints } from './microphoneConstraints'
 
 export const AUDIO_CAPTURE_PROCESSOR_NAME = 'sotto-audio-capture'
 
@@ -108,16 +110,6 @@ export interface AudioRecorderOptions {
    * while durationMs still reports the full recording length.
    */
   onSegment?: (segment: AudioRecordingResult) => void
-}
-
-export interface MicrophoneConstraints {
-  audio: {
-    deviceId: { exact: string } | undefined
-    channelCount: 1
-    echoCancellation: true
-    noiseSuppression: true
-    autoGainControl: true
-  }
 }
 
 interface RecordingSession {
@@ -236,16 +228,7 @@ export class AudioRecorder {
       session.gain.connect(session.context.destination)
       session.worklet.port.onmessage = (event) => this.receiveChunk(session, event.data)
 
-      const selected = this.options.selectedDeviceId
-      session.stream = await this.dependencies.mediaDevices.getUserMedia({
-        audio: {
-          deviceId: selected ? { exact: selected } : undefined,
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-      })
+      session.stream = await this.dependencies.mediaDevices.getUserMedia(microphoneConstraints(this.options.selectedDeviceId))
       this.assertSessionLive(session)
       this.monitorTrackEnd(session)
 

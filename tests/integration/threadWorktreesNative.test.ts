@@ -14,9 +14,10 @@ import { FakeProviderHost } from '../fixtures/fakeProviderHost'
 
 const cleanup: Array<() => Promise<void>> = []
 afterEach(async () => { vi.restoreAllMocks(); for (const close of cleanup.splice(0).reverse()) await close() })
-const factories = { codex: () => codexFixture(), claude: () => claudeFixture(), grok: () => grokFixture(), devin: () => devinFixture() }
-async function fixture(provider: keyof typeof factories, committed = true, nested = false) {
-  const f = await factories[provider]()
+// Functional working-copy checks use the adapter's normal acknowledgement budget.
+const factories = { codex: (requestTimeoutMs = 15_000) => codexFixture(undefined, false, requestTimeoutMs), claude: () => claudeFixture(), grok: () => grokFixture(), devin: () => devinFixture() }
+async function fixture(provider: keyof typeof factories, committed = true, nested = false, requestTimeoutMs?: number) {
+  const f = await factories[provider](requestTimeoutMs)
   let project = join(f.root, 'project'); await mkdir(project)
   await git(project, ['init'])
   if (committed) {
@@ -214,7 +215,7 @@ describe('native thread working copies', () => {
   })
 
   it('retains the reserved working copy after lost native creation acknowledgement and refuses replay after workspace restart', async () => {
-    const { f, workspace, native, create, project } = await fixture('codex')
+    const { f, workspace, native, create, project } = await fixture('codex', true, false, 2000)
     await create('uncertain', 'independent')
     await prepared(workspace, 'uncertain')
     await writeFile(join(f.root, 'script.json'), JSON.stringify({ delay: { method: 'thread/start', ms: 3000 }, suppressNotifications: true }))

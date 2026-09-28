@@ -1,3 +1,5 @@
+import { microphoneConstraints, type MicrophoneConstraints } from '../../audio/microphoneConstraints'
+
 export type MicrophoneTestState =
   | 'idle'
   | 'requesting'
@@ -41,17 +43,10 @@ export interface MicrophoneTestDependencies {
   readonly cancelFrame: (handle: number) => void
 }
 
-export interface MicrophoneTestConstraints {
-  readonly audio: {
-    readonly channelCount: 1
-    readonly echoCancellation: true
-    readonly noiseSuppression: true
-    readonly autoGainControl: true
-  }
-}
+export type MicrophoneTestConstraints = MicrophoneConstraints
 
 export interface MicrophoneTestController {
-  start(onLevel: (level: number) => void): Promise<MicrophoneTestOutcome>
+  start(onLevel: (level: number) => void, selectedDeviceId?: string): Promise<MicrophoneTestOutcome>
   stop(): Promise<void>
 }
 
@@ -97,7 +92,7 @@ export class BrowserMicrophoneTest implements MicrophoneTestController {
 
   constructor(private readonly dependencies: MicrophoneTestDependencies = productionDependencies()) {}
 
-  async start(onLevel: (level: number) => void): Promise<MicrophoneTestOutcome> {
+  async start(onLevel: (level: number) => void, selectedDeviceId?: string): Promise<MicrophoneTestOutcome> {
     const generation = ++this.generation
     await this.releaseOwnedResources()
     if (generation !== this.generation) return 'error'
@@ -106,14 +101,7 @@ export class BrowserMicrophoneTest implements MicrophoneTestController {
     let source: AudioNodeLike | null = null
     let analyser: AnalyserLike | null = null
     try {
-      stream = await this.dependencies.getUserMedia({
-        audio: {
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-      })
+      stream = await this.dependencies.getUserMedia(microphoneConstraints(selectedDeviceId))
       if (generation !== this.generation) {
         this.stopTracks(stream)
         return 'error'
