@@ -212,7 +212,7 @@ export class AttachmentStore {
   }
   /**
    * The bytes a digest names, or null when this store no longer keeps them. Bytes read from disk are hashed first:
-   * a file truncated, damaged or replaced since it was staged is not the image the user attached, so it is treated
+   * a file missing, truncated, damaged or replaced since it was staged is not the image the user attached, so it is treated
    * as gone rather than sent under their digest. The file and its index entry go too, so the next start does not
    * take it back and every draft or follow-up that names it meets the missing-image sentence rather than a failed
    * send. Staging the same image again writes it afresh.
@@ -221,10 +221,10 @@ export class AttachmentStore {
     const held = this.held.get(digest)
     if (!held) return null
     if (held.memory) return held.memory
-    let bytes: Buffer
+    let bytes: Buffer | null = null
     try { bytes = await readFile(this.file(held)) }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error }
-    if (createHash('sha256').update(bytes).digest('hex') === digest) return bytes
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+    if (bytes && createHash('sha256').update(bytes).digest('hex') === digest) return bytes
     if (this.held.get(digest) === held) {
       this.held.delete(digest)
       // In turn with staging: an image staged again meanwhile has written a good file, which is left alone.
