@@ -2246,7 +2246,8 @@ export class AgentControl {
       }
     }
     if (prompt) draftId ??= randomUUID()
-    if (this.outbox.some(item => threadId ? item.threadId === threadId : item.threadId === undefined && (item.provider ?? this.state.configuration.provider) === provider)) throw new Error('An earlier action has an unknown result. Reconnect and inspect the provider before retrying; Sotto will not send it twice.')
+    // Stop has its own intent and may pass an unresolved prompt; it cannot settle or replay that prompt.
+    if (command.type !== 'interrupt' && this.outbox.some(item => threadId ? item.threadId === threadId : item.threadId === undefined && (item.provider ?? this.state.configuration.provider) === provider)) throw new Error('An earlier action has an unknown result. Reconnect and inspect the provider before retrying; Sotto will not send it twice.')
     const answerRequest = command.type === 'answer' ? this.thread(command.threadId).requests.find(item => item.id === command.requestId) : undefined
     const answerQuestions = answerRequest ? requestDraftQuestions(answerRequest) : []
     // A model change that names no effort is saved with the new model's default, as the provider will start it on.
