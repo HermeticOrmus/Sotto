@@ -1,0 +1,11 @@
+# Grok fixture read errors (#420)
+
+The request-log observer previously converted every filesystem read rejection into an empty log. A controlled regression wrote a real synthetic log containing one matching `session/load`, verified one start, then denied only that log read. Both EACCES and EBUSY incorrectly resolved zero instead of surfacing the error. The two desired assertions failed on unchanged source; missing-file and malformed-JSON neighbors passed.
+
+The observer now treats only ENOENT as an empty initial log. Other read errors propagate unchanged. Parsing remains outside that handler, so malformed or partially written JSON stays visible as a parse failure; neither the recorded prefix nor its file is truncated. After the injected fault is removed, the same existing log again reports its one start.
+
+The four observer tests and the full Grok adapter contract passed: 27 tests passed and 6 skipped across two files. Typecheck, lint and notices passed. Full two-worker gate and independent review are pending. No production adapter, deadline, idle threshold or idle-session assertion changed; no rendered surface requires a new Electron journey.
+
+This defect was found while investigating a separate first-stop Grok count failure in #410. The original full run retained no read-error evidence, and five unchanged focused repeats passed. The controlled reproduction proves that a read error can erase an observation; it does not establish that a read error caused that original failure. The current-session historical-exit correction remains separate in #411.
+
+All files and errors were synthetic and owned by the test fixture. Every test invocation used a verified absent owned `SOTTO_PERF_DATA` path. No production profile or paid provider was accessed.
