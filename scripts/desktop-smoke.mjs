@@ -14,6 +14,8 @@ const env = { ...process.env, SOTTO_PERF_DATA: performanceData, SOTTO_E2E_ARTIFA
 for (const key of Object.keys(env)) if (/^SOTTO_.*_LIVE$/.test(key)) delete env[key]
 // The command builds this checkout; a caller's diagnostic override must not launch another app.
 delete env.SOTTO_E2E_MAIN_ENTRY
+delete env.SOTTO_PERF_BENCH
+delete env.SOTTO_PERF_ASSERT
 
 function run(args) {
   const result = spawnSync(process.execPath, args, { cwd: root, env, stdio: 'inherit', windowsHide: true })

@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { evidenceDirectory } from './support/evidence'
 import { hostKeys } from './support/hostKeys'
 import { closeSotto, launchSottoWithVoice, openThreads, userMessageTexts } from './support/sottoLaunch'
 
@@ -66,4 +67,3 @@ test('steers a queued message from the keyboard without consuming the newer draf
     expect(await userMessageTexts(page, 'docs')).toEqual(['Start the work', 'Use the simpler approach', 'Keep this queued'])
   } finally { await closeSotto(launched) }
 })
-import { evidenceDirectory } from './support/evidence'
