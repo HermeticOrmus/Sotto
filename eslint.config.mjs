@@ -12,6 +12,7 @@ export default tseslint.config(
       'artifacts/review-379/**',
       'artifacts/review-402/**',
       'artifacts/review-410/**',
+      'artifacts/review-411/**',
       'artifacts/phase-three-themes/**',
       'artifacts/thread-browser-player/**',
       'artifacts/new-thread-defaults/**',
