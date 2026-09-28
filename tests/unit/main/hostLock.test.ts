@@ -16,7 +16,14 @@ const lock = () => readFile(path, 'utf8')
 const deadPid = async (): Promise<number> => {
   const child = spawn(process.execPath, ['-e', ''], { stdio: 'ignore', windowsHide: true })
   await new Promise(resolve => child.once('exit', resolve))
-  return child.pid as number
+  const pid = child.pid as number
+  const kill = process.kill.bind(process)
+  // Windows can reuse the exited child's PID during these filesystem races. Keep only that probe stale.
+  vi.spyOn(process, 'kill').mockImplementation((target, signal) => {
+    if (target === pid && signal === 0) throw Object.assign(new Error('Synthetic exited process'), { code: 'ESRCH' })
+    return kill(target, signal)
+  })
+  return pid
 }
 beforeEach(async () => { root = await mkdtemp(join(tmpdir(), 'sotto-host-lock-')); path = join(root, 'host-listener.lock'); events.length = 0 })
 afterEach(async () => {

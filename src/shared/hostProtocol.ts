@@ -106,7 +106,11 @@ export interface HostPairing { v: 1; hostId: string; clientId: string; token: st
 export interface HostReceipt { status: 'pending' | 'completed' | 'unknown'; error?: HostProtocolError | undefined }
 /** Written to host-listener.json and served, with `status`, as /v1/health. */
 export interface HostDescriptor { v: 1; pid: number; hostId: string; port: number; sottoVersion: string; features: string[] }
-export interface HostHealth extends HostDescriptor { status: 'ready' }
+export interface HostHealth extends HostDescriptor {
+  status: 'ready'
+  /** The computer's name as its owner set it for phones; only the desktop's phone access sends it (ADR-0033). */
+  name?: string
+}
 export const HOST_SESSION_REJECTED = 'This connection is no longer authorized. Connect again or pair this device on the host.'
 /** What an HTTP 429 from the host means to the user: nothing is wrong with this device, and waiting is the fix. */
 export const HOST_BUSY = 'The host is busy. Nothing was lost. Try again in a moment.'

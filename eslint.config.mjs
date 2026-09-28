@@ -4,8 +4,17 @@ import tseslint from 'typescript-eslint'
 export default tseslint.config(
   {
     ignores: [
+      'artifacts/review-378/**',
+      'artifacts/review-403/**',
+      'artifacts/review-389/**',
       'artifacts/review-377/**',
       'artifacts/review-391/**',
+      'artifacts/review-406/**',
+      'artifacts/review-385/**',
+      'artifacts/review-379/**',
+      'artifacts/review-402/**',
+      'artifacts/review-410/**',
+      'artifacts/review-411/**',
       'artifacts/phase-three-themes/**',
       'artifacts/thread-browser-player/**',
       'artifacts/new-thread-defaults/**',

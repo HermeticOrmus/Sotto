@@ -169,4 +169,17 @@ describe('PolicyStore', () => {
       expect(policies.authorizes(record)).toEqual({ allowed: false, reason: 'always-confirm', policyId: record.id })
     }
   })
+  it('sets one paired client’s answers from the owner’s switch: one record while on, none active once off', () => {
+    const phone = { clientId: 'phone', user: '', transport: 'socket' } as const
+    expect(policies.mayGrant(phone)).toMatchObject({ allowed: false, reason: 'no-policy' })
+    policies.setRemoteAnswers('phone', true, 'The user turned on Can answer.')
+    policies.setRemoteAnswers('phone', true, 'The user turned on Can answer.')
+    expect(policies.list({ scope: 'client:phone' }).filter(record => record.action === 'remote-answer')).toHaveLength(1)
+    expect(policies.mayGrant(phone)).toMatchObject({ allowed: true, reason: 'paired-client' })
+    expect(policies.mayGrant({ ...phone, clientId: 'other' }).allowed).toBe(false)
+    policies.setRemoteAnswers('phone', false, 'The user turned off Can answer.')
+    expect(policies.list({ scope: 'client:phone' }).filter(record => record.action === 'remote-answer')).toEqual([])
+    expect(policies.mayGrant(phone)).toMatchObject({ allowed: false, reason: 'unpaired' })
+  })
+
 })

@@ -73,6 +73,18 @@ export class PolicyStore {
   }
 
   /**
+   * The user's switch for one paired client: revokes every remote-answer record that names it, then,
+   * when allowed, writes a new one. Both the headless host's admin path and the desktop's Phones page
+   * call this, so a client never carries two records that disagree.
+   */
+  setRemoteAnswers(clientId: string, allowed: boolean, note: string): void {
+    for (const record of this.list({ scope: remoteAnswerScope(clientId) })) {
+      if (record.action === 'remote-answer' && record.resource === clientId) this.revoke(record.id)
+    }
+    if (allowed) this.grantRemoteAnswers(clientId, note)
+  }
+
+  /**
    * Whether this client's answer may count as a grant. The local window always may; a remote client
    * may only while a record names it, and nothing else ever may. A record scoped `global` or to some
    * other client is not an answer about this one, which is why this does not go through `authorizes`.
