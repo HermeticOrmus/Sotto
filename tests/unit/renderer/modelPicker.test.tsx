@@ -18,7 +18,7 @@ afterEach(cleanup)
 describe('provider model picker', () => {
   it('sorts numeric versions newest first and keeps provider order for the same version', () => {
     expect(newestModelsFirst(models.filter(model => model.provider === 'Codex')).map(model => model.id)).toEqual(['astra', 'terra', 'minor', 'old'])
-    expect(models[0].id).toBe('old')
+    expect(models[0]?.id).toBe('old')
   })
 
   it('keeps the provider’s own recommendation at the top of its list, whatever it is called', () => {
@@ -49,7 +49,7 @@ describe('provider model picker', () => {
     await user.click(trigger)
     expect(screen.getByRole('textbox', { name: 'Search models' })).toHaveFocus()
     expect(screen.getAllByRole('option').map(option => option.textContent)).toEqual(['GPT-6-Astra', 'GPT-6-Terra', 'GPT-5.10', 'GPT-5.6'])
-    await user.click(screen.getByRole('tab', { name: 'Claude', exact: true }))
+    await user.click(screen.getByRole('tab', { name: 'Claude' }))
     expect(onChange).not.toHaveBeenCalled()
     expect(screen.getByRole('option', { name: /Claude Opus/ })).toBeDisabled()
     expect(screen.queryByRole('option', { name: 'GPT-6-Astra' })).not.toBeInTheDocument()
