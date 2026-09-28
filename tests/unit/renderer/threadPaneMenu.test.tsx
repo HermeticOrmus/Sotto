@@ -104,7 +104,7 @@ describe('the composer while the voice coordinator is hidden', () => {
     // The fixture has this thread assigned to the coordinator; with it hidden, the pane offers the manual prompt.
     expect(row.assignment?.mode).toBe('managed')
     render(<ThreadPane row={row} state={live.state} command={live.command} store={new ThreadDraftStore(live.command)} focused promptId="manual" error={null} onOpenThread={vi.fn()} />)
-    expect(screen.getByRole('textbox', { name: 'Prompt', exact: true })).toHaveAttribute('id', 'manual')
+    expect(screen.getByRole('textbox', { name: 'Prompt' })).toHaveAttribute('id', 'manual')
     expect(screen.queryByRole('button', { name: 'Write here' })).toBeNull()
   })
 })

@@ -31,7 +31,7 @@ function mount(state: AgentState) {
   const live = liveAgentState(state)
   vi.mocked(useAgents).mockImplementation(live.useLive)
   const view = render(<ThreadsView onOpenAgents={vi.fn()} now={NOW} />)
-  return { live, view, prompt: () => screen.getByRole('textbox', { name: 'Prompt', exact: true }) }
+  return { live, view, prompt: () => screen.getByRole('textbox', { name: 'Prompt' }) }
 }
 
 beforeEach(() => { vi.mocked(useAgents).mockReset() })
@@ -394,7 +394,7 @@ describe('Threads project folders', () => {
     const { live } = mount(threadsStateFixture())
     fireEvent.click(screen.getByRole('button', { name: 'New thread in sotto-site' }))
     expect(screen.queryByRole('dialog', { name: 'New thread' })).not.toBeInTheDocument()
-    await waitFor(() => expect(screen.getByRole('heading', { name: 'New thread', exact: true })).toBeVisible())
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'New thread' })).toBeVisible())
     expect(live.command).toHaveBeenCalledWith(expect.objectContaining({ type: 'create-thread', projectId: 'sotto-site', title: 'New thread', managed: false }))
   })
 })
@@ -418,8 +418,8 @@ describe('Thread provider choice', () => {
   it('lets an unstarted thread choose any ready provider that can create threads', async () => {
     const { live } = mount(providerState(false))
     fireEvent.click(screen.getByRole('combobox', { name: 'Thread model' }))
-    expect(screen.queryByRole('button', { name: 'Grok', exact: true })).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('tab', { name: 'Codex', exact: true }))
+    expect(screen.queryByRole('button', { name: 'Grok' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('tab', { name: 'Codex' }))
     fireEvent.click(screen.getByRole('option', { name: 'GPT-5.4' }))
     await waitFor(() => expect(live.command).toHaveBeenCalledWith({ type: 'configure-thread', threadId: 'grok-previews', modelId: 'codex:gpt' }))
   })
@@ -430,7 +430,7 @@ describe('Thread provider choice', () => {
       state.host.providers![0] = { ...state.host.providers![0]!, connection: 'connected', capabilities: ALL }
       mount(state)
       fireEvent.click(screen.getByRole('combobox', { name: 'Thread model' }))
-      expect(screen.queryByRole('button', { name: 'Codex', exact: true })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Codex' })).not.toBeInTheDocument()
       expect(screen.queryByText('This conversation stays with Claude.')).not.toBeInTheDocument()
       cleanup()
     }
