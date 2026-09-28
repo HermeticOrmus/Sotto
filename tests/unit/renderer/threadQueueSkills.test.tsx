@@ -41,7 +41,7 @@ function mount(state: AgentState, options: Parameters<typeof liveAgentState>[1] 
   const live = liveAgentState(state, options)
   vi.mocked(useAgents).mockImplementation(live.useLive)
   const view = render(<ThreadsView onOpenAgents={vi.fn()} now={NOW} />)
-  return { live, view, prompt: () => screen.getByRole('textbox', { name: 'Prompt', exact: true }) as HTMLTextAreaElement }
+  return { live, view, prompt: () => screen.getByRole('textbox', { name: 'Prompt' }) as HTMLTextAreaElement }
 }
 
 const requests = <T extends AgentCommand['type']>(live: ReturnType<typeof liveAgentState>, type: T): Extract<AgentCommand, { type: T }>[] =>
@@ -518,7 +518,7 @@ describe('skills with queue and steer', () => {
       return <ThreadComposer row={row} state={connection.state!} command={connection.command} store={connection.threadDrafts} onSend={vi.fn()} composerId={id} />
     }
     render(<><Pane id="pane-a" /><Pane id="pane-b" /></>)
-    const [a, b] = screen.getAllByRole('textbox', { name: 'Prompt', exact: true }) as HTMLTextAreaElement[]
+    const [a, b] = screen.getAllByRole('textbox', { name: 'Prompt' }) as HTMLTextAreaElement[]
     expect([a!.id, b!.id]).toEqual(['pane-a', 'pane-b'])
     expect(a!.closest('form')).toHaveAttribute('data-thread-id', THREAD)
     type(a!, '$')

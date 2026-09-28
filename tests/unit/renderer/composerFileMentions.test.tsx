@@ -55,7 +55,7 @@ function mount() {
   const live = liveAgentState(state)
   vi.mocked(useAgents).mockImplementation(live.useLive)
   render(<ThreadsView onOpenAgents={vi.fn()} now={NOW} />)
-  return { live, prompt: () => screen.getByRole('textbox', { name: 'Prompt', exact: true }) as HTMLTextAreaElement }
+  return { live, prompt: () => screen.getByRole('textbox', { name: 'Prompt' }) as HTMLTextAreaElement }
 }
 
 const requests = <T extends AgentCommand['type']>(live: ReturnType<typeof liveAgentState>, type: T): Extract<AgentCommand, { type: T }>[] =>

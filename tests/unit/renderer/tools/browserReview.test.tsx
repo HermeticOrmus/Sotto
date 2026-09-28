@@ -108,7 +108,7 @@ describe('the browser player', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Move the browser into Tools' }))
     await waitFor(() => expect(store.getSnapshot()).toMatchObject({ open: true, surface: 'browser', pinnedThreadId: null }))
     expect(store.browser.thread('visual-gate')?.activePageId).toBe(page.id)
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Browser', exact: true })).toHaveFocus())
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Browser' })).toHaveFocus())
   })
   it('shrinks to a pill showing the current action, moves focus there, and the pill restores it', async () => {
     const browser = fake(); const store = new ToolsPanelStore(); const playerStore = new BrowserPlayerStore()
@@ -168,7 +168,7 @@ describe('the browser player', () => {
     const pending = task({ pendingAction: { id: '33333333-3333-4333-8333-333333333333', action: { type: 'click', x: 10, y: 20 }, description: 'Click at 10, 20 on localhost', expiresAt: Date.now() + 10000 } })
     const browser = fake([pending]); const store = new ToolsPanelStore(); const playerStore = new BrowserPlayerStore()
     let settleAnswer: (() => void) | null = null
-    browser.bridge.answerAction = vi.fn(() => new Promise(resolve => { settleAnswer = () => resolve(ok(task())) }))
+    browser.bridge.answerAction = vi.fn<NonNullable<BrowserBridge['answerAction']>>(() => new Promise(resolve => { settleAnswer = () => resolve(ok(task())) }))
     render(<BrowserPlayer state={threadsStateFixture()} focusedThreadId="visual-gate" bridge={browser.bridge} store={store} playerStore={playerStore} />)
     const allowOnce = await screen.findByRole('button', { name: 'Allow once' })
     const deny = screen.getByRole('button', { name: 'Deny' })

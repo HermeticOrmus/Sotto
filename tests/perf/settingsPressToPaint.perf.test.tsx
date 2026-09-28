@@ -94,6 +94,11 @@ describe.skipIf(!PERF_BENCH)('permission chip press to paint', () => {
           pressToPaintedMs: round(median(painted), 2), pressToReplyMs: round(median(replied)), pressToConfirmedMs: round(median(confirmed)),
           maxPressToPaintedMs: round(Math.max(...painted), 2) }))
       }
-    } finally { cleanup(); actEnvironment.IS_REACT_ACT_ENVIRONMENT = wasAct; await stack.cleanup() }
+    } finally {
+      cleanup()
+      if (wasAct === undefined) delete actEnvironment.IS_REACT_ACT_ENVIRONMENT
+      else actEnvironment.IS_REACT_ACT_ENVIRONMENT = wasAct
+      await stack.cleanup()
+    }
   }, 180_000)
 })
