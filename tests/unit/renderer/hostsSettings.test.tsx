@@ -331,6 +331,9 @@ it('shows Tailscale under This computer, and connects it from Add host', async (
   expect(within(dialog).getByText(/Tailscale is off on this computer\./)).toBeTruthy()
   expect(within(dialog).getAllByRole('option').map(option => option.querySelector('b')?.textContent)).toEqual(['forge', 'spark', 'buildbox.example.net', 'Another SSH host…'])
   expect(within(dialog).getByText('Connect to Tailscale to see the machines on your tailnet here.')).toBeTruthy()
+  // Inside Add host, Connect to Tailscale is the primary action, as the prototype drew it; on the Hosts page it is not.
+  expect(within(dialog).getByRole('button', { name: 'Connect to Tailscale' }).className).toContain('tt-button--primary')
+  expect(within(offRow).getByRole('button', { name: 'Connect to Tailscale' }).className).toContain('tt-button--secondary')
   await user.click(within(dialog).getByRole('button', { name: 'Connect to Tailscale' }))
   expect(off.connectTailscale).toHaveBeenCalledTimes(1)
   expect(within(dialog).getByRole('button', { name: 'Connecting…' })).toHaveProperty('disabled', true)

@@ -89,15 +89,15 @@ export function useTailscale(bridge: HostsBridge | undefined): TailscaleControl 
 const devicesOnTailnet = (count: number): string => `${count} ${count === 1 ? 'device' : 'devices'} on your tailnet`
 
 /**
- * The button a Tailscale that is off or missing offers: the same on the Hosts page and in Add host. While the
- * sign-in goes on in the browser it opens the sign-in page again, since a second tailscale up would only
- * replace the first.
+ * The button a Tailscale that is off or missing offers: the same on the Hosts page and in Add host, where
+ * Connect to Tailscale is the primary action. While the sign-in goes on in the browser it opens the sign-in
+ * page again, since a second tailscale up would only replace the first.
  */
-function TailscaleAction({ control, summary }: { readonly control: TailscaleControl; readonly summary: TailscaleSummary }): ReactNode {
+function TailscaleAction({ control, summary, primary = false }: { readonly control: TailscaleControl; readonly summary: TailscaleSummary; readonly primary?: boolean }): ReactNode {
   if (summary.state === 'missing') return <Button variant="secondary" onClick={control.getTailscale}>Get Tailscale</Button>
   if (summary.state !== 'off') return null
   const label = control.phase === 'connecting' ? 'Connecting…' : control.phase === 'signing-in' ? 'Open sign-in page' : 'Connect to Tailscale'
-  return <Button variant="secondary" disabled={control.phase === 'connecting'} onClick={control.connect}>{label}</Button>
+  return <Button variant={primary ? 'primary' : 'secondary'} disabled={control.phase === 'connecting'} onClick={control.connect}>{label}</Button>
 }
 
 /** The Hosts page's Tailscale row, under This computer. */
@@ -125,7 +125,7 @@ export function TailscalePrompt({ control }: { readonly control: TailscaleContro
     <p>{summary.state === 'off'
       ? <><b>Tailscale is off on this computer.</b> Connect to see the machines on your tailnet.</>
       : <><b>Tailscale is not installed.</b> Any machine you reach over SSH works; Tailscale makes your other machines easy to reach.</>}</p>
-    <TailscaleAction control={control} summary={summary} />
+    <TailscaleAction control={control} summary={summary} primary />
     {control.notice ? <p className="hosts-tailscale-prompt__notice" role="status">{control.notice}</p> : null}
   </div>
 }
