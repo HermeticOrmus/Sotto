@@ -74,14 +74,10 @@
 .thread-folder__actions, .thread-nav__row-actions { opacity: 0; }
 .thread-folder__head:hover .thread-folder__actions, .thread-folder__head:focus-within .thread-folder__actions,
 .thread-nav__row:hover .thread-nav__row-actions, .thread-nav__row:focus-within .thread-nav__row-actions, .thread-nav__row[data-current] .thread-nav__row-actions { opacity: 1; }
-/* With a pointer, folder actions overlay the indicators instead of taking width from the name. They sit centred
-   on the height of the head and inset from its edge like the actions of a row, and paint no background of their
-   own: the hover of the head is enough, and a second translucent layer read as a tile set askew. */
-@media (hover: hover) {
-  .thread-folder__actions { position: absolute; inset: 0 2px 0 auto; align-items: center; }
-  /* Fade (not hide) the indicators under the actions: the counts stay in the toggle's accessible name. */
-  .thread-folder__head:has(.thread-folder__actions):is(:hover, :focus-within) .thread-nav__indicators { opacity: 0; }
-}
+/* Reserve the actions' width even before hover, so neither the name nor the host can sit under them. */
+.thread-folder__actions { flex: none; align-items: center; }
+.thread-folder__toggle .host-badge { flex: none; }
+.thread-folder__toggle .host-badge[data-kind='local'] { max-width: none; }
 @media (hover: none) { .thread-folder__actions, .thread-nav__row-actions { opacity: 1; } }
 
 .thread-nav__row { position: relative; display: flex; align-items: flex-start; margin: 1px 0; border: 1px solid transparent; border-radius: 7px; }
@@ -199,6 +195,10 @@
 .thread-nav__rail .thread-nav__pages { flex-direction: column; }
 .thread-nav .thread-nav__rail .update-control { margin: 0; }
 @container thread-sidebar (max-width: 285px) { .thread-nav__wordmark { display: none; } }
+@container thread-sidebar (max-width: 339px) {
+  .thread-folder__toggle .host-badge { padding-inline: 5px; }
+  .thread-folder__toggle .host-badge__name { display: none; }
+}
 @container thread-sidebar (min-width: 340px) {
   .thread-nav__branch { display: flex; }
   .thread-nav__row--details .thread-nav__title { white-space: normal; overflow-wrap: anywhere; }

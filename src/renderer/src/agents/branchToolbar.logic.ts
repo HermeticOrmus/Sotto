@@ -4,7 +4,7 @@ import type { GitRef } from '../../../shared/gitRefs'
 import type { SottoPlatform } from '../../../shared/platform'
 
 /** The thread fields the toolbar reads; a full record satisfies it, and tests can pass less. */
-export type ToolbarThread = Pick<AgentThread, 'id' | 'projectId' | 'nativeSessionStarted' | 'worktree' | 'messages' | 'remoteHost' | 'hostLabel'>
+export type ToolbarThread = Pick<AgentThread, 'id' | 'projectId' | 'nativeSessionStarted' | 'worktree' | 'messages' | 'remoteHost' | 'hostLabel' | 'updatedAt' | 'summary'>
 
 /** The three shortcuts the toolbar claims, in T3's chords. Run on is static text here, so it claims none. */
 export const TOOLBAR_SHORTCUTS = { branch: 'mod+shift+g', workspace: 'mod+shift+x', previous: 'mod+shift+l' } as const
@@ -40,7 +40,7 @@ export function previousWorktreeDraft(thread: ToolbarThread): boolean {
 }
 
 export type WorkspaceChoice = { readonly kind: 'current' } | { readonly kind: 'new' } | { readonly kind: 'previous'; readonly path: string }
-export interface WorkspaceOption { readonly id: string; readonly label: string; readonly choice: WorkspaceChoice }
+export interface WorkspaceOption { readonly id: string; readonly label: string; readonly name?: string; readonly choice: WorkspaceChoice }
 
 /** One spelling for a folder, so a path Git wrote with slashes matches the one the record keeps with backslashes. */
 export const folderKey = (path: string): string => path.replace(/[\\/]+$/u, '').replace(/\\/gu, '/').toLowerCase()
@@ -72,13 +72,18 @@ export function workspaceLabel(thread: ToolbarThread): string {
 export function workspaceOptions(thread: ToolbarThread, threads: readonly ToolbarThread[]): WorkspaceOption[] {
   const previous: WorkspaceOption[] = []
   const seen = new Set<string>()
-  for (const other of threads) {
+  // Use activity, not Git's polling time. Shell snapshots carry the newest message time in their summary.
+  const recent = threads.filter(other => other.id !== thread.id && other.projectId === thread.projectId).map(other => ({ thread: other,
+    at: other.messages.reduce((latest, message) => Math.max(latest, Date.parse(message.createdAt) || 0), Math.max(0, Date.parse(other.updatedAt ?? '') || 0, Date.parse(other.summary?.lastMessageAt ?? '') || 0)),
+  }))
+    .sort((a, b) => b.at - a.at)
+  for (const { thread: other } of recent) {
     const worktree = other.worktree
-    if (other.id === thread.id || other.projectId !== thread.projectId || !worktree || worktree.mode !== 'independent' || worktree.status !== 'ready' || !worktree.path || worktree.reclaimedAt) continue
+    if (!worktree || worktree.mode !== 'independent' || worktree.status !== 'ready' || !worktree.path || worktree.reclaimedAt) continue
     const key = folderKey(worktree.path)
     if (seen.has(key)) continue
     seen.add(key)
-    previous.push({ id: `previous:${key}`, label: `Previous worktree (${worktree.branch ?? 'detached'})`, choice: { kind: 'previous', path: worktree.path } })
+    previous.push({ id: `previous:${key}`, label: `Previous worktree (${worktree.branch ?? 'detached'})`, name: worktree.branch ?? `Detached · ${worktree.path.split(/[\\/]/u).filter(Boolean).at(-1)}`, choice: { kind: 'previous', path: worktree.path } })
   }
   return [
     { id: 'current', label: 'Current checkout', choice: { kind: 'current' } },
