@@ -1790,7 +1790,7 @@ export class AgentControl {
       case 'voice-state': this.state.voice.status = command.status; this.state.voice.error = command.error; return
       case 'configure': {
         const speechRevision = this.speechPreferenceRevision
-        const next = agentConfigurationSchema.parse({ ...this.state.configuration, ...command.patch })
+        let next = agentConfigurationSchema.parse({ ...this.state.configuration, ...command.patch })
         const before = this.state.configuration
         // Coordinator account selection has no authority over native thread connections.
         if (next.reasoning !== before.reasoning) await this.dependencies.credentials.set('reasoning', '')
@@ -1801,11 +1801,7 @@ export class AgentControl {
           const removed = enabledThreadProviders(before).filter(provider => !next.enabledProviders?.includes(provider))
           for (const provider of removed) this.dependencies.host.disconnect(provider)
           // What the new set leaves out is turned off, and what it puts back is on again (ADR-0036).
-          if (command.patch.disconnectedProviders === undefined) {
-            const off = turnedOff(before, removed, next.enabledProviders ?? [])
-            if (off.length) next.disconnectedProviders = off
-            else delete next.disconnectedProviders
-          }
+          if (command.patch.disconnectedProviders === undefined) next = withTurnedOff(next, turnedOff(before, removed, next.enabledProviders ?? []))
         }
         if (speechRevision !== this.speechPreferenceRevision) next.speak = this.state.configuration.speak
         this.state.configuration = next

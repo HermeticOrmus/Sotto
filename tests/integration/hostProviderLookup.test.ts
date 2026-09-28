@@ -44,6 +44,12 @@ async function configuration(data: string): Promise<AgentConfiguration> {
 class SignedOut extends E2EAgentHost {
   override async connect(): Promise<AgentHostSnapshot> { throw new Error('Sign in to this provider on the host, then connect again.') }
 }
+/** A scripted provider that counts the connections asked of it, so staying off is a count and not a wait. */
+class Counted extends E2EAgentHost {
+  connects = 0
+  override async connect(): Promise<AgentHostSnapshot> { this.connects += 1; return super.connect() }
+}
+const counted = () => ({ codex: new Counted(), claude: new Counted(), grok: new Counted(), devin: new Counted() })
 const scripted = () => ({ codex: new E2EAgentHost(), claude: new E2EAgentHost(), grok: new E2EAgentHost(), devin: new E2EAgentHost() })
 async function start(data: string, providers: Partial<Record<ProviderId, E2EAgentHost>> = scripted()): Promise<Host> {
   const host = await startHeadlessHost({ dataDirectory: data, providers, reasoner: e2eAgentReasoner })
@@ -65,11 +71,11 @@ describe('a headless host and its providers', () => {
     expect((await configuration(data)).disconnectedProviders).toEqual(['grok'])
     await host.close(); hosts.splice(hosts.indexOf(host), 1)
 
-    host = await start(data)
+    const restarted = counted()
+    host = await start(data, restarted)
     await expect.poll(() => connections(host)).toEqual({ codex: 'connected', claude: 'connected', grok: 'disconnected', devin: 'connected' })
-    // Still off after a moment, when a reconnect would have run.
-    await new Promise(done => setTimeout(done, 200))
-    expect(connection(host.service.shell(), 'grok')).toBe('disconnected')
+    // A turned-off provider is not asked at start.
+    expect(restarted.grok.connects).toBe(0)
 
     // Connecting it again is the user's choice too, and the record goes.
     expect((await host.service.command({ type: 'connect', provider: 'grok' }, client)).error).toBeNull()
@@ -89,9 +95,10 @@ describe('a headless host and its providers', () => {
     expect((await configuration(data)).disconnectedProviders).toEqual(['codex', 'claude', 'grok', 'devin'])
     await host.close(); hosts.splice(hosts.indexOf(host), 1)
 
-    host = await start(data)
-    await new Promise(done => setTimeout(done, 200))
+    const restarted = counted()
+    host = await start(data, restarted)
     expect(connections(host)).toEqual({ codex: 'disconnected', claude: 'disconnected', grok: 'disconnected', devin: 'disconnected' })
+    expect(Object.values(restarted).map(provider => provider.connects)).toEqual([0, 0, 0, 0])
     // With nothing connected, a create names the machine and the page that connects one, and claims no draft.
     const project = join(await folder('sotto-host-providers-'), 'site')
     expect((await host.service.command({ type: 'create-project', provider: 'codex', title: 'site', path: project }, client)).error)
