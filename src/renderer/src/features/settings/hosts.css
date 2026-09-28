@@ -78,3 +78,8 @@
 
 @media (max-width: 1000px) { .hosts-local { flex-wrap: wrap; } }
 @media (max-width: 520px) { .hosts-dialog__pair { grid-template-columns: minmax(0, 1fr); } }
+
+/* A host setup the dialog was closed on, still running in its thread (ADR-0035). */
+.hosts-setup-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; border-left: 2px solid var(--tt-accent); border-radius: var(--tt-radius-sm); background: var(--tt-surface-sunken); padding: 10px 12px; }
+.hosts-settings .hosts-setup-line > p { flex: 1 1 260px; min-width: 0; margin: 0; color: var(--tt-text); font-size: 13px; }
+.hosts-setup-line b { font-weight: 600; }

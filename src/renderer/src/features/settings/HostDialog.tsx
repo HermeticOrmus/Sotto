@@ -3,6 +3,9 @@ import { LoaderCircle } from 'lucide-react'
 import { DEFAULT_HOST_DATA_DIRECTORY, DEFAULT_HOST_INSTALL_PATH, type HostsBridge, type HostsState, type HostStatus, type RemoteHost, type SshHostSuggestion } from '../../../../shared/hosts'
 import { Button } from '../../components/Button'
 import { HostSetupChecklist, hostSetupSummary, hostSetupTitle, TAILSCALE_GUIDE_URL, type HostSetupOutcome } from './HostSetupChecklist'
+import { HostAddChoices, HostSetupProgress, hostSetupEnded, hostSetupViewTitle, SetupModelSelect, type HostAddChoice } from './HostSetupView'
+import { useOptionalAgents } from '../../agents/AgentContext'
+import { useOptionalApp } from '../../state/AppContext'
 
 /** How many Hosts modals are open, so a saved host's SSH question waits rather than stacking on one. */
 let openModals = 0
@@ -36,7 +39,7 @@ export function HostsModal({ title, onClose, busy = false, children, footer, cla
   }, [])
   const onKeyDown = (event: KeyboardEvent<HTMLElement>): void => {
     if (event.key !== 'Tab') return
-    const focusable = [...dialog.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), summary, [tabindex]:not([tabindex="-1"])') ?? []]
+    const focusable = [...dialog.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), summary, [tabindex]:not([tabindex="-1"])') ?? []]
     const first = focusable[0], last = focusable.at(-1)
     if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
     else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
@@ -111,19 +114,22 @@ function HostCombobox({ value, onChange, suggestions, offer, disabled, onPick, o
   </div>
 }
 
-/** What the dialog is for: adding a new host, or changing a saved host's connection. */
-export type HostDialogMode = { readonly kind: 'add' } | { readonly kind: 'edit'; readonly host: HostStatus }
+/** What the dialog is for: adding a new host, changing a saved host's connection, or showing the host setup running. */
+export type HostDialogMode = { readonly kind: 'add' } | { readonly kind: 'edit'; readonly host: HostStatus } | { readonly kind: 'setup' }
 
 /**
- * Add host and Edit connection. Add host connects from inside the dialog and saves the host only once it
- * answers and pairs: once pressed, the form gives way to the host setup checklist, which asks SSH's and
- * Tailscale's questions itself and shows a failure on the step it happened. Edit connection saves the new
- * route; a host that is on connects again with it.
+ * Add host and Edit connection. Add host offers two ways to add a machine (ADR-0035): Have my agent set this up,
+ * which starts a host setup thread and follows it, and Add it, which connects from inside the dialog and saves
+ * the host only once it answers and pairs. Once pressed, the form gives way to the host setup checklist, which
+ * asks SSH's and Tailscale's questions itself and shows a failure on the step it happened; a failed step offers
+ * Have my agent fix this. Edit connection saves the new route; a host that is on connects again with it.
  */
 export function HostDialog({ mode, bridge, state, onClose }: {
   readonly mode: HostDialogMode; readonly bridge: HostsBridge; readonly state: HostsState | null; readonly onClose: () => void
 }): ReactNode {
   const editing = mode.kind === 'edit' ? mode.host : undefined
+  const agents = useOptionalAgents()
+  const app = useOptionalApp()
   const [host, setHost] = useState(editing ? targetHost(editing.target) : '')
   const [user, setUser] = useState(editing ? targetUser(editing.target) : '')
   const [port, setPort] = useState(editing?.sshPort ? String(editing.sshPort) : '')
@@ -146,19 +152,34 @@ export function HostDialog({ mode, bridge, state, onClose }: {
   const [submitted, setSubmitted] = useState<{ name: string; user: string; port?: number } | null>(null)
   /** Set once the host this dialog added is connected; the dialog then says so until closed. */
   const [connected, setConnected] = useState(false)
+  // Have my agent set this up: the choice, its model, and the setup this dialog started or was opened to show.
+  const choice = state?.setupChoice
+  const agentAvailable = choice !== undefined && !choice.unavailable && choice.models.length > 0
+  const [how, setHow] = useState<HostAddChoice>(agentAvailable ? 'agent' : 'self')
+  const howChosen = useRef(false)
+  const [modelId, setModelId] = useState('')
+  const setupModel = choice?.models.some(model => model.id === modelId) ? modelId : choice?.modelId ?? choice?.models[0]?.id ?? ''
+  const [setupId, setSetupId] = useState<string | null>(mode.kind === 'setup' ? state?.setup?.id ?? null : null)
+  const [starting, setStarting] = useState(false)
+  const setup = setupId !== null && state?.setup?.id === setupId ? state.setup : undefined
   const closeRef = useRef(onClose)
   closeRef.current = onClose
-  const hintId = useId()
+  const hintId = useId(), closeHintId = useId()
   const userId = useId(), portId = useId(), installId = useId(), dataId = useId(), dataHintId = useId(), identityId = useId(), answerId = useId()
   // The add this dialog started, as main reports it; it leaves `adding` for `hosts` once the host is saved.
   const adding = attempt !== null && state?.adding?.id === attempt ? state.adding : undefined
   const addedHost = attempt !== null ? state?.hosts.find(item => item.id === attempt) : undefined
   const added = addedHost !== undefined
   const connecting = sending || adding?.phase === 'connecting'
-  const prompt = adding?.prompt
+  // SSH's question and Tailscale's approval belong to whichever connect is showing: the setup's check or add, or Add host's.
+  const live = setup ? setup.attempt : adding
+  const liveId = setup ? setup.attempt?.id ?? null : attempt
+  const prompt = live?.phase === 'connecting' ? live.prompt : undefined
   // Once the connect has failed, main's sentence is the one that says why; one from this dialog is older.
   const shownError = adding?.phase === 'error' ? adding.error ?? error : error
-  const approvalWaiting = adding?.tailscale?.waiting === true
+  const approvalWaiting = live?.tailscale?.waiting === true
+  // The choice arrives with the first state; until the user picks, the agent is chosen where it is offered.
+  useEffect(() => { if (!howChosen.current) setHow(agentAvailable ? 'agent' : 'self') }, [agentAvailable])
   useEffect(() => {
     if (editing) return
     let alive = true
@@ -168,11 +189,15 @@ export function HostDialog({ mode, bridge, state, onClose }: {
   // Added and connected: the checklist says so until Done. Added but not connected (a host of another Sotto
   // version, which is saved): its row says what to update, so the dialog closes onto it.
   useEffect(() => { if (addedHost?.phase === 'connected') setConnected(true); else if (addedHost?.phase === 'error' && !connected) closeRef.current() }, [addedHost?.phase, connected])
+  // Opened to show a setup that has since been dismissed: nothing is left to show.
+  useEffect(() => { if (mode.kind === 'setup' && !setup) closeRef.current() }, [mode.kind, setup])
   useEffect(() => { setAnswer('') }, [prompt?.id])
   useEffect(() => { if (!approvalWaiting) setApprovalError(null) }, [approvalWaiting])
   const saved = new Set(state?.hosts.map(item => targetHost(item.target).toLowerCase()) ?? [])
   const offered = suggestions.filter(item => !saved.has(item.alias.toLowerCase()))
   const close = (): void => {
+    // A setup carries on in its thread when its dialog closes; one that has ended is put away.
+    if (setup) { if (hostSetupEnded(setup)) void bridge.command({ type: 'dismiss-setup', id: setup.id }).catch(() => undefined); onClose(); return }
     // A failed or unfinished add is dropped with the dialog: main keeps nothing for it.
     if (attempt !== null && !added) void bridge.command({ type: 'cancel-add', id: attempt }).catch(() => undefined)
     onClose()
@@ -212,6 +237,27 @@ export function HostDialog({ mode, bridge, state, onClose }: {
     }
     finally { setSending(false) }
   }
+  /**
+   * Start setup, or Have my agent fix this on a failed Add it attempt (`after`), which main hands to the setup.
+   * The dialog follows the setup from the moment main has it; a refusal goes back to the form, which says why.
+   */
+  const startSetup = async (after?: string): Promise<void> => {
+    if (starting || connecting) return
+    const route = connection()
+    if (typeof route === 'string') { setError(route); return }
+    if (!setupModel) { setError('Choose a model for the setup thread.'); return }
+    const id = crypto.randomUUID()
+    setError(null); setStarting(true); setSetupId(id)
+    try {
+      await bridge.command({ type: 'start-setup', id, host: { id: crypto.randomUUID(), name: targetHost(route.target).slice(0, MAX_NAME_LENGTH), ...route }, modelId: setupModel, ...(after ? { after } : {}) })
+      if (after) setAttempt(null)
+    } catch (failure) {
+      setSetupId(null)
+      if (after) { void bridge.command({ type: 'cancel-add', id: after }).catch(() => undefined); setAttempt(null) }
+      setError(failure instanceof Error ? failure.message : 'The setup could not start. Nothing was started. Try again.')
+    } finally { setStarting(false) }
+  }
+  const go = (): void => { if (!editing && how === 'agent' && agentAvailable) void startSetup(); else void submit() }
   /** Change: drops the attempt, connecting or failed, and gives the form back with what was typed. */
   const change = (): void => {
     if (attempt !== null) void bridge.command({ type: 'cancel-add', id: attempt }).catch(() => undefined)
@@ -219,31 +265,43 @@ export function HostDialog({ mode, bridge, state, onClose }: {
     queueMicrotask(() => formRef.current?.querySelector<HTMLInputElement>('input')?.focus())
   }
   const openApproval = async (): Promise<void> => {
-    if (attempt === null) return
+    if (liveId === null) return
     setApprovalError(null)
-    try { await bridge.command({ type: 'open-approval', id: attempt }) }
+    try { await bridge.command({ type: 'open-approval', id: liveId }) }
     catch (failure) { setApprovalError(failure instanceof Error ? failure.message : 'The approval page could not open. Nothing was changed. Try again.') }
   }
   const answerPrompt = async (): Promise<void> => {
-    if (!prompt || attempt === null || answering) return
+    if (!prompt || liveId === null || answering) return
     setAnswering(true)
-    try { await bridge.command({ type: 'ssh-answer', id: attempt, promptId: prompt.id, answer: prompt.kind === 'host-key' ? 'yes' : answer }) }
+    try { await bridge.command({ type: 'ssh-answer', id: liveId, promptId: prompt.id, answer: prompt.kind === 'host-key' ? 'yes' : answer }) }
     catch (failure) { setError(failure instanceof Error ? failure.message : 'SSH did not take the answer. Cancel and add the host again.') }
     finally { setAnswer(''); setAnswering(false) }
   }
-  const fieldsDisabled = connecting
+  const stopSetup = async (): Promise<void> => {
+    if (!setup) return
+    try { await bridge.command({ type: 'stop-setup', id: setup.id }) }
+    catch (failure) { setError(failure instanceof Error ? failure.message : 'The setup could not be stopped. Try again.') }
+  }
+  /** Open thread: the Threads page, on the setup thread. The setup carries on; Show setup on the Hosts page brings this back. */
+  const openThread = (): void => {
+    const threadId = setup?.threadId
+    if (!threadId) return
+    void agents?.command({ type: 'select-thread', threadId }).catch(() => undefined)
+    app?.actions.navigate('threads')
+  }
+  const fieldsDisabled = connecting || starting
   // Add host turns off while it connects; focus moves to Cancel rather than being dropped.
   useEffect(() => {
     const focused = document.activeElement
-    if (connecting && (focused === null || focused === document.body || (focused instanceof HTMLButtonElement || focused instanceof HTMLInputElement) && focused.disabled)) cancelButton.current?.focus()
-  }, [connecting])
+    if ((connecting || starting) && (focused === null || focused === document.body || (focused instanceof HTMLButtonElement || focused instanceof HTMLInputElement) && focused.disabled)) cancelButton.current?.focus()
+  }, [connecting, starting])
   // Once pressed, Add host is the checklist until Change gives the form back.
-  const setup = !editing && attempt !== null && submitted !== null
+  const checklist = !editing && !setup && attempt !== null && submitted !== null
   const outcome: HostSetupOutcome = connected ? 'connected' : shownError && !connecting ? 'failed' : 'connecting'
   // A control that goes away with a step (Open approval page once approved, Cancel once connected) hands focus on.
   useEffect(() => {
     const focused = document.activeElement
-    if (setup && (focused === null || focused === document.body || !focused.isConnected)) (doneButton.current ?? cancelButton.current)?.focus()
+    if ((checklist || setup) && (focused === null || focused === document.body || !focused.isConnected)) (doneButton.current ?? cancelButton.current)?.focus()
   })
   const question = prompt ? <div className="hosts-notice hosts-prompt" role="group" aria-label={prompt.kind === 'host-key' ? 'Trust this SSH host?' : 'SSH needs an answer'}>
     <p className="hosts-prompt__lead">{prompt.kind === 'host-key' ? 'SSH has not seen this host before. Check its key, then trust it to continue.' : prompt.kind === 'passphrase' ? 'SSH needs your key passphrase to sign in.' : 'SSH needs your password to sign in.'}</p>
@@ -253,23 +311,47 @@ export function HostDialog({ mode, bridge, state, onClose }: {
         onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); void answerPrompt() } }} /></div> : null}
     <div className="hosts-prompt__actions"><Button autoFocus={prompt.kind === 'host-key'} disabled={answering} onClick={() => void answerPrompt()}>{prompt.kind === 'host-key' ? 'Trust host and continue' : 'Continue'}</Button></div>
   </div> : null
-  return <HostsModal title={editing ? `Edit connection to ${editing.name}` : setup ? hostSetupTitle(submitted.name, outcome) : 'Add host'} onClose={close} busy={connecting} className="hosts-dialog--connection"
-    footer={setup && outcome === 'connected' ? <Button ref={doneButton} onClick={onClose}>Done</Button> : <>
+  const openGuide = (): void => { void window.sotto?.openExternalLink?.(TAILSCALE_GUIDE_URL) }
+  if (setup) {
+    const over = hostSetupEnded(setup)
+    return <HostsModal title={hostSetupViewTitle(setup)} onClose={close} busy={setup.phase === 'starting'} className="hosts-dialog--connection"
+      footer={over ? <Button ref={doneButton} onClick={close}>{setup.phase === 'connected' ? 'Done' : 'Close'}</Button> : <>
+        <Button ref={cancelButton} variant="secondary" aria-describedby={closeHintId} onClick={close}>Close</Button>
+        <Button variant="secondary" disabled={setup.phase === 'starting'} onClick={() => void stopSetup()}>Stop setup</Button>
+        <span id={closeHintId} className="tt-visually-hidden">Closes this dialog. The setup carries on in its thread.</span>
+      </>}>
+      <HostSetupProgress setup={setup} question={question} approvalError={approvalError} onOpenThread={openThread} onOpenApproval={() => void openApproval()} onOpenGuide={openGuide} />
+      {error ? <div className="hosts-notice hosts-notice--error" role="alert"><p>{error}</p></div> : null}
+    </HostsModal>
+  }
+  // Have my agent fix this, under a failed step of the Add it path.
+  const offer = checklist && outcome === 'failed' && agentAvailable ? <div className="host-setup__offer">
+    <p className="host-setup__quiet">Or let an agent do it: it works in a new thread, and you answer each command it wants to run.</p>
+    <div className="host-setup__actions">
+      <SetupModelSelect choice={choice} value={setupModel} onChange={setModelId} disabled={starting} label="Model" />
+      <Button variant="secondary" disabled={starting} onClick={() => void startSetup(attempt ?? undefined)}>{starting ? 'Starting…' : 'Have my agent fix this'}</Button>
+    </div>
+  </div> : null
+  const agentChosen = !editing && how === 'agent' && agentAvailable
+  return <HostsModal title={editing ? `Edit connection to ${editing.name}` : checklist ? hostSetupTitle(submitted.name, outcome) : 'Add host'} onClose={close} busy={connecting || starting} className="hosts-dialog--connection"
+    footer={checklist && outcome === 'connected' ? <Button ref={doneButton} onClick={onClose}>Done</Button> : <>
       <Button ref={cancelButton} variant="secondary" onClick={close}>Cancel</Button>
-      <Button ref={addButton} disabled={connecting || prompt !== undefined} onClick={() => void submit()}>
-        {editing ? (sending ? 'Saving…' : 'Save connection') : connecting ? 'Connecting…' : setup ? 'Try again' : 'Add host'}</Button>
+      <Button ref={addButton} disabled={connecting || starting || prompt !== undefined} onClick={() => { if (checklist) void submit(); else go() }}>
+        {editing ? (sending ? 'Saving…' : 'Save connection') : connecting ? 'Connecting…' : checklist ? 'Try again' : agentChosen ? (starting ? 'Starting…' : 'Start setup') : 'Add host'}</Button>
     </>}>
-    {setup ? <HostSetupChecklist name={submitted.name} summary={hostSetupSummary(submitted.user, submitted.port)} host={adding ?? addedHost} outcome={outcome}
-      error={shownError} approvalError={approvalError} question={question} {...(outcome === 'connected' ? {} : { onChange: change })}
-      onOpenApproval={() => void openApproval()} onOpenGuide={() => void window.sotto?.openExternalLink?.(TAILSCALE_GUIDE_URL)} /> : <>
-    <p className="hosts-dialog__intro">{editing ? 'The new connection is used the next time Sotto connects. A host that is on connects again now.' : 'Sotto connects as soon as you add it.'}</p>
-    <form ref={formRef} className="hosts-dialog__fields" onSubmit={event => { event.preventDefault(); void submit() }}
-      onKeyDown={event => { const target = event.target as HTMLElement; if (event.key === 'Enter' && target instanceof HTMLInputElement && target.getAttribute('role') !== 'combobox') { event.preventDefault(); void submit() } }}>
+    {checklist ? <HostSetupChecklist name={submitted.name} summary={hostSetupSummary(submitted.user, submitted.port)} host={adding ?? addedHost} outcome={outcome}
+      error={shownError} approvalError={approvalError} question={question} offer={offer} {...(outcome === 'connected' ? {} : { onChange: change })}
+      onOpenApproval={() => void openApproval()} onOpenGuide={openGuide} /> : <>
+    <p className="hosts-dialog__intro">{editing ? 'The new connection is used the next time Sotto connects. A host that is on connects again now.' : 'Connect a machine you reach over SSH, such as a device on your tailnet.'}</p>
+    <form ref={formRef} className="hosts-dialog__fields" onSubmit={event => { event.preventDefault(); go() }}
+      onKeyDown={event => { const target = event.target as HTMLElement; if (event.key === 'Enter' && target instanceof HTMLInputElement && target.type !== 'radio' && target.getAttribute('role') !== 'combobox') { event.preventDefault(); go() } }}>
       <div className="tt-field">
         <HostCombobox value={host} onChange={setHost} suggestions={offered} offer={!editing} disabled={fieldsDisabled} describedBy={hintId}
-          onPick={item => { setHost(item.alias); if (item.port) setPort(String(item.port)); addButton.current?.focus() }} onSubmit={() => void submit()} />
+          onPick={item => { setHost(item.alias); if (item.port) setPort(String(item.port)); addButton.current?.focus() }} onSubmit={go} />
         <p className="tt-field__description" id={hintId}>{editing ? 'An alias from your SSH configuration, or a host name.' : 'Suggestions come from your SSH configuration and known hosts.'}</p>
       </div>
+      {!editing ? <HostAddChoices value={how} onChange={value => { howChosen.current = true; setHow(value) }} choice={choice} modelId={setupModel}
+        onModel={setModelId} disabled={fieldsDisabled} /> : null}
       <div className="hosts-dialog__pair">
         <div className="tt-field"><label className="tt-field__label" htmlFor={userId}>Username <span className="hosts-dialog__optional">(optional)</span></label>
           <input id={userId} className="tt-input tt-focusable" value={user} disabled={fieldsDisabled} autoCapitalize="none" spellCheck={false} maxLength={64} placeholder="From your SSH configuration" onChange={event => setUser(event.target.value)} /></div>
@@ -290,6 +372,7 @@ export function HostDialog({ mode, bridge, state, onClose }: {
       {editing?.clientId ? <p className="hosts-dialog__client">This computer's client ID on {editing.name}: <code>{editing.clientId}</code></p> : null}
     </form>
     {editing && sending ? <div className="hosts-notice hosts-notice--work" role="status"><LoaderCircle size={16} aria-hidden="true" className="hosts-spin" /><p>Saving the connection.</p></div> : null}
+    {starting ? <div className="hosts-notice hosts-notice--work" role="status"><LoaderCircle size={16} aria-hidden="true" className="hosts-spin" /><p>Starting the setup thread.</p></div> : null}
     {shownError && !connecting ? <div className="hosts-notice hosts-notice--error" role="alert"><p>{shownError}</p></div> : null}
     </>}
   </HostsModal>

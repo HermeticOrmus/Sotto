@@ -169,12 +169,17 @@ export function HostsSettings({ localHostEnabled, onLocalHostChange, bridge = wi
     <p>Dictation and automatic paste always use this computer. They do not paste into a remote host.</p>
     <div className="hosts-heading"><h3>Remote hosts</h3><Button ref={addButton} variant="secondary" disabled={!bridge} onClick={() => setDialog({ kind: 'add' })}><Plus size={16} aria-hidden="true" />Add host</Button></div>
     <p>Connect to machines you reach over SSH. Sotto signs in with your SSH setup, starts the host if needed and pairs this computer. Hosts that are on reconnect when Sotto starts, and a host Sotto started keeps running until you stop it.</p>
+    {/* A setup the dialog was closed on carries on in its thread; this is the way back to it. */}
+    {state?.setup && (state.setup.phase === 'starting' || state.setup.phase === 'running') ? <div className="hosts-setup-line" role="status">
+      <p><b>{state.setup.modelName}</b> is setting up {state.setup.name} in the thread <b>{state.setup.threadTitle}</b>.{state.setup.waiting ? ' It is waiting for your answer.' : ''}</p>
+      <Button variant="secondary" aria-label={`Show the setup of ${state.setup.name}`} onClick={() => setDialog({ kind: 'setup' })}>Show setup</Button>
+    </div> : null}
     <div className="hosts-list">
       {state?.hosts.map(host => <HostRow key={host.id} host={host} onCommand={run} onAction={act} />)}
       {state && !state.hosts.length ? <p className="hosts-empty">No remote hosts yet.</p> : null}
     </div>
     {error && <p className="hosts-error" role="alert">{error}</p>}
-    {dialog && bridge ? <HostDialog key={dialog.kind === 'edit' ? dialog.host.id : 'add'} mode={dialog} bridge={bridge} state={state} onClose={closeDialog} /> : null}
+    {dialog && bridge ? <HostDialog key={dialog.kind === 'edit' ? dialog.host.id : dialog.kind} mode={dialog} bridge={bridge} state={state} onClose={closeDialog} /> : null}
     {renaming ? <RenameDialog host={renaming} onClose={() => setRenameId(null)} onRename={async name => {
       if (!bridge) return 'Hosts are not available in this window.'
       try { setState(await bridge.command({ type: 'rename', id: renaming.id, name })); return null }
