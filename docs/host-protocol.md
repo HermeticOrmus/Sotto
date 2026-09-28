@@ -1,6 +1,6 @@
 # Host protocol, version 1
 
-This is every message a client and a host exchange: the desktop reaching a remote host through `SocketHostService`, and the planned iPhone client (#225) from its own Swift code. The schemas are in `src/shared/hostProtocol.ts`; the listener is `src/host/socketServer.ts`. Why the host works this way is ADR-0025.
+This is every message a client and a host exchange: the desktop reaching a remote host through `SocketHostService`, and the iPhone client (`apps/ios`) from its own Swift code. The schemas are in `src/shared/hostProtocol.ts`; the listener is `src/host/socketServer.ts`. Why the host works this way is ADR-0025.
 
 Version 1 is frozen from the pull request that added detail deltas and the version check (#238, #239). A later host may add to it, and only in these ways:
 
@@ -27,11 +27,11 @@ Between two v1 builds of different Sotto versions, the thread and command shapes
 
 ## HTTP
 
-All on the host's loopback listener, reached through the SSH forward or private Tailscale HTTPS. Every response is JSON with `Cache-Control: no-store`. A request carrying an `Origin` other than a loopback page, or one the host was started to allow, is refused.
+All on the host's loopback listener, reached through the SSH forward or private Tailscale HTTPS. The desktop's own listener, with phone access on, is reached at `https://<machine>.<tailnet>.ts.net:8443` through Tailscale Serve (ADR-0033). Every response is JSON with `Cache-Control: no-store`. A request carrying an `Origin` other than a loopback page, or one the host was started to allow, is refused.
 
 | Request | Body | Answer |
 | --- | --- | --- |
-| `GET /v1/health` | none | `{ v: 1, status: "ready", hostId, pid, port, sottoVersion, features }` |
+| `GET /v1/health` | none | `{ v: 1, status: "ready", hostId, pid, port, sottoVersion, features, name? }`. `name` is optional: the computer's name as the owner set it for phones, sent by the desktop's phone access (ADR-0033). A client shows it when present and falls back to its own name for the host. |
 | `POST /v1/pair` | `{ v: 1, code, name }` | `{ v: 1, hostId, clientId, token }`. The code is single use and lasts five minutes. |
 | `POST /v1/session`, `Authorization: Bearer <token>` | none | `{ v: 1, hostId, clientId, session, expiresAt }`. A session lasts twelve hours. |
 | `POST /v1/revoke`, `Authorization: Bearer <token>` | none | `{ v: 1, hostId, revoked }`. The client forgets itself. |
@@ -39,7 +39,7 @@ All on the host's loopback listener, reached through the SSH forward or private 
 | `POST /v1/admin/revoke-client`, admin bearer | `{ clientId }` | `{ v: 1, hostId, revoked }` |
 | `POST /v1/admin/allow-answers`, `/v1/admin/deny-answers`, admin bearer | `{ clientId }` | `{ v: 1, hostId, ok: true }` |
 
-The admin bearer is in the host's private `host-listener.json`, which holds the same fields as health (without `status`) plus `adminToken`. Only the launch script and the host's own command line use it. A refusal is `{ v: 1, error: { code, message } }` with status 401 for `unauthenticated`, 429 for `busy` and 400 otherwise. A request body is at most 8192 bytes.
+The admin bearer is in the host's private `host-listener.json`, which holds the same fields as health (without `status`) plus `adminToken`. Only the launch script and the host's own command line use it. The desktop's phone listener has no administrative routes and answers them `invalid_request`: it issues codes, allows answers and revokes clients in-process, from Settings > Phones. A refusal is `{ v: 1, error: { code, message } }` with status 401 for `unauthenticated`, 429 for `busy` and 400 otherwise. A request body is at most 8192 bytes.
 
 ## The socket
 

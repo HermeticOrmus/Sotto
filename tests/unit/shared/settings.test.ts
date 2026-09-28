@@ -79,6 +79,8 @@ const customSettings = {
   streamingAsr: false,
   autoUpdateCheck: false,
   localHostEnabled: false,
+  phoneAccess: true,
+  phoneAccessName: 'Studio',
   voiceCoordinatorEnabled: true,
   memoryEnabled: true,
 } satisfies AppSettings
@@ -298,7 +300,18 @@ describe('settings', () => {
       streamingAsr: true,
       autoUpdateCheck: true,
       localHostEnabled: true,
+      phoneAccess: false,
+      phoneAccessName: '',
     })
+  })
+
+  it('keeps phone access off for installs saved before it existed, and refuses a name longer than a DNS label', () => {
+    const legacy = { ...customSettings } as Record<string, unknown>
+    delete legacy.phoneAccess
+    delete legacy.phoneAccessName
+    expect(parseSettings(legacy)).toMatchObject({ phoneAccess: false, phoneAccessName: '' })
+    expect(parseSettings({ ...customSettings, phoneAccessName: 'x'.repeat(64) }).phoneAccessName).toBe('')
+    expect(parseSettings({ ...customSettings, phoneAccessName: '  Studio Mac  ' }).phoneAccessName).toBe('Studio Mac')
   })
 
 
