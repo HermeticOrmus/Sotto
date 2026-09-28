@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { existsSync } from 'node:fs'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -96,6 +97,30 @@ describe('the sign-in on the host', () => {
       expect(service.read(older.id, 'desktop')?.stage).toBe('ended')
       expect(service.read(newer.id, 'desktop')?.stage).toBe('waiting')
       await expect(service.start('devin', 'desktop')).rejects.toThrow('Devin signs in from a terminal on the host. Nothing was changed.')
+    } finally { service.close() }
+  })
+
+  it('runs one sign-in per provider when two starts overlap, and spawns nothing once the host stops', async () => {
+    // Each lookup waits until released, as a login shell's can, so both starts are past their first check before either
+    // could spawn. The older one ends without running a client (a start that answers "ended" never spawned), the newer one runs.
+    const lookups: (() => void)[] = []
+    const fake = fakeSignInCommand(root)
+    const slow = (provider: ProviderId) => new Promise<void>(resolve => { lookups.push(resolve) }).then(() => fake(provider))
+    const service = new ProviderSignIns({ command: slow, connect: async () => undefined })
+    try {
+      const first = service.start('codex', 'desktop'), second = service.start('codex', 'desktop')
+      await expect.poll(() => lookups.length).toBe(2)
+      for (const release of lookups.splice(0)) release()
+      const [older, newer] = await Promise.all([first, second])
+      expect(older.stage).toBe('ended')
+      expect(newer.stage).toBe('waiting')
+
+      const late = service.start('grok', 'desktop')
+      await expect.poll(() => lookups.length).toBe(1)
+      service.close()
+      lookups.splice(0)[0]!()
+      expect(await late).toMatchObject({ stage: 'ended' })
+      expect(existsSync(join(root, 'grok.args.json'))).toBe(false)
     } finally { service.close() }
   })
 })

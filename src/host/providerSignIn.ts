@@ -95,11 +95,18 @@ export class ProviderSignIns {
     const name = PROVIDER_LABELS[provider]
     if (!shape) throw new ProviderSignInRefusal(`${name} signs in from a terminal on the host. Nothing was changed.`)
     for (const [id, entry] of this.entries) if (entry.view.provider === provider && !ended(entry.view)) this.end(id, 'ended')
-    const command = await (this.options.command ?? defaultCommand)(provider)
-    if (!command) throw new ProviderSignInRefusal(`${name} is not installed on this host, so it cannot sign in. Nothing was changed.`)
+    // The provider is this start's before the lookup below waits, so a start that overlaps it (another press, another
+    // client) stops this one rather than running beside it, and a host that stops meanwhile spawns nothing.
     const id = randomUUID()
     const entry: Entry = { view: { id, provider, shape, stage: 'starting' }, clientId, shape, output: '', codeSent: false, timers: [] }
     this.entries.set(id, entry)
+    let command: SignInCommand | undefined
+    try { command = await (this.options.command ?? defaultCommand)(provider) } catch { command = undefined }
+    if (this.closed || this.entries.get(id) !== entry || ended(entry.view)) return this.copy(entry)
+    if (!command) {
+      this.entries.delete(id)
+      throw new ProviderSignInRefusal(`${name} is not installed on this host, so it cannot sign in. Nothing was changed.`)
+    }
     const printed = new Promise<void>(resolve => { entry.ready = resolve })
     let child: ChildProcess
     try {
