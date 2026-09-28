@@ -775,6 +775,7 @@ describe('Sotto application onboarding integration', () => {
 
     await user.click(screen.getByRole('button', { name: /retest microphone/i }))
     await waitFor(() => expect(active.stop).toHaveBeenCalledOnce())
+    await user.click(screen.getByRole('button', { name: /skip for now/i }))
     await user.click(screen.getByRole('button', { name: /continue/i }))
     stopped.resolve()
 
@@ -865,6 +866,7 @@ describe('Sotto application onboarding integration', () => {
 
     await user.click(screen.getByRole('button', { name: /test microphone/i }))
     await waitFor(() => expect(microphone.start).toHaveBeenCalledOnce())
+    await user.click(screen.getByRole('button', { name: /skip for now/i }))
     await user.click(screen.getByRole('button', { name: /continue/i }))
     await waitFor(() => expect(microphone.stop).toHaveBeenCalledOnce())
     started.resolve('ready')
