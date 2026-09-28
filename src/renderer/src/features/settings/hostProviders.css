@@ -34,6 +34,21 @@
 .host-provider[data-kind='connecting'] .host-provider__dot { border-color: var(--tt-accent); }
 .host-provider:is([data-kind='not-installed'], [data-kind='too-old'], [data-kind='cannot-start']) .host-provider__dot { border-color: var(--tt-text-faint); background: var(--tt-text-faint); }
 
+/* An agent is working on it (ADR-0035): on its way, as Connecting is, with the thread named in the detail. */
+.host-provider[data-kind='working'] .host-provider__dot { border-color: var(--tt-accent); background: var(--tt-accent); }
+.host-provider__detail b { color: var(--tt-text); font-weight: 600; }
+/* A tile's two actions wrap under each other in a narrow tile, and a long name wraps inside its button. */
+.host-provider__actions .tt-button { max-width: 100%; white-space: normal; text-align: left; }
+
+/* Have my agent install it, update it or fix it: the dialog that starts it. */
+.host-agent-dialog { width: min(460px, 100%); }
+.host-agent { display: grid; gap: 12px; margin-top: 10px; }
+.hosts-settings .host-agent p { margin: 0; color: var(--tt-text); font-size: 13px; }
+.hosts-settings .host-agent .host-agent__quiet { color: var(--tt-text-muted); font-size: 12px; }
+.host-agent b { font-weight: 600; }
+.host-agent__model { display: grid; gap: 6px; }
+.host-agent .hosts-notice { margin-top: 0; }
+
 /* Devin signs in from a terminal on the host: the command, with Copy. */
 .host-provider__command { display: grid; gap: 6px; min-width: 0; }
 .hosts-settings .host-provider__command p { margin: 0; color: var(--tt-text-muted); font-size: 12px; }

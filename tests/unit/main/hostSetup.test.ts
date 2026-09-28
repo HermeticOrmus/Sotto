@@ -14,7 +14,7 @@ const CHOICE: HostSetupChoice = { models: [{ id: 'claude:opus', name: 'Claude Op
 const host: Omit<RemoteHost, 'enabled'> = { id: HOST_ID, name: 'forge', target: 'zach@forge', identityFile: 'C:/Users/zache/.ssh/id_forge', installPath: '~/.local/share/sotto-host', dataDirectory: '~/.sotto' }
 const start = (patch: Partial<Extract<HostsCommand, { type: 'start-setup' }>> = {}): Extract<HostsCommand, { type: 'start-setup' }> => ({ type: 'start-setup', id: SETUP_ID, host, modelId: 'claude:opus', ...patch })
 
-function fixture() {
+function fixture(busy?: () => string | undefined) {
   const statuses = new Map<string, HostStatus>()
   const saved: string[] = []
   const checks: ((status: Partial<HostStatus>) => void)[] = []
@@ -43,7 +43,7 @@ function fixture() {
     windowId: (threadId: string) => `host:local:${threadId}`,
     subscribe: (next: () => void) => { listener = next; return () => undefined },
   } satisfies HostSetupThreads
-  const setup = new HostSetup({ hosts, threads, version: '0.1.21' })
+  const setup = new HostSetup({ hosts, threads, version: '0.1.21', ...(busy ? { busy } : {}) })
   const revoked: string[] = []
   setup.useTools(threadId => { revoked.push(threadId); events.push('revoke') })
   const onRequests = vi.fn()
@@ -262,6 +262,13 @@ describe('HostSetup', () => {
     f.threads.thread.mockReturnValue({ requestIds: [], archived: true })
     f.threadsChanged()
     await vi.waitFor(() => expect(f.setup.state()?.phase).toBe('stopped'))
+  })
+
+  it('does not start beside a provider job: one agent job at a time', async () => {
+    const f = fixture(() => 'An agent is installing Devin on forge now. Stop it on its tile in Settings > Hosts first. Nothing was started.')
+    await expect(f.setup.command(start())).rejects.toThrow('An agent is installing Devin on forge now.')
+    expect(f.threads.start).not.toHaveBeenCalled()
+    expect(f.setup.state()).toBeUndefined()
   })
 
   it('keeps a thread that did not take its brief open to look at, and gives back the form when none was made', async () => {

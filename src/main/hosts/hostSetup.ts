@@ -4,7 +4,7 @@ import { HOST_SETUP_STEPS, type HostSetupChoice, type HostSetupState, type HostS
 import { isSottoRequest, SOTTO_REQUEST_PREFIX, type SottoThreadRequests } from '../agents/sottoRequests'
 import type { HostSetupSource } from './desktopHosts'
 import { hostSetupBrief } from './hostSetupBrief'
-import type { HostSetupToolHandlers, HostSetupToolName, HostSetupToolReply } from './hostSetupTools'
+import { HOST_SETUP_TOOL_NAMES, type AgentJobToolName, type HostSetupToolHandlers, type HostSetupToolReply } from './hostSetupTools'
 import { validateSshHost } from './sshConfiguration'
 
 type Connection = Omit<RemoteHost, 'enabled'>
@@ -76,7 +76,11 @@ export class HostSetup implements HostSetupSource, HostSetupToolHandlers {
   private revokeTool: ((threadId: string) => void) | undefined
   private watched = ''
   private readonly unsubscribe: () => void
-  constructor(private readonly options: { hosts: HostSetupHosts; threads: HostSetupThreads; version: string }) {
+  /**
+   * `busy` names the other agent job running, a provider job, as the sentence that refuses a second one: one agent job
+   * runs at a time (ADR-0035).
+   */
+  constructor(private readonly options: { hosts: HostSetupHosts; threads: HostSetupThreads; version: string; busy?: () => string | undefined }) {
     this.unsubscribe = options.threads.subscribe(() => this.threadsChanged())
   }
   /** The running setup's own thread, by its Sotto thread ID. */
@@ -126,9 +130,11 @@ export class HostSetup implements HostSetupSource, HostSetupToolHandlers {
   }
   // The tool's side, for the one thread whose setup runs.
   admits(threadId: string): boolean { return running(this.current) && this.current.threadId === threadId }
-  async run(threadId: string, tool: HostSetupToolName): Promise<HostSetupToolReply> {
+  /** The setup thread's tools: the host setup's three, and none of a provider job's. */
+  tools(threadId: string): readonly AgentJobToolName[] { return this.admits(threadId) ? HOST_SETUP_TOOL_NAMES : [] }
+  async run(threadId: string, tool: AgentJobToolName): Promise<HostSetupToolReply> {
     const run = this.current
-    if (!running(run) || run.threadId !== threadId) return { isError: true, result: { message: 'This thread is not setting up a host now. Nothing was checked or added.' } }
+    if (!running(run) || run.threadId !== threadId || !(HOST_SETUP_TOOL_NAMES as readonly string[]).includes(tool)) return { isError: true, result: { message: 'This thread is not setting up a host now. Nothing was checked or added.' } }
     if (tool === 'host_status') return { result: this.status(run) }
     if (tool === 'host_add' && run.adding) return run.adding
     if (run.busy || run.adding) return { isError: true, result: { message: 'A check or an add is already running for this device. Wait for it, then read host_status.' } }
@@ -148,6 +154,8 @@ export class HostSetup implements HostSetupSource, HostSetupToolHandlers {
 
   private async start(command: Extract<HostsCommand, { type: 'start-setup' }>): Promise<void> {
     if (running(this.current)) throw new Error(`Sotto is already setting up ${this.current.name}. Stop that setup first. Nothing was started.`)
+    const busy = this.options.busy?.()
+    if (busy) throw new Error(busy)
     const choice = this.options.threads.choice()
     if (choice.unavailable) throw new Error(choice.unavailable)
     const model = choice.models.find(item => item.id === command.modelId)

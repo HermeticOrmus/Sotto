@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { providerIdSchema, type ProviderId } from './agents'
+import { PROVIDER_LABELS, providerIdSchema, type AgentProviderStatus, type ProviderId, type ProviderProblem } from './agents'
 
 /**
  * A host's providers from this computer (ADR-0037): the tiles under a connected host's row in Settings > Hosts, the
@@ -86,6 +86,48 @@ export const hostSignInRequestSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('open'), id: z.uuid(), signInId: z.uuid() }).strict(),
 ])
 export type HostSignInRequest = z.infer<typeof hostSignInRequestSchema>
+
+/**
+ * A provider job (ADR-0035, amended for #461): an agent in a thread on this computer installs, updates or fixes one
+ * provider on one connected host, from that provider's tile. `install` is for a provider the host did not find,
+ * `update` for one older than Sotto's floor, `fix` for one installed where the host cannot find or start it.
+ */
+export const hostProviderJobCaseSchema = z.enum(['install', 'update', 'fix'])
+export type HostProviderJobCase = z.infer<typeof hostProviderJobCaseSchema>
+/** The job a tile offers for why its provider is not connected, or undefined when no job fits. */
+export function hostProviderJobCase(problem: ProviderProblem | undefined): HostProviderJobCase | undefined {
+  return problem === 'not-installed' ? 'install' : problem === 'too-old' ? 'update' : problem === 'cannot-start' ? 'fix' : undefined
+}
+/**
+ * Whether a host has found a provider and can start it, which is where a provider job ends: it connected, or it
+ * started and said it is not signed in. Signing in is the user's, from the tile (ADR-0037).
+ */
+export function hostProviderFound(status: AgentProviderStatus | undefined): boolean {
+  return status?.connection === 'connected' || status?.connection === 'error' && status.problem === 'signed-out'
+}
+const JOB_VERBS: Readonly<Record<HostProviderJobCase, string>> = { install: 'Install', update: 'Update', fix: 'Fix' }
+/** The job's thread and dialog title: "Install Devin on forge". */
+export function hostProviderJobTitle(jobCase: HostProviderJobCase, provider: ProviderId, host: string): string {
+  return `${JOB_VERBS[jobCase]} ${PROVIDER_LABELS[provider]} on ${host}`
+}
+/**
+ * A provider job as Settings > Hosts shows it: which saved host (`hostId`, its saved ID) and provider, the thread working
+ * on it and its model. `starting` until the thread has its brief, `running` while it works, then `found` once the host
+ * finds the provider, `stopped` on Stop, or `failed` when the thread did not start working, with the reason.
+ */
+export interface HostProviderJobState {
+  readonly id: string
+  readonly hostId: string
+  readonly host: string
+  readonly provider: ProviderId
+  readonly case: HostProviderJobCase
+  /** The job's thread as the window addresses it. Absent until the thread exists. */
+  readonly threadId?: string | undefined
+  readonly threadTitle: string
+  readonly modelName: string
+  readonly phase: 'starting' | 'running' | 'found' | 'stopped' | 'failed'
+  readonly error?: string | undefined
+}
 
 export const HOSTS_PROVIDER_ACTION = 'hosts:provider-action'
 export const HOSTS_SIGN_IN = 'hosts:sign-in'
