@@ -43,6 +43,7 @@ export async function projectWorkingCopy(state: AgentState, project: AgentProjec
 export function unusedNewThread(state: AgentState, project: AgentProject): AgentThread | undefined {
   const { modelId, selectedModel, reasoningEffort, permission } = newThreadOptions(state, project)
   if (state.configuration.newThreadReasoningEffort && reasoningEffort === undefined) return undefined
+  if (state.configuration.newThreadRuntimeMode && permission.runtimeMode === undefined && permission.providerMode === undefined) return undefined
   return state.host.threads.find(thread => thread.projectId === project.id && thread.titleSource === 'default' && thread.status === 'idle'
     && !isThreadClosed(thread) && !isWorkspaceThreadSettled(thread, project)
     && Object.keys(pendingSettingsStore.view(thread.id).pending).length === 0 && unconfirmedKinds(state, thread.id).size === 0

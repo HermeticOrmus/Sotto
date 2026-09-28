@@ -34,6 +34,8 @@ Spec: new work is unsettled; reused empty work must match the current default mo
 
 Independent review of PR #433 found two additional reuse cases: pending or unconfirmed model/effort changes could land after reuse, and a missing catalog could leave a saved effort unresolved. Five regression cases failed before the follow-up fix; the four focused files then passed all 41 tests. Reuse now declines both cases. The guide's older unconditional reuse sentence was corrected too. The repeated CSS exclusion across the two existing Settings scopes was retained rather than introducing a broader text-field refactor.
 
+Grok's spec recheck found the corresponding unresolved permission-default case. Two regression cases reproduced reuse of a more permissive empty thread when the model was missing or offered no permission choices. Reuse now declines an unresolved saved permission default too. A neighboring test confirms that a matching provider profile still permits reuse. All 44 tests in the four focused files passed after this fix.
+
 After rebasing onto main and applying the review fixes, typecheck, lint and build passed again. The three related Electron specs ran together with all six tests passing. The retained screenshots were refreshed to match the current app, including the Phones navigation entry already on main.
 
 Passed: `npm run typecheck`, `npm run lint`, `npm run notices:verify` (174 components), and `npm run build`. The four focused unit files passed (35 tests); after adding the managed regression, the two affected files passed (24 tests). The two new Electron journeys passed three consecutive runs (six tests), and the Settings journey passed again with track-click coverage. All three existing effort-picker tests and the settled-folder test passed.

@@ -58,6 +58,21 @@ describe('an unused new thread', () => {
     expect(unusedNewThread(current, project)).toBeUndefined()
   })
 
+  it.each([true, false])('does not reuse a thread when its saved permission cannot be resolved (model present: %s)', modelPresent => {
+    const current = state([thread({ runtimeMode: 'full-access' })])
+    current.configuration.newThreadModelId = 'codex:model'
+    current.configuration.newThreadRuntimeMode = 'approval-required'
+    if (!modelPresent) current.host.models = []
+    expect(unusedNewThread(current, project)).toBeUndefined()
+  })
+
+  it('reuses a matching provider profile when the saved runtime mode does not apply', () => {
+    const current = state([thread({ providerMode: 'standard' })])
+    current.configuration.newThreadRuntimeMode = 'approval-required'
+    current.host.models[0]!.providerModes = [{ id: 'standard', name: 'Standard' }]
+    expect(unusedNewThread(current, project)?.id).toBe('thread')
+  })
+
   it('is not a thread that has been used, renamed, is running, settled or elsewhere', () => {
     const used = [
       thread({ messages: [{ id: 'm', role: 'user', text: 'Hello', createdAt: '2026-09-26T00:00:00.000Z' }] }),
