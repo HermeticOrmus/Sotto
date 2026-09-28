@@ -1227,3 +1227,34 @@ describe('Personal dictionary draft acknowledgements', () => {
     expect(f.input).toHaveValue('  Sotto\nZach  ')
   })
 })
+
+describe('Settings draft editing work', () => {
+  it.each([
+    { category: 'Cleanup', label: 'Personal dictionary', field: 'llmDictionary', text: 'Sotto', saved: 'Sotto', blurCommits: 0 },
+    { category: 'Output', label: 'Paste delay', field: 'pasteDelayMs', text: '300', saved: 300, blurCommits: 1 },
+  ])('does no extra render or request while editing $label', async ({ category, label, field, text, saved, blurCommits }) => {
+    const pending = deferred<boolean>()
+    const update = vi.fn(() => pending.promise)
+    const props = baseProps({ onUpdateSettings: update })
+    let commits = 0
+    const count = () => { commits += 1 }
+    const view = render(<React.Profiler id="settings-drafts" onRender={count}><SettingsView {...props} /></React.Profiler>)
+    await selectCategory(category)
+    await act(async () => undefined)
+    const input = screen.getByRole('textbox', { name: label })
+    const before = commits
+    for (let end = 1; end <= text.length; end += 1) fireEvent.change(input, { target: { value: text.slice(0, end) } })
+    expect(commits - before).toBe(text.length)
+    expect(update).not.toHaveBeenCalled()
+    fireEvent.blur(input)
+    expect(update).toHaveBeenCalledExactlyOnceWith({ [field]: saved })
+    expect(commits - before).toBe(text.length + blurCommits)
+    await act(async () => { pending.resolve(true) })
+    expect(commits - before).toBe(text.length + blurCommits + 1)
+    const afterSave = commits
+    view.rerender(<React.Profiler id="settings-drafts" onRender={count}><SettingsView {...props} settings={{ ...props.settings, [field]: saved }} /></React.Profiler>)
+    expect(commits - afterSave).toBe(1)
+    expect(input).toHaveValue(text)
+    expect(update).toHaveBeenCalledTimes(1)
+  })
+})

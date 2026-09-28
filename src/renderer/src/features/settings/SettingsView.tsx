@@ -1,5 +1,6 @@
 import { HostsSettings } from './HostsSettings'
 import { PhonesSettings } from './PhonesSettings'
+import { useRevisionDraft } from './useRevisionDraft'
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { ArrowUpRight, AudioLines, ChevronRight, Command, GitBranch, Mic, Palette, Server, Settings2, Smartphone, Sparkles, Workflow } from 'lucide-react'
 
@@ -48,13 +49,6 @@ import {
 } from '../onboarding/microphoneTest'
 
 type MediaDevicesAdapter = Pick<MediaDevices, 'enumerateDevices' | 'addEventListener' | 'removeEventListener'>
-
-interface DraftSubmission<T> {
-  readonly token: number
-  readonly submitted: T
-  readonly authoritativeAtSubmit: T
-  readonly editVersion: number
-}
 
 export interface SettingsViewProps {
   readonly settings: AppSettings
@@ -154,13 +148,13 @@ export function SettingsView({
   const [microphoneLevel, setMicrophoneLevel] = useState(0)
   const microphoneTestRef = useRef<MicrophoneTestController | null>(null)
   const [deviceState, setDeviceState] = useState<'loading' | 'ready' | 'error'>('loading')
-  const [hotkeyDraft, setHotkeyDraft] = useState(() => formatAccelerator(settings.hotkey, platform, 'editing'))
-  const [pasteDelayDraft, setPasteDelayDraft] = useState(String(settings.pasteDelayMs))
-  const [successDurationDraft, setSuccessDurationDraft] = useState(String(settings.successDisplayMs))
   const [pasteDelayError, setPasteDelayError] = useState<string | undefined>()
   const [successDurationError, setSuccessDurationError] = useState<string | undefined>()
   const [notice, setNotice] = useState<{ text: string; error: boolean } | null>(null)
-  const [llmDictionaryDraft, setLlmDictionaryDraft] = useState(settings.llmDictionary)
+  const hotkeyDraft = useRevisionDraft(canonicalAccelerator(settings.hotkey, platform), formatAccelerator(settings.hotkey, platform, 'editing'))
+  const pasteDelayDraft = useRevisionDraft(settings.pasteDelayMs, String(settings.pasteDelayMs), () => setPasteDelayError(undefined))
+  const successDurationDraft = useRevisionDraft(settings.successDisplayMs, String(settings.successDisplayMs), () => setSuccessDurationError(undefined))
+  const llmDictionaryDraft = useRevisionDraft(settings.llmDictionary, settings.llmDictionary)
   const [updateBusy, setUpdateBusy] = useState(false)
   const [clearFailure, setClearFailure] = useState<string | null>(null)
   const [resetFailure, setResetFailure] = useState<string | null>(null)
@@ -170,86 +164,9 @@ export function SettingsView({
   const motionSequenceRef = useRef(0)
   const settingsRef = useRef(settings)
   const headingRef = useRef<HTMLHeadingElement>(null)
-  const hotkeyDraftRef = useRef(hotkeyDraft)
-  const hotkeyEditVersionRef = useRef(0)
-  const hotkeySubmissionRef = useRef<DraftSubmission<string> | null>(null)
-  const hotkeyTokenRef = useRef(0)
-  const pasteDelayDraftRef = useRef(pasteDelayDraft)
-  const pasteDelayEditVersionRef = useRef(0)
-  const pasteDelaySubmissionRef = useRef<DraftSubmission<number> | null>(null)
-  const pasteDelayTokenRef = useRef(0)
-  const successDurationDraftRef = useRef(successDurationDraft)
-  const successDurationEditVersionRef = useRef(0)
-  const successDurationSubmissionRef = useRef<DraftSubmission<number> | null>(null)
-  const successDurationTokenRef = useRef(0)
-  const llmDictionaryDraftRef = useRef(llmDictionaryDraft)
-  const llmDictionaryEditVersionRef = useRef(0)
-  const llmDictionaryTokenRef = useRef(0)
-  const llmDictionarySubmissionsRef = useRef<DraftSubmission<string>[]>([])
 
   settingsRef.current = settings
 
-  useEffect(() => {
-    const submission = hotkeySubmissionRef.current
-    if (submission === null) {
-      const display = formatAccelerator(settings.hotkey, platform, 'editing')
-      hotkeyDraftRef.current = display
-      setHotkeyDraft(display)
-      return
-    }
-    const authoritative = canonicalAccelerator(settings.hotkey, platform)
-    if (authoritative === submission.submitted) {
-      if (hotkeyEditVersionRef.current === submission.editVersion) {
-        const display = formatAccelerator(settings.hotkey, platform, 'editing')
-        hotkeyDraftRef.current = display
-        setHotkeyDraft(display)
-      }
-      hotkeySubmissionRef.current = null
-    } else if (authoritative !== submission.authoritativeAtSubmit) {
-      hotkeySubmissionRef.current = null
-      const display = formatAccelerator(settings.hotkey, platform, 'editing')
-      hotkeyDraftRef.current = display
-      setHotkeyDraft(display)
-    }
-  }, [platform, settings.hotkey])
-  useEffect(() => {
-    const submission = pasteDelaySubmissionRef.current
-    if (submission === null || settings.pasteDelayMs !== submission.authoritativeAtSubmit) {
-      if (submission === null || settings.pasteDelayMs !== submission.submitted || pasteDelayEditVersionRef.current === submission.editVersion) {
-        const value = String(settings.pasteDelayMs)
-        pasteDelayDraftRef.current = value
-        setPasteDelayDraft(value)
-        setPasteDelayError(undefined)
-      }
-      if (submission !== null) pasteDelaySubmissionRef.current = null
-    }
-  }, [settings.pasteDelayMs])
-  useEffect(() => {
-    const submission = successDurationSubmissionRef.current
-    if (submission === null || settings.successDisplayMs !== submission.authoritativeAtSubmit) {
-      if (submission === null || settings.successDisplayMs !== submission.submitted || successDurationEditVersionRef.current === submission.editVersion) {
-        const value = String(settings.successDisplayMs)
-        successDurationDraftRef.current = value
-        setSuccessDurationDraft(value)
-        setSuccessDurationError(undefined)
-      }
-      if (submission !== null) successDurationSubmissionRef.current = null
-    }
-  }, [settings.successDisplayMs])
-
-  useEffect(() => {
-    // Settings saves are ordered, but several blurs can be queued before the first acknowledgement.
-    const submission = llmDictionarySubmissionsRef.current.find(value => value.submitted === settings.llmDictionary)
-    if (submission) {
-      llmDictionarySubmissionsRef.current = llmDictionarySubmissionsRef.current.filter(value => value.token > submission.token)
-      if (llmDictionaryEditVersionRef.current !== submission.editVersion) return
-    } else {
-      // An external update remains authoritative, including over older saves still awaiting a reply.
-      llmDictionaryEditVersionRef.current += 1
-    }
-    llmDictionaryDraftRef.current = settings.llmDictionary
-    setLlmDictionaryDraft(settings.llmDictionary)
-  }, [settings.llmDictionary])
   useEffect(() => {
     if (mediaDevices === undefined) {
       setDeviceState('error')
@@ -331,69 +248,32 @@ export function SettingsView({
   }
 
   const saveDictionary = async (): Promise<void> => {
-    const value = llmDictionaryDraftRef.current
-    if (value === settingsRef.current.llmDictionary && !llmDictionarySubmissionsRef.current.some(submission => submission.submitted !== value)) return
-    if (llmDictionarySubmissionsRef.current.some(submission => submission.editVersion === llmDictionaryEditVersionRef.current)) return
-    const submission: DraftSubmission<string> = {
-      token: ++llmDictionaryTokenRef.current,
-      submitted: value,
-      authoritativeAtSubmit: settingsRef.current.llmDictionary,
-      editVersion: llmDictionaryEditVersionRef.current,
-    }
-    llmDictionarySubmissionsRef.current.push(submission)
-    if (!await save({ llmDictionary: value }, 'Dictionary saved.')) {
-      llmDictionarySubmissionsRef.current = llmDictionarySubmissionsRef.current.filter(value => value.token !== submission.token)
-    }
+    const value = llmDictionaryDraft.read()
+    const submission = llmDictionaryDraft.begin(value, true)
+    if (submission === null) return
+    if (!await save({ llmDictionary: value }, 'Dictionary saved.')) llmDictionaryDraft.fail(submission, false)
   }
 
   const savePasteDelay = async (): Promise<void> => {
-    const value = parseBoundedInteger(pasteDelayDraftRef.current, 50, 1_000)
+    const value = parseBoundedInteger(pasteDelayDraft.read(), 50, 1_000)
     if (value === null) {
       setPasteDelayError('Enter a whole number between 50 and 1000.')
       return
     }
     setPasteDelayError(undefined)
-    const submission: DraftSubmission<number> = {
-      token: ++pasteDelayTokenRef.current,
-      submitted: value,
-      authoritativeAtSubmit: settingsRef.current.pasteDelayMs,
-      editVersion: pasteDelayEditVersionRef.current,
-    }
-    pasteDelaySubmissionRef.current = submission
-    const saved = await save({ pasteDelayMs: value }, 'Paste delay saved.')
-    if (!saved && pasteDelaySubmissionRef.current?.token === submission.token) {
-      pasteDelaySubmissionRef.current = null
-      if (pasteDelayEditVersionRef.current === submission.editVersion) {
-        const authoritative = String(settingsRef.current.pasteDelayMs)
-        pasteDelayDraftRef.current = authoritative
-        setPasteDelayDraft(authoritative)
-      }
-    }
+    const submission = pasteDelayDraft.begin(value)!
+    if (!await save({ pasteDelayMs: value }, 'Paste delay saved.')) pasteDelayDraft.fail(submission, true)
   }
 
   const saveSuccessDuration = async (): Promise<void> => {
-    const value = parseBoundedInteger(successDurationDraftRef.current, 500, 5_000)
+    const value = parseBoundedInteger(successDurationDraft.read(), 500, 5_000)
     if (value === null) {
       setSuccessDurationError('Enter a whole number between 500 and 5000.')
       return
     }
     setSuccessDurationError(undefined)
-    const submission: DraftSubmission<number> = {
-      token: ++successDurationTokenRef.current,
-      submitted: value,
-      authoritativeAtSubmit: settingsRef.current.successDisplayMs,
-      editVersion: successDurationEditVersionRef.current,
-    }
-    successDurationSubmissionRef.current = submission
-    const saved = await save({ successDisplayMs: value }, 'Success duration saved.')
-    if (!saved && successDurationSubmissionRef.current?.token === submission.token) {
-      successDurationSubmissionRef.current = null
-      if (successDurationEditVersionRef.current === submission.editVersion) {
-        const authoritative = String(settingsRef.current.successDisplayMs)
-        successDurationDraftRef.current = authoritative
-        setSuccessDurationDraft(authoritative)
-      }
-    }
+    const submission = successDurationDraft.begin(value)!
+    if (!await save({ successDisplayMs: value }, 'Success duration saved.')) successDurationDraft.fail(submission, true)
   }
 
   // One busy flag for all three: they are the same button row, and only one of
@@ -428,37 +308,21 @@ export function SettingsView({
   }
 
   const saveHotkey = async (): Promise<void> => {
-
-    const candidate = parseAccelerator(hotkeyDraftRef.current, platform)
+    const candidate = parseAccelerator(hotkeyDraft.read(), platform)
     if (candidate === null) {
-      const display = formatAccelerator(settingsRef.current.hotkey, platform, 'editing')
-      hotkeyDraftRef.current = display
-      setHotkeyDraft(display)
+      hotkeyDraft.reset()
       setNotice({ text: 'Enter a valid shortcut. Your previous shortcut is still active.', error: true })
       return
     }
-    const submission: DraftSubmission<string> = {
-      token: ++hotkeyTokenRef.current,
-      submitted: candidate,
-      authoritativeAtSubmit: canonicalAccelerator(settingsRef.current.hotkey, platform),
-      editVersion: hotkeyEditVersionRef.current,
-    }
-    hotkeySubmissionRef.current = submission
+    const submission = hotkeyDraft.begin(candidate)!
     const result = await onReplaceHotkey(candidate).catch(() => ({ ok: false as const, reason: 'unavailable' as const }))
-    if (hotkeySubmissionRef.current?.token !== submission.token) return
+    if (!hotkeyDraft.isLatest(submission)) return
     if (result.ok) setNotice({ text: 'Global shortcut updated.', error: false })
     else {
-      hotkeySubmissionRef.current = null
-      if (hotkeyEditVersionRef.current === submission.editVersion) {
-        const display = formatAccelerator(settingsRef.current.hotkey, platform, 'editing')
-        hotkeyDraftRef.current = display
-        setHotkeyDraft(display)
-      }
+      hotkeyDraft.fail(submission, true)
       setNotice({ text: result.reason === 'conflict' ? 'Another application is already using that shortcut. Your previous shortcut is still active.' : result.reason === 'invalid' ? 'That shortcut is not valid. Your previous shortcut is still active.' : 'The shortcut could not be updated. Your previous shortcut is still active.', error: true })
     }
-
   }
-
 
   const selectSection = (id: SettingsSectionId): void => {
     setActiveSection(id)
@@ -547,11 +411,9 @@ export function SettingsView({
                   </Field>
                   <div className="settings-input-action">
                     <Field label="Global shortcut" description={copy.settingsGlobalShortcutDescription}>
-                      <input className="tt-input" value={hotkeyDraft} onBlur={() => void saveHotkey()} onChange={(event) => {
+                      <input className="tt-input" value={hotkeyDraft.value} onBlur={() => void saveHotkey()} onChange={(event) => {
                         const value = event.currentTarget.value
-                        hotkeyDraftRef.current = value
-                        hotkeyEditVersionRef.current += 1
-                        setHotkeyDraft(value)
+                        hotkeyDraft.edit(value)
                       }} />
                     </Field>
 
@@ -583,11 +445,9 @@ export function SettingsView({
                   <Field label="Formatting quality" description="Low is near-instant; higher tiers format better but add up to a couple seconds."><Select disabled={!settings.llmFormatting} value={settings.llmQuality} onChange={(event) => void save({ llmQuality: event.currentTarget.value as LlmQuality })}><option value="low">Low — fastest (Mercury 2)</option><option value="medium">Medium (Nova 2 Lite)</option><option value="value">Value — cheap, near-High (GLM-5.3 Flash)</option><option value="high">High — best formatting (Claude Haiku 4.5)</option></Select></Field>
                   <div className="settings-input-action">
                     <Field label="Personal dictionary" description="One word or name per line. Sent as spelling hints with your audio and used during cleanup.">
-                      <textarea className="tt-input" rows={5} value={llmDictionaryDraft} onBlur={() => void saveDictionary()} onChange={(event) => {
+                      <textarea className="tt-input" rows={5} value={llmDictionaryDraft.value} onBlur={() => void saveDictionary()} onChange={(event) => {
                         const value = event.currentTarget.value
-                        llmDictionaryDraftRef.current = value
-                        llmDictionaryEditVersionRef.current += 1
-                        setLlmDictionaryDraft(value)
+                        llmDictionaryDraft.edit(value)
                       }} />
                     </Field>
 
@@ -613,8 +473,8 @@ export function SettingsView({
                 <div className="settings-rows">
                   <Toggle label="Automatic clipboard copy" checked disabled onCheckedChange={() => undefined} description="Always enabled for every successful non-empty transcript." />
                   <Toggle label="Automatic paste" checked={settings.autoPaste} onCheckedChange={(checked) => void save({ autoPaste: checked })} description={copy.settingsAutoPasteDescription} />
-                  <div className="settings-input-action"><Field label="Paste delay" description="Milliseconds to wait before attempting paste (50-1000)." {...(pasteDelayError === undefined ? {} : { error: pasteDelayError })}><input className="tt-input" inputMode="numeric" value={pasteDelayDraft} onBlur={() => void savePasteDelay()} onChange={(event) => { const value = event.currentTarget.value; pasteDelayDraftRef.current = value; pasteDelayEditVersionRef.current += 1; setPasteDelayDraft(value) }} /></Field></div>
-                  <div className="settings-input-action"><Field label="Success message duration" description="Milliseconds the success state remains visible (500-5000)." {...(successDurationError === undefined ? {} : { error: successDurationError })}><input className="tt-input" inputMode="numeric" value={successDurationDraft} onBlur={() => void saveSuccessDuration()} onChange={(event) => { const value = event.currentTarget.value; successDurationDraftRef.current = value; successDurationEditVersionRef.current += 1; setSuccessDurationDraft(value) }} /></Field></div>
+                  <div className="settings-input-action"><Field label="Paste delay" description="Milliseconds to wait before attempting paste (50-1000)." {...(pasteDelayError === undefined ? {} : { error: pasteDelayError })}><input className="tt-input" inputMode="numeric" value={pasteDelayDraft.value} onBlur={() => void savePasteDelay()} onChange={(event) => { pasteDelayDraft.edit(event.currentTarget.value) }} /></Field></div>
+                  <div className="settings-input-action"><Field label="Success message duration" description="Milliseconds the success state remains visible (500-5000)." {...(successDurationError === undefined ? {} : { error: successDurationError })}><input className="tt-input" inputMode="numeric" value={successDurationDraft.value} onBlur={() => void saveSuccessDuration()} onChange={(event) => { successDurationDraft.edit(event.currentTarget.value) }} /></Field></div>
                 </div>
               </Card>
 
