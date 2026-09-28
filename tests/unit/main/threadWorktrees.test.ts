@@ -47,6 +47,10 @@ describe('independent working-copy allocation', () => {
     expect((await service.ensure(ready)).status).toBe('ready')
     expect(calls).toHaveLength(6)
     expect(calls.filter(args => args.includes('--git-common-dir'))).toHaveLength(2)
+    calls.length = 0
+    expect(await service.discover(ready.path!, f.project)).toMatchObject({ mode: 'independent', path: ready.path, branch: ready.branch, reused: true })
+    expect(calls).toHaveLength(6)
+    expect(calls.filter(args => args.includes('--git-common-dir'))).toHaveLength(2)
     await removeTestCheckout(f.root, ready.path!)
     calls.length = 0
     const restored = await service.restore(ready)
@@ -56,6 +60,20 @@ describe('independent working-copy allocation', () => {
     calls.length = 0
     expect((await service.reclaim(restored)).reclaimedAt).toBeDefined()
     expect(calls).toHaveLength(7)
+  })
+
+  it('checks the original repository independently before reading a discovered checkout status', async () => {
+    const f = await fixture(), other = await fixture()
+    const ready = await f.service.ensure(await f.service.allocate(f.project, 'independent'))
+    let statusReads = 0
+    const service = new ThreadWorktrees(f.root, async (cwd, args) => {
+      if (args[0] === 'status') statusReads += 1
+      if (cwd === f.project && args.includes('--git-common-dir')) return git(other.project, args)
+      return git(cwd, args)
+    })
+    await expect(service.discover(ready.path!, f.project)).rejects.toThrow('no longer belongs to the original repository')
+    expect(statusReads).toBe(0)
+    expect(await readFile(join(ready.path!, 'tracked.txt'), 'utf8')).toBe('committed baseline')
   })
 
   it('coordinates registry access across service instances and linked project roots while another repository progresses', async () => {
@@ -351,6 +369,7 @@ describe('independent working-copy allocation', () => {
     await git(f.project, ['worktree', 'lock', '--reason', 'initializing', a.path!])
     await expect(f.service.ensure(a)).rejects.toThrow('locked')
     await expect(f.service.inspect(a)).rejects.toThrow('locked')
+    await expect(f.service.discover(a.path!, f.project)).rejects.toThrow('locked')
     await git(f.project, ['worktree', 'unlock', a.path!])
     expect((await f.service.ensure(a)).status).toBe('ready')
   })

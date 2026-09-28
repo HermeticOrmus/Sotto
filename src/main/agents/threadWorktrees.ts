@@ -32,6 +32,7 @@ function pathKey(path: string): string { const key = resolve(path); return proce
 // including when their projects start in different linked checkouts of one repository.
 const registryOperations = new Map<string, Promise<void>>()
 interface RegistryIdentity { readonly common: string; readonly key: string }
+interface InspectionReads { readonly root: string; readonly common?: string; readonly listing?: string }
 async function coordinateRegistry(identity: RegistryIdentity, run: () => Promise<string>): Promise<string> {
   const previous = registryOperations.get(identity.key) ?? Promise.resolve()
   const operation = previous.then(run)
@@ -205,15 +206,18 @@ export class ThreadWorktrees {
     let projectRoot: string | undefined
     try { projectRoot = await this.checkoutIdentity(projectPath) } catch { /* The established folder still defines its session. */ }
     // Equal checkout roots already establish the shared-folder result; no registry scan is needed.
-    if (pathKey(root) === projectRoot) return (await this.inspectWithin({ mode: 'shared', status: 'ready', path }, undefined, root)).worktree
+    if (pathKey(root) === projectRoot) return (await this.inspectWithin({ mode: 'shared', status: 'ready', path }, undefined, { root })).worktree
     const identity = await this.registryIdentity(root)
-    const entries = registeredWorktrees(await this.registry(root, ['worktree', 'list', '--porcelain', '-z'], identity))
+    const listing = await this.registry(root, ['worktree', 'list', '--porcelain', '-z'], identity)
+    const entries = registeredWorktrees(listing)
     const registered = entries.find(entry => pathKey(entry.path) === pathKey(root))
     if (pathKey(root) !== projectRoot && registered && pathKey(entries[0]?.path ?? root) !== pathKey(root)) {
+      // Carry this discovery's reads, not a cached binding. Inspection still obtains
+      // the main checkout's common directory independently before allowing status.
       return (await this.inspectWithin({ mode: 'independent', status: 'ready', path: root, repositoryRoot: await existingWorkingDirectory(entries[0]!.path),
-        projectRelativePath: relative(root, path).split(sep).join('/'), reused: true }, undefined, root)).worktree
+        projectRelativePath: relative(root, path).split(sep).join('/'), reused: true }, undefined, { root, common: identity.common, listing })).worktree
     }
-    return (await this.inspectWithin({ mode: 'shared', status: 'ready', path }, undefined, root)).worktree
+    return (await this.inspectWithin({ mode: 'shared', status: 'ready', path }, undefined, { root })).worktree
   }
 
   async renameTemporaryBranch(metadata: AgentWorktree, name: string): Promise<AgentWorktree> {
@@ -394,11 +398,11 @@ export class ThreadWorktrees {
     return (await this.inspectWithin(metadata)).worktree
   }
 
-  private async inspectWithin(metadata: AgentWorktree, identity?: RegistryIdentity, knownRoot?: string): Promise<{ worktree: AgentWorktree; identity?: RegistryIdentity }> {
+  private async inspectWithin(metadata: AgentWorktree, identity?: RegistryIdentity, observed?: InspectionReads): Promise<{ worktree: AgentWorktree; identity?: RegistryIdentity }> {
     if (!metadata.path) throw new Error('The working folder is not allocated. Retry setup.')
     const path = await existingWorkingDirectory(metadata.path)
     if (metadata.mode === 'shared') {
-      let repositoryRoot = knownRoot
+      let repositoryRoot = observed?.root
       try { repositoryRoot ??= (await this.git(path, ['rev-parse', '--show-toplevel'])).trim() }
       catch (error) {
         if (error instanceof Error && /not a git repository|Git is unavailable/u.test(error.message)) return { worktree: { ...metadata, branch: undefined, dirty: false, status: 'ready', error: undefined } }
@@ -413,9 +417,9 @@ export class ThreadWorktrees {
     // These were already inspection's ownership reads. Run them beside the registry
     // read so moving expected-common discovery earlier adds no subprocess or Git phase.
     const [rootResult, commonResult, listing] = await Promise.allSettled([
-      knownRoot === undefined ? this.git(path, ['rev-parse', '--show-toplevel']) : Promise.resolve(knownRoot),
-      this.git(path, ['rev-parse', '--path-format=absolute', '--git-common-dir']),
-      this.registry(metadata.repositoryRoot, ['worktree', 'list', '--porcelain', '-z'], identity),
+      observed ? Promise.resolve(observed.root) : this.git(path, ['rev-parse', '--show-toplevel']),
+      observed?.common === undefined ? this.git(path, ['rev-parse', '--path-format=absolute', '--git-common-dir']) : Promise.resolve(observed.common),
+      observed?.listing === undefined ? this.registry(metadata.repositoryRoot, ['worktree', 'list', '--porcelain', '-z'], identity) : Promise.resolve(observed.listing),
     ])
     if (listing.status === 'rejected') throw listing.reason
     const entries = registeredWorktrees(listing.value)
