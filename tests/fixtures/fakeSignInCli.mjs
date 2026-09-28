@@ -7,7 +7,8 @@
 // FAKE_SIGN_IN_DIR is a folder of plain files the test drives it with: `<provider>.approved` stands for the user entering
 // the code on the page, `<provider>.denied` for refusing it there. On success it writes `<provider>.signed-in`, which the
 // test's scripted provider reads to connect. It records its arguments in `<provider>.args.json`, never a code.
-// FAKE_SIGN_IN_PAGE, when set, is printed in place of the provider's own page.
+// FAKE_SIGN_IN_PAGE, when set, is printed in place of the provider's own page. FAKE_SIGN_IN_SPLIT, when set, is where
+// the output is cut in two with a pause between, as a pipe can hand a reader a line in pieces.
 import { existsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
@@ -20,11 +21,22 @@ writeFileSync(file('args.json'), JSON.stringify(args))
 const grey = text => `\u001b[90m${text}\u001b[0m`, blue = text => `\u001b[94m${text}\u001b[0m`
 const signedIn = () => { writeFileSync(file('signed-in'), ''); }
 const page = process.env.FAKE_SIGN_IN_PAGE
+const split = process.env.FAKE_SIGN_IN_SPLIT
+let printing = Promise.resolve()
+const say = text => {
+  const at = split ? text.indexOf(split) : -1
+  printing = printing.then(async () => {
+    if (at < 0) { process.stdout.write(text); return }
+    process.stdout.write(text.slice(0, at + split.length))
+    await new Promise(resolve => setTimeout(resolve, 300))
+    process.stdout.write(text.slice(at + split.length))
+  })
+}
 
 if (provider === 'claude') {
-  process.stdout.write('Opening browser to sign in…\n')
-  process.stdout.write(`If the browser didn't open, visit: ${page ?? 'https://claude.com/cai/oauth/authorize?code=true&client_id=fixture&state=fixture-state'}\n`)
-  process.stdout.write('Paste code here if prompted > ')
+  say('Opening browser to sign in…\n')
+  say(`If the browser didn't open, visit: ${page ?? 'https://claude.com/cai/oauth/authorize?code=true&client_id=fixture&state=fixture-state'}\n`)
+  say('Paste code here if prompted > ')
   const lines = createInterface({ input: process.stdin })
   lines.on('line', line => {
     const [code, state] = line.trim().split('#')
@@ -35,13 +47,13 @@ if (provider === 'claude') {
 } else {
   const code = provider === 'codex' ? 'WDJB-MJHTQ' : 'K7PX-2QRM'
   if (provider === 'codex') {
-    process.stdout.write(`\nWelcome to Codex [v${grey('0.158.0')}]\n${grey("OpenAI's command-line coding agent")}\n\n`)
-    process.stdout.write('Follow these steps to sign in with ChatGPT using device code authorization:\n\n')
-    process.stdout.write(`1. Open this link in your browser and sign in to your account\n   ${blue(page ?? 'https://auth.openai.com/codex/device')}\n\n`)
-    process.stdout.write(`2. Enter this one-time code ${grey('(expires in 15 minutes)')}\n   ${blue(code)}\n\n`)
+    say(`\nWelcome to Codex [v${grey('0.158.0')}]\n${grey("OpenAI's command-line coding agent")}\n\n`)
+    say('Follow these steps to sign in with ChatGPT using device code authorization:\n\n')
+    say(`1. Open this link in your browser and sign in to your account\n   ${blue(page ?? 'https://auth.openai.com/codex/device')}\n\n`)
+    say(`2. Enter this one-time code ${grey('(expires in 15 minutes)')}\n   ${blue(code)}\n\n`)
   } else {
-    process.stdout.write(`\nTo sign in, open this URL in your browser:\n\n  ${page ?? `https://accounts.x.ai/oauth2/device?user_code=${code}`}\n\n`)
-    process.stdout.write(`Confirm this code in your browser:\n\n  ${code}\n\nWaiting for authorization...\n`)
+    say(`\nTo sign in, open this URL in your browser:\n\n  ${page ?? `https://accounts.x.ai/oauth2/device?user_code=${code}`}\n\n`)
+    say(`Confirm this code in your browser:\n\n  ${code}\n\nWaiting for authorization...\n`)
   }
   setInterval(() => {
     if (existsSync(file('approved'))) { signedIn(); process.stdout.write('Successfully logged in\n'); process.exit(0) }

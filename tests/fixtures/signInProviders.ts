@@ -23,10 +23,10 @@ export function signInProviders(directory: string): Record<ProviderId, SignedOut
     grok: new SignedOutUntilSignIn('grok', directory), devin: new SignedOutUntilSignIn('devin', directory) }
 }
 /** Each provider's sign-in, run as the fake client under this Node, with only what it needs in its environment. */
-export function fakeSignInCommand(directory: string, script = resolve('tests/fixtures/fakeSignInCli.mjs'), page?: string) {
+export function fakeSignInCommand(directory: string, script = resolve('tests/fixtures/fakeSignInCli.mjs'), page?: string, split?: string) {
   return async (provider: ProviderId): Promise<SignInCommand | undefined> => provider === 'devin' ? undefined : {
     executable: process.execPath,
     args: [script, provider, ...PROVIDER_SIGN_IN_ARGS[provider] ?? []],
-    env: { PATH: process.env.PATH ?? '', SYSTEMROOT: process.env.SYSTEMROOT ?? '', FAKE_SIGN_IN_DIR: directory, ...(page ? { FAKE_SIGN_IN_PAGE: page } : {}) },
+    env: { PATH: process.env.PATH ?? '', SYSTEMROOT: process.env.SYSTEMROOT ?? '', FAKE_SIGN_IN_DIR: directory, ...(page ? { FAKE_SIGN_IN_PAGE: page } : {}), ...(split ? { FAKE_SIGN_IN_SPLIT: split } : {}) },
   }
 }

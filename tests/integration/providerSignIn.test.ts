@@ -23,8 +23,8 @@ afterEach(async () => { if (root && dirname(root) === tmpdir() && root.includes(
 
 describe('the sign-in on the host', () => {
   const connected: [ProviderId, string][] = []
-  const signIns = (options: { page?: string; lifetimeMs?: number; startTimeoutMs?: number } = {}) => new ProviderSignIns({
-    command: fakeSignInCommand(root, undefined, options.page),
+  const signIns = (options: { page?: string; split?: string; lifetimeMs?: number; startTimeoutMs?: number } = {}) => new ProviderSignIns({
+    command: fakeSignInCommand(root, undefined, options.page, options.split),
     connect: async (provider, clientId) => { connected.push([provider, clientId]); return undefined },
     ...(options.lifetimeMs ? { lifetimeMs: options.lifetimeMs } : {}), ...(options.startTimeoutMs ? { startTimeoutMs: options.startTimeoutMs } : {}),
   })
@@ -98,6 +98,17 @@ describe('the sign-in on the host', () => {
       expect(service.read(newer.id, 'desktop')?.stage).toBe('waiting')
       await expect(service.start('devin', 'desktop')).rejects.toThrow('Devin signs in from a terminal on the host. Nothing was changed.')
     } finally { service.close() }
+  })
+
+  it('reads a page or a code only once the client has printed all of it', async () => {
+    const pageCut = signIns({ split: 'client_id=' })
+    try {
+      expect((await pageCut.start('claude', 'desktop')).url).toBe('https://claude.com/cai/oauth/authorize?code=true&client_id=fixture&state=fixture-state')
+    } finally { pageCut.close() }
+    const codeCut = signIns({ split: 'WDJB-MJ' })
+    try {
+      expect((await codeCut.start('codex', 'desktop')).code).toBe('WDJB-MJHTQ')
+    } finally { codeCut.close() }
   })
 
   it('runs one sign-in per provider when two starts overlap, and spawns nothing once the host stops', async () => {

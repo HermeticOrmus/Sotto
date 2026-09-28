@@ -178,14 +178,16 @@ export class ProviderSignIns {
   private parse(entry: Entry): void {
     if (entry.view.stage !== 'starting') return
     const text = entry.output.replace(TERMINAL_SEQUENCES, '')
-    const page = PAGE.exec(text)?.[0]?.replace(/[.,;:)\]]+$/u, '')
+    const page = followed(text, PAGE.exec(text))?.[0]?.replace(/[.,;:)\]]+$/u, '')
     if (!page) return
     const name = PROVIDER_LABELS[entry.view.provider]
     if (!isProviderSignInPage(entry.view.provider, page)) {
       this.end(entry.view.id, 'failed', `${name} asked to sign in on a page Sotto does not open. Nothing was signed in. Sign in to ${name} on the host itself.`)
       return
     }
-    const code = entry.shape === 'device-code' ? DEVICE_CODE.exec(text.replace(page, ''))?.[1] ?? DEVICE_CODE.exec(page)?.[1] : undefined
+    const rest = text.replace(page, ''), printed = DEVICE_CODE.exec(rest)
+    // A printed code still arriving is waited for; a code printed only in the page's address is taken from there.
+    const code = entry.shape === 'device-code' ? (printed ? followed(rest, printed)?.[1] : DEVICE_CODE.exec(page)?.[1]) : undefined
     if (entry.shape === 'device-code' && !code) return
     const minutes = Number(EXPIRES.exec(text)?.[1])
     entry.view = { ...entry.view, stage: 'waiting', url: page, page: new URL(page).hostname, ...(code ? { code } : {}),
@@ -232,4 +234,11 @@ export class ProviderSignIns {
   private copy(entry: Entry): HostSignIn { return { ...entry.view } }
 }
 
+/**
+ * The match, once something follows it in what was printed: a chunk can end partway through a page's address or a code,
+ * and the part read so far would still match.
+ */
+function followed(text: string, match: RegExpExecArray | null): RegExpExecArray | null {
+  return match && match.index + match[0].length < text.length ? match : null
+}
 function ended(view: HostSignIn): boolean { return view.stage === 'connected' || view.stage === 'refused' || view.stage === 'failed' || view.stage === 'ended' }
