@@ -57,6 +57,125 @@ async function started(service: TerminalWorkspaceService, request: unknown) {
 }
 
 describe('terminal workspace service', () => {
+  it.each([false, true])('reserves an overlapping restart before launcher lookup (closed=%s)', async closed => {
+    const executableExists = vi.fn(async () => true)
+    const f = await fixture({ executableExists })
+    const { terminal } = await started(f.service, { projectId: 'p1', title: 'Build', workingCopy: 'shared', launch: shellLaunch })
+    if (closed) unwrap(await f.service.close({ id: terminal.id }))
+    const gate = Promise.withResolvers<boolean>(), entered = Promise.withResolvers<void>()
+    executableExists.mockImplementationOnce(() => { entered.resolve(); return gate.promise })
+    const restarting = f.service.restart({ id: terminal.id })
+    try {
+      await entered.promise
+      expect(await f.service.restart({ id: terminal.id })).toMatchObject({ ok: false, error: { code: 'busy' } })
+      gate.resolve(true)
+      expect(unwrap(await restarting).terminal.status).toBe('running')
+      expect(f.spawn).toHaveBeenCalledTimes(2)
+    } finally {
+      gate.resolve(true); await restarting
+      f.service.dispose()
+    }
+    for (const process of f.processes) expect(process.pty.kill).toHaveBeenCalledOnce()
+  })
+
+  it('Close cancels a reserved restart while its launcher waits', async () => {
+    const executableExists = vi.fn(async () => true)
+    const f = await fixture({ executableExists })
+    const { terminal } = await started(f.service, { projectId: 'p1', title: 'Build', workingCopy: 'shared', launch: shellLaunch })
+    const gate = Promise.withResolvers<boolean>(), entered = Promise.withResolvers<void>()
+    executableExists.mockImplementationOnce(() => { entered.resolve(); return gate.promise })
+    const restarting = f.service.restart({ id: terminal.id })
+    try {
+      await entered.promise
+      unwrap(await f.service.close({ id: terminal.id }))
+      expect(unwrap(await f.service.restart({ id: terminal.id })).terminal.status).toBe('running')
+      gate.resolve(true)
+      expect(await restarting).toMatchObject({ ok: false, error: { code: 'session-unavailable' } })
+      expect(unwrap(await f.service.read({ id: terminal.id })).terminal.closedAt).toBeNull()
+      expect(f.spawn).toHaveBeenCalledTimes(2)
+    } finally { gate.resolve(true); await restarting; f.service.dispose() }
+    for (const process of f.processes) expect(process.pty.kill).toHaveBeenCalledOnce()
+  })
+
+  it('Close settles before an initial checkout finishes and prevents its late process', async () => {
+    const f = await fixture()
+    const gate = Promise.withResolvers<AgentWorktree>(), entered = Promise.withResolvers<void>()
+    f.worktrees.ensure.mockImplementationOnce(() => { entered.resolve(); return gate.promise })
+    const opened = unwrap(await f.service.open({ projectId: 'p1', title: 'Build', workingCopy: 'independent', launch: shellLaunch }))
+    let closed = false
+    const closing = f.service.close({ id: opened.terminal.id }).then(result => { unwrap(result); closed = true })
+    try {
+      await entered.promise
+      await expect.poll(() => closed).toBe(true)
+    } finally {
+      gate.resolve({ ...opened.terminal.worktree!, status: 'ready' })
+      await closing
+      await f.service.read({ id: opened.terminal.id })
+    }
+    expect(f.spawn).not.toHaveBeenCalled()
+    expect(unwrap(await f.service.list()).terminals[0]!.closedAt).not.toBeNull()
+  })
+
+  it('Reopen shares the initial checkout preparation after Close invalidates its first start', async () => {
+    const f = await fixture()
+    const checkout = Promise.withResolvers<AgentWorktree>(), directory = Promise.withResolvers<string>(), directoryEntered = Promise.withResolvers<void>()
+    f.worktrees.ensure.mockImplementationOnce(() => checkout.promise)
+    f.worktrees.workingDirectory.mockImplementationOnce(() => { directoryEntered.resolve(); return directory.promise })
+    const opened = unwrap(await f.service.open({ projectId: 'p1', title: 'Build', workingCopy: 'independent', launch: shellLaunch }))
+    unwrap(await f.service.close({ id: opened.terminal.id }))
+    let settled = false
+    const reopening = f.service.restart({ id: opened.terminal.id }).then(result => { settled = true; return result })
+    try {
+      await new Promise<void>(resolve => setImmediate(resolve))
+      expect(settled).toBe(false)
+      expect(f.spawn).not.toHaveBeenCalled()
+      checkout.resolve({ ...opened.terminal.worktree!, status: 'ready' })
+      await directoryEntered.promise
+      expect(f.spawn).not.toHaveBeenCalled()
+      directory.resolve(f.checkout)
+      expect(unwrap(await reopening).terminal).toMatchObject({ status: 'running', workingDirectory: f.checkout, worktree: { status: 'ready' }, closedAt: null })
+      expect(f.worktrees.ensure).toHaveBeenCalledOnce()
+      expect(f.worktrees.workingDirectory).toHaveBeenCalledOnce()
+      expect(f.spawn).toHaveBeenCalledExactlyOnceWith(expect.any(String), expect.any(Array), expect.objectContaining({ cwd: f.checkout }))
+    } finally {
+      checkout.resolve({ ...opened.terminal.worktree!, status: 'ready' }); directory.resolve(f.checkout)
+      await reopening; f.service.dispose()
+    }
+    expect(f.processes[0]!.pty.kill).toHaveBeenCalledOnce()
+  })
+
+  it('disposal during launcher lookup leaves no late process or terminal event', async () => {
+    const executableExists = vi.fn(async () => true)
+    const f = await fixture({ executableExists })
+    const { terminal } = await started(f.service, { projectId: 'p1', title: 'Build', workingCopy: 'shared', launch: shellLaunch })
+    const gate = Promise.withResolvers<boolean>(), entered = Promise.withResolvers<void>()
+    executableExists.mockImplementationOnce(() => { entered.resolve(); return gate.promise })
+    const restarting = f.service.restart({ id: terminal.id })
+    await entered.promise
+    f.service.dispose()
+    const events = f.events.length
+    gate.resolve(true)
+    expect(await restarting).toMatchObject({ ok: false })
+    expect(f.spawn).toHaveBeenCalledOnce()
+    expect(f.events).toHaveLength(events)
+    expect(f.processes[0]!.pty.kill).toHaveBeenCalledOnce()
+  })
+
+  it('releases a failed launcher reservation so the same terminal can retry', async () => {
+    const executableExists = vi.fn(async () => true)
+    const f = await fixture({ executableExists })
+    const { terminal } = await started(f.service, { projectId: 'p1', title: 'Build', workingCopy: 'shared', launch: shellLaunch })
+    f.processes[0]!.emit('Output before failed restart')
+    executableExists.mockRejectedValueOnce(new Error('Synthetic launcher failure'))
+    expect(await f.service.restart({ id: terminal.id })).toMatchObject({ ok: false })
+    const failed = unwrap(await f.service.read({ id: terminal.id }))
+    expect(failed.output).toContain('Output before failed restart')
+    expect(failed.terminal.status).toBe('unavailable')
+    expect(unwrap(await f.service.restart({ id: terminal.id })).terminal.status).toBe('running')
+    f.service.dispose()
+    for (const process of f.processes) expect(process.pty.kill).toHaveBeenCalledOnce()
+  })
+
   it('lists every Closed row through IPC, releases its output, and keeps the active limit on reopen', async () => {
     const f = await fixture()
     const handlers = new Map<string, (event: IpcInvocationEvent, ...args: unknown[]) => unknown>()
@@ -84,6 +203,7 @@ describe('terminal workspace service', () => {
     expect(unwrap(await bridge.list()).terminals).toHaveLength(134)
     expect(await bridge.open(request)).toMatchObject({ ok: false, error: { code: 'busy' } })
     expect(await bridge.restart({ id: closed[0]!.id })).toMatchObject({ ok: false, error: { code: 'busy' } })
+    expect(unwrap(await bridge.read({ id: closed[0]!.id })).terminal).toEqual(closed[0])
     unwrap(await bridge.close({ id: active[0]!.id }))
     const reopened = unwrap(await bridge.restart({ id: closed[0]!.id }))
     expect(reopened.terminal).toMatchObject({ id: closed[0]!.id, title: 'Build 0', closedAt: null, status: 'running' })
