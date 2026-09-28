@@ -2,6 +2,7 @@ import React, { useEffect, useId, useMemo, useRef, useState, useSyncExternalStor
 import { LoaderCircle } from 'lucide-react'
 import { DEFAULT_HOST_DATA_DIRECTORY, DEFAULT_HOST_INSTALL_PATH, type HostsBridge, type HostsState, type HostStatus, type RemoteHost, type SshHostSuggestion } from '../../../../shared/hosts'
 import { Button } from '../../components/Button'
+import { HostSetupChecklist, hostSetupSummary, hostSetupTitle, TAILSCALE_GUIDE_URL, type HostSetupOutcome } from './HostSetupChecklist'
 
 /** How many Hosts modals are open, so a saved host's SSH question waits rather than stacking on one. */
 let openModals = 0
@@ -115,8 +116,9 @@ export type HostDialogMode = { readonly kind: 'add' } | { readonly kind: 'edit';
 
 /**
  * Add host and Edit connection. Add host connects from inside the dialog and saves the host only once it
- * answers and pairs: the dialog shows that it is connecting, asks SSH's questions itself, and says what
- * happened when it fails. Edit connection saves the new route; a host that is on connects again with it.
+ * answers and pairs: once pressed, the form gives way to the host setup checklist, which asks SSH's and
+ * Tailscale's questions itself and shows a failure on the step it happened. Edit connection saves the new
+ * route; a host that is on connects again with it.
  */
 export function HostDialog({ mode, bridge, state, onClose }: {
   readonly mode: HostDialogMode; readonly bridge: HostsBridge; readonly state: HostsState | null; readonly onClose: () => void
@@ -132,28 +134,42 @@ export function HostDialog({ mode, bridge, state, onClose }: {
   const [attempt, setAttempt] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  /** Why Open approval page did not open, shown on the Tailscale card; it goes when Tailscale stops waiting. */
+  const [approvalError, setApprovalError] = useState<string | null>(null)
   const [answer, setAnswer] = useState('')
   const [answering, setAnswering] = useState(false)
   const addButton = useRef<HTMLButtonElement>(null)
   const cancelButton = useRef<HTMLButtonElement>(null)
+  const doneButton = useRef<HTMLButtonElement>(null)
+  const formRef = useRef<HTMLFormElement>(null)
+  /** What Add host was pressed for, kept for the checklist's summary line. */
+  const [submitted, setSubmitted] = useState<{ name: string; user: string; port?: number } | null>(null)
+  /** Set once the host this dialog added is connected; the dialog then says so until closed. */
+  const [connected, setConnected] = useState(false)
   const closeRef = useRef(onClose)
   closeRef.current = onClose
   const hintId = useId()
   const userId = useId(), portId = useId(), installId = useId(), dataId = useId(), dataHintId = useId(), identityId = useId(), answerId = useId()
   // The add this dialog started, as main reports it; it leaves `adding` for `hosts` once the host is saved.
   const adding = attempt !== null && state?.adding?.id === attempt ? state.adding : undefined
-  const added = attempt !== null && state?.hosts.some(item => item.id === attempt) === true
+  const addedHost = attempt !== null ? state?.hosts.find(item => item.id === attempt) : undefined
+  const added = addedHost !== undefined
   const connecting = sending || adding?.phase === 'connecting'
   const prompt = adding?.prompt
-  const shownError = error ?? (adding?.phase === 'error' ? adding.error ?? null : null)
+  // Once the connect has failed, main's sentence is the one that says why; one from this dialog is older.
+  const shownError = adding?.phase === 'error' ? adding.error ?? error : error
+  const approvalWaiting = adding?.tailscale?.waiting === true
   useEffect(() => {
     if (editing) return
     let alive = true
     void bridge.sshSuggestions().then(found => { if (alive) setSuggestions(found) }, () => undefined)
     return () => { alive = false }
   }, [bridge, editing])
-  useEffect(() => { if (added) closeRef.current() }, [added])
+  // Added and connected: the checklist says so until Done. Added but not connected (a host of another Sotto
+  // version, which is saved): its row says what to update, so the dialog closes onto it.
+  useEffect(() => { if (addedHost?.phase === 'connected') setConnected(true); else if (addedHost?.phase === 'error' && !connected) closeRef.current() }, [addedHost?.phase, connected])
   useEffect(() => { setAnswer('') }, [prompt?.id])
+  useEffect(() => { if (!approvalWaiting) setApprovalError(null) }, [approvalWaiting])
   const saved = new Set(state?.hosts.map(item => targetHost(item.target).toLowerCase()) ?? [])
   const offered = suggestions.filter(item => !saved.has(item.alias.toLowerCase()))
   const close = (): void => {
@@ -186,10 +202,27 @@ export function HostDialog({ mode, bridge, state, onClose }: {
     }
     const id = crypto.randomUUID()
     setAttempt(id); setSending(true)
+    setSubmitted({ name: targetHost(route.target), user: targetUser(route.target), ...(route.sshPort ? { port: route.sshPort } : {}) })
     // A new host is named after its host part until renamed, cut to the length a name may have.
     try { await bridge.command({ type: 'add', host: { id, name: targetHost(route.target).slice(0, MAX_NAME_LENGTH), ...route } }) }
-    catch (failure) { setError(failure instanceof Error ? failure.message : 'The host could not be added. Nothing was saved. Try again.') }
+    catch (failure) {
+      // Refused before connecting (already saved, still adding another): back to the form, which says why.
+      setAttempt(null)
+      setError(failure instanceof Error ? failure.message : 'The host could not be added. Nothing was saved. Try again.')
+    }
     finally { setSending(false) }
+  }
+  /** Change: drops the attempt, connecting or failed, and gives the form back with what was typed. */
+  const change = (): void => {
+    if (attempt !== null) void bridge.command({ type: 'cancel-add', id: attempt }).catch(() => undefined)
+    setAttempt(null); setError(null)
+    queueMicrotask(() => formRef.current?.querySelector<HTMLInputElement>('input')?.focus())
+  }
+  const openApproval = async (): Promise<void> => {
+    if (attempt === null) return
+    setApprovalError(null)
+    try { await bridge.command({ type: 'open-approval', id: attempt }) }
+    catch (failure) { setApprovalError(failure instanceof Error ? failure.message : 'The approval page could not open. Nothing was changed. Try again.') }
   }
   const answerPrompt = async (): Promise<void> => {
     if (!prompt || attempt === null || answering) return
@@ -204,14 +237,33 @@ export function HostDialog({ mode, bridge, state, onClose }: {
     const focused = document.activeElement
     if (connecting && (focused === null || focused === document.body || (focused instanceof HTMLButtonElement || focused instanceof HTMLInputElement) && focused.disabled)) cancelButton.current?.focus()
   }, [connecting])
-  return <HostsModal title={editing ? `Edit connection to ${editing.name}` : 'Add host'} onClose={close} busy={connecting} className="hosts-dialog--connection"
-    footer={<>
+  // Once pressed, Add host is the checklist until Change gives the form back.
+  const setup = !editing && attempt !== null && submitted !== null
+  const outcome: HostSetupOutcome = connected ? 'connected' : shownError && !connecting ? 'failed' : 'connecting'
+  // A control that goes away with a step (Open approval page once approved, Cancel once connected) hands focus on.
+  useEffect(() => {
+    const focused = document.activeElement
+    if (setup && (focused === null || focused === document.body || !focused.isConnected)) (doneButton.current ?? cancelButton.current)?.focus()
+  })
+  const question = prompt ? <div className="hosts-notice hosts-prompt" role="group" aria-label={prompt.kind === 'host-key' ? 'Trust this SSH host?' : 'SSH needs an answer'}>
+    <p className="hosts-prompt__lead">{prompt.kind === 'host-key' ? 'SSH has not seen this host before. Check its key, then trust it to continue.' : prompt.kind === 'passphrase' ? 'SSH needs your key passphrase to sign in.' : 'SSH needs your password to sign in.'}</p>
+    <pre className="hosts-challenge">{prompt.text}</pre>
+    {prompt.kind !== 'host-key' ? <div className="tt-field"><label className="tt-field__label" htmlFor={answerId}>{prompt.kind === 'passphrase' ? 'Key passphrase' : 'SSH password'}</label>
+      <input id={answerId} className="tt-input tt-focusable" type="password" autoComplete="off" autoFocus value={answer} onChange={event => setAnswer(event.target.value)}
+        onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); void answerPrompt() } }} /></div> : null}
+    <div className="hosts-prompt__actions"><Button autoFocus={prompt.kind === 'host-key'} disabled={answering} onClick={() => void answerPrompt()}>{prompt.kind === 'host-key' ? 'Trust host and continue' : 'Continue'}</Button></div>
+  </div> : null
+  return <HostsModal title={editing ? `Edit connection to ${editing.name}` : setup ? hostSetupTitle(submitted.name, outcome) : 'Add host'} onClose={close} busy={connecting} className="hosts-dialog--connection"
+    footer={setup && outcome === 'connected' ? <Button ref={doneButton} onClick={onClose}>Done</Button> : <>
       <Button ref={cancelButton} variant="secondary" onClick={close}>Cancel</Button>
       <Button ref={addButton} disabled={connecting || prompt !== undefined} onClick={() => void submit()}>
-        {editing ? (sending ? 'Saving…' : 'Save connection') : connecting ? 'Connecting…' : 'Add host'}</Button>
+        {editing ? (sending ? 'Saving…' : 'Save connection') : connecting ? 'Connecting…' : setup ? 'Try again' : 'Add host'}</Button>
     </>}>
+    {setup ? <HostSetupChecklist name={submitted.name} summary={hostSetupSummary(submitted.user, submitted.port)} host={adding ?? addedHost} outcome={outcome}
+      error={shownError} approvalError={approvalError} question={question} {...(outcome === 'connected' ? {} : { onChange: change })}
+      onOpenApproval={() => void openApproval()} onOpenGuide={() => void window.sotto?.openExternalLink?.(TAILSCALE_GUIDE_URL)} /> : <>
     <p className="hosts-dialog__intro">{editing ? 'The new connection is used the next time Sotto connects. A host that is on connects again now.' : 'Sotto connects as soon as you add it.'}</p>
-    <form className="hosts-dialog__fields" onSubmit={event => { event.preventDefault(); void submit() }}
+    <form ref={formRef} className="hosts-dialog__fields" onSubmit={event => { event.preventDefault(); void submit() }}
       onKeyDown={event => { const target = event.target as HTMLElement; if (event.key === 'Enter' && target instanceof HTMLInputElement && target.getAttribute('role') !== 'combobox') { event.preventDefault(); void submit() } }}>
       <div className="tt-field">
         <HostCombobox value={host} onChange={setHost} suggestions={offered} offer={!editing} disabled={fieldsDisabled} describedBy={hintId}
@@ -237,16 +289,8 @@ export function HostDialog({ mode, bridge, state, onClose }: {
       </details>
       {editing?.clientId ? <p className="hosts-dialog__client">This computer's client ID on {editing.name}: <code>{editing.clientId}</code></p> : null}
     </form>
-    {connecting && !prompt ? <div className="hosts-notice hosts-notice--work" role="status"><LoaderCircle size={16} aria-hidden="true" className="hosts-spin" />
-      <p>{editing ? 'Saving the connection.' : `Connecting to ${targetHost(host.trim())}. Sotto signs in over SSH, starts the host if it is not running, and pairs this computer.`}</p></div> : null}
-    {prompt ? <div className="hosts-notice hosts-prompt" role="group" aria-label={prompt.kind === 'host-key' ? 'Trust this SSH host?' : 'SSH needs an answer'}>
-      <p className="hosts-prompt__lead">{prompt.kind === 'host-key' ? 'SSH has not seen this host before. Check its key, then trust it to continue.' : prompt.kind === 'passphrase' ? 'SSH needs your key passphrase to sign in.' : 'SSH needs your password to sign in.'}</p>
-      <pre className="hosts-challenge">{prompt.text}</pre>
-      {prompt.kind !== 'host-key' ? <div className="tt-field"><label className="tt-field__label" htmlFor={answerId}>{prompt.kind === 'passphrase' ? 'Key passphrase' : 'SSH password'}</label>
-        <input id={answerId} className="tt-input tt-focusable" type="password" autoComplete="off" autoFocus value={answer} onChange={event => setAnswer(event.target.value)}
-          onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); void answerPrompt() } }} /></div> : null}
-      <div className="hosts-prompt__actions"><Button autoFocus={prompt.kind === 'host-key'} disabled={answering} onClick={() => void answerPrompt()}>{prompt.kind === 'host-key' ? 'Trust host and continue' : 'Continue'}</Button></div>
-    </div> : null}
+    {editing && sending ? <div className="hosts-notice hosts-notice--work" role="status"><LoaderCircle size={16} aria-hidden="true" className="hosts-spin" /><p>Saving the connection.</p></div> : null}
     {shownError && !connecting ? <div className="hosts-notice hosts-notice--error" role="alert"><p>{shownError}</p></div> : null}
+    </>}
   </HostsModal>
 }

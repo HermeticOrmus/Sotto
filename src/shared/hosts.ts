@@ -22,6 +22,14 @@ export const remoteHostSchema = z.object({
   enabled: z.boolean().optional(),
 }).strict()
 export type RemoteHost = z.infer<typeof remoteHostSchema>
+/**
+ * The host setup checklist: the steps a connect goes through, in the order it meets them. Add host shows
+ * them once pressed. `tailscale` appears only when Tailscale SSH holds the connection for the user's approval.
+ */
+export const HOST_SETUP_STEPS = ['reach', 'tailscale', 'sign-in', 'install', 'start', 'pair'] as const
+export type HostSetupStep = typeof HOST_SETUP_STEPS[number]
+/** How long Sotto waits for the user to approve a connection Tailscale SSH holds in its `check` mode. */
+export const TAILSCALE_APPROVAL_MS = 5 * 60_000
 export interface HostStatus extends Omit<RemoteHost, 'enabled'> {
   enabled: boolean
   phase: 'disconnected' | 'connecting' | 'connected' | 'error'
@@ -35,6 +43,15 @@ export interface HostStatus extends Omit<RemoteHost, 'enabled'> {
   owned?: boolean | undefined
   error?: string | undefined
   prompt?: { id: string; kind: 'host-key' | 'password' | 'passphrase'; text: string }
+  /** Where the current connect stands: the step it is on while connecting, or the step that failed. */
+  step?: HostSetupStep | undefined
+  /**
+   * Set once Tailscale SSH asked this connect for approval: `waiting` until the approval arrives, and `url`,
+   * Tailscale's own approval page, while it waits. Shown, and opened only on the user's press; never logged.
+   */
+  tailscale?: { waiting: boolean; url?: string | undefined } | undefined
+  /** A command that fixes the failure, for the user to run, and the sentence that introduces it. Sotto never runs it. */
+  fix?: { text: string; command: string } | undefined
 }
 export interface HostsState {
   hosts: HostStatus[]; localHostEnabled: boolean; localHostRunning: boolean; activeHostId?: string; localHostId?: string
@@ -52,6 +69,8 @@ export const hostsCommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('stop-host'), id: z.uuid() }).strict(),
   z.object({ type: z.literal('forget'), id: z.uuid() }).strict(),
   z.object({ type: z.literal('ssh-answer'), id: z.uuid(), promptId: z.string().max(256), answer: z.string().max(4096) }).strict(),
+  /** Opens the Tailscale approval page a connect is waiting on, in the default browser. Main holds the URL. */
+  z.object({ type: z.literal('open-approval'), id: z.uuid() }).strict(),
   z.object({ type: z.literal('restart') }).strict(),
   z.object({ type: z.literal('select'), hostId: z.uuid() }).strict(),
 ])

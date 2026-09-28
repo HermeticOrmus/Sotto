@@ -10,6 +10,7 @@ import './hosts.css'
 /** What a saved host's row says about it, after "SSH forge ·". */
 export function hostStatusLabel(host: HostStatus): string {
   if (host.phase === 'connected') return 'Connected'
+  if (host.phase === 'connecting' && host.tailscale?.waiting) return 'Waiting for your approval in Tailscale'
   if (host.phase === 'connecting') return host.reconnecting ? 'Reconnecting…' : 'Connecting…'
   if (host.phase === 'error') return 'Needs attention'
   return host.enabled ? 'Not connected' : 'Switched off'
@@ -75,6 +76,9 @@ function HostRow({ host, onCommand, onAction }: {
       {host.error ? <p className="hosts-row__error" role="alert">{host.error}</p> : null}
     </div>
     <div className="hosts-row__actions">
+      {/* Tailscale SSH holds a reconnect until it is approved, and only the browser can approve it. */}
+      {host.phase === 'connecting' && host.tailscale?.waiting && host.tailscale.url ? <Button variant="secondary" aria-label={`Open the Tailscale approval page for ${host.name}`}
+        onClick={() => void onCommand({ type: 'open-approval', id: host.id })}>Open approval page</Button> : null}
       {/* The sentence under a host that needs attention asks for one of these; each is also where it always is. */}
       {host.phase === 'error' && canStop(host) ? <Button variant="secondary" onClick={() => onAction(host, 'stop')}>Stop host</Button> : null}
       {host.phase === 'error' && host.enabled && !canStop(host) ? <Button variant="secondary" onClick={() => void onCommand({ type: 'set-enabled', id: host.id, enabled: true })}>Connect again</Button> : null}

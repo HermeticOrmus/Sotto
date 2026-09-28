@@ -70,7 +70,9 @@ test('client-only desktop keeps local history, renders Hosts, and retains dictat
     await page.keyboard.press('Escape')
     await dialog.getByRole('textbox', { name: 'Port (optional)' }).fill('1')
     await dialog.getByRole('button', { name: 'Add host', exact: true }).click()
-    await expect(dialog.getByRole('alert')).toContainText('Nothing was saved.', { timeout: 60_000 })
+    // Once pressed, the dialog is the setup checklist, and a failure shows on its step.
+    const failed = page.getByRole('dialog', { name: '127.0.0.1 could not be added' })
+    await expect(failed.getByRole('alert')).toContainText('Nothing was saved.', { timeout: 60_000 })
     await page.screenshot({ path: test.info().outputPath('host-add-failed.png'), animations: 'disabled' })
     expect((JSON.parse(await readFile(join(profile, 'remote-hosts.json'), 'utf8')) as { name: string }[]).map(host => host.name)).toEqual(['Forge'])
     await page.keyboard.press('Escape')

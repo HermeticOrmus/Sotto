@@ -1,0 +1,41 @@
+/* Add host once pressed: the host setup checklist. It sits inside the Hosts dialog, so .hosts-settings
+   rules for paragraphs are matched on purpose; every colour is a theme role. */
+.host-setup { display: grid; gap: 4px; margin-top: 12px; }
+
+/* What is being added, where the form was. */
+.host-setup__summary { display: flex; align-items: center; gap: 10px; min-width: 0; border: 1px solid var(--tt-hairline); border-radius: var(--tt-radius-md); padding: 6px 6px 6px 12px; }
+.hosts-settings .host-setup__summary > p { flex: 1; min-width: 0; margin: 0; overflow: hidden; color: var(--tt-text); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.host-setup__summary b { font-weight: 600; }
+.host-setup__summary span { color: var(--tt-text-muted); }
+.host-setup__summary > .tt-button { flex: 0 0 auto; min-height: 30px; padding: 0 12px; font-size: 12.5px; }
+
+.host-setup__steps { display: grid; gap: 2px; margin: 10px 0 0; padding: 0; list-style: none; }
+.host-setup__steps > li { display: grid; grid-template-columns: 20px minmax(0, 1fr); align-items: start; gap: 4px 10px; padding: 6px 0; }
+.host-setup__mark { display: grid; place-items: center; width: 20px; height: 20px; color: var(--tt-text-faint); }
+.host-setup__steps [data-state='done'] .host-setup__mark { color: var(--tt-success); }
+.host-setup__steps [data-state='active'] .host-setup__mark,
+.host-setup__steps [data-state='waiting'] .host-setup__mark { color: var(--tt-accent-text); }
+.host-setup__steps [data-state='failed'] .host-setup__mark { color: var(--tt-error); }
+.host-setup__title { min-width: 0; color: var(--tt-text); font-size: 13.5px; line-height: 20px; overflow-wrap: anywhere; }
+.host-setup__steps [data-state='todo'] .host-setup__title { color: var(--tt-text-muted); }
+.host-setup__steps [data-state='active'] .host-setup__title,
+.host-setup__steps [data-state='waiting'] .host-setup__title,
+.host-setup__steps [data-state='failed'] .host-setup__title { font-weight: 600; }
+.host-setup__detail { grid-column: 2; min-width: 0; }
+.host-setup__detail > .hosts-notice { margin-top: 4px; }
+
+/* The card under a step: Tailscale's approval, a failure with its fix, or SSH's question. */
+.hosts-notice.host-setup__card { display: grid; gap: 10px; }
+.host-setup__card--done { border-left-color: var(--tt-success); }
+.host-setup__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+.host-setup__actions > .tt-button { min-height: 32px; padding: 0 14px; font-size: 13px; }
+.host-setup__link { border: 0; border-radius: var(--tt-radius-sm); background: none; padding: 2px 0; color: var(--tt-accent-text); font: inherit; font-size: 12.5px; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.host-setup__link:hover { color: var(--tt-text); }
+.hosts-settings .host-setup__card .host-setup__quiet { color: var(--tt-text-muted); font-size: 12.5px; }
+/* Open approval page did not open: said on the card it belongs to, not as the connect's failure. */
+.hosts-settings .host-setup__card .host-setup__problem { color: var(--tt-error-text); font-size: 13px; overflow-wrap: anywhere; }
+
+/* A command to copy: one line that scrolls rather than wraps, so it copies the way it reads. */
+.host-setup__command { display: flex; align-items: center; gap: 8px; min-width: 0; border: 1px solid var(--tt-border-faint); border-radius: var(--tt-radius-sm); background: var(--tt-surface-elevated); padding: 4px 4px 4px 10px; }
+.host-setup__command > code { flex: 1; min-width: 0; overflow-x: auto; color: var(--tt-text); font: 12.5px/1.6 var(--tt-font-mono); white-space: nowrap; }
+.host-setup__command > .tt-button { flex: 0 0 auto; gap: 6px; min-height: 28px; padding: 0 12px; font-size: 12.5px; }
