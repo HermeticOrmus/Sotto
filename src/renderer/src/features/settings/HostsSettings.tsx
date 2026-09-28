@@ -129,8 +129,8 @@ function HostSetupLine({ setup, onShow, onDismiss }: { readonly setup: HostSetup
       : setup.phase === 'connected' ? <>{setup.name} is set up and connected. <b>{setup.modelName}</b> set it up in the thread <b>{setup.threadTitle}</b>.</>
         : setup.phase === 'stopped' ? <>The setup of {setup.name} stopped. {setup.error ?? 'Nothing was saved as a host.'}</>
           : <>{setup.error ?? `The setup of ${setup.name} could not carry on. Nothing was saved as a host.`}</>}</p>
-    <Button variant="secondary" aria-label={`Show the setup of ${setup.name}`} onClick={onShow}>Show setup</Button>
-    {running ? null : <Button variant="ghost" aria-label={`Dismiss the setup of ${setup.name}`} onClick={onDismiss}>Dismiss</Button>}
+    <Button variant="secondary" aria-label={`Show setup of ${setup.name}`} onClick={onShow}>Show setup</Button>
+    {running ? null : <Button variant="ghost" aria-label={`Dismiss setup of ${setup.name}`} onClick={onDismiss}>Dismiss</Button>}
   </div>
 }
 

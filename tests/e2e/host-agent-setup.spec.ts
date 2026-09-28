@@ -187,7 +187,7 @@ test('Add host follows a setup thread as it checks forge, waits in the thread, a
     await openPage(page, 'Settings')
     await page.getByRole('tab', { name: 'Hosts', exact: true }).click()
     await expect(page.locator('.hosts-setup-line p')).toHaveText('Claude Test is setting up forge in the thread Set up forge.')
-    await page.getByRole('button', { name: 'Show the setup of forge' }).click()
+    await page.getByRole('button', { name: 'Show setup of forge' }).click()
     await expect(page.getByRole('dialog', { name: 'Setting up forge' })).toBeVisible()
 
     // The agent fixed Node; the next check starts the host and pairs nothing.
@@ -215,7 +215,7 @@ test('Add host follows a setup thread as it checks forge, waits in the thread, a
     expect((JSON.parse(await readFile(join(profile, 'remote-hosts.json'), 'utf8')) as { name: string }[]).map(host => host.name)).toEqual(['forge'])
     // The finished setup stays on the Hosts page until put away; Show setup gives the dialog's last word on it.
     await expect(page.locator('.hosts-setup-line p')).toHaveText('forge is set up and connected. Claude Test set it up in the thread Set up forge.')
-    await page.getByRole('button', { name: 'Show the setup of forge' }).click()
+    await page.getByRole('button', { name: 'Show setup of forge' }).click()
     const done = page.getByRole('dialog', { name: 'forge is connected' })
     await expect(titles(page)).toHaveText(['Reached forge', 'Signed in', 'Host installed by the agent', 'Host started', 'Paired'])
     await expect(done.getByText(/^forge is added and connected\. Claude Test set it up in/)).toBeVisible()

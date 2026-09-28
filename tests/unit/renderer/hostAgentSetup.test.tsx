@@ -89,7 +89,7 @@ it('follows the setup thread: the agent line, the checklist with the agent\'s st
   await user.click(within(dialog).getByRole('button', { name: 'Close' }))
   expect(screen.queryByRole('dialog')).toBeNull()
   expect(command.mock.calls.some(([value]) => value.type === 'dismiss-setup' || value.type === 'stop-setup')).toBe(false)
-  await user.click(screen.getByRole('button', { name: 'Show the setup of forge' }))
+  await user.click(screen.getByRole('button', { name: 'Show setup of forge' }))
   const again = screen.getByRole('dialog', { name: 'Setting up forge' })
   await user.click(within(again).getByRole('button', { name: 'Stop setup' }))
   expect(command).toHaveBeenLastCalledWith({ type: 'stop-setup', id })
