@@ -55,6 +55,9 @@ interface SessionRecord {
   pending: TerminalSnapshot | null
   size: { cols: number; rows: number } | null
   loadError: string | null
+  inputTail: Promise<void>
+  inputVersion: number
+  closing: boolean
 }
 
 const unavailable: ToolsError = { code: 'unavailable', message: 'Terminal is not available in this window.' }
@@ -127,6 +130,7 @@ export class TerminalStore {
     const target = this.target(threadId)
     const record = this.records.get(sessionId)
     if (!bridge || !target || !record) return
+    record.inputVersion++
     this.patch(threadId, { busy: true, notice: null })
     record.replaying = true
     record.buffer = []
@@ -145,9 +149,14 @@ export class TerminalStore {
   async close(bridge: TerminalBridge | undefined, threadId: string, sessionId: string): Promise<void> {
     const target = this.target(threadId)
     if (!bridge || !target) return
+    const record = this.records.get(sessionId)
+    if (record) { record.inputVersion++; record.closing = true; record.view?.setInputEnabled(false) }
     this.patch(threadId, { busy: true, notice: null })
     const result = await settle(bridge.close({ ...target, sessionId }))
-    if (!result.ok && result.error.code !== 'session-unavailable') { this.fail(bridge, threadId, result.error, 'Could not end this terminal.'); return }
+    if (!result.ok && result.error.code !== 'session-unavailable') {
+      if (record && this.records.get(sessionId) === record) { record.closing = false; record.view?.setInputEnabled(this.running(threadId, sessionId)) }
+      this.fail(bridge, threadId, result.error, 'Could not end this terminal.'); return
+    }
     this.removeSession(threadId, sessionId)
     this.patch(threadId, { busy: false })
   }
@@ -156,10 +165,22 @@ export class TerminalStore {
     const target = this.target(threadId)
     const record = this.records.get(sessionId)
     const session = this.threads.get(threadId)?.sessions.find(item => item.id === sessionId)
-    if (!bridge || !target || !record || record.replaying || session?.status !== 'running') return
-    // Main takes at most 64 KiB per write; a large paste goes in order, chunk by chunk.
+    if (!bridge || !target || !record || record.replaying || record.closing || session?.status !== 'running') return
+    const version = record.inputVersion
+    // One tail covers every input event, not just the chunks of one paste.
     const chunks = data.match(/[\s\S]{1,16384}/gu) ?? []
-    void chunks.reduce<Promise<unknown>>((previous, chunk) => previous.then(() => settle(bridge.write({ ...target, sessionId, data: chunk }))), Promise.resolve())
+    record.inputTail = record.inputTail.then(async () => {
+      for (const chunk of chunks) {
+        if (this.records.get(sessionId) !== record || record.inputVersion !== version || record.replaying || record.closing || !this.running(threadId, sessionId) || this.target(threadId)?.workspaceId !== target.workspaceId) return
+        const result = await settle(Promise.resolve().then(() => bridge.write({ ...target, sessionId, data: chunk })))
+        if (this.records.get(sessionId) !== record || record.inputVersion !== version) return
+        if (!result.ok) {
+          record.inputVersion++
+          this.fail(bridge, threadId, result.error, 'Terminal input stopped. Check the command before trying again.')
+          return
+        }
+      }
+    })
   }
 
   interrupt(bridge: TerminalBridge | undefined, threadId: string, sessionId: string): void {
@@ -300,6 +321,7 @@ export class TerminalStore {
       if (!thread || thread.workspace?.workspaceId !== event.session.workspace.workspaceId) return
       this.upsertSession(threadId, event.session)
       const record = this.records.get(event.session.id)
+      if (record && event.session.status !== 'running') record.inputVersion++
       if (record && !record.replaying) record.view?.setInputEnabled(event.session.status === 'running')
       this.emit()
       return
@@ -337,7 +359,7 @@ export class TerminalStore {
   private ensureRecord(threadId: string, sessionId: string): SessionRecord {
     let record = this.records.get(sessionId)
     if (!record) {
-      record = { threadId, view: null, sequence: 0, replaying: false, buffer: [], loaded: false, pending: null, size: null, loadError: null }
+      record = { threadId, view: null, sequence: 0, replaying: false, buffer: [], loaded: false, pending: null, size: null, loadError: null, inputTail: Promise.resolve(), inputVersion: 0, closing: false }
       this.records.set(sessionId, record)
     }
     return record
