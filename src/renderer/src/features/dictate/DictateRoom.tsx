@@ -20,6 +20,8 @@ export interface DictateRoomProps {
   readonly platform: SottoPlatform
   readonly dictation: DictationState
   readonly entries: readonly HistoryEntry[]
+  readonly recovery?: readonly HistoryEntry[]
+  readonly onDismissRecovery?: (id: string) => void
   readonly historyStatus: HistoryStatus
   readonly onStart: () => Promise<void>
   readonly onStop: () => Promise<void>
@@ -63,7 +65,7 @@ function errorDetail(code: string, copy: PlatformCopy): string {
     case 'MIC_NOT_SET_UP': return MICROPHONE_NOT_SET_UP_DETAIL
     case 'NO_SPEECH': return 'No speech was detected. Try again a little closer to the microphone.'
     case 'OUTPUT_FAILED':
-    case 'OUTPUT_UNAVAILABLE': return 'Your text could not be delivered. Try again, then paste from the clipboard manually.'
+    case 'OUTPUT_UNAVAILABLE': return 'Your completed text is below. Copy it again, or select and copy it yourself.'
     default: return isTranscriptionErrorCode(code)
       ? TRANSCRIPTION_ERROR_DETAIL[code]
       : TRANSCRIPTION_ERROR_DETAIL.TRANSCRIPTION_FAILED
@@ -108,6 +110,8 @@ export function DictateRoom({
   platform,
   dictation,
   entries,
+  recovery = [],
+  onDismissRecovery,
   historyStatus,
   onStart,
   onStop,
@@ -204,6 +208,13 @@ export function DictateRoom({
           )}
         </div>
       </div>
+      {recovery.length > 0 ? (
+        <section className="dictate__recovery" aria-label="Completed text to recover">
+          <h2>Your text is still here</h2>
+          <p>Copy it when you are ready. It stays here until you dismiss it or close Sotto.</p>
+          {recovery.map(entry => <RecoveredTranscript key={entry.id} entry={entry} onCopy={onCopy} onDismiss={() => onDismissRecovery?.(entry.id)} />)}
+        </section>
+      ) : null}
       {showLatest && latest !== null && stamp !== null ? (
         <div className="dictate__last" data-testid="dictate-last">
           <div className="dictate__when">
@@ -216,4 +227,26 @@ export function DictateRoom({
       ) : null}
     </section>
   )
+}
+
+function RecoveredTranscript({ entry, onCopy, onDismiss }: {
+  readonly entry: HistoryEntry
+  readonly onCopy: (text: string) => Promise<boolean>
+  readonly onDismiss: () => void
+}): ReactNode {
+  const [state, setState] = useState<'ready' | 'copying' | 'copied' | 'failed'>('ready')
+  const copy = async (): Promise<void> => {
+    if (state === 'copying') return
+    setState('copying')
+    try { setState(await onCopy(entry.text) ? 'copied' : 'failed') }
+    catch { setState('failed') }
+  }
+  return <article className="dictate__recovered" aria-label="Recovered transcript">
+    <textarea readOnly aria-label="Completed dictation text" value={entry.text} rows={3} />
+    <div className="dictate__recovery-actions">
+      <Button variant="secondary" disabled={state === 'copying'} onClick={() => void copy()}>Copy text</Button>
+      <Button variant="secondary" onClick={onDismiss}>Dismiss text</Button>
+      <span role="status">{state === 'copied' ? 'Copied.' : state === 'failed' ? 'Copy failed. Your text is still here. Try again or select and copy it.' : ''}</span>
+    </div>
+  </article>
 }

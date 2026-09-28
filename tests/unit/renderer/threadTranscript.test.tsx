@@ -82,8 +82,8 @@ describe('message copy control', () => {
     expect(control).toHaveAttribute('aria-expanded', 'true')
     fireEvent.keyDown(menu, { key: 'ArrowDown' })
     expect(items[1]).toHaveFocus()
-    fireEvent.keyDown(items[1], { key: 'Enter' })
-    fireEvent.click(items[1])
+    fireEvent.keyDown(items[1]!, { key: 'Enter' })
+    fireEvent.click(items[1]!)
     await act(async () => undefined)
     const text = writeText.mock.calls.at(-1)![0] as string
     expect(text).toContain('a\tb\tc')

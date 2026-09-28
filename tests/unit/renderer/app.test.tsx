@@ -8,6 +8,7 @@ import { appearancePreview } from '../../../src/renderer/src/state/appearance'
 import type { MicrophoneTestController } from '../../../src/renderer/src/features/onboarding/microphoneTest'
 import {
   AppProvider,
+  createProductionDictationController,
   useApp,
   type AppControllerFactory,
   type AppNavigation,
@@ -22,6 +23,55 @@ import { DEFAULT_SETTINGS, type AppSettings } from '../../../src/shared/settings
 import { agentWireBridge } from '../../fixtures/agentBridge'
 
 const OK = Object.freeze({ ok: true as const })
+
+it('retains failed dictation across navigation and later dictation, and copies without retranscription or paste', async () => {
+  let recordings = 0
+  const transcribe = vi.fn(async () => ({ text: `Completed words ${++recordings}`, language: 'en' }))
+  const factory: AppControllerFactory = bindings => createProductionDictationController(bindings, {
+    createRecorder: () => ({ start: async () => undefined, stop: async () => ({ samples: new Float32Array([0.2]), sourceSampleRate: 16_000, durationMs: 500 }), cancel: async () => undefined }),
+    createTranscriber: () => ({ transcribe, cancel: () => undefined, dispose: () => undefined }),
+    createCuePlayer: () => ({ playStart: () => undefined, playStop: () => undefined }),
+  })
+  const deliverOutput = vi.fn<SottoBridge['deliverOutput']>()
+    .mockRejectedValueOnce(new Error('Synthetic copy failure'))
+    .mockRejectedValueOnce(new Error('Synthetic copy failure'))
+    .mockRejectedValueOnce(new Error('Synthetic retry failure'))
+    .mockResolvedValue('copied')
+  const bridge = createBridge({
+    getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, onboardingComplete: true, historyEnabled: false, llmApiKey: 'synthetic', autoPaste: true })),
+    deliverOutput,
+  })
+  const user = userEvent.setup()
+  render(<AppProvider bridge={bridge} createController={factory}><NavigationProbe /><App /></AppProvider>)
+  await openPage('home')
+  const dictate = async () => {
+    await user.click(screen.getByRole('button', { name: 'Start dictation' }))
+    await user.click(screen.getByRole('button', { name: 'Stop' }))
+  }
+  await dictate()
+  await waitFor(() => expect(screen.getByRole('textbox', { name: 'Completed dictation text' })).toHaveValue('Completed words 1'))
+  act(() => shell.navigate('history'))
+  act(() => shell.navigate('home'))
+  expect(screen.getByRole('textbox', { name: 'Completed dictation text' })).toHaveValue('Completed words 1')
+  await dictate()
+  await waitFor(() => expect(screen.getAllByRole('textbox', { name: 'Completed dictation text' })).toHaveLength(2))
+  expect(screen.getAllByRole('textbox', { name: 'Completed dictation text' }).map(node => (node as HTMLTextAreaElement).value)).toEqual(['Completed words 1', 'Completed words 2'])
+  await user.click(screen.getAllByRole('button', { name: 'Copy text' })[0]!)
+  expect(await screen.findByText('Copy failed. Your text is still here. Try again or select and copy it.')).toBeVisible()
+  await user.click(screen.getAllByRole('button', { name: 'Copy text' })[0]!)
+  await waitFor(() => expect(screen.getByText('Copied.')).toBeVisible())
+  expect(deliverOutput.mock.calls.slice(2)).toEqual([
+    [expect.objectContaining({ text: 'Completed words 1', autoPaste: false })],
+    [expect.objectContaining({ text: 'Completed words 1', autoPaste: false })],
+  ])
+  expect(transcribe).toHaveBeenCalledTimes(2)
+  await dictate()
+  await waitFor(() => expect(transcribe).toHaveBeenCalledTimes(3))
+  expect(screen.getAllByRole('textbox', { name: 'Completed dictation text' })).toHaveLength(2)
+  expect(bridge.addHistory).not.toHaveBeenCalled()
+  await user.click(screen.getAllByRole('button', { name: 'Dismiss text' })[0]!)
+  expect(screen.getByRole('textbox', { name: 'Completed dictation text' })).toHaveValue('Completed words 2')
+})
 
 function deferred<Value>() {
   let resolve!: (value: Value) => void
@@ -233,8 +283,8 @@ describe('Sotto application onboarding integration', () => {
     const bridge = createBridge({
       getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, onboardingComplete: true })),
       listRecoveryNotices: vi.fn(async () => [
-        { code: 'SETTINGS_RECOVERED' },
-        { code: 'HISTORY_RECOVERED' },
+        { code: 'SETTINGS_RECOVERED' as const },
+        { code: 'HISTORY_RECOVERED' as const },
       ]),
       onRecoveryNotice: vi.fn((listener) => {
         recoveryListener = listener
@@ -353,7 +403,7 @@ describe('Sotto application onboarding integration', () => {
     await user.click(screen.getByRole('link', { name: 'Settings' }))
     const root = document.documentElement
 
-    await user.click(screen.getByRole('tab', { name: 'Appearance', exact: true }))
+    await user.click(screen.getByRole('tab', { name: 'Appearance' }))
     const lightHalf = (): HTMLElement => screen.getByRole('radiogroup', { name: 'Light theme' })
     await user.click(screen.getByRole('radio', { name: 'Light' }))
     expect(root).toHaveAttribute('data-theme', 'light')
@@ -398,7 +448,7 @@ describe('Sotto application onboarding integration', () => {
     await user.click(screen.getByRole('link', { name: 'Settings' }))
     const root = document.documentElement
 
-    await user.click(screen.getByRole('tab', { name: 'Appearance', exact: true }))
+    await user.click(screen.getByRole('tab', { name: 'Appearance' }))
     const lightHalf = (): HTMLElement => screen.getByRole('radiogroup', { name: 'Light theme' })
     await user.click(screen.getByRole('radio', { name: 'Light' }))
     await user.click(within(lightHalf()).getByRole('radio', { name: 'Tropic' }))
@@ -902,7 +952,7 @@ describe('transcription pipeline prewarm', () => {
     expect(screen.getByText(copy.accessibilityHelp ?? '')).toBeVisible()
 
     await user.click(screen.getByRole('link', { name: /settings/i }))
-    await user.click(screen.getByRole('tab', { name: 'Application', exact: true }))
+    await user.click(screen.getByRole('tab', { name: 'Application' }))
     expect(await screen.findByRole('switch', { name: copy.settingsLaunchAtStartupLabel })).toBeVisible()
   })
 })

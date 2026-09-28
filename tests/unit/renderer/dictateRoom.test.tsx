@@ -53,6 +53,24 @@ function barHeights(container: HTMLElement): number[] {
 }
 
 describe('DictateRoom', () => {
+  it('keeps selectable completed text and normal controls through failed and successful Copy retries', async () => {
+    const onCopy = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true)
+    const onDismissRecovery = vi.fn()
+    const user = userEvent.setup()
+    render(<DictateRoom {...baseProps} settings={{ ...baseProps.settings, historyEnabled: false }} recovery={[entries[0]!]} onCopy={onCopy} onDismissRecovery={onDismissRecovery} />)
+    expect(screen.getByRole('textbox', { name: 'Completed dictation text' })).toHaveValue(entries[0]!.text)
+    expect(screen.getByRole('button', { name: 'Start dictation' })).toBeEnabled()
+    await user.click(screen.getByRole('button', { name: 'Copy text' }))
+    expect(await screen.findByRole('status')).toHaveTextContent('Copy failed. Your text is still here.')
+    expect(screen.getByRole('textbox', { name: 'Completed dictation text' })).toHaveValue(entries[0]!.text)
+    await user.click(screen.getByRole('button', { name: 'Copy text' }))
+    expect(screen.getByRole('status')).toHaveTextContent('Copied.')
+    expect(onCopy.mock.calls).toEqual([[entries[0]!.text], [entries[0]!.text]])
+    expect(onDismissRecovery).not.toHaveBeenCalled()
+    await user.click(screen.getByRole('button', { name: 'Dismiss text' }))
+    expect(onDismissRecovery).toHaveBeenCalledWith(entries[0]!.id)
+  })
+
   it('says it is ready, offers the one pill and the shortcut, and shows only the newest transcript', () => {
     const { container } = render(<DictateRoom {...baseProps} />)
 
@@ -115,7 +133,7 @@ describe('DictateRoom', () => {
   })
 
   it('locks the pill and drops the clock while transcribing, then reports the outcome', () => {
-    const rendered = render(<DictateRoom {...baseProps} dictation={{ status: 'processing', sessionId: 'one' }} />)
+    const rendered = render(<DictateRoom {...baseProps} dictation={{ status: 'processing', sessionId: 'one', startedAt: Date.now() }} />)
     expect(screen.getByRole('heading', { level: 1, name: 'Turning speech into text.' })).toBeVisible()
     expect(screen.getByRole('button', { name: 'Transcribing...' })).toBeDisabled()
     expect(rendered.container.querySelector('.voice-wave')).toHaveAttribute('data-stage', 'processing')

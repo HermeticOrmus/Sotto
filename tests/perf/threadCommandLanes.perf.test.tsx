@@ -63,7 +63,7 @@ describe.skipIf(!PERF_BENCH)('thread command lanes in the window', () => {
         const reached: number[] = [], replied: number[] = [], answered: number[] = []
         for (let run = 0; run < RUNS; run += 1) {
           const requestId = `perf-request-${run}`
-          act(() => host.event({ type: 'question', threadId: 'docs', requestId, text: 'Continue?', status: 'waiting' }))
+          act(() => host.event({ type: 'question', threadId: 'docs', requestId, text: 'Continue?', status: 'idle' }))
           await waitFor(() => expect(control.get().host.threads.find(thread => thread.id === 'docs')?.requests.some(request => request.id === requestId)).toBe(true))
           let answer: Promise<AgentState | null> | undefined, settings: Promise<AgentState | null> | undefined
           const started = performance.now()

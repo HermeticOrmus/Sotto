@@ -18,7 +18,7 @@ function thread(git: GitStatus | undefined, over: Partial<AgentThread> = {}): Ag
 }
 const state = (current: AgentThread, extra: Partial<AgentState> = {}): AgentState => ({ connection: 'connected', error: null, notice: null, activeThreadId: current.id, host: { projects: [project], threads: [current] }, ...extra } as unknown as AgentState)
 const files = (listed: GitChangedFiles['files'] = [{ path: 'src/app.ts', status: 'modified', insertions: 4, deletions: 1 }, { path: 'docs/new.md', status: 'untracked', insertions: 2, deletions: 0 }, { path: 'logo.png', status: 'modified', insertions: null, deletions: null }]): GitChangedFiles => ({ isRepository: true, files: listed, truncated: false })
-function mount(current: AgentThread, options: { command?: (request: AgentCommand) => Promise<AgentState | null>; changed?: GitChangedFiles; openExternalLink?: ReturnType<typeof vi.fn>; explained?: ReturnType<typeof vi.fn> } = {}) {
+function mount(current: AgentThread, options: { command?: (request: AgentCommand) => Promise<AgentState | null>; changed?: GitChangedFiles; openExternalLink?: ReturnType<typeof vi.fn>; explained?: (error: string | null) => void } = {}) {
   const gitChangedFiles = vi.fn(async () => options.changed ?? files())
   vi.stubGlobal('sotto', { agents: { gitChangedFiles }, openExternalLink: options.openExternalLink ?? vi.fn() })
   const command = vi.fn(options.command ?? (async () => state(current)))
@@ -209,7 +209,7 @@ describe('the Git action in the pane header', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'Commit' }))
     dialog = await screen.findByRole('dialog', { name: 'Commit changes' })
     await within(dialog).findByText('3 files')
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Commit', exact: true }))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Commit' }))
     await waitFor(() => expect(command).toHaveBeenCalledTimes(2))
     expect(sent(command)[1]).toMatchObject({ action: 'commit' }); expect(screen.queryByRole('dialog')).toBeNull()
   })
