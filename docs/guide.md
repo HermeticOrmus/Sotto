@@ -58,6 +58,10 @@ Codex can see and operate the apps on your computer with its Computer Use, as it
 
 Ask for it by name ("use Computer Use to…") or with Codex's `$computer-use` skill. Its calls show in the thread's activity as **Computer Use**. When one fails because either condition is missing, the activity says which, and nothing was changed.
 
+### Terminal mode
+
+In Terminal mode, **Close** releases the terminal's output and keeps its row on **Closed** until Sotto quits. **Reopen** starts the same command with fresh output. **Stop**, a command finishing, or hiding its pane keeps the output readable. Up to 64 terminals can be open at once; Closed rows do not count toward that limit.
+
 ### Sending, steering and screenshots
 
 While a thread is running, **Steer now** beside a queued message sends that message into the current turn when the provider supports steering. The rest of the queue and any newer composer draft stay in place. An unconfirmed message cannot be steered again; use **Check again** to reconcile its delivery.
@@ -220,7 +224,7 @@ Settings:
 
 - Dictation: microphone, global shortcut, recording limit, local sound cues, and streaming transcription so long dictations finish almost immediately after you stop
 - Transcription: MAI-Transcribe-2 through OpenRouter (the only model), your OpenRouter API key with a verify button, language, and conservative whitespace formatting
-- Cleanup: optional AI cleanup with quality tiers and the personal dictionary that also feeds transcription spelling hints; and the switches for generated thread titles, commit messages and pull request text
+- Cleanup: optional AI cleanup with quality tiers and the personal dictionary that also feeds transcription spelling hints; and the switches for generated thread titles, commit messages and pull request text. The dictionary saves when you leave its field. An older save finishing while you type keeps your newer draft in place; if a save fails, leave the field again to retry.
 - Output: mandatory clipboard safety copy, optional automatic paste, paste delay, and success-message duration
 - Appearance: the color scheme (Light, Dark, or match the system), then one theme for light mode and one for dark, chosen in two columns. Sotto ships six themes of its own: Sotto, Hush, Linen, Nocturne, Tropic and Citrine. Sotto is the default, with an almost-black dark room and the app icon's teal (a deeper teal in light mode, so text and links stay readable). You can create a theme, import a T3 Code or VS Code theme file, or install one from Open VSX. Below the themes: the effort color, contrast and glass.
 - Updates: the version you are running and, on Windows, an automatic GitHub release check that is on by default and can be turned off, plus a manual check

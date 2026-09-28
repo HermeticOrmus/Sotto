@@ -310,7 +310,7 @@ describe('Browser page placement', () => {
 
     // The editor as ThemeEditor marks it, minimized to its bar left of the viewport (which spans x 1200.4–1600, y 180–700).
     const editor = document.body.appendChild(document.createElement('section'))
-    for (const [name, value] of [['role', 'dialog'], ['data-theme-editor-panel', ''], ['data-covers-native-view', ''], ['data-minimized', 'true']]) editor.setAttribute(name, value!)
+    for (const [name, value] of [['role', 'dialog'], ['data-theme-editor-panel', ''], ['data-covers-native-view', ''], ['data-minimized', 'true']] as const) editor.setAttribute(name, value)
     let bar = DOMRect.fromRect({ x: 840, y: 632, width: 360, height: 68 })
     const layout = vi.mocked(HTMLElement.prototype.getBoundingClientRect).getMockImplementation()!
     vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockImplementation(function (this: HTMLElement) { return this === editor ? bar : layout.call(this) })

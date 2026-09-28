@@ -6,6 +6,7 @@ import type { ToolsResult } from './tools'
 /** Terminal mode: terminals opened beside Threads, owned by a project rather than a thread. */
 export const TERMINALS_CHANNEL = 'sotto:terminals:'
 export const TERMINALS_EVENT = `${TERMINALS_CHANNEL}event`
+/** Active terminals only; the session's Closed shelf retains every row. */
 export const TERMINALS_MAX = 64
 /** A pasted image on its way to a terminal's folder: PNG only, the same ceiling as an attachment. */
 export const TERMINAL_IMAGE_MAX_BYTES = 10 * 1024 * 1024
@@ -56,7 +57,7 @@ export const workspaceTerminalResizeSchema = workspaceTerminalRequestSchema.exte
 export const workspaceTerminalImageSchema = workspaceTerminalRequestSchema.extend({ dataUrl: z.string().max(14_000_000) }).strict()
 export const workspaceTerminalSnapshotSchema = z.object({ terminal: workspaceTerminalSchema, output: z.string().max(TERMINAL_MAX_OUTPUT), sequence: z.number().int().nonnegative() }).strict()
 export const workspaceTerminalListingSchema = z.object({
-  terminals: z.array(workspaceTerminalSchema).max(TERMINALS_MAX),
+  terminals: z.array(workspaceTerminalSchema),
   /** The shell a terminal without a provider opens, by name: what the dialog's Runs box shows for it. */
   shell: z.string().max(256),
 }).strict()

@@ -6,6 +6,7 @@ import { useAgentConnection, useOptionalAgents } from '../../../src/renderer/src
 import { ProvidersSettings } from '../../../src/renderer/src/agents/ProvidersSettings'
 import { ThreadOptions } from '../../../src/renderer/src/agents/ThreadOptions'
 import { AgentSetupFields } from '../../../src/renderer/src/agents/AgentAccountSettings'
+import { agentContextFixture } from '../../fixtures/agentContext'
 
 vi.mock('../../../src/renderer/src/agents/AgentContext', async importOriginal => ({ ...await importOriginal<typeof import('../../../src/renderer/src/agents/AgentContext')>(), useOptionalAgents: vi.fn() }))
 const caps = { projects: true, threads: true, submit: true, observe: true, questions: true, permissions: true, interrupt: true, messageOrigin: true, reconcile: true, configureThread: true }
@@ -23,7 +24,7 @@ function fixture(): AgentState {
 }
 function provide(state = fixture()) {
   const command = vi.fn(async () => state)
-  vi.mocked(useOptionalAgents).mockReturnValue({ state, command, error: null, voice: { status: 'off' }, muteVoice: vi.fn(), stopSpeech: vi.fn(), retryVoice: vi.fn(), attention: { items: [], show: false, dismiss: vi.fn(), reopen: vi.fn(), next: vi.fn(async () => undefined) } })
+  vi.mocked(useOptionalAgents).mockReturnValue(agentContextFixture(state, command))
   return { state, command }
 }
 afterEach(() => { cleanup(); vi.clearAllMocks() })
@@ -33,7 +34,7 @@ describe('independent provider settings', () => {
     const { state, command } = provide()
     render(<ProvidersSettings />)
     for (const label of ['Codex', 'Claude Code', 'Grok Build']) expect(screen.getByRole('switch', { name: `Enable ${label}` })).toHaveAttribute('aria-checked', 'true')
-    fireEvent.click(screen.getByRole('button', { name: 'Grok Build', exact: true }))
+    fireEvent.click(screen.getByRole('button', { name: 'Grok Build' }))
     fireEvent.click(screen.getByRole('button', { name: 'Disconnect Grok Build' }))
     await waitFor(() => expect(command).toHaveBeenCalledWith({ type: 'disconnect', provider: 'grok' }))
     expect(state.configuration.reasoning).toBe('claude')
@@ -45,7 +46,7 @@ describe('independent provider settings', () => {
     const { command } = provide(state)
     render(<ProvidersSettings />)
     for (const provider of providerIdSchema.options) {
-      fireEvent.click(screen.getByRole('button', { name: PROVIDER_LABELS[provider], exact: true }))
+      fireEvent.click(screen.getByRole('button', { name: PROVIDER_LABELS[provider] }))
       expect(screen.queryByRole('combobox', { name: /default thread model/i })).toBeNull()
     }
     expect(state.configuration.reasoning).toBe('claude')
@@ -58,7 +59,7 @@ describe('independent provider settings', () => {
     const { command } = provide(state)
     render(<ProvidersSettings />)
     expect(screen.getByRole('switch', { name: 'Enable Devin' })).toHaveAttribute('aria-checked', 'false')
-    fireEvent.click(screen.getByRole('button', { name: 'Devin', exact: true }))
+    fireEvent.click(screen.getByRole('button', { name: 'Devin' }))
     expect(screen.getByText(/Install Devin CLI and run devin auth login/)).toBeVisible()
     expect(screen.getByText(/Devin keeps its own history and usage analytics/)).toBeVisible()
     fireEvent.click(screen.getByRole('button', { name: 'Connect Devin' }))
@@ -70,11 +71,11 @@ describe('independent provider settings', () => {
     const { container } = render(<ProvidersSettings />)
     for (const provider of providerIdSchema.options) {
       // Every provider Sotto ships draws its own mark; the initial is the fallback for one it has none for.
-      const drawn = screen.getByRole('button', { name: PROVIDER_LABELS[provider], exact: true }).querySelector(`svg.provider-mark[data-provider="${provider}"]`)
+      const drawn = screen.getByRole('button', { name: PROVIDER_LABELS[provider] }).querySelector(`svg.provider-mark[data-provider="${provider}"]`)
       expect(drawn, `${provider} needs its own mark rather than its initial`).not.toBeNull()
       expect(drawn!.querySelector('path')?.getAttribute('d')).toBeTruthy()
     }
-    fireEvent.click(screen.getByRole('button', { name: 'Grok Build', exact: true }))
+    fireEvent.click(screen.getByRole('button', { name: 'Grok Build' }))
     expect(container.querySelector('.provider-detail__header svg.provider-mark[data-provider="grok"]')).not.toBeNull()
   })
   it('shows a provider-specific failure and retries it while others stay connected', async () => {
@@ -82,7 +83,7 @@ describe('independent provider settings', () => {
     state.host.providers![1] = { ...state.host.providers![1]!, connection: 'error', error: 'Sign in to Claude Code.' }
     const { command } = provide(state)
     render(<ProvidersSettings />)
-    fireEvent.click(screen.getByRole('button', { name: 'Claude Code', exact: true }))
+    fireEvent.click(screen.getByRole('button', { name: 'Claude Code' }))
     expect(screen.getByRole('alert')).toHaveTextContent('Sign in to Claude Code.')
     fireEvent.click(screen.getByRole('button', { name: 'Retry Claude Code' }))
     await waitFor(() => expect(command).toHaveBeenCalledWith({ type: 'connect', provider: 'claude' }))
@@ -91,7 +92,7 @@ describe('independent provider settings', () => {
   it('shows only the selected provider catalog and keeps coordinator choices in Agents settings', () => {
     provide()
     const view = render(<ProvidersSettings />)
-    fireEvent.click(screen.getByRole('button', { name: 'Claude Code', exact: true }))
+    fireEvent.click(screen.getByRole('button', { name: 'Claude Code' }))
     fireEvent.click(screen.getByRole('tab', { name: 'Models' }))
     const panel = screen.getByRole('tabpanel')
     expect(within(panel).getByText('claude model')).toBeVisible()
