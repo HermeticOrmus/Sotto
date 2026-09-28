@@ -106,7 +106,8 @@ export function HostProviderSignIn({ host, provider, bridge, onClose }: {
     if (view.shape === 'device-code') return <div className="host-sign-in">
       <p>Enter this code on {name}'s sign-in page. {host.name} finishes signing in by itself once you do.</p>
       <div className="host-sign-in__code-row">
-        <span className="host-sign-in__code" role="text" aria-label={`Code ${spelled(view.code ?? '')}`}>{view.code}</span>
+        <span className="host-sign-in__code" aria-hidden="true">{view.code}</span>
+        <span className="tt-visually-hidden">Code {spelled(view.code ?? '')}</span>
         <Button variant="secondary" aria-label="Copy the code" onClick={() => void copy(view.code ?? '')}>
           {copied === 'copied' ? <Check size={14} aria-hidden="true" /> : <Copy size={14} aria-hidden="true" />}{copied === 'copied' ? 'Copied' : 'Copy code'}
         </Button>

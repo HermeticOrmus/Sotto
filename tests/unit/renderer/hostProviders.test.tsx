@@ -89,7 +89,9 @@ it('signs Codex in with a device code: the code, Copy code, Open sign-in page, a
   await user.click(screen.getByRole('button', { name: 'Sign in to Codex on forge from this computer' }))
   const dialog = screen.getByRole('dialog', { name: 'Sign in to Codex on forge' })
   expect(signIn).toHaveBeenCalledWith({ type: 'start', id: HOST, provider: 'codex' })
-  expect(await within(dialog).findByText('WDJB-MJHT')).toHaveAttribute('aria-label', 'Code W D J B dash M J H T')
+  // The code is read out one character at a time; the code as shown is hidden from a screen reader, which would say it as a word.
+  expect(await within(dialog).findByText('WDJB-MJHT')).toHaveAttribute('aria-hidden', 'true')
+  expect(within(dialog).getByText('Code W D J B dash M J H T')).toHaveClass('tt-visually-hidden')
   expect(within(dialog).getByText('Waiting for you on auth.openai.com. The code lasts 15 minutes.')).toBeInTheDocument()
   // Focus goes to the step's own control once the code is there.
   await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Open sign-in page' })).toHaveFocus())
