@@ -32,6 +32,8 @@ The [dark two-pane transcript](../../artifacts/review-378/threads-dark.png) and 
 
 ## Review
 
+Final integration at `53bb7910` includes the independent roster-readiness (#402) and fake-Claude timestamp (#403) corrections that blocked earlier CI. Typecheck, lint and notices passed. The eight retry cases plus personal-chat and fixture timestamp cases passed 13 tests; activity persistence, publish coalescing, quit drain and history-off neighbors passed 32 more. No retry production source changed during integration. Final-head CI remains the integrated full gate.
+
 Independent native GPT-6-astra standards and spec review of `d08d6c7f` reported zero verified findings after inspecting the source, tests and shutdown callers. A follow-up independent native review of the interrupted-privacy guard and regressions also reported zero verified Standards or Spec findings. The coordinating agent performs its own review separately.
 
 The four external CLI slots from the code-review skill were attempted. Automatic approval review rejected the Astra spec and both Grok calls because external disclosure of the private source was not authorized. Astra standards started but could not read the checkout because its child sandbox failed to initialize. No external slot produced review evidence. The authorized native review replaces those unavailable calls; this is not a cross-model review.
