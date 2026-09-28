@@ -40,6 +40,33 @@ async function openPicker() {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
 describe('branch toolbar logic', () => {
+  it('orders worktrees by their latest use', () => {
+    const others = Array.from({ length: 8 }, (_, index) => thread({ id: `recent-${index}`, updatedAt: `2026-09-${String(index + 10).padStart(2, '0')}T00:00:00Z`, worktree: { mode: 'independent', status: 'ready', path: `C:/wt/${index}`, branch: `feat/${index}` } }))
+    expect(workspaceOptions(thread(), others).slice(2).map(option => option.choice)).toEqual([...others].reverse().map(other => ({ kind: 'previous', path: other.worktree!.path })))
+  })
+  it('uses message activity from full and shell threads, keeping the newest record for a shared worktree', () => {
+    const other = (id: string, path: string, extra: Partial<AgentThread> = {}) => thread({ id, worktree: { mode: 'independent', status: 'ready', path, branch: id }, ...extra })
+    const options = workspaceOptions(thread(), [
+      other('old-record', 'C:/wt/reused', { updatedAt: '2026-09-01T00:00:00Z' }),
+      other('unknown', 'C:/wt/unknown', { updatedAt: 'invalid' }),
+      other('new-record', 'C:\\wt\\reused\\', { summary: { messageCount: 1, activityCount: 0, lastMessageAt: '2026-09-25T00:00:00Z' } }),
+      other('message', 'C:/wt/message', { messages: [{ id: 'm', role: 'user', text: '', createdAt: '2026-09-26T00:00:00Z' }] }),
+    ])
+    expect(options.slice(2).map(option => option.name)).toEqual(['message', 'new-record', 'unknown'])
+  })
+  it('shows five recent worktrees and searches older ones while keeping both starting choices', () => {
+    const others = Array.from({ length: 12 }, (_, index) => thread({ id: `recent-${index}`, updatedAt: `2026-09-${String(index + 10).padStart(2, '0')}T00:00:00Z`, worktree: { mode: 'independent', status: 'ready', path: `C:/wt/${index}`, branch: `feat/${index}` } }))
+    const { command } = mount(thread(), { others })
+    fireEvent.click(screen.getByRole('combobox', { name: 'Choose workspace' }))
+    expect(screen.getAllByRole('option')).toHaveLength(7)
+    const search = screen.getByRole('searchbox', { name: 'Search worktrees' })
+    expect(search).toHaveFocus()
+    fireEvent.change(search, { target: { value: 'feat/0' } })
+    expect(screen.getAllByRole('option')).toHaveLength(3)
+    expect(screen.getByRole('option', { name: 'New worktree' })).toBeVisible()
+    fireEvent.click(screen.getByRole('option', { name: /feat\/0/ }))
+    expect(command).toHaveBeenCalledWith({ type: 'configure-thread-working-copy', threadId: 'thread-1', workingCopy: 'independent', existingWorktreePath: 'C:/wt/0' })
+  })
   it('applies to a repository or a worktree still to be made, and locks the workspace once the thread has started', () => {
     expect(toolbarApplies(thread())).toBe(true)
     expect(toolbarApplies(thread({ worktree: { mode: 'shared', status: 'ready', path: project.path, git: { ...git, isRepository: false } } }))).toBe(false)
@@ -144,8 +171,8 @@ describe('BranchToolbar', () => {
     expect(chip).toHaveTextContent('Current checkout')
     fireEvent.click(chip)
     const list = screen.getByRole('listbox', { name: 'Workspace' })
-    expect(within(list).getAllByRole('option').map(option => option.textContent)).toEqual(['Current checkout', 'New worktree', 'Previous worktree (feat/other)'])
-    expect(within(list).getByRole('option', { name: 'Current checkout' })).toHaveFocus()
+    expect(within(list).getAllByRole('option').map(option => option.textContent)).toEqual(['Current checkout', 'New worktree', 'feat/other'])
+    expect(screen.getByRole('searchbox', { name: 'Search worktrees' })).toHaveFocus()
     fireEvent.click(within(list).getByRole('option', { name: 'New worktree' }))
     await waitFor(() => expect(command).toHaveBeenCalledWith({ type: 'configure-thread-working-copy', threadId: 'thread-1', workingCopy: 'independent', startFromOrigin: true }))
     expect(chip).toHaveFocus()

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
-import { Check, ChevronDown, Folder, GitBranch, GitMerge, GitPullRequest, GitPullRequestArrow, GitPullRequestClosed, GitPullRequestDraft, Laptop, Search, Server } from 'lucide-react'
+import { Check, ChevronDown, Folder, GitBranch, GitMerge, GitPullRequest, GitPullRequestArrow, GitPullRequestClosed, GitPullRequestDraft, Laptop, Plus, Search, Server } from 'lucide-react'
 import type { AgentState } from '../../../shared/agents'
 import type { GitPullRequestSummary } from '../../../shared/gitStatus'
 import type { GitRef, GitRefsPage } from '../../../shared/gitRefs'
@@ -165,7 +165,7 @@ function PullRequestBadge({ pullRequest, onOpen }: { readonly pullRequest: GitPu
   </button>
 }
 
-/** The Workspace chip: a short list of where the draft will work, closed by a choice, Escape, Tab or a pointer outside. */
+/** The Workspace chip: fixed starting choices, five recent worktrees, and search across the project's worktrees. */
 function WorkspaceMenu({ triggerRef, open, onOpenChange, label, value, options, disabled, onChoose }: {
   readonly triggerRef: React.RefObject<HTMLButtonElement | null>
   readonly open: boolean; readonly onOpenChange: (open: boolean) => void
@@ -174,29 +174,92 @@ function WorkspaceMenu({ triggerRef, open, onOpenChange, label, value, options, 
   readonly disabled: boolean
   readonly onChoose: (choice: WorkspaceChoice) => void
 }): ReactNode {
+  const panel = useRef<HTMLDivElement>(null)
   const list = useRef<HTMLDivElement>(null)
+  const search = useRef<HTMLInputElement>(null)
+  const restoreFocus = useRef(false)
+  const [query, setQuery] = useState('')
+  const [position, setPosition] = useState<{ left: number; width: number; maxHeight: number; below: boolean } | null>(null)
   const listId = useId()
+  const panelId = useId()
+  const needle = query.trim().toLowerCase()
+  const worktrees = options.filter(option => option.choice.kind === 'previous')
+  const recent = needle ? worktrees.filter(option => `${option.name ?? option.label} ${option.choice.kind === 'previous' ? option.choice.path : ''}`.toLowerCase().includes(needle)) : worktrees.slice(0, 5)
+  useEffect(() => {
+    if (disabled || !restoreFocus.current) return
+    restoreFocus.current = false
+    // Disabling a focused button drops focus to the document. Restore it after the command, unless the
+    // user has already moved elsewhere while it was running.
+    if (document.activeElement === document.body) triggerRef.current?.focus()
+  }, [disabled, triggerRef])
   useEffect(() => {
     if (!open) return
+    setQuery('')
     const dismiss = (event: PointerEvent): void => {
       const target = event.target as Node
-      if (!list.current?.contains(target) && !triggerRef.current?.contains(target)) onOpenChange(false)
+      if (!panel.current?.contains(target) && !triggerRef.current?.contains(target)) onOpenChange(false)
     }
     document.addEventListener('pointerdown', dismiss, true)
-    ;(list.current?.querySelector<HTMLButtonElement>('button[aria-selected="true"]') ?? list.current?.querySelector<HTMLButtonElement>('button'))?.focus()
+    search.current?.focus()
     return () => document.removeEventListener('pointerdown', dismiss, true)
   }, [open, onOpenChange, triggerRef])
+  useLayoutEffect(() => {
+    if (!open) return
+    const trigger = triggerRef.current
+    if (!trigger) return
+    const composerElement = trigger.closest('.thread-workspace__compose')
+    const paneElement = trigger.closest('.thread-pane') ?? composerElement
+    const update = (): void => {
+      const anchor = trigger.getBoundingClientRect()
+      const pane = paneElement?.getBoundingClientRect()
+      const leftEdge = Math.max(8, (pane?.left ?? 0) + 8)
+      const rightEdge = Math.min(window.innerWidth - 8, (pane?.right ?? window.innerWidth) - 8)
+      const width = Math.min(340, rightEdge - leftEdge)
+      const left = Math.max(leftEdge, Math.min(anchor.left, rightEdge - width)) - anchor.left
+      const topEdge = Math.max(0, pane?.top ?? 0) + 8
+      const bottomEdge = Math.min(window.innerHeight, pane?.bottom ?? window.innerHeight) - 8
+      const above = anchor.top - topEdge - 6
+      const below = bottomEdge - anchor.bottom - 6
+      const opensBelow = above < 280 && below > above
+      const maxHeight = Math.min(380, Math.max(0, opensBelow ? below : above))
+      setPosition(previous => previous?.left === left && previous.width === width && previous.maxHeight === maxHeight && previous.below === opensBelow ? previous : { left, width, maxHeight, below: opensBelow })
+    }
+    update()
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(update)
+    observer?.observe(trigger)
+    if (paneElement) observer?.observe(paneElement)
+    if (composerElement && composerElement !== paneElement) observer?.observe(composerElement)
+    window.addEventListener('resize', update)
+    window.addEventListener('scroll', update, true)
+    return () => { observer?.disconnect(); window.removeEventListener('resize', update); window.removeEventListener('scroll', update, true) }
+  }, [open, triggerRef])
+  const optionButton = (option: ReturnType<typeof workspaceOptions>[number]): ReactNode => {
+    const Icon = option.choice.kind === 'current' ? Folder : option.choice.kind === 'new' ? Plus : GitBranch
+    return <button type="button" role="option" key={option.id} aria-label={option.label} aria-selected={option.id === value}
+      className="branch-toolbar__workspace-option" title={option.choice.kind === 'previous' ? option.choice.path : undefined}
+      onClick={() => { onOpenChange(false); triggerRef.current?.focus(); if (option.id !== value) { restoreFocus.current = true; onChoose(option.choice) } }}>
+      <Icon size={14} aria-hidden="true" /><span>{option.name ?? option.label}</span>{option.id === value ? <Check size={14} aria-hidden="true" /> : null}</button>
+  }
   return <div className="branch-toolbar__menu"
     onKeyDown={event => { if (open && event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onOpenChange(false); triggerRef.current?.focus() } }}
     onBlur={event => { if (open && !event.currentTarget.contains(event.relatedTarget as Node | null)) onOpenChange(false) }}>
-    <button ref={triggerRef} type="button" className="branch-toolbar__chip tt-focusable" role="combobox" aria-label="Choose workspace" title={`Workspace: ${label}`} aria-haspopup="listbox" aria-expanded={open}
-      aria-controls={open ? listId : undefined} disabled={disabled} onClick={() => onOpenChange(!open)}>
+    <button ref={triggerRef} type="button" className="branch-toolbar__chip tt-focusable" role="combobox" aria-label="Choose workspace" title={`Workspace: ${label}`} aria-haspopup="dialog" aria-expanded={open}
+      aria-controls={open ? panelId : undefined} disabled={disabled} onClick={() => onOpenChange(!open)}>
       <Folder size={13} aria-hidden="true" /><span>{label}</span><ChevronDown size={12} aria-hidden="true" />
     </button>
-    {open ? <div ref={list} id={listId} role="listbox" aria-label="Workspace" className="branch-toolbar__list" onKeyDown={event => moveListboxFocus(event, list.current)}>
-      {options.map(option => <button type="button" role="option" key={option.id} aria-selected={option.id === value}
-        onClick={() => { onOpenChange(false); triggerRef.current?.focus(); if (option.id !== value) onChoose(option.choice) }}>
-        <span>{option.label}</span>{option.id === value ? <Check size={14} aria-hidden="true" /> : null}</button>)}
+    {open ? <div ref={panel} id={panelId} role="dialog" aria-label="Choose workspace" className="branch-toolbar__list branch-toolbar__workspace"
+      style={position ? { left: position.left, width: position.width, maxHeight: position.maxHeight, ...(position.below ? { top: 'calc(100% + 6px)', bottom: 'auto' } : {}) } : undefined}>
+      <label className="branch-toolbar__search"><Search size={14} aria-hidden="true" /><input ref={search} type="search" aria-label="Search worktrees" placeholder="Search worktrees" value={query} aria-controls={listId}
+        onChange={event => setQuery(event.target.value)} onKeyDown={event => {
+          if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); const items = list.current?.querySelectorAll<HTMLButtonElement>('button'); (event.key === 'ArrowDown' ? items?.[0] : items?.[items.length - 1])?.focus() }
+        }} /></label>
+      <div ref={list} id={listId} role="listbox" aria-label="Workspace" className="branch-toolbar__workspace-choices" onKeyDown={event => moveListboxFocus(event, list.current)}>
+        <div role="group" aria-label="Start here" className="branch-toolbar__workspace-start">{options.filter(option => option.choice.kind !== 'previous').map(optionButton)}</div>
+        <div className="branch-toolbar__workspace-heading" aria-hidden="true">{needle ? 'Search results' : 'Recent worktrees'}</div>
+        <div role="group" aria-label={needle ? 'Search results' : 'Recent worktrees'} className="branch-toolbar__workspace-recent">{recent.map(optionButton)}
+          {recent.length === 0 ? <p className="branch-toolbar__empty" role="status">{needle ? 'No matching worktrees.' : 'No recent worktrees.'}</p> : null}
+        </div>
+      </div>
     </div> : null}
   </div>
 }

@@ -33,6 +33,17 @@
 .branch-toolbar__menu, .branch-toolbar__picker { position: relative; min-width: 0; }
 .branch-toolbar__list, .branch-toolbar__panel { position: absolute; bottom: calc(100% + 6px); z-index: 30; border: 1px solid var(--tt-field-border); border-radius: 12px; background: var(--tt-surface-elevated); box-shadow: 0 16px 48px var(--tt-shadow-color); color: var(--tt-text); }
 .branch-toolbar__list { left: 0; min-width: 200px; padding: 6px; }
+.branch-toolbar__workspace { display: flex; flex-direction: column; width: min(340px, calc(100vw - 32px)); min-width: 0; max-height: min(380px, calc(100vh - 80px)); overflow: hidden; }
+.branch-toolbar__workspace > .branch-toolbar__search { flex: none; }
+.branch-toolbar__workspace-choices { display: flex; flex-direction: column; min-height: 0; }
+.branch-toolbar__workspace-start, .branch-toolbar__workspace-heading { flex: none; }
+.branch-toolbar__workspace-heading { margin: 5px 4px 0; padding: 9px 6px 5px; border-top: 1px solid var(--tt-hairline); color: var(--tt-text-muted); font-size: 11px; }
+.branch-toolbar__workspace-recent { min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; scrollbar-width: thin; }
+.branch-toolbar__workspace-option { display: flex; align-items: center; gap: 9px; width: 100%; min-height: 34px; padding: 7px 10px; border: 0; border-radius: 8px; background: transparent; color: var(--tt-text-2); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.branch-toolbar__workspace-option > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.branch-toolbar__workspace-option > svg { flex: none; }
+.branch-toolbar__workspace-option:hover, .branch-toolbar__workspace-option:focus-visible { background: var(--tt-hover); color: var(--tt-text); outline: 0; }
+.branch-toolbar__workspace-option[aria-selected='true'] { color: var(--tt-activity); }
 /* Placed by measurement from the trigger, so it stays inside the pane whatever the row wrapped into; the stylesheet gives the fallback. */
 .branch-toolbar__panel { left: 0; display: grid; width: min(340px, calc(100vw - 48px)); padding: 6px; }
 .branch-toolbar__list > button, .branch-toolbar__refs > button[role='option'] { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; min-height: 32px; padding: 6px 10px; border: 0; border-radius: 8px; background: transparent; color: var(--tt-text-2); font: inherit; font-size: 13px; text-align: left; white-space: nowrap; cursor: pointer; }
