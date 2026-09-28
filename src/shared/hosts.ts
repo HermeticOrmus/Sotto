@@ -90,8 +90,11 @@ export interface HostSetupState {
   readonly attempt?: (HostStatus & { readonly purpose: 'check' | 'add' }) | undefined
   /** Steps that failed in an earlier check and passed in a later one: done by the agent. */
   readonly byAgent: readonly HostSetupStep[]
-  /** What the thread is waiting on the user for: a command it wants to run, or Sotto's "Add forge as a host?". */
-  readonly waiting?: 'command' | 'add' | undefined
+  /**
+   * What the thread is waiting on the user for: a command it wants to run, Sotto's "Add forge as a host?", or an
+   * SSH question or Tailscale approval during the tool's check or add (`connection`), which the thread cannot show.
+   */
+  readonly waiting?: 'command' | 'add' | 'connection' | undefined
 }
 export interface HostsState {
   hosts: HostStatus[]; localHostEnabled: boolean; localHostRunning: boolean; activeHostId?: string; localHostId?: string

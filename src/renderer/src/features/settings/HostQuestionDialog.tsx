@@ -1,14 +1,26 @@
 import React, { useEffect, useState, type ReactNode } from 'react'
-import type { HostsBridge, HostsCommand, HostsState } from '../../../../shared/hosts'
+import type { HostsBridge, HostsCommand, HostsState, HostStatus } from '../../../../shared/hosts'
 import { ConfirmationDialog } from '../../components/ConfirmationDialog'
 import { useHostsModalOpen } from './HostDialog'
 import './hosts.css'
 
 /**
+ * The check or add a running host setup is waiting on the user for, if any (ADR-0035): SSH's question, or a
+ * Tailscale approval with its page. The setup's thread cannot say so itself while its tool call waits.
+ */
+function setupWait(state: HostsState | null): HostStatus | undefined {
+  const setup = state?.setup
+  if (!setup || (setup.phase !== 'starting' && setup.phase !== 'running')) return undefined
+  const attempt = setup.attempt
+  return attempt?.phase === 'connecting' && (attempt.prompt || (attempt.tailscale?.waiting && attempt.tailscale.url)) ? attempt : undefined
+}
+
+/**
  * SSH's question for a saved host that is connecting on its own: at launch, after a drop, or after a
  * switch-on. It is asked over whichever page is open, because a host reconnects wherever the user is and
- * SSH stops waiting after a while. Add host asks its own questions in its dialog, and this one waits while
- * a Hosts dialog is open so the two never stack.
+ * SSH stops waiting after a while. A host setup's check or add asks its SSH question, or Tailscale's approval,
+ * the same way, with Not now to answer it later from Show setup. Add host asks its own questions in its
+ * dialog, and this one waits while a Hosts dialog is open so the two never stack.
  */
 export function HostQuestionDialog({ bridge = window.sotto?.hosts }: { readonly bridge?: HostsBridge | undefined }): ReactNode {
   const [state, setState] = useState<HostsState | null>(null)
@@ -22,15 +34,45 @@ export function HostQuestionDialog({ bridge = window.sotto?.hosts }: { readonly 
     const off = bridge.onChanged(value => { if (alive) setState(value) })
     return () => { alive = false; off() }
   }, [bridge])
-  const host = state?.hosts.find(item => item.prompt)
+  /** The setup question the user put off with Not now; it shows again once another one comes. */
+  const [later, setLater] = useState<string | null>(null)
+  const saved = state?.hosts.find(item => item.prompt)
+  const waiting = saved ? undefined : setupWait(state)
+  const setupKey = waiting ? waiting.prompt ? `prompt:${waiting.prompt.id}` : `tailscale:${waiting.id}` : null
+  const host = saved ?? (setupKey !== later ? waiting : undefined)
   const prompt = host?.prompt
-  useEffect(() => { setAnswer(''); setError(null) }, [prompt?.id])
-  if (!bridge || !host || !prompt || hostsDialogOpen) return null
-  const run = async (command: HostsCommand, failure: string): Promise<void> => {
+  useEffect(() => { setAnswer(''); setError(null) }, [prompt?.id, setupKey])
+  if (!bridge || !host || hostsDialogOpen) return null
+  const run = async (command: HostsCommand, failure: string): Promise<boolean> => {
     setError(null)
-    try { setState(await bridge.command(command)) }
-    catch (reason) { setError(reason instanceof Error ? reason.message : failure) }
+    try { setState(await bridge.command(command)); return true }
+    catch (reason) { setError(reason instanceof Error ? reason.message : failure); return false }
   }
+  if (!saved) {
+    const name = state?.setup?.name ?? host.name
+    const notNow = (): void => { setAnswer(''); setLater(setupKey) }
+    const putOff = ' Not now leaves it waiting, and Show setup in Settings > Hosts has it too.'
+    if (!prompt) return <ConfirmationDialog key={setupKey} danger={false} title={`Approve the connection to ${name} in Tailscale`}
+      confirmLabel="Open approval page" cancelLabel="Not now" onCancel={notNow}
+      onConfirm={() => run({ type: 'open-approval', id: host.id }, 'The approval page could not open. Nothing was changed. Try again.')}
+      {...(error ? { failureMessage: error } : {})}
+      description={<p>{`An agent is setting up ${name}, and Tailscale SSH asks you to approve this computer's connection before the setup goes on. Open the approval page and approve it in your browser.${putOff}`}</p>} />
+    const hostKey = prompt.kind === 'host-key'
+    return <ConfirmationDialog key={setupKey} danger={false}
+      title={hostKey ? `Trust the SSH host ${name}?` : `Unlock the SSH connection to ${name}`}
+      confirmLabel={hostKey ? 'Trust host' : 'Continue'} cancelLabel="Not now" onCancel={notNow}
+      // The dialog stays until main clears the question, which it does once SSH has the answer.
+      onConfirm={async () => { await run({ type: 'ssh-answer', id: host.id, promptId: prompt.id, answer: hostKey ? 'yes' : answer }, 'SSH did not take the answer. Answer it again from Show setup in Settings > Hosts.'); setAnswer(''); return false }}
+      {...(error ? { failureMessage: error } : {})}
+      description={<div className="hosts-dialog__fields">
+        <p>{(hostKey ? `An agent is setting up ${name}, and SSH has not seen this host before. Check its key, then trust it to continue.`
+          : `An agent is setting up ${name}, and SSH needs your ${prompt.kind === 'passphrase' ? 'key passphrase' : 'password'} to sign in.`) + putOff}</p>
+        <pre className="hosts-challenge">{prompt.text}</pre>
+        {!hostKey && <div className="tt-field"><label className="tt-field__label" htmlFor="hosts-prompt-answer">{prompt.kind === 'passphrase' ? 'Key passphrase' : 'SSH password'}</label>
+          <input id="hosts-prompt-answer" className="tt-input tt-focusable" type="password" autoComplete="off" value={answer} onChange={event => setAnswer(event.target.value)} /></div>}
+      </div>} />
+  }
+  if (!prompt) return null
   const hostKey = prompt.kind === 'host-key'
   return <ConfirmationDialog key={prompt.id} danger={false}
     title={hostKey ? `Trust the SSH host ${host.name}?` : `Unlock the SSH connection to ${host.name}`}

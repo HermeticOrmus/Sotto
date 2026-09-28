@@ -293,10 +293,16 @@ export class HostSetup implements HostSetupSource, HostSetupToolHandlers {
     }
     if (status.phase === 'error' && status.step) run.failed.set(status.step, status.reason)
   }
-  /** What the thread waits on the user for: Sotto's add request first, else any request the provider made. */
+  /**
+   * What the thread waits on the user for: Sotto's add request first, then an SSH question or Tailscale approval
+   * holding the tool's check or add, else any request the provider made.
+   */
   private waiting(run: Run): HostSetupState['waiting'] {
     if (run.request) return 'add'
-    if (!running(run) || !run.threadId) return undefined
+    if (!running(run)) return undefined
+    const attempt = run.attemptId ? this.options.hosts.attempt(run.attemptId) : undefined
+    if (attempt?.phase === 'connecting' && (attempt.prompt || attempt.tailscale?.waiting)) return 'connection'
+    if (!run.threadId) return undefined
     return this.options.threads.thread(run.threadId)?.requestIds.some(id => !isSottoRequest(id)) ? 'command' : undefined
   }
   /** The threads changed: the setup's waiting line, an archived setup thread, or a model becoming ready. */

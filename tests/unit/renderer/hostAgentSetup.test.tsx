@@ -3,6 +3,7 @@ import { act, cleanup, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, expect, it, vi } from 'vitest'
 import { HostsSettings } from '../../../src/renderer/src/features/settings/HostsSettings'
+import { HostQuestionDialog } from '../../../src/renderer/src/features/settings/HostQuestionDialog'
 import type { HostSetupChoice, HostSetupState, HostsBridge, HostsCommand, HostsState, HostStatus } from '../../../src/shared/hosts'
 
 // Have my agent set this up in Add host (ADR-0035, issue #431): the two choices, the setup view that follows the
@@ -113,6 +114,33 @@ it('says the host is connected when the agent\'s add connects, and Done puts the
   expect(within(dialog).queryByRole('button', { name: 'Stop setup' })).toBeNull()
   await user.click(within(dialog).getByRole('button', { name: 'Done' }))
   expect(command).toHaveBeenLastCalledWith({ type: 'dismiss-setup', id })
+})
+
+it('asks a running setup\'s SSH question and Tailscale approval over any page, with Not now, and says so on the Hosts page', async () => {
+  const { bridge, command, push } = fixture(CHOICE), user = userEvent.setup()
+  const checking = attempt({ step: 'sign-in', prompt: { id: 'prompt-1', kind: 'password', text: 'zach@forge password:' } })
+  push({ setup: setupState({ attempt: checking, waiting: 'connection' }) })
+  render(<><HostQuestionDialog bridge={bridge} /><HostsSettings localHostEnabled onLocalHostChange={async () => true} bridge={bridge} /></>)
+  expect((await screen.findByText(/SSH is waiting for your answer before it connects to forge\. Show setup to answer it\./)).textContent).toContain('GPT-6 is setting up forge')
+  const unlock = await screen.findByRole('dialog', { name: 'Unlock the SSH connection to forge' })
+  expect(unlock.textContent).toContain('An agent is setting up forge, and SSH needs your password to sign in. Not now leaves it waiting')
+  await user.type(within(unlock).getByLabelText('SSH password'), 'synthetic')
+  await user.click(within(unlock).getByRole('button', { name: 'Continue' }))
+  expect(command).toHaveBeenLastCalledWith({ type: 'ssh-answer', id: checking.id, promptId: 'prompt-1', answer: 'synthetic' })
+  // Not now puts this question off; the next one asks again.
+  await user.click(within(unlock).getByRole('button', { name: 'Not now' }))
+  expect(screen.queryByRole('dialog', { name: 'Unlock the SSH connection to forge' })).toBeNull()
+  expect(command.mock.calls.some(([value]) => value.type === 'stop-setup')).toBe(false)
+  push({ setup: setupState({ attempt: attempt({ step: 'tailscale', tailscale: { waiting: true, url: 'https://login.tailscale.com/a/synthetic' } }), waiting: 'connection' }) })
+  expect(screen.getByText(/Tailscale is waiting for you to approve the connection to forge\. Show setup to approve it\./)).toBeTruthy()
+  const approve = screen.getByRole('dialog', { name: 'Approve the connection to forge in Tailscale' })
+  expect(approve.textContent).not.toContain('login.tailscale.com')
+  await user.click(within(approve).getByRole('button', { name: 'Open approval page' }))
+  expect(command).toHaveBeenLastCalledWith({ type: 'open-approval', id: checking.id })
+  expect(screen.queryByRole('dialog', { name: 'Approve the connection to forge in Tailscale' })).toBeNull()
+  // A setup that has ended asks nothing.
+  push({ setup: setupState({ phase: 'stopped', attempt: attempt({ step: 'sign-in', prompt: { id: 'prompt-2', kind: 'host-key', text: 'The authenticity of host forge cannot be established.' } }) }) })
+  expect(screen.queryByRole('dialog')).toBeNull()
 })
 
 it('offers Have my agent fix this under a failed step of Add it, naming the failed attempt', async () => {

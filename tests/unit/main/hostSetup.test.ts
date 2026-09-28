@@ -236,6 +236,23 @@ describe('HostSetup', () => {
     expect(f.hosts.forget).not.toHaveBeenCalled()
   })
 
+  it('says the setup waits on the user while SSH asks a question or Tailscale holds its check', async () => {
+    const f = fixture()
+    await f.setup.command(start())
+    const checking = f.setup.run('thread-1', 'host_check')
+    await vi.waitFor(() => expect(f.hosts.check).toHaveBeenCalled())
+    const id = f.hosts.check.mock.calls[0]![0].id
+    f.statuses.set(id, { ...f.statuses.get(id)!, step: 'sign-in', prompt: { id: 'prompt-1', kind: 'password', text: 'zach@forge password:' } })
+    expect(f.setup.state()?.waiting).toBe('connection')
+    const signedIn = { ...f.statuses.get(id)! }
+    delete signedIn.prompt
+    f.statuses.set(id, { ...signedIn, step: 'tailscale', tailscale: { waiting: true, url: 'https://login.tailscale.com/a/synthetic' } })
+    expect(f.setup.state()?.waiting).toBe('connection')
+    await f.finishCheck({ phase: 'disconnected', step: 'pair', checked: true })
+    await checking
+    expect(f.setup.state()?.waiting).toBeUndefined()
+  })
+
   it('says the thread waits for a command while the provider asks, and stops when the thread is archived', async () => {
     const f = fixture()
     await f.setup.command(start())

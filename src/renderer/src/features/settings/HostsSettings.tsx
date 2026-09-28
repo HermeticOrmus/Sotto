@@ -123,7 +123,9 @@ function RenameDialog({ host, onRename, onClose }: { readonly host: HostStatus; 
 function HostSetupLine({ setup, onShow, onDismiss }: { readonly setup: HostSetupState; readonly onShow: () => void; readonly onDismiss: () => void }): ReactNode {
   const running = setup.phase === 'starting' || setup.phase === 'running'
   return <div className="hosts-setup-line" role="status" data-phase={setup.phase}>
-    <p>{running ? <><b>{setup.modelName}</b> is setting up {setup.name} in the thread <b>{setup.threadTitle}</b>.{setup.waiting ? ' It is waiting for your answer there.' : ''}</>
+    <p>{running ? <><b>{setup.modelName}</b> is setting up {setup.name} in the thread <b>{setup.threadTitle}</b>.{setup.waiting === 'connection'
+      ? setup.attempt?.prompt ? ` SSH is waiting for your answer before it connects to ${setup.name}. Show setup to answer it.` : ` Tailscale is waiting for you to approve the connection to ${setup.name}. Show setup to approve it.`
+      : setup.waiting ? ' It is waiting for your answer there.' : ''}</>
       : setup.phase === 'connected' ? <>{setup.name} is set up and connected. <b>{setup.modelName}</b> set it up in the thread <b>{setup.threadTitle}</b>.</>
         : setup.phase === 'stopped' ? <>The setup of {setup.name} stopped. {setup.error ?? 'Nothing was saved as a host.'}</>
           : <>{setup.error ?? `The setup of ${setup.name} could not carry on. Nothing was saved as a host.`}</>}</p>

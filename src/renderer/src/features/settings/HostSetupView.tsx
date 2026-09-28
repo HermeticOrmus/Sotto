@@ -80,7 +80,8 @@ export function HostSetupProgress({ setup, question, approvalError, onOpenThread
   const target = setup.target.includes('@') ? setup.target.slice(0, setup.target.lastIndexOf('@')) : ''
   const outcome: HostSetupOutcome = setup.phase === 'connected' ? 'connected' : 'connecting'
   const openThread = <Button variant="secondary" disabled={!setup.threadId} onClick={onOpenThread}>Open thread</Button>
-  const waiting = setup.waiting && !ended(setup) ? <div className="hosts-notice host-setup__card" role="status">
+  // SSH's question and Tailscale's approval sit on their own steps; these cards are for answers the thread holds.
+  const waiting = (setup.waiting === 'command' || setup.waiting === 'add') && !ended(setup) ? <div className="hosts-notice host-setup__card" role="status">
     <p>{setup.waiting === 'add' ? `Sotto is asking in the thread whether to add ${setup.name} as a host. Answer it there to carry on.`
       : `The agent wants to run a command on ${setup.name}. Answer it in the thread to carry on.`}</p>
     <div className="host-setup__actions">{openThread}</div>
