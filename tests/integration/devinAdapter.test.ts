@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { randomUUID } from 'node:crypto'
-import { readFile, readdir, rm } from 'node:fs/promises'
+import { readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { isImmutableActivities, subscribeActivitySnapshots } from '../../src/main/agents/activitySnapshots'
@@ -344,8 +344,7 @@ describe('Devin dispatch and decision boundaries', () => {
   })
 
   it('reopens a thread with history whose mode changed since Devin last held it', async () => {
-    // Unwatched, like the other reopen tests: a watched thread's history reads hold the session while it reopens.
-    const id = await create('smart')
+    const id = await create('smart'); f.host.observeThreads([id])
     await send(id); await f.driver.completeTurn(id, 'Smart reply')
     await expect.poll(async () => (await thread(id)).status).toBe('idle')
     await f.host.execute({ type: 'configure-thread', commandId: randomUUID(), threadId: id, providerMode: 'bypass' })
@@ -371,6 +370,28 @@ describe('Devin dispatch and decision boundaries', () => {
     await send()
     await f.action(threadId, { type: 'mode', mode: 'bypass' })
     await expect.poll(async () => (await thread()).status).toBe('error')
+  })
+
+  it('waits for its own history read to let go of a session before reopening it (#464)', async () => {
+    // Watched, so Sotto keeps reading the thread's history while its session changes hands.
+    await send(); await f.driver.completeTurn(threadId, 'Reply')
+    await expect.poll(async () => (await thread()).status).toBe('idle')
+    // The next read waits before it takes the session, so it is still in flight when the session stops.
+    const loads = async (): Promise<number> => (await f.driver.requests()).filter(record => record.method === 'session/load').length
+    const before = await loads()
+    await f.script({ holdLoad: true })
+    await expect.poll(loads).toBeGreaterThan(before)
+    await f.host.execute({ type: 'configure-thread', commandId: randomUUID(), threadId, providerMode: 'bypass' })
+    // Released, the read takes the session its thread just let go of, and holds it until released again.
+    const starts = await f.sessions.starts(threadId)
+    await writeFile(join(f.root, 'release-load'), '')
+    await expect.poll(() => f.sessions.starts(threadId)).toBeGreaterThan(starts)
+    const reopening = f.host.refreshThread(threadId).then(() => 'reopened', (error: unknown) => error instanceof Error ? error.message : 'failed')
+    // Long enough for a reopen that does not wait to reach Devin and be refused as open in another client.
+    await new Promise(resolve => setTimeout(resolve, 1_000))
+    await writeFile(join(f.root, 'release-reply'), '')
+    expect(await reopening).toBe('reopened')
+    expect(await thread()).toMatchObject({ status: 'idle', providerMode: 'bypass' })
   })
 
   it('refuses a permission change while a turn is running, and leaves the recorded mode alone', async () => {
