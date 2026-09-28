@@ -43,6 +43,18 @@ function createHarness() {
 }
 
 describe('browser microphone setup test', () => {
+  it.each([undefined, 'headset'])('requests the same exact input dictation selects (%s)', async selectedDeviceId => {
+    const harness = createHarness()
+    const test = new BrowserMicrophoneTest(harness.dependencies)
+    await expect(test.start(vi.fn(), selectedDeviceId)).resolves.toBe('ready')
+    expect(harness.dependencies.getUserMedia).toHaveBeenCalledWith({ audio: {
+      deviceId: selectedDeviceId ? { exact: selectedDeviceId } : undefined,
+      channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true,
+    } })
+    await test.stop()
+    expect(harness.track.stop).toHaveBeenCalledOnce()
+  })
+
   it('reports live RMS activity and releases every native resource on stop', async () => {
     const harness = createHarness()
     const levels: number[] = []
@@ -71,7 +83,11 @@ describe('browser microphone setup test', () => {
     vi.mocked(harness.dependencies.getUserMedia).mockRejectedValueOnce({ name, secret: 'raw device detail' })
     const test = new BrowserMicrophoneTest(harness.dependencies)
 
-    await expect(test.start(vi.fn())).resolves.toBe(outcome)
+    await expect(test.start(vi.fn(), 'selected-headset')).resolves.toBe(outcome)
+    expect(harness.dependencies.getUserMedia).toHaveBeenCalledOnce()
+    expect(harness.dependencies.getUserMedia).toHaveBeenCalledWith(expect.objectContaining({
+      audio: expect.objectContaining({ deviceId: { exact: 'selected-headset' } }),
+    }))
     expect(harness.dependencies.createAudioContext).not.toHaveBeenCalled()
   })
 
