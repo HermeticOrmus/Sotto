@@ -142,6 +142,7 @@ export class WorkspaceHost implements AgentHost {
   private writeTimer: ReturnType<typeof setTimeout> | undefined
   private readonly lanes = new Map<string, Promise<unknown>>()
   private readonly organizationLanes = new Map<string, Promise<unknown>>()
+  private readonly interruptLanes = new Map<string, Promise<unknown>>()
   /** In-flight working-copy setup per thread, so a send waits for it instead of starting a second one. */
   private readonly preparations = new Map<string, Promise<void>>()
   private readonly worktrees: ThreadWorktrees
@@ -198,6 +199,12 @@ export class WorkspaceHost implements AgentHost {
   private readonly eventSourced: boolean
   /** Events waiting to be written, so a streamed reply costs one transaction per publish, not per word. */
   private readonly pendingEvents = new Map<string, ThreadEvent[]>()
+  /** A failed privacy transition must not later promote these pending words to durable history. */
+  private pendingEventsPrivate = false
+  /** Failed batches stay ahead of later events; organization saves cannot acknowledge their warning. */
+  private readonly failedEventThreads = new Set<string>()
+  private historyRetryTimer: ReturnType<typeof setTimeout> | undefined
+  private historyRetryDelay = 1_000
   /** The threads whose window and summary the next publish has to read again. */
   private readonly eventChanged = new Set<string>()
 
@@ -944,6 +951,7 @@ export class WorkspaceHost implements AgentHost {
    * at the next publish rather than per event, which keeps a streamed reply at one publish per window.
    */
   private recordEvent(threadId: string, event: ThreadEvent): void {
+    if (!this.historyEnabled()) this.pendingEventsPrivate = true
     const waiting = this.pendingEvents.get(threadId)
     if (waiting) waiting.push(event)
     else this.pendingEvents.set(threadId, [event])
@@ -951,18 +959,41 @@ export class WorkspaceHost implements AgentHost {
     if (this.ready) this.publishSoon()
   }
   /** Write what the events said. Called before anything reads the store, and at every publish. */
-  private writeEvents(): void {
+  private writeEvents(force = false): void {
     if (this.pendingEvents.size === 0 || !this.ready || this.storeUnavailable) return
-    const waiting = [...this.pendingEvents]
-    this.pendingEvents.clear()
-    for (const [threadId, events] of waiting) {
-      try { this.threadStore.appendMany(threadId, events); this.noteWritten(threadId, events) }
-      catch { this.saveError = HISTORY_SAVE_ERROR; this.storedAnchors.delete(threadId) }
-      // The store, not the published array, is now what this thread's history is compared against.
-      this.known.delete(threadId)
-      if (events.some(event => event.kind === 'messages-reset')) this.hidden.delete(threadId)
+    // Another store may have stopped privacyChanged before this connection could be replaced.
+    // The setting already forbids durable text, including a timer or shutdown retry.
+    if (!this.threadStore.ephemeral && (!this.historyEnabled() || this.pendingEventsPrivate)) return
+    for (const [threadId, events] of this.pendingEvents) {
+      if (!force && this.historyRetryTimer && this.failedEventThreads.has(threadId)) continue
+      try {
+        // appendMany commits the entire transaction or rolls it back. Remove only a committed batch.
+        this.threadStore.appendMany(threadId, events)
+        this.pendingEvents.delete(threadId)
+        this.failedEventThreads.delete(threadId)
+        this.noteWritten(threadId, events)
+        this.eventChanged.add(threadId)
+        this.known.delete(threadId)
+        if (events.some(event => event.kind === 'messages-reset')) this.hidden.delete(threadId)
+        this.dirty = true
+      } catch {
+        this.failedEventThreads.add(threadId)
+        this.storedAnchors.delete(threadId)
+      }
     }
-    this.dirty = true
+    if (this.failedEventThreads.size === 0) {
+      clearTimeout(this.historyRetryTimer)
+      this.historyRetryTimer = undefined
+      this.historyRetryDelay = 1_000
+    } else if (!this.historyRetryTimer && !this.stopping) {
+      this.historyRetryTimer = setTimeout(() => {
+        this.historyRetryTimer = undefined
+        this.applyEvents()
+        this.publish()
+      }, this.historyRetryDelay)
+      this.historyRetryTimer.unref?.()
+      this.historyRetryDelay = Math.min(this.historyRetryDelay * 2, 30_000)
+    }
   }
   /** Give every thread an event touched its window again, and its summary from the projection. */
   private applyEvents(): void {
@@ -1155,19 +1186,21 @@ export class WorkspaceHost implements AgentHost {
   /** Finish command lanes before detaching provider delivery and closing SQLite. */
   async close(): Promise<void> {
     this.stopping = true
-    await Promise.allSettled([...this.branchWrites, ...this.lanes.values()])
+    await Promise.allSettled([...this.branchWrites, ...this.lanes.values(), ...this.interruptLanes.values()])
     this.stopDelivery()
     try { if (this.ready) await this.flush() } finally { this.dispose() }
+    if (this.pendingEvents.size) throw new Error(HISTORY_SAVE_ERROR)
   }
 
   /** Closes the history store. Called when the app quits, after the last flush. */
   dispose(): void {
     this.stopDelivery()
-    clearTimeout(this.publishTimer); clearTimeout(this.writeTimer)
+    clearTimeout(this.publishTimer); clearTimeout(this.writeTimer); clearTimeout(this.historyRetryTimer)
+    this.historyRetryTimer = undefined
     for (const timer of this.worktreeRefreshes.values()) clearTimeout(timer)
     this.worktreeRefreshes.clear()
     if (this.gitStatusTimer) { clearInterval(this.gitStatusTimer); this.gitStatusTimer = undefined }
-    try { if (this.ready) { this.writeEvents(); this.saveActivities() } }
+    try { if (this.ready) { this.writeEvents(true); this.saveActivities() } }
     catch { this.saveError = 'Thread activity could not be saved. Restore local storage and restart Sotto.' }
     finally { this.threadStore.close(); this.subagentStore.close() }
     if (this.subagentTimer) clearTimeout(this.subagentTimer)
@@ -1267,7 +1300,8 @@ export class WorkspaceHost implements AgentHost {
   workspaceSnapshot(): AgentHostSnapshot {
     this.applyEvents()
     const snapshot = cloneHostSnapshot(this.state.snapshot)
-    if (this.saveError) snapshot.error = this.saveError
+    if (this.failedEventThreads.size) snapshot.error = HISTORY_SAVE_ERROR
+    else if (this.saveError) snapshot.error = this.saveError
     return snapshot
   }
   private publish(): void {
@@ -1276,7 +1310,8 @@ export class WorkspaceHost implements AgentHost {
       this.applyEvents()
       for (const listener of this.activityListeners) {
         const snapshot = cloneActivitySnapshot(this.state.snapshot)
-        if (this.saveError) snapshot.error = this.saveError
+        if (this.failedEventThreads.size) snapshot.error = HISTORY_SAVE_ERROR
+        else if (this.saveError) snapshot.error = this.saveError
         listener(snapshot)
       }
     }
@@ -1485,7 +1520,18 @@ export class WorkspaceHost implements AgentHost {
    */
   async privacyChanged(): Promise<void> {
     this.activityInputs.clear()
-    if (!this.historyEnabled()) this.activityJsonFallbackAllowed = false
+    if (!this.historyEnabled()) {
+      this.activityJsonFallbackAllowed = false
+      this.pendingEventsPrivate = true
+    } else if (this.pendingEventsPrivate) {
+      // Clear before either store switches: an earlier failed redaction may have left this one durable.
+      this.pendingEvents.clear()
+      this.failedEventThreads.clear()
+      clearTimeout(this.historyRetryTimer)
+      this.historyRetryTimer = undefined
+      this.historyRetryDelay = 1_000
+      this.pendingEventsPrivate = false
+    }
     if (!this.subagentUnavailable && this.subagentStore.ephemeral === this.historyEnabled()) {
       try {
         const unsettled = new Map(this.state.snapshot.threads.map(thread => {
@@ -1509,6 +1555,11 @@ export class WorkspaceHost implements AgentHost {
       const wanted = this.historyEnabled()
       if (wanted === this.threadStore.ephemeral) {
         try {
+          // Events held while history was off must never cross into the durable connection.
+          // Turning history off instead carries failed durable events into this run's memory store.
+          clearTimeout(this.historyRetryTimer)
+          this.historyRetryTimer = undefined
+          this.historyRetryDelay = 1_000
           if (wanted) {
             this.saveActivities()
             this.threadStore.becomeDurable()
@@ -1730,6 +1781,8 @@ export class WorkspaceHost implements AgentHost {
     return existingWorkingDirectory(resolveThreadWorkingDirectory(current, this.state.snapshot.projects.find(project => project.id === current.projectId)))
   }
   execute(command: AgentHostCommand): Promise<AgentHostResult> {
+    // Cancellation passes a held prompt, but remains tracked so shutdown drains its final publication.
+    if (command.type === 'interrupt') return this.onLane(command.threadId, () => this.executeOne(command), this.interruptLanes)
     const key = 'threadId' in command ? command.threadId : command.projectId
     // Creation changes older threads' settlement too. Keep that transaction apart from
     // settlement edits in the same project so failed writes cannot cross their rollbacks.

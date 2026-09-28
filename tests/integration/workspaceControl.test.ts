@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { randomUUID } from 'node:crypto'
 import { mkdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -26,6 +27,64 @@ async function fixture() {
 function thread(state: AgentState) { return state.host.threads.find(thread => thread.id === state.activeThreadId)! }
 
 describe('workspace controller integration', () => {
+  it.each(['pending', 'uncertain'] as const)('stops native work while the original send is %s without replacing or replaying it', async delivery => {
+    const f = await fixture()
+    const threadId = f.control.get().host.threads.find(thread => thread.providerId === 'codex')!.id
+    const native = f.adapters.codex.state.threads.find(thread => thread.id === f.registry.byThread(threadId)!.sessionId)!
+    const original = f.adapters.codex.execute.bind(f.adapters.codex)
+    let release!: () => void
+    const held = new Promise<void>(resolve => { release = resolve })
+    const execute = vi.spyOn(f.adapters.codex, 'execute').mockImplementation(async command => {
+      if (command.type !== 'send') return original(command)
+      native.status = 'running'; native.lastTurn = { id: 'unconfirmed-turn', status: 'running' }
+      f.adapters.codex.emit()
+      if (delivery === 'pending') await held
+      return { accepted: false, uncertain: true }
+    })
+    const prompt = { type: 'manual-send' as const, threadId, draftId: randomUUID(), text: 'Start synthetic work' }
+    const sending = f.control.command(prompt)
+    let stopping: Promise<AgentState> | undefined
+    try {
+      await expect.poll(() => f.control.get().host.threads.find(thread => thread.id === threadId)?.status).toBe('running')
+      if (delivery === 'uncertain') await sending
+      const saved = () => readFile(join(f.root, 'agents.json'), 'utf8').then(text => JSON.parse(text))
+      const intent = (await saved()).outbox.find((item: { type: string }) => item.type === 'send')
+      expect(intent).toMatchObject({ threadId, draftId: prompt.draftId, messageId: expect.any(String), draftDigest: expect.any(String) })
+      stopping = f.control.command({ type: 'interrupt', threadId })
+      // The provider cannot finish the pending send until released below; Stop must cross both real layers first.
+      await expect.poll(() => execute.mock.calls.filter(([command]) => command.type === 'interrupt').length).toBe(1)
+      expect((await stopping).error).toBeNull()
+      expect((await saved()).outbox).toEqual([intent])
+      expect(f.control.get().host.threads.find(thread => thread.id === threadId)?.status).toBe('idle')
+      release(); await sending
+      expect(f.control.get().deliveries?.find(item => item.draftId === prompt.draftId)?.status).toBe('uncertain')
+      await f.control.command(prompt)
+      expect(execute.mock.calls.filter(([command]) => command.type === 'send')).toHaveLength(1)
+      expect((await saved()).outbox).toEqual([intent])
+      // Only an exact provider echo reconciles the original prompt; Stop alone is not a delivery receipt.
+      native.messages.push({ id: intent.messageId, commandId: intent.id, role: 'user', text: prompt.text, createdAt: new Date().toISOString() })
+      f.adapters.codex.emit()
+      await expect.poll(() => f.control.get().deliveries?.find(item => item.draftId === prompt.draftId)?.status).toBe('accepted')
+      await f.control.command(prompt)
+      await expect.poll(async () => (await saved()).outbox).toEqual([])
+      expect(execute.mock.calls.filter(([command]) => command.type === 'send')).toHaveLength(1)
+    } finally { release(); await Promise.allSettled([sending, stopping]); execute.mockRestore() }
+  })
+
+  it('releases a rejected interrupt lane before a reconnect, another Stop and a fresh send', async () => {
+    const f = await fixture()
+    const threadId = f.control.get().host.threads.find(thread => thread.providerId === 'codex')!.id
+    const execute = vi.spyOn(f.adapters.codex, 'execute').mockRejectedValueOnce(new Error('Synthetic Stop failure'))
+    try {
+      expect((await f.control.command({ type: 'interrupt', threadId })).error).toBe('Synthetic Stop failure')
+      expect(JSON.parse(await readFile(join(f.root, 'agents.json'), 'utf8')).outbox).toEqual([])
+      await f.control.command({ type: 'disconnect', provider: 'codex' })
+      expect((await f.control.command({ type: 'connect', provider: 'codex' })).error).toBeNull()
+      expect((await f.control.command({ type: 'interrupt', threadId })).error).toBeNull()
+      expect((await f.control.command({ type: 'manual-send', threadId, draftId: randomUUID(), text: 'Fresh work after reconnect' })).error).toBeNull()
+      expect(f.adapters.codex.commands.map(command => command.type)).toEqual(['interrupt', 'send'])
+    } finally { execute.mockRestore() }
+  })
   it('opens only the known thread’s validated working folder and rejects arbitrary targets', async () => {
     const f = await fixture()
     const initial = f.control.get()
