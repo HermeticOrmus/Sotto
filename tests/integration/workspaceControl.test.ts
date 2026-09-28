@@ -11,8 +11,8 @@ import { immediatePublishScheduler } from '../fixtures/publishScheduler'
 
 const cleanup: Array<() => Promise<void>> = []
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close() })
-async function fixture() {
-  const f = await workspaceFixture()
+async function fixture(root?: string) {
+  const f = await workspaceFixture(root)
   const credentials = new AgentCredentials(join(f.root, 'vault'), { isEncryptionAvailable: () => false, encryptString: value => Buffer.from(value), decryptString: value => value.toString() })
   await credentials.load()
   const opened: string[] = []
@@ -20,13 +20,55 @@ async function fixture() {
     openThreadFolder: async path => { opened.push(path) },
     reasoner: { intent: async () => ({ type: 'clarify', text: 'Choose a thread' }), decide: async () => ({ decision: 'human', text: 'Review' }) },
     membership: { status: async () => ({ status: 'beta', label: 'Test', expiresAt: null }), action: async () => ({ status: 'beta', label: 'Test', expiresAt: null }) } })
-  cleanup.push(async () => { control.dispose(); await control.privacyChanged(); await f.stop(); await f.remove() })
+  let closing: Promise<void> | undefined
+  const close = () => closing ??= (async () => { control.dispose(); await control.privacyChanged(); await f.stop() })()
+  cleanup.push(async () => { await close(); await f.remove() })
   await control.start(); await control.command({ type: 'connect' })
-  return { ...f, control, opened }
+  return { ...f, control, opened, close }
 }
 function thread(state: AgentState) { return state.host.threads.find(thread => thread.id === state.activeThreadId)! }
 
 describe('workspace controller integration', () => {
+  it('reopens an uncertain send through the real workspace and reconciles only its exact late receipt without replay', async () => {
+    const first = await fixture()
+    const threadId = first.control.get().host.threads.find(thread => thread.providerId === 'codex')!.id
+    const nativeId = first.registry.byThread(threadId)!.sessionId
+    const original = first.adapters.codex.execute.bind(first.adapters.codex)
+    const execute = vi.spyOn(first.adapters.codex, 'execute').mockImplementation(async command => {
+      if (command.type !== 'send') return original(command)
+      return { accepted: false, uncertain: true }
+    })
+    const prompt = { type: 'manual-send' as const, threadId, draftId: randomUUID(), text: 'Keep this exact synthetic prompt' }
+    const saved = async () => JSON.parse(await readFile(join(first.root, 'agents.json'), 'utf8'))
+    try {
+      expect((await first.control.command(prompt)).deliveries).toContainEqual(expect.objectContaining({ draftId: prompt.draftId, status: 'uncertain' }))
+      const intent = (await saved()).outbox[0]
+      expect(intent).toMatchObject({ threadId, draftId: prompt.draftId, messageId: expect.any(String), draftDigest: expect.any(String) })
+      await first.close()
+
+      // Replace the coordinator, workspace, registry and provider adapters. Only disk crosses this boundary.
+      const reopened = await fixture(first.root)
+      expect(reopened.registry.byThread(threadId)?.sessionId).toBe(nativeId)
+      expect((await saved()).outbox).toEqual([intent])
+      await reopened.control.command(prompt)
+      expect(reopened.adapters.codex.commands.filter(command => command.type === 'send')).toEqual([])
+      const native = reopened.adapters.codex.state.threads.find(thread => thread.id === nativeId)!
+      native.messages.push({ id: 'unrelated-message', role: 'user', text: prompt.text, createdAt: new Date().toISOString() })
+      reopened.adapters.codex.emit()
+      await reopened.control.command({ type: 'refresh' })
+      expect((await saved()).outbox).toEqual([intent])
+
+      native.messages.push({ id: intent.messageId, commandId: intent.id, role: 'user', text: prompt.text, createdAt: new Date().toISOString() })
+      reopened.adapters.codex.emit()
+      await expect.poll(() => reopened.control.get().deliveredDrafts).toContainEqual({ threadId, draftId: prompt.draftId })
+      await expect.poll(async () => (await saved()).outbox).toEqual([])
+      await reopened.control.command(prompt)
+      expect(reopened.adapters.codex.commands.filter(command => command.type === 'send')).toEqual([])
+      expect(execute.mock.calls.filter(([command]) => command.type === 'send')).toHaveLength(1)
+      await expect.poll(() => reopened.host.threadMessages(threadId).filter(message => message.id === intent.messageId)).toHaveLength(1)
+    } finally { execute.mockRestore() }
+  })
+
   it.each(['pending', 'uncertain'] as const)('stops native work while the original send is %s without replacing or replaying it', async delivery => {
     const f = await fixture()
     const threadId = f.control.get().host.threads.find(thread => thread.providerId === 'codex')!.id
