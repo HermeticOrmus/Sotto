@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Measures what the window re-renders when one agent state update arrives: the Threads page with one thread
  * open, re-rendered with a state object that carries one more streaming chunk on the open thread, ten times
  * to warm up and twenty more that are timed. Uses a copy of an explicitly selected Sotto data folder.
