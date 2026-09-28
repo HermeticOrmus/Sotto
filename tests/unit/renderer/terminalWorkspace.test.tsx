@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { AgentCommand, AgentState } from '../../../src/shared/agents'
 import { E2E_THREADS_NOW } from '../../../src/shared/e2e'
-import type { TerminalOpenRequest, TerminalWorkspaceBridge, WorkspaceTerminal, WorkspaceTerminalEvent } from '../../../src/shared/terminalWorkspace'
+import type { TerminalOpenRequest, TerminalWorkspaceBridge, WorkspaceTerminal, WorkspaceTerminalEvent, WorkspaceTerminalSnapshot } from '../../../src/shared/terminalWorkspace'
 import type { ToolsResult } from '../../../src/shared/tools'
 import { useAgents } from '../../../src/renderer/src/agents/AgentContext'
 import { SIDEBAR_MODE_KEY } from '../../../src/renderer/src/agents/SidebarFrame'
@@ -24,6 +24,68 @@ const WIDE = 1400
 const ID_1 = '11111111-1111-4111-8111-111111111111'
 const ID_2 = '22222222-2222-4222-8222-222222222222'
 const ok = <T,>(value: T): ToolsResult<T> => ({ ok: true, value })
+
+it('keeps terminal workspace paste chunks and later events ordered while another terminal continues', async () => {
+  const { bridge } = fakeBridge([terminal(ID_1), terminal(ID_2)])
+  const store = new TerminalWorkspaceStore()
+  await store.activate(bridge)
+  const first = Promise.withResolvers<ToolsResult<void>>()
+  vi.mocked(bridge.write).mockImplementationOnce(() => first.promise)
+  store.write(bridge, ID_1, 'a'.repeat(20_000))
+  store.write(bridge, ID_1, 'later event')
+  store.write(bridge, ID_2, 'independent')
+  try {
+    await waitFor(() => expect(bridge.write).toHaveBeenCalledWith({ id: ID_2, data: 'independent' }))
+    expect(vi.mocked(bridge.write).mock.calls.filter(([request]) => request.id === ID_1).map(([request]) => request.data)).toEqual(['a'.repeat(16_384)])
+  } finally { first.resolve(ok(undefined)) }
+  await waitFor(() => expect(bridge.write).toHaveBeenCalledTimes(4))
+  expect(vi.mocked(bridge.write).mock.calls.filter(([request]) => request.id === ID_1).map(([request]) => request.data)).toEqual(['a'.repeat(16_384), 'a'.repeat(3_616), 'later event'])
+})
+
+it('drops failed workspace input and its remainder, then accepts a fresh attempt', async () => {
+  const { bridge } = fakeBridge([terminal(ID_1)])
+  const store = new TerminalWorkspaceStore()
+  await store.activate(bridge)
+  const first = Promise.withResolvers<ToolsResult<void>>()
+  vi.mocked(bridge.write).mockImplementationOnce(() => first.promise)
+  store.write(bridge, ID_1, 'a'.repeat(20_000))
+  store.write(bridge, ID_1, 'old queued input')
+  await waitFor(() => expect(bridge.write).toHaveBeenCalled())
+  first.resolve({ ok: false, error: { code: 'unavailable', message: 'The terminal could not take this input.' } })
+  await waitFor(() => expect(store.getSnapshot().notice).toContain('Terminal input stopped'))
+  store.write(bridge, ID_1, 'fresh input')
+  await waitFor(() => expect(bridge.write).toHaveBeenLastCalledWith({ id: ID_1, data: 'fresh input' }))
+  expect(bridge.write).toHaveBeenCalledTimes(2)
+})
+
+it('accepts new input after a starting terminal becomes running', async () => {
+  const { bridge, emit, settle } = fakeBridge([terminal(ID_1, { status: 'starting' })])
+  const store = new TerminalWorkspaceStore()
+  await store.activate(bridge)
+  emit({ type: 'terminal', terminal: terminal(ID_1, { status: 'starting' }) })
+  store.write(bridge, ID_1, 'too early')
+  settle(ID_1)
+  store.write(bridge, ID_1, 'ready input')
+  await waitFor(() => expect(bridge.write).toHaveBeenCalledWith({ id: ID_1, data: 'ready input' }))
+  expect(bridge.write).toHaveBeenCalledTimes(1)
+})
+
+it.each(['restart', 'close', 'stop'] as const)('does not carry queued workspace input across %s', async action => {
+  const { bridge } = fakeBridge([terminal(ID_1)])
+  const store = new TerminalWorkspaceStore()
+  await store.activate(bridge)
+  const first = Promise.withResolvers<ToolsResult<void>>()
+  vi.mocked(bridge.write).mockImplementationOnce(() => first.promise)
+  store.write(bridge, ID_1, 'in flight')
+  store.write(bridge, ID_1, 'old queued input')
+  await waitFor(() => expect(bridge.write).toHaveBeenCalled())
+  await store[action](bridge, ID_1)
+  first.resolve(ok(undefined))
+  if (action !== 'restart') await store.restart(bridge, ID_1)
+  store.write(bridge, ID_1, 'new shell input')
+  await waitFor(() => expect(bridge.write).toHaveBeenLastCalledWith({ id: ID_1, data: 'new shell input' }))
+  expect(vi.mocked(bridge.write).mock.calls.map(([request]) => request.data)).toEqual(['in flight', 'new shell input'])
+})
 
 function terminal(id: string, patch: Partial<WorkspaceTerminal> = {}): WorkspaceTerminal {
   return {
@@ -125,9 +187,50 @@ beforeEach(() => { vi.mocked(useAgents).mockReset(); localStorage.clear() })
 afterEach(() => { cleanup(); localStorage.clear() })
 
 describe('Terminal mode', () => {
+  it('forgets closed output and ignores an old pending read after the same terminal reopens', async () => {
+    const store = new TerminalWorkspaceStore()
+    const fake = fakeBridge([terminal(ID_1)])
+    const pending = Promise.withResolvers<ToolsResult<WorkspaceTerminalSnapshot>>()
+    vi.mocked(fake.bridge.read).mockReturnValueOnce(pending.promise)
+    await store.activate(fake.bridge)
+    const { factory, views } = fakeViews()
+    store.attach(fake.bridge, ID_1, document.createElement('div'), factory)
+    fake.emit({ type: 'output', id: ID_1, data: 'Old buffered output\r\n', sequence: 2 })
+    expect(store.lastLine(ID_1)).toContain('Old buffered output')
+    await store.close(fake.bridge, ID_1)
+    expect(store.lastLine(ID_1)).toBe('')
+    expect(store.terminal(ID_1)?.closedAt).toBe(NOW)
+    fake.emit({ type: 'output', id: ID_1, data: 'Late closed output', sequence: 3 })
+    expect(store.lastLine(ID_1)).toBe('')
+    await store.restart(fake.bridge, ID_1)
+    store.attach(fake.bridge, ID_1, document.createElement('div'), factory)
+    pending.resolve(ok({ terminal: terminal(ID_1), output: 'Old snapshot output', sequence: 1 }))
+    await pending.promise
+    await Promise.resolve()
+    expect(views[1]!.written.join('')).not.toContain('Old')
+    expect(store.terminal(ID_1)?.closedAt).toBeNull()
+    expect(store.lastLine(ID_1)).toBe('')
+  })
+
+  it('retains output when a pane hides or a terminal exits without Close', async () => {
+    const store = new TerminalWorkspaceStore()
+    const fake = fakeBridge([terminal(ID_1)])
+    await store.activate(fake.bridge)
+    const { factory, views } = fakeViews()
+    store.attach(fake.bridge, ID_1, document.createElement('div'), factory)
+    await Promise.resolve()
+    await Promise.resolve()
+    fake.emit({ type: 'output', id: ID_1, data: 'Readable output\r\n', sequence: 1 })
+    store.detach(ID_1)
+    fake.emit({ type: 'terminal', terminal: terminal(ID_1, { status: 'exited', exitCode: 0 }) })
+    expect(store.lastLine(ID_1)).toContain('Readable output')
+    store.attach(fake.bridge, ID_1, document.createElement('div'), factory)
+    expect(views).toHaveLength(1)
+    expect(views[0]!.written.join('')).toContain('Readable output')
+  })
   it('reports a failed terminal view without restarting the running terminal', async () => {
     const view = mount([terminal(ID_1)], { lazy: true })
-    fireEvent.click(await within(sidebar()).findByRole('button', { name: 'Build', exact: true }))
+    fireEvent.click(await within(sidebar()).findByRole('button', { name: 'Build' }))
     expect(await screen.findByText('The terminal view could not load. Your terminal and its output are still here.')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Reload window' })).toBeEnabled()
     expect(screen.getByLabelText('Build, terminal')).not.toHaveAttribute('aria-busy', 'true')

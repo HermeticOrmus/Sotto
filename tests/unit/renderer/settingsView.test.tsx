@@ -16,6 +16,7 @@ import {
   type TranscriptionKeyCheck,
 } from '../../../src/shared/contracts'
 import { DEFAULT_SETTINGS } from '../../../src/shared/settings'
+import { agentContextFixture } from '../../fixtures/agentContext'
 
 vi.mock('../../../src/renderer/src/agents/AgentContext', async importOriginal => ({
   ...await importOriginal<typeof import('../../../src/renderer/src/agents/AgentContext')>(),
@@ -75,7 +76,7 @@ function baseProps(overrides: Partial<SettingsViewProps> = {}): SettingsViewProp
 const copy = platformCopy('win32')
 
 async function selectCategory(name: string): Promise<void> {
-  await userEvent.click(screen.getByRole('tab', { name, exact: true }))
+  await userEvent.click(screen.getByRole('tab', { name }))
 }
 
 describe('SettingsView', () => {
@@ -86,35 +87,35 @@ describe('SettingsView', () => {
     for (const name of categories) {
       await selectCategory(name)
       expect(screen.getAllByRole('tabpanel')).toHaveLength(1)
-      const panel = screen.getByRole('tabpanel', { name, exact: true })
+      const panel = screen.getByRole('tabpanel', { name })
       expect(panel).toBeVisible()
-      expect(screen.getByRole('tab', { name, exact: true })).toHaveAttribute('aria-selected', 'true')
+      expect(screen.getByRole('tab', { name })).toHaveAttribute('aria-selected', 'true')
       // The sidebar foot's room switch is a tablist of its own, so the count is scoped to the sections.
       expect(within(screen.getByRole('tablist', { name: 'Settings sections' })).getAllByRole('tab', { selected: true })).toHaveLength(1)
       expect(screen.getAllByRole('tabpanel', { hidden: true })).toHaveLength(11)
     }
-    screen.getByRole('tab', { name: 'Application', exact: true }).focus()
+    screen.getByRole('tab', { name: 'Application' }).focus()
     await user.keyboard('{Home}')
-    expect(screen.getByRole('tab', { name: 'Dictation', exact: true })).toHaveFocus()
+    expect(screen.getByRole('tab', { name: 'Dictation' })).toHaveFocus()
     await user.keyboard('{ArrowDown}')
-    expect(screen.getByRole('tab', { name: 'Transcription', exact: true })).toHaveFocus()
+    expect(screen.getByRole('tab', { name: 'Transcription' })).toHaveFocus()
     // The column continues into the sidebar foot (the room switch, then the page links) before the room itself.
     await user.tab()
     expect(screen.getByRole('tablist', { name: 'Page' })).toContainElement(document.activeElement as HTMLElement)
     for (const name of ['Chats', 'History', 'Settings', 'Help']) {
       await user.tab()
-      expect(screen.getByRole('link', { name, exact: true })).toHaveFocus()
+      expect(screen.getByRole('link', { name })).toHaveFocus()
     }
     await user.tab()
-    expect(screen.getByRole('tabpanel', { name: 'Transcription', exact: true })).toHaveFocus()
+    expect(screen.getByRole('tabpanel', { name: 'Transcription' })).toHaveFocus()
     await user.tab()
     expect(screen.getByLabelText('OpenRouter API key')).toHaveFocus()
     expect(screen.queryByRole('textbox', { name: 'Global shortcut' })).not.toBeInTheDocument()
-    screen.getByRole('tab', { name: 'Transcription', exact: true }).focus()
+    screen.getByRole('tab', { name: 'Transcription' }).focus()
     await user.keyboard('{End}')
-    expect(screen.getByRole('tab', { name: 'Git', exact: true })).toHaveFocus()
+    expect(screen.getByRole('tab', { name: 'Git' })).toHaveFocus()
     await user.keyboard('{ArrowUp}')
-    expect(screen.getByRole('tab', { name: 'Application', exact: true })).toHaveFocus()
+    expect(screen.getByRole('tab', { name: 'Application' })).toHaveFocus()
   })
 
   it('preserves invalid numeric drafts and their validation when returning to a category', async () => {
@@ -349,7 +350,7 @@ describe('SettingsView', () => {
 
   it('keeps custom instructions typed just before the style changes away from Custom instructions', async () => {
     const user = userEvent.setup()
-    const update = vi.fn(async () => true)
+    const update = vi.fn<Parameters<typeof SettingsView>[0]['onUpdateSettings']>(async () => true)
     const props = baseProps({ onUpdateSettings: update, settings: { ...DEFAULT_SETTINGS, onboardingComplete: true, gitWritingStyle: 'custom' } })
     const rendered = render(<SettingsView {...props} />)
     await selectCategory('Git')
@@ -367,7 +368,7 @@ describe('SettingsView', () => {
   it('groups every Git setting under the moment it acts, in one Git section', async () => {
     render(<SettingsView {...baseProps()} />)
     await selectCategory('Git')
-    const panel = screen.getByRole('tabpanel', { name: 'Git', exact: true })
+    const panel = screen.getByRole('tabpanel', { name: 'Git' })
     const groups = within(panel).getAllByRole('region')
     expect(groups.map(group => within(group).getByRole('heading', { level: 3 }).textContent)).toEqual(['When a thread commits', 'When a pull request is made or merged', 'When you read Changes', 'In the background'])
     // The controls of each group in the order the eye meets them.
@@ -380,7 +381,7 @@ describe('SettingsView', () => {
     // Moved, not copied: Application and Cleanup keep none of them.
     for (const section of ['Application', 'Cleanup']) {
       await selectCategory(section)
-      const other = screen.getByRole('tabpanel', { name: section, exact: true })
+      const other = screen.getByRole('tabpanel', { name: section })
       for (const name of ['Git fetch interval', 'Default merge method', 'Commit and pull request style']) expect(within(other).queryByRole('combobox', { name })).toBeNull()
       for (const name of ['Automatically pull', 'Auto-settle merged threads', 'Proactive panels', 'Follow pull request templates', 'Hide whitespace changes']) expect(within(other).queryByRole('switch', { name })).toBeNull()
     }
@@ -553,6 +554,40 @@ describe('SettingsView', () => {
     expect(start).toHaveBeenCalledOnce()
     await waitFor(() => expect(onUpdateSettings).toHaveBeenCalledWith({ microphoneSkipped: false }))
     expect(await screen.findByText(/microphone ready/i)).toBeVisible()
+  })
+
+  it('tests the selected input and discards its late result after the selection changes', async () => {
+    const outcome = deferred<'ready'>()
+    const stop = vi.fn(async () => undefined)
+    let publishLevel!: (level: number) => void
+    const start = vi.fn((onLevel: (level: number) => void) => { publishLevel = onLevel; return outcome.promise })
+    const props = baseProps({ settings: { ...DEFAULT_SETTINGS, microphoneId: 'headset', microphoneSkipped: true },
+      createMicrophoneTest: () => ({ start, stop }) })
+    const rendered = render(<SettingsView {...props} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Test microphone' }))
+    expect(start).toHaveBeenCalledWith(expect.any(Function), 'headset')
+    rendered.rerender(<SettingsView {...props} settings={{ ...props.settings, microphoneId: 'desk' }} />)
+    await waitFor(() => expect(stop).toHaveBeenCalledOnce())
+    await act(async () => { publishLevel(0.8); outcome.resolve('ready') })
+    expect(screen.queryByText(/microphone ready/i)).not.toBeInTheDocument()
+    expect(props.onUpdateSettings).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'Test microphone' })).toBeEnabled()
+  })
+
+  it('clears a ready meter when the selected input changes and tests the new input', async () => {
+    const stop = vi.fn(async () => undefined)
+    const start = vi.fn(async (onLevel: (level: number) => void) => { onLevel(0.7); return 'ready' as const })
+    const props = baseProps({ createMicrophoneTest: () => ({ start, stop }) })
+    const rendered = render(<SettingsView {...props} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Test microphone' }))
+    expect(await screen.findByText(/microphone ready/i)).toBeVisible()
+    rendered.rerender(<SettingsView {...props} settings={{ ...props.settings, microphoneId: 'desk' }} />)
+    await waitFor(() => expect(stop).toHaveBeenCalledOnce())
+    expect(screen.queryByText(/microphone ready/i)).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Test microphone' }))
+    expect(start).toHaveBeenLastCalledWith(expect.any(Function), 'desk')
+    rendered.unmount()
+    expect(stop).toHaveBeenCalledTimes(2)
   })
 
   it('keeps the skip when the Settings test cannot reach a microphone', async () => {
@@ -990,10 +1025,7 @@ describe('SettingsView', () => {
       credentials: { reasoning: false, grokSpeech: false, secure: true }, reasoningAccounts: [],
       membership: { status: 'beta', label: 'Test', expiresAt: null },
     }
-    vi.mocked(useOptionalAgents).mockReturnValue({
-      state, command: vi.fn(async () => state), error: null, voice: { status: 'off' }, muteVoice: vi.fn(), stopSpeech: vi.fn(), retryVoice: vi.fn(),
-      attention: { items: [], show: false, dismiss: vi.fn(), reopen: vi.fn(), next: vi.fn(async () => undefined) },
-    })
+    vi.mocked(useOptionalAgents).mockReturnValue(agentContextFixture(state, vi.fn(async () => state)))
     const { container } = render(<SettingsView {...baseProps()} />)
     await selectCategory('Agents')
     const nav = screen.getByRole('tablist', { name: 'Settings sections' })
@@ -1017,10 +1049,7 @@ describe('SettingsView', () => {
       credentials: { reasoning: false, grokSpeech: false, secure: true }, reasoningAccounts: [],
       membership: { status: 'beta', label: 'Test', expiresAt: null },
     }
-    vi.mocked(useOptionalAgents).mockReturnValue({
-      state, command: vi.fn(async () => state), error: null, voice: { status: 'off' }, muteVoice: vi.fn(), stopSpeech: vi.fn(), retryVoice: vi.fn(),
-      attention: { items: [], show: false, dismiss: vi.fn(), reopen: vi.fn(), next: vi.fn(async () => undefined) },
-    })
+    vi.mocked(useOptionalAgents).mockReturnValue(agentContextFixture(state, vi.fn(async () => state)))
     const { container, rerender } = render(<SettingsView {...baseProps()} />)
     await selectCategory('Agents')
     const agents = container.querySelector('#settings-agents') as HTMLElement
@@ -1050,10 +1079,7 @@ function withProjects(): void {
     credentials: { reasoning: false, grokSpeech: false, secure: true }, reasoningAccounts: [],
     membership: { status: 'beta', label: 'Test', expiresAt: null },
   }
-  vi.mocked(useOptionalAgents).mockReturnValue({
-    state, command: vi.fn(async () => state), error: null, voice: { status: 'off' }, muteVoice: vi.fn(), stopSpeech: vi.fn(), retryVoice: vi.fn(),
-    attention: { items: [], show: false, dismiss: vi.fn(), reopen: vi.fn(), next: vi.fn(async () => undefined) },
-  })
+  vi.mocked(useOptionalAgents).mockReturnValue(agentContextFixture(state, vi.fn(async () => state)))
 }
 
 describe('Project thread defaults in Application settings', () => {
@@ -1066,7 +1092,7 @@ describe('Project thread defaults in Application settings', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Project defaults' }))
     const choice = screen.getByRole('combobox', { name: 'New threads in this project work in' })
     expect(choice).toHaveValue('independent')
-    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Project', exact: true }), 'two')
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Project' }), 'two')
     expect(choice).toHaveValue('inherit')
     await userEvent.selectOptions(choice, 'independent')
     expect(onUpdateSettings).toHaveBeenLastCalledWith({ projectThreadWorkingCopyDefaults: { one: 'independent', missing: 'shared', two: 'independent' } })
@@ -1089,7 +1115,7 @@ describe('Project thread defaults in Application settings', () => {
     const choice = screen.getByRole('combobox', { name: 'New threads in this project work in' })
     await userEvent.selectOptions(choice, 'independent')
     expect(choice).toBeDisabled()
-    expect(screen.getByRole('combobox', { name: 'Project', exact: true })).toBeDisabled()
+    expect(screen.getByRole('combobox', { name: 'Project' })).toBeDisabled()
     await act(async () => pending.resolve(false))
     expect(choice).toBeEnabled()
     expect(choice).toHaveValue('inherit')
@@ -1102,4 +1128,208 @@ describe('Project thread defaults in Application settings', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Project defaults' }))
     expect(screen.getByText('Add a project in Threads to set its default working copy.')).toBeVisible()
   })
+})
+
+
+describe('Personal dictionary draft acknowledgements', () => {
+  async function dictionary() {
+    const answers: Array<ReturnType<typeof deferred<boolean>>> = []
+    const update = vi.fn<SettingsViewProps['onUpdateSettings']>(() => { const answer = deferred<boolean>(); answers.push(answer); return answer.promise })
+    const props = baseProps({ onUpdateSettings: update })
+    const view = render(<SettingsView {...props} />)
+    await selectCategory('Cleanup')
+    const input = screen.getByRole('textbox', { name: 'Personal dictionary' })
+    const edit = (value: string) => { input.focus(); fireEvent.change(input, { target: { value } }) }
+    const publish = (value: string) => view.rerender(<SettingsView {...props} settings={{ ...props.settings, llmDictionary: value }} />)
+    return { input, edit, publish, answers, update }
+  }
+
+  it.each(['before', 'after'] as const)('preserves newer typing when an older acknowledgement is published %s its save result', async order => {
+    const f = await dictionary()
+    f.edit('Sotto'); fireEvent.blur(f.input)
+    f.edit('Sotto\nZach')
+    if (order === 'before') f.publish('Sotto')
+    await act(async () => f.answers[0]!.resolve(true))
+    if (order === 'after') f.publish('Sotto')
+    expect(f.input).toHaveValue('Sotto\nZach')
+    expect(f.input).toHaveFocus()
+    fireEvent.blur(f.input)
+    expect(f.update).toHaveBeenLastCalledWith({ llmDictionary: 'Sotto\nZach' })
+    f.publish('Sotto\nZach')
+    await act(async () => f.answers[1]!.resolve(true))
+    expect(f.input).toHaveValue('Sotto\nZach')
+    expect(screen.getByRole('status')).toHaveTextContent('Dictionary saved.')
+  })
+
+  it('retains the latest draft through repeated blur and refocus while earlier saves are queued', async () => {
+    const f = await dictionary()
+    f.edit('A'); fireEvent.blur(f.input)
+    f.edit('B'); fireEvent.blur(f.input)
+    f.edit('C')
+    f.publish('A'); await act(async () => f.answers[0]!.resolve(true))
+    expect(f.input).toHaveValue('C')
+    f.publish('B'); await act(async () => f.answers[1]!.resolve(true))
+    expect(f.input).toHaveValue('C')
+    fireEvent.blur(f.input)
+    expect(f.update.mock.calls.map(([patch]) => patch)).toEqual([{ llmDictionary: 'A' }, { llmDictionary: 'B' }, { llmDictionary: 'C' }])
+    f.publish('C'); await act(async () => f.answers[2]!.resolve(true))
+    expect(f.input).toHaveValue('C')
+  })
+
+  it('saves a return to the previous value when an older different value is still queued', async () => {
+    const f = await dictionary()
+    f.edit('A'); fireEvent.blur(f.input)
+    f.edit(''); fireEvent.blur(f.input)
+    expect(f.update.mock.calls.map(([patch]) => patch)).toEqual([{ llmDictionary: 'A' }, { llmDictionary: '' }])
+    f.publish('A'); await act(async () => f.answers[0]!.resolve(true))
+    expect(f.input).toHaveValue('')
+    f.publish(''); await act(async () => f.answers[1]!.resolve(true))
+    expect(f.input).toHaveValue('')
+  })
+
+  it('accepts an external update while saving and ignores the older acknowledgement afterward', async () => {
+    const f = await dictionary()
+    f.edit('A'); fireEvent.blur(f.input)
+    f.publish('External')
+    expect(f.input).toHaveValue('External')
+    f.publish('A'); await act(async () => f.answers[0]!.resolve(true))
+    expect(f.input).toHaveValue('External')
+    fireEvent.blur(f.input)
+    expect(f.update).toHaveBeenLastCalledWith({ llmDictionary: 'External' })
+  })
+
+  it('commits an explicit dictionary return to the value of an ignored older receipt', async () => {
+    const f = await dictionary()
+    f.edit('A'); fireEvent.blur(f.input)
+    f.publish('External')
+    f.publish('A'); await act(async () => f.answers[0]!.resolve(true))
+    expect(f.input).toHaveValue('External')
+    f.edit('A'); fireEvent.blur(f.input)
+    expect(f.update.mock.calls).toEqual([[{ llmDictionary: 'A' }], [{ llmDictionary: 'A' }]])
+  })
+  it('retains the draft when the update rejects and retries it on the next blur', async () => {
+    const f = await dictionary()
+    f.update.mockRejectedValueOnce(new Error('Synthetic save rejection'))
+    f.edit('Sotto'); fireEvent.blur(f.input)
+    expect(await screen.findByRole('alert')).toHaveTextContent('could not be saved')
+    expect(f.input).toHaveValue('Sotto')
+    f.input.focus(); fireEvent.blur(f.input)
+    expect(f.update).toHaveBeenCalledTimes(2)
+    f.publish('Sotto'); await act(async () => f.answers[0]!.resolve(true))
+    expect(f.input).toHaveValue('Sotto')
+  })
+
+  it('keeps failed text available for another blur and never restores a superseded failed draft', async () => {
+    const f = await dictionary()
+    f.edit('A'); fireEvent.blur(f.input)
+    f.edit('B'); fireEvent.blur(f.input)
+    await act(async () => f.answers[0]!.resolve(false))
+    expect(f.input).toHaveValue('B')
+    await act(async () => f.answers[1]!.resolve(false))
+    expect(f.input).toHaveValue('B')
+    expect(screen.getByRole('alert')).toHaveTextContent('Your previous setting is still active.')
+    f.input.focus(); fireEvent.blur(f.input)
+    expect(f.update).toHaveBeenLastCalledWith({ llmDictionary: 'B' })
+    f.publish('B'); await act(async () => f.answers[2]!.resolve(true))
+    expect(f.input).toHaveValue('B')
+  })
+
+  it('accepts external settings updates and does not treat an unrelated setting publication as a dictionary acknowledgement', async () => {
+    const f = await dictionary()
+    f.publish('External')
+    expect(f.input).toHaveValue('External')
+    f.edit('A'); fireEvent.blur(f.input)
+    f.edit('B')
+    f.publish('External')
+    expect(f.input).toHaveValue('B')
+    f.publish('A'); await act(async () => f.answers[0]!.resolve(true))
+    expect(f.input).toHaveValue('B')
+    f.publish('New external')
+    expect(f.input).toHaveValue('New external')
+  })
+
+  it('saves exact multiline text on keyboard blur and skips an unchanged field', async () => {
+    const f = await dictionary()
+    const user = userEvent.setup()
+    await user.click(f.input)
+    await user.type(f.input, '  Sotto{Enter}Zach  ')
+    await user.tab()
+    expect(f.update).toHaveBeenCalledOnce()
+    expect(f.update).toHaveBeenCalledWith({ llmDictionary: '  Sotto\nZach  ' })
+    f.publish('  Sotto\nZach  '); await act(async () => f.answers[0]!.resolve(true))
+    await user.click(f.input); await user.tab()
+    expect(f.update).toHaveBeenCalledOnce()
+    expect(f.input).toHaveValue('  Sotto\nZach  ')
+  })
+})
+
+describe('Settings draft editing work', () => {
+  it.each([
+    { category: 'Cleanup', label: 'Personal dictionary', field: 'llmDictionary', text: 'Sotto', saved: 'Sotto', blurCommits: 0 },
+    { category: 'Output', label: 'Paste delay', field: 'pasteDelayMs', text: '300', saved: 300, blurCommits: 1 },
+  ])('does no extra render or request while editing $label', async ({ category, label, field, text, saved, blurCommits }) => {
+    const pending = deferred<boolean>()
+    const update = vi.fn(() => pending.promise)
+    const props = baseProps({ onUpdateSettings: update })
+    let commits = 0
+    const count = () => { commits += 1 }
+    const view = render(<React.Profiler id="settings-drafts" onRender={count}><SettingsView {...props} /></React.Profiler>)
+    await selectCategory(category)
+    await act(async () => undefined)
+    const input = screen.getByRole('textbox', { name: label })
+    const before = commits
+    for (let end = 1; end <= text.length; end += 1) fireEvent.change(input, { target: { value: text.slice(0, end) } })
+    expect(commits - before).toBe(text.length)
+    expect(update).not.toHaveBeenCalled()
+    fireEvent.blur(input)
+    expect(update).toHaveBeenCalledExactlyOnceWith({ [field]: saved })
+    expect(commits - before).toBe(text.length + blurCommits)
+    await act(async () => { pending.resolve(true) })
+    expect(commits - before).toBe(text.length + blurCommits + 1)
+    const afterSave = commits
+    view.rerender(<React.Profiler id="settings-drafts" onRender={count}><SettingsView {...props} settings={{ ...props.settings, [field]: saved }} /></React.Profiler>)
+    expect(commits - afterSave).toBe(1)
+    expect(input).toHaveValue(text)
+    expect(update).toHaveBeenCalledTimes(1)
+  })
+})
+it('keeps external numeric authority after an ignored old receipt and a later failed edit', async () => {
+  const answers: ReturnType<typeof deferred<boolean>>[] = []
+  const update = vi.fn(() => { const pending = deferred<boolean>(); answers.push(pending); return pending.promise })
+  const props = baseProps({ onUpdateSettings: update })
+  const view = render(<SettingsView {...props} />)
+  await selectCategory('Output')
+  const input = screen.getByRole('textbox', { name: 'Paste delay' })
+  fireEvent.change(input, { target: { value: '300' } })
+  fireEvent.blur(input)
+  view.rerender(<SettingsView {...props} settings={{ ...props.settings, pasteDelayMs: 625 }} />)
+  expect(input).toHaveValue('625')
+  view.rerender(<SettingsView {...props} settings={{ ...props.settings, pasteDelayMs: 300 }} />)
+  await act(async () => { answers[0]!.resolve(true) })
+  expect(input).toHaveValue('625')
+  fireEvent.change(input, { target: { value: '450' } })
+  fireEvent.blur(input)
+  await act(async () => { answers[1]!.resolve(false) })
+  expect(input).toHaveValue('625')
+  expect(update.mock.calls).toEqual([[{ pasteDelayMs: 300 }], [{ pasteDelayMs: 450 }]])
+})
+it('rolls back to a successful explicit numeric return even when its setting value did not change', async () => {
+  const answers: ReturnType<typeof deferred<boolean>>[] = []
+  const update = vi.fn(() => { const pending = deferred<boolean>(); answers.push(pending); return pending.promise })
+  const props = baseProps({ onUpdateSettings: update })
+  const view = render(<SettingsView {...props} />)
+  await selectCategory('Output')
+  const input = screen.getByRole('textbox', { name: 'Paste delay' })
+  fireEvent.change(input, { target: { value: '300' } }); fireEvent.blur(input)
+  view.rerender(<SettingsView {...props} settings={{ ...props.settings, pasteDelayMs: 625 }} />)
+  view.rerender(<SettingsView {...props} settings={{ ...props.settings, pasteDelayMs: 300 }} />)
+  await act(async () => { answers[0]!.resolve(true) })
+  expect(input).toHaveValue('625')
+  fireEvent.change(input, { target: { value: '300' } }); fireEvent.blur(input)
+  await act(async () => { answers[1]!.resolve(true) })
+  expect(input).toHaveValue('300')
+  fireEvent.change(input, { target: { value: '450' } }); fireEvent.blur(input)
+  await act(async () => { answers[2]!.resolve(false) })
+  expect(input).toHaveValue('300')
+  expect(update.mock.calls).toEqual([[{ pasteDelayMs: 300 }], [{ pasteDelayMs: 300 }], [{ pasteDelayMs: 450 }]])
 })

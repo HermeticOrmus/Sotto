@@ -1,7 +1,7 @@
 import React from 'react'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { AgentAttachment } from '../../src/shared/agents'
+import type { AgentAttachmentHandle } from '../../src/shared/agents'
 import { ScreenshotInput } from '../../src/renderer/src/agents/ScreenshotInput'
 import { median, PERF_BENCH, round } from '../fixtures/perfBench'
 
@@ -33,14 +33,14 @@ function screenshot(name: string, bytes: number): File {
 }
 
 /** An attachment already on the composer whose decoded size is `bytes`. */
-function attached(id: string, bytes: number): AgentAttachment {
-  return { id, name: `${id}.png`, mimeType: 'image/png', dataUrl: `data:image/png;base64,${'A'.repeat(bytes / 3 * 4)}` }
+function attached(id: string, bytes: number): AgentAttachmentHandle {
+  return { id, name: `${id}.png`, mimeType: 'image/png', sizeBytes: bytes, digest: '0'.repeat(64) }
 }
 
 /** Drops `files` on the input and times the wait until the refusal (`refusal`) appears. */
-async function refusedDrop(files: File[], attachments: AgentAttachment[], refusal: RegExp): Promise<{ ms: number, counts: Counts }> {
+async function refusedDrop(files: File[], attachments: AgentAttachmentHandle[], refusal: RegExp): Promise<{ ms: number, counts: Counts }> {
   const counts = countReaders()
-  render(<ScreenshotInput attachments={attachments} onChange={() => undefined} disabled={false} supported><textarea aria-label="Prompt" /></ScreenshotInput>)
+  render(<ScreenshotInput target="workshop" attachments={attachments} onChange={() => undefined} disabled={false} supported><textarea aria-label="Prompt" /></ScreenshotInput>)
   const started = performance.now()
   fireEvent.drop(screen.getByRole('textbox'), { dataTransfer: { files, types: ['Files'] } })
   await screen.findByText(refusal)
@@ -52,7 +52,7 @@ async function refusedDrop(files: File[], attachments: AgentAttachment[], refusa
 
 const TOTAL = /must total 20 MB or less/u
 
-async function measure(label: string, files: File[], attachments: AgentAttachment[], refusal = TOTAL) {
+async function measure(label: string, files: File[], attachments: AgentAttachmentHandle[], refusal = TOTAL) {
   await refusedDrop(files, attachments, refusal) // warm run
   const runs = []
   for (let index = 0; index < RUNS; index += 1) runs.push(await refusedDrop(files, attachments, refusal))

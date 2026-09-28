@@ -11,6 +11,8 @@ import { HostTailscale } from './hosts/tailscale'
 import { registerPhonesIpc } from './phones/ipc'
 import { e2eTailscale } from './e2e/tailscale'
 import { e2eHostsTailscale } from './e2e/hostsTailscale'
+import { e2eSshStandIn } from './e2e/sshStandIn'
+import { SshHostLauncher } from './hosts/sshLauncher'
 import { PHONES_CHANGED } from '../shared/phones'
 import { discoverSshHosts } from './hosts/sshSuggestions'
 import { DevinAcpHost } from './agents/devin'
@@ -655,9 +657,18 @@ async function createRuntime(): Promise<NativeRuntimeController> {
     hostFolders: request => hostService.hostFolders(request),
     subscribeDetail: listener => agentControl.subscribeThreadDetail(listener),
   })
+  // A Playwright journey adds hosts through a scripted ssh; development only, like the gh stand-in.
+  const sshStandInScript = e2eConfiguration !== null && !app.isPackaged ? process.env['SOTTO_E2E_SSH_SCRIPT'] : undefined
+  const sshStandInExecutable = process.env['SOTTO_E2E_SSH_EXECUTABLE']
+  if (sshStandInScript && (!isAbsolute(sshStandInScript) || !sshStandInExecutable || !isAbsolute(sshStandInExecutable))) throw new Error('The ssh test stand-in requires absolute paths.')
+  const sshStandIn = sshStandInScript && sshStandInExecutable ? e2eSshStandIn(sshStandInExecutable, sshStandInScript) : undefined
+  /** The last page an end-to-end run asked the browser to open, which it never opens. */
+  let openedExternalLink: string | null = null
   const desktopHosts = new DesktopHosts({ directory: userDataPath, credentials, router: hostRouter,
     localHostRunning: startupSettings.localHostEnabled, localHostEnabled: () => workingCopySettings.localHostEnabled,
     restart: () => { app.relaunch(); app.quit() },
+    ...(sshStandIn ? { launcher: () => new SshHostLauncher({ spawn: sshStandIn }) } : {}),
+    openExternal: async url => { if (e2eConfiguration === null) await shell.openExternal(url); else openedExternalLink = url },
   })
   await desktopHosts.start()
   // Phone access serves the local host's own threads to paired phones over the tailnet (ADR-0033). Its
@@ -1219,7 +1230,7 @@ async function createRuntime(): Promise<NativeRuntimeController> {
         return { ...snapshotE2EState(
           e2eState,
           BrowserWindow.getAllWindows().some((candidate) => candidate.getTitle() === APP_NAME && candidate.isVisible()),
-        ), openedThreadFolder }
+        ), openedThreadFolder, openedExternalLink }
       })
       ipcMain.handle(E2E_TRIGGER_SHORTCUT_CHANNEL, (event) => {
         if (!isTrustedMainE2ESender(event.sender, windows.getTrustedRenderers())) {

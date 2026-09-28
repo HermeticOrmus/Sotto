@@ -283,8 +283,8 @@ describe('Sotto application onboarding integration', () => {
     const bridge = createBridge({
       getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, onboardingComplete: true })),
       listRecoveryNotices: vi.fn(async () => [
-        { code: 'SETTINGS_RECOVERED' },
-        { code: 'HISTORY_RECOVERED' },
+        { code: 'SETTINGS_RECOVERED' as const },
+        { code: 'HISTORY_RECOVERED' as const },
       ]),
       onRecoveryNotice: vi.fn((listener) => {
         recoveryListener = listener
@@ -403,7 +403,7 @@ describe('Sotto application onboarding integration', () => {
     await user.click(screen.getByRole('link', { name: 'Settings' }))
     const root = document.documentElement
 
-    await user.click(screen.getByRole('tab', { name: 'Appearance', exact: true }))
+    await user.click(screen.getByRole('tab', { name: 'Appearance' }))
     const lightHalf = (): HTMLElement => screen.getByRole('radiogroup', { name: 'Light theme' })
     await user.click(screen.getByRole('radio', { name: 'Light' }))
     expect(root).toHaveAttribute('data-theme', 'light')
@@ -448,7 +448,7 @@ describe('Sotto application onboarding integration', () => {
     await user.click(screen.getByRole('link', { name: 'Settings' }))
     const root = document.documentElement
 
-    await user.click(screen.getByRole('tab', { name: 'Appearance', exact: true }))
+    await user.click(screen.getByRole('tab', { name: 'Appearance' }))
     const lightHalf = (): HTMLElement => screen.getByRole('radiogroup', { name: 'Light theme' })
     await user.click(screen.getByRole('radio', { name: 'Light' }))
     await user.click(within(lightHalf()).getByRole('radio', { name: 'Tropic' }))
@@ -731,6 +731,14 @@ describe('Sotto application onboarding integration', () => {
     expect(document.body).not.toHaveTextContent('private storage detail')
   })
 
+  it('uses the saved dictation input when testing during onboarding', async () => {
+    const microphone = { start: vi.fn(async () => 'ready' as const), stop: vi.fn(async () => undefined) }
+    renderApp(createBridge({ getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, microphoneId: 'saved-headset' })) }), () => microphone)
+    await userEvent.click(await screen.findByRole('button', { name: /continue/i }))
+    await userEvent.click(screen.getByRole('button', { name: /test microphone/i }))
+    await waitFor(() => expect(microphone.start).toHaveBeenCalledWith(expect.any(Function), 'saved-headset'))
+  })
+
   it('releases an active microphone test across StrictMode unmount cleanup', async () => {
     const user = userEvent.setup()
     const microphone = {
@@ -767,6 +775,7 @@ describe('Sotto application onboarding integration', () => {
 
     await user.click(screen.getByRole('button', { name: /retest microphone/i }))
     await waitFor(() => expect(active.stop).toHaveBeenCalledOnce())
+    await user.click(screen.getByRole('button', { name: /skip for now/i }))
     await user.click(screen.getByRole('button', { name: /continue/i }))
     stopped.resolve()
 
@@ -857,6 +866,7 @@ describe('Sotto application onboarding integration', () => {
 
     await user.click(screen.getByRole('button', { name: /test microphone/i }))
     await waitFor(() => expect(microphone.start).toHaveBeenCalledOnce())
+    await user.click(screen.getByRole('button', { name: /skip for now/i }))
     await user.click(screen.getByRole('button', { name: /continue/i }))
     await waitFor(() => expect(microphone.stop).toHaveBeenCalledOnce())
     started.resolve('ready')
@@ -950,7 +960,7 @@ describe('transcription pipeline prewarm', () => {
     expect(screen.getByText(copy.accessibilityHelp ?? '')).toBeVisible()
 
     await user.click(screen.getByRole('link', { name: /settings/i }))
-    await user.click(screen.getByRole('tab', { name: 'Application', exact: true }))
+    await user.click(screen.getByRole('tab', { name: 'Application' }))
     expect(await screen.findByRole('switch', { name: copy.settingsLaunchAtStartupLabel })).toBeVisible()
   })
 })

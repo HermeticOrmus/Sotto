@@ -1,3 +1,5 @@
+import type { HostSetupStep } from '../../shared/hosts'
+
 /**
  * Why an SSH host connection or request failed. The code is what code decides on (retry or stop, which
  * message); the message is what the user reads, and rewording it changes no decision.
@@ -30,6 +32,7 @@ export type SshFailureCode =
   | 'request-busy'
   | 'not-connected'
   | 'cancelled'
+  | 'tailscale-unapproved'
 
 /** The Node major a host archive needs when the archive does not say. `scripts/package-host.mjs` writes the same range. */
 export const HOST_NODE_MAJOR = 24
@@ -62,6 +65,7 @@ const MESSAGES: Readonly<Record<SshFailureCode, string>> = {
   'request-busy': 'Wait for the current host request to finish.',
   'not-connected': 'Connect to the SSH host first.',
   'cancelled': 'The SSH connection was cancelled.',
+  'tailscale-unapproved': 'Tailscale SSH asked you to approve this connection, and no approval came within 5 minutes, so Sotto stopped connecting. Approve it in your browser when Sotto asks, then reconnect.',
 }
 
 /** Node's own version string from the host, shown to the user only when it is plainly a version. */
@@ -72,7 +76,12 @@ function nodeMessage(code: 'node-too-old' | 'node-too-new', version: string | un
     : `The SSH host runs Node ${version}, which is newer than this host release supports. Install Node ${HOST_NODE_MAJOR} for that SSH account, then reconnect.`
 }
 
+/** A command that fixes a failure, for the user to run, and the sentence that introduces it. Sotto never runs it. */
+export interface SshFix { readonly text: string; readonly command: string }
+
 export class SshFailure extends Error {
+  /** Set where there is one exact command that fixes the failure. */
+  fix?: SshFix
   constructor(readonly code: SshFailureCode, message: string = MESSAGES[code]) {
     super(message)
     this.name = 'SshFailure'
@@ -94,3 +103,107 @@ export const LAUNCH_REASONS: ReadonlySet<SshFailureCode> = new Set<SshFailureCod
   'archive-missing', 'descriptor-invalid', 'port-taken', 'host-busy', 'host-start-failed', 'host-timeout',
   'node-missing', 'node-too-old', 'node-too-new',
 ])
+
+/**
+ * The host setup checklist step each failure belongs to. A code that is not here (a timeout, SSH's catch-all,
+ * a cancel) shows on whichever step the connect had reached.
+ */
+const FAILURE_STEPS: Partial<Readonly<Record<SshFailureCode, HostSetupStep>>> = {
+  'ssh-missing': 'reach', 'ssh-too-old': 'reach', 'ssh-unreachable': 'reach',
+  'tailscale-unapproved': 'tailscale',
+  'auth-failed': 'sign-in', 'host-key-changed': 'sign-in', 'host-key-rejected': 'sign-in', 'identity-file-unreadable': 'sign-in', 'prompt-unanswered': 'sign-in',
+  // Until the host archive carries its own Node (#207), a missing or unsuitable Node is part of the installation.
+  'node-missing': 'install', 'node-too-old': 'install', 'node-too-new': 'install', 'archive-missing': 'install',
+  'descriptor-invalid': 'start', 'port-taken': 'start', 'host-busy': 'start', 'host-start-failed': 'start', 'host-timeout': 'start',
+  'forward-failed': 'start', 'forward-timeout': 'start',
+  'pairing-failed': 'pair',
+}
+export const failureStep = (code: SshFailureCode): HostSetupStep | undefined => FAILURE_STEPS[code]
+
+/** What an ssh process that ended without a result left behind: its exit, its stderr, and whether Tailscale held it. */
+export interface SshExit {
+  readonly spawnFailed?: boolean | undefined
+  readonly exitCode?: number | null | undefined
+  readonly stderr: string
+  /** Tailscale SSH asked for approval on this process, and it never signed in. */
+  readonly heldForApproval?: boolean | undefined
+  /** The process ran with the live keepalive, so a hold ended after 30 seconds: the port forward, or a request once connected. */
+  readonly liveWait?: 'forward' | 'request' | undefined
+}
+/** A hold that ended after 30 seconds, where the 5-minute approval wait does not apply. */
+const SHORT_HOLDS = {
+  forward: 'Tailscale SSH asked you to approve the port forward as well, and closed it after 30 seconds without an approval. Try again, and approve it in your browser when Sotto asks.',
+  request: 'Tailscale SSH asked you to approve this request, and Sotto shows an approval only while it connects. Nothing was changed. Switch the host off and on, approve the connection in your browser when Sotto asks, then try again.',
+} as const
+/**
+ * Why an ssh process ended without a result, from its exit and OpenSSH's own words, falling back to what the
+ * operation was for. Never logged.
+ */
+export function classifySshExit(run: SshExit, fallback: SshFailureCode): SshFailure {
+  if (run.spawnFailed) return new SshFailure('ssh-missing')
+  // 127 is the remote shell's "command not found": the account has no usable shell or Node.
+  if (run.exitCode === 127) return new SshFailure('node-missing')
+  // Tailscale answers no keepalive while it holds a connection for approval, so the end of a held connection
+  // (a timeout, or Tailscale closing it) means the approval never came.
+  if (run.heldForApproval) return run.liveWait ? new SshFailure('tailscale-unapproved', SHORT_HOLDS[run.liveWait]) : new SshFailure('tailscale-unapproved')
+  const text = run.stderr.split(/\r?\n/u).filter(line => !/^debug\d?:/u.test(line)).join('\n')
+  if (/REMOTE HOST IDENTIFICATION HAS CHANGED/iu.test(text)) return new SshFailure('host-key-changed')
+  if (/Host key verification failed/iu.test(text)) return new SshFailure('host-key-rejected')
+  if (/Permission denied|Too many authentication failures|Authentication failed/iu.test(text)) return new SshFailure('auth-failed')
+  if (/bind .*Address already in use|cannot listen to port|Could not request local forwarding|forwarding failed/iu.test(text)) return new SshFailure('forward-failed')
+  // OpenSSH's own read timeout while connecting and signing in (ServerAliveInterval x ServerAliveCountMax).
+  if (/Connection to \S+ port \d+ timed out/iu.test(text)) return new SshFailure('connect-timeout')
+  if (/Could not resolve hostname|Name or service not known|Connection refused|Connection timed out|Operation timed out|Network is unreachable|No route to host|Connection closed by|Connection reset|kex_exchange_identification/iu.test(text)) return new SshFailure('ssh-unreachable')
+  // 255 is ssh's own exit: it failed before or instead of running the command. Anything else came from the host's side.
+  return new SshFailure(run.exitCode === 255 && fallback !== 'forward-failed' ? 'ssh-failed' : fallback)
+}
+
+/** A word safe to show inside a command the user copies: a host name, an address, a user or a port. */
+const plainWord = (value: string): boolean => /^[A-Za-z0-9._:@[\]-]{1,255}$/u.test(value)
+/** A folder on the SSH host written the way a POSIX shell reads it inside double quotes, or undefined when it needs more care. */
+function shellFolder(path: string): string | undefined {
+  if (!/^(?:~\/|\/)[A-Za-z0-9._/-]{0,1024}$/u.test(path)) return undefined
+  return path.startsWith('~/') ? `"$HOME/${path.slice(2)}"` : `"${path}"`
+}
+/**
+ * An identity file on this computer written so a POSIX shell, PowerShell and cmd.exe all read it as one word,
+ * or undefined when it needs more care. It is already absolute: `validateSshHost()` expanded `~`.
+ */
+function localPath(path: string): string | undefined {
+  if (!/^[A-Za-z0-9._:/\\ -]{1,1024}$/u.test(path)) return undefined
+  return path.includes(' ') ? `"${path}"` : path
+}
+/**
+ * The exact command that fixes a failure, where there is one: SSH's own words for a sign-in or reach
+ * failure, the stale known-hosts entry for a changed key, and the archive for a missing installation.
+ */
+export function failureFix(code: SshFailureCode, context: {
+  readonly target: string; readonly sshPort?: number | undefined; readonly installPath: string
+  /** An identity file saved with the host, which Sotto passes with `IdentitiesOnly`; the command signs in the same way. */
+  readonly identityFile?: string | undefined
+  /** Where the SSH configuration sent the target, from `ssh -G`, when it was read. */
+  readonly hostname?: string | undefined; readonly port?: number | undefined; readonly version: string
+}): SshFix | undefined {
+  const port = context.sshPort ?? context.port
+  if (code === 'ssh-failed' || code === 'ssh-unreachable' || code === 'auth-failed' || code === 'connect-timeout') {
+    if (!plainWord(context.target)) return undefined
+    const identity = context.identityFile ? localPath(context.identityFile) : ''
+    if (identity === undefined) return undefined
+    return { text: 'To see what SSH itself says, run this in a terminal on this computer:',
+      command: `ssh ${identity ? `-i ${identity} -o IdentitiesOnly=yes ` : ''}${context.sshPort ? `-p ${context.sshPort} ` : ''}${context.target}` }
+  }
+  if (code === 'host-key-changed') {
+    const host = context.hostname ?? context.target.split('@').at(-1) ?? ''
+    if (!plainWord(host) || host.includes('@')) return undefined
+    const entry = port && port !== 22 ? `'[${host}]:${port}'` : host
+    return { text: "Once you know the new key is the host's own, remove the old one from your known hosts on this computer:", command: `ssh-keygen -R ${entry}` }
+  }
+  if (code === 'archive-missing') {
+    const folder = shellFolder(context.installPath)
+    if (!folder || !/^\d+\.\d+\.\d+$/u.test(context.version)) return undefined
+    const archive = `Sotto-host-${context.version}-linux-x64.tar.gz`
+    return { text: `Download ${archive} from the Sotto releases page to the SSH host, then unpack it into the host installation folder there:`,
+      command: `mkdir -p ${folder} && tar -xzf ${archive} -C ${folder}` }
+  }
+  return undefined
+}

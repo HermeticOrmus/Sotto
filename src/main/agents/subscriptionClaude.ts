@@ -45,7 +45,7 @@ const RESULT = z.object({ type: z.literal('result'), is_error: z.boolean().optio
 // directories, Node injection flags, or cloud-provider routing overrides.
 const ENVIRONMENT_KEYS = new Set([
   'path', 'pathext', 'systemroot', 'windir', 'temp', 'tmp', 'userprofile', 'homedrive', 'homepath', 'home',
-  'appdata', 'localappdata', 'xdg_config_home', 'xdg_cache_home', 'xdg_data_home',
+  'appdata', 'localappdata', 'programdata', 'allusersprofile', 'xdg_config_home', 'xdg_cache_home', 'xdg_data_home',
   'lang', 'lc_all', 'lc_ctype', 'tz', 'https_proxy', 'http_proxy', 'no_proxy',
   'ssl_cert_file', 'ssl_cert_dir', 'node_extra_ca_certs',
   // Preserve the user's native compaction policy without inventing defaults.

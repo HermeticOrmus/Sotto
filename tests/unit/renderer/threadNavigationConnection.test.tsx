@@ -17,6 +17,7 @@ import type { AgentBridge, AgentState } from '../../../src/shared/agents'
 import { immediatePublishScheduler } from '../../fixtures/publishScheduler'
 import { agentBridgeFor, agentWireBridge } from '../../fixtures/agentBridge'
 import { handleOf, PIXEL_PNG, stageInto } from '../../fixtures/stagedImages'
+import { threadsStateFixture } from './liveAgentState'
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
@@ -93,7 +94,7 @@ describe('thread draft recovery through the real connection and disk', () => {
       // of the composer. Its authoritative echo resolves the retained outbox.
       await act(async () => { await original(execute.mock.calls[0]![0]) })
       await waitFor(() => expect(screen.queryByRole('button', { name: 'Check again' })).not.toBeInTheDocument())
-      expect(screen.getByRole('textbox', { name: 'Prompt', exact: true })).toHaveValue('Independent newer draft')
+      expect(screen.getByRole('textbox', { name: 'Prompt' })).toHaveValue('Independent newer draft')
       await f.control.privacyChanged()
       expect((await f.disk()).threadDrafts).toContainEqual(expect.objectContaining({ draftId: newId, text: 'Independent newer draft' }))
       expect(execute).toHaveBeenCalledTimes(1)
@@ -104,10 +105,11 @@ describe('thread draft recovery through the real connection and disk', () => {
     let release!: () => void
     const gate = new Promise<void>(done => { release = done })
     const seen: string[] = []
-    const bridge: AgentBridge = { get: async () => null as unknown as AgentState, onState: () => () => undefined, command: async request => {
+    const snapshot = threadsStateFixture()
+    const bridge: AgentBridge = { get: async () => snapshot, onState: () => () => undefined, command: async request => {
       seen.push(request.type)
       if (request.type === 'configure') await gate
-      return null
+      return snapshot
     } }
     const { result } = renderHook(() => useAgentConnection(bridge))
     const threadId = 'workshop', draftId = randomUUID()
@@ -178,7 +180,7 @@ describe('thread draft recovery through the real connection and disk', () => {
       await f.control.command({ type: 'select-thread', threadId: 'workshop' })
       vi.stubGlobal('sotto', { agents: agentWireBridge(f.bridge) })
       const view = render(page(true))
-      await screen.findByRole('textbox', { name: 'Prompt', exact: true })
+      await screen.findByRole('textbox', { name: 'Prompt' })
       const store = controls.threadDrafts
       const original = AtomicJsonStore.prototype.write
       spy = vi.spyOn(AtomicJsonStore.prototype, 'write').mockImplementation(async function(this: AtomicJsonStore<unknown>, value) {
@@ -187,7 +189,7 @@ describe('thread draft recovery through the real connection and disk', () => {
         }
         return original.call(this, value)
       })
-      fireEvent.change(screen.getByRole('textbox', { name: 'Prompt', exact: true }), { target: { value: 'Keep this unsaved draft' } })
+      fireEvent.change(screen.getByRole('textbox', { name: 'Prompt' }), { target: { value: 'Keep this unsaved draft' } })
       act(() => { store.edit('workshop', { attachments: [image] }); store.flush('workshop') })
       await waitFor(() => expect(writing).toBe(true))
       expect((await f.disk()).threadDrafts).toEqual([])
@@ -200,7 +202,7 @@ describe('thread draft recovery through the real connection and disk', () => {
       await act(async () => { await controls.command({ type: 'voice-state', status: 'off', error: null }) })
       view.rerender(page(true))
       expect(controls.threadDrafts).toBe(store)
-      expect(screen.getByRole('textbox', { name: 'Prompt', exact: true })).toHaveValue('Keep this unsaved draft')
+      expect(screen.getByRole('textbox', { name: 'Prompt' })).toHaveValue('Keep this unsaved draft')
       expect(screen.getByRole('img', { name: 'pixel.png' })).toBeVisible()
       if (stage === 'pending') {
         expect(store.snapshot('workshop').save).toBe('saving')
@@ -233,7 +235,9 @@ describe('thread draft recovery through the real connection and disk', () => {
       rerender({ bridge: nextBridge })
       await waitFor(() => expect(result.current.state).toBe(nextState))
       expect(result.current.threadDrafts).not.toBe(oldStore)
-      await act(async () => { finish({ ...nextState, error: 'Old save failed', threadDrafts: [{ threadId: 'workshop', ...oldStore.draft('workshop'), updatedAt: new Date().toISOString() }] }) })
+      const oldDraft = oldStore.draft('workshop')
+      await act(async () => { finish({ ...nextState, error: 'Old save failed', threadDrafts: [{ threadId: 'workshop', ...oldDraft,
+        attachments: [...oldDraft.attachments], skills: [...oldDraft.skills], files: [...oldDraft.files], updatedAt: new Date().toISOString() }] }) })
       expect(oldStore.snapshot('workshop').save).toBe('unsaved')
       expect(result.current.threadDrafts.draft('workshop').text).toBe('')
       expect(result.current.state).toBe(nextState)
@@ -331,19 +335,21 @@ describe('thread navigation through the real renderer connection and controller'
     }
   })
 
-  it('queues a follow-up on a running thread with its skill through the real controller and disk, and sends it once after review', async () => {
+  it.each([false, true])('queues a follow-up on a running thread with its skill through the real controller and disk, and sends it once after review (hold queue observation: %s)', async holdObservation => {
     const f = await draftFixture()
     const skill = { name: 'deploy', path: 'C:/sotto-test/.agents/skills/deploy/SKILL.md' }
     let controls!: ReturnType<typeof useAgents>
     function Observer() { controls = useAgents(); return null }
     const executeSpy = vi.spyOn(f.host, 'execute')
     const sends = () => executeSpy.mock.calls.filter(([request]) => request.type === 'send')
+    let deliver = (): void => undefined
+    let releaseObservation = (): void => undefined
     try {
       await f.control.command({ type: 'select-thread', threadId: 'workshop' })
       f.host.event({ type: 'manual', threadId: 'workshop', text: 'Start the long job' })
       vi.stubGlobal('sotto', { agents: agentWireBridge(f.bridge) })
       render(<AgentProvider settings={null} dictation={{ status: 'idle' }}><Observer /><ThreadsView onOpenAgents={() => undefined} /></AgentProvider>)
-      const prompt = await screen.findByRole('textbox', { name: 'Prompt', exact: true })
+      const prompt = await screen.findByRole('textbox', { name: 'Prompt' })
       await screen.findByRole('button', { name: 'Stop agent' })
       act(() => controls.threadDrafts.edit('workshop', { text: 'Then run $deploy', skills: [skill] }))
       await screen.findByRole('button', { name: 'Queue prompt' })
@@ -363,22 +369,47 @@ describe('thread navigation through the real renderer connection and controller'
       await within(queue).findByText('Paused')
       expect(sends()).toEqual([])
       // Hold the provider while the follow-up is on its way: a newer revision still lines up behind it.
-      let deliver!: () => void
       const provider = new Promise<void>(done => { deliver = done })
       executeSpy.mockImplementation(async request => { if (request.type === 'send') await provider; return E2EAgentHost.prototype.execute.call(f.host, request) })
       fireEvent.click(within(queue).getByRole('button', { name: 'Resume queue' }))
       await waitFor(() => expect(sends()).toEqual([[expect.objectContaining({ threadId: 'workshop', text: 'Then run $deploy', skills: [skill] })]]))
       await within(queue).findByText('Sending')
+      if (holdObservation) {
+        // A separate toolbar refusal can finish while the queue's durable write is being acknowledged.
+        const write = AtomicJsonStore.prototype.write
+        let refusedToolbar = false
+        vi.spyOn(AtomicJsonStore.prototype, 'write').mockImplementation(async function (this: AtomicJsonStore<unknown>, value) {
+          await write.call(this, value)
+          if (!refusedToolbar && (value as { items?: { text: string }[] }).items?.some(item => item.text === 'And then post the link')) {
+            refusedToolbar = true
+            await f.control.command({ type: 'refresh-thread-worktree', threadId: 'workshop' })
+          }
+        })
+        // Model the published shell not having committed yet; the command reply still carries exact ownership.
+        const receive = controls.threadDrafts.receive.bind(controls.threadDrafts)
+        let pending: AgentState | undefined
+        const observation = vi.spyOn(controls.threadDrafts, 'receive').mockImplementation(state => {
+          if (state.followups?.some(item => item.text === 'And then post the link')) { pending = state; return }
+          receive(state)
+        })
+        releaseObservation = () => { observation.mockRestore(); if (pending) receive(pending) }
+      }
       act(() => controls.threadDrafts.edit('workshop', { text: 'And then post the link' }))
+      const secondDraftId = controls.threadDrafts.draft('workshop').draftId
+      const resolved = vi.spyOn(controls.threadDrafts, 'resolve')
       expect(screen.getByRole('button', { name: 'Queue prompt' })).toBeEnabled()
       fireEvent.keyDown(prompt, { key: 'Enter' })
       await waitFor(() => expect(f.control.get().followups?.map(item => [item.text, item.status])).toEqual([['Then run $deploy', 'dispatching'], ['And then post the link', 'queued']]))
+      await waitFor(() => expect(resolved.mock.calls.some(([threadId, draftId]) => threadId === 'workshop' && draftId === secondDraftId)).toBe(true))
       await waitFor(() => expect(prompt).toHaveValue(''))
+      if (holdObservation) expect(f.control.get().error).toBe('Working-copy status is unavailable.')
+      await act(async () => { releaseObservation() })
+      expect(prompt).toHaveValue('')
       await act(async () => { deliver() })
       await waitFor(() => expect(f.control.get().followups?.map(item => item.text)).toEqual(['And then post the link']))
       expect(f.control.get().host.threads.find(thread => thread.id === 'workshop')!.messages.filter(message => message.text === 'Then run $deploy')).toHaveLength(1)
       await act(async () => { await controls.command({ type: 'refresh' }) })
       expect(sends()).toHaveLength(1)
-    } finally { await f.close() }
+    } finally { releaseObservation(); deliver(); await f.close() }
   })
 })

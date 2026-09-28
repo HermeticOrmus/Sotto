@@ -170,6 +170,7 @@ it.skipIf(!posix)('reports a Node too old for the archive as node-too-old with i
   const home = join(configuration.directory, 'home'); await mkdir(home)
   await symlink(process.execPath, join(configuration.directory, 'node'))
   const outcome = await probe(configuration, { HOME: home, PATH: configuration.directory, SHELL: '/nonexistent' })
-  expect(outcome.messages).toEqual([{ type: 'error', reason: 'node-too-old', version: process.versions.node }])
+  // The probe's first line says SSH signed in; the reason follows.
+  expect(outcome.messages).toEqual([{ type: 'signed-in' }, { type: 'error', reason: 'node-too-old', version: process.versions.node }])
   await expect(readFile(join(configuration.dataDirectory, 'host-listener.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
 })

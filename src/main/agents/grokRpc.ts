@@ -15,7 +15,7 @@ export class GrokUnreadable extends GrokUncertain {}
 /** A client Sotto will not drive: an older CLI, another protocol version, or no subscription sign-in. */
 export class GrokUnsupported extends Error {}
 export class GrokRejected extends Error {}
-const safeEnvironment = new Set(['path', 'pathext', 'systemroot', 'windir', 'temp', 'tmp', 'home', 'userprofile', 'homedrive', 'homepath', 'appdata', 'localappdata', 'lang', 'lc_all', 'lc_ctype', 'tz', 'https_proxy', 'http_proxy', 'no_proxy', 'ssl_cert_file', 'ssl_cert_dir'])
+const safeEnvironment = new Set(['path', 'pathext', 'systemroot', 'windir', 'temp', 'tmp', 'home', 'userprofile', 'homedrive', 'homepath', 'appdata', 'localappdata', 'programdata', 'allusersprofile', 'lang', 'lc_all', 'lc_ctype', 'tz', 'https_proxy', 'http_proxy', 'no_proxy', 'ssl_cert_file', 'ssl_cert_dir'])
 export function grokEnvironment(environment: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const env = Object.fromEntries(Object.entries(environment).filter(([key]) => safeEnvironment.has(key.toLowerCase())))
   for (const key of ['GROK_HOME', 'GROK_AUTH_PATH']) if (environment[key] && isAbsolute(environment[key]!)) env[key] = environment[key]

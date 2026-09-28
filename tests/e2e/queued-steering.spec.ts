@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { evidenceDirectory } from './support/evidence'
 import { hostKeys } from './support/hostKeys'
 import { closeSotto, launchSottoWithVoice, openThreads, userMessageTexts } from './support/sottoLaunch'
 
@@ -41,7 +42,7 @@ test('steers a queued message from the keyboard without consuming the newer draf
         if (await toggle.getAttribute('aria-expanded') === 'false') await toggle.click()
         await expect(queue.getByRole('button', { name: 'Steer now' }).last()).toBeVisible()
         expect(await queue.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
-        await page.screenshot({ path: `artifacts/queued-steering/${appearance}-${width}.png`, animations: 'disabled' })
+        await page.screenshot({ path: `${evidenceDirectory('artifacts/queued-steering')}/${appearance}-${width}.png`, animations: 'disabled' })
       }
     }
     await page.emulateMedia({ reducedMotion: 'reduce' })

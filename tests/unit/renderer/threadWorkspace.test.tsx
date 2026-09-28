@@ -2,7 +2,7 @@ import React from 'react'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { AgentCapabilities, AgentState } from '../../../src/shared/agents'
+import type { AgentCapabilities, AgentCommand, AgentState } from '../../../src/shared/agents'
 import { E2E_THREADS_NOW } from '../../../src/shared/e2e'
 import { useAgents } from '../../../src/renderer/src/agents/AgentContext'
 import { composerEnterIntent } from '../../../src/renderer/src/agents/composerKeys'
@@ -31,7 +31,7 @@ function mount(state: AgentState) {
   const live = liveAgentState(state)
   vi.mocked(useAgents).mockImplementation(live.useLive)
   const view = render(<ThreadsView onOpenAgents={vi.fn()} now={NOW} />)
-  return { live, view, prompt: () => screen.getByRole('textbox', { name: 'Prompt', exact: true }) }
+  return { live, view, prompt: () => screen.getByRole('textbox', { name: 'Prompt' }) }
 }
 
 beforeEach(() => { vi.mocked(useAgents).mockReset() })
@@ -53,6 +53,44 @@ describe('composer Enter intent', () => {
 })
 
 describe('Threads manual composer', () => {
+  it.each([
+    ['row', false], ['receipt', false], ['row', true], ['receipt', true],
+    ['wrong-thread', false], ['wrong-draft', false], ['refused', false], ['unconfirmed', false],
+  ] as const)('uses exact queue ownership before interpreting a %s reply (newer draft: %s)', async (evidence, newer) => {
+    const state = manualState()
+    const row = describeThreads(state, NOW).find(item => item.thread.id === state.activeThreadId)!
+    let answer!: (state: AgentState | null) => void
+    const command = vi.fn(async (request: AgentCommand): Promise<AgentState | null> => request.type === 'queue-followup'
+      ? new Promise(done => { answer = done }) : state)
+    const store = new ThreadDraftStore(command)
+    store.edit(row.thread.id, { text: 'Already queued' })
+    const draft = store.draft(row.thread.id)
+    const sending = sendThreadRevision(store, row, command, 1, 'queue')
+    if (newer) store.edit(row.thread.id, { text: 'Newer typing' })
+    const result = structuredClone(state)
+    result.error = 'Working-copy status is unavailable.'
+    result.followups = []
+    result.followupReceipts = []
+    if (evidence === 'row') result.followups = [{ id: crypto.randomUUID(), threadId: row.thread.id, draftId: draft.draftId,
+      text: draft.text, attachments: [], status: 'queued', createdAt: SETTLED_AT, updatedAt: SETTLED_AT }]
+    if (evidence === 'receipt' || evidence === 'wrong-thread' || evidence === 'wrong-draft') result.followupReceipts = [{
+      threadId: evidence === 'wrong-thread' ? 'another-thread' : row.thread.id,
+      draftId: evidence === 'wrong-draft' ? crypto.randomUUID() : draft.draftId,
+    }]
+    answer(evidence === 'unconfirmed' ? null : result)
+    await sending
+    const accepted = evidence === 'row' || evidence === 'receipt'
+    const expectedText = newer ? 'Newer typing' : accepted || evidence === 'unconfirmed' ? '' : draft.text
+    expect(store.draft(row.thread.id).text).toBe(expectedText)
+    expect(submissionStatus(store.submissions()[0]!, result).status).toBe(accepted ? 'queued' : evidence === 'unconfirmed' ? 'uncertain' : 'failed')
+    // A later publication cannot restore accepted text under a new revision or overwrite newer typing.
+    store.receive(result)
+    expect(store.draft(row.thread.id).text).toBe(expectedText)
+    expect(result.error).toBe('Working-copy status is unavailable.')
+    expect(command.mock.calls.filter(([request]) => request.type === 'queue-followup')).toEqual([[expect.objectContaining({ threadId: row.thread.id, draftId: draft.draftId, text: draft.text })]])
+    store.flushAll()
+  })
+
   it.each(['edited', 'rejected'] as const)('sends the prompt it captured once old management stops, and gives it back when stopping is %s', async outcome => {
     const state = threadsStateFixture()
     const thread = state.host.threads.find(item => item.id === 'footer-links')!
@@ -394,7 +432,7 @@ describe('Threads project folders', () => {
     const { live } = mount(threadsStateFixture())
     fireEvent.click(screen.getByRole('button', { name: 'New thread in sotto-site' }))
     expect(screen.queryByRole('dialog', { name: 'New thread' })).not.toBeInTheDocument()
-    await waitFor(() => expect(screen.getByRole('heading', { name: 'New thread', exact: true })).toBeVisible())
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'New thread' })).toBeVisible())
     expect(live.command).toHaveBeenCalledWith(expect.objectContaining({ type: 'create-thread', projectId: 'sotto-site', title: 'New thread', managed: false }))
   })
 })
@@ -418,8 +456,8 @@ describe('Thread provider choice', () => {
   it('lets an unstarted thread choose any ready provider that can create threads', async () => {
     const { live } = mount(providerState(false))
     fireEvent.click(screen.getByRole('combobox', { name: 'Thread model' }))
-    expect(screen.queryByRole('button', { name: 'Grok', exact: true })).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('tab', { name: 'Codex', exact: true }))
+    expect(screen.queryByRole('button', { name: 'Grok' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('tab', { name: 'Codex' }))
     fireEvent.click(screen.getByRole('option', { name: 'GPT-5.4' }))
     await waitFor(() => expect(live.command).toHaveBeenCalledWith({ type: 'configure-thread', threadId: 'grok-previews', modelId: 'codex:gpt' }))
   })
@@ -430,7 +468,7 @@ describe('Thread provider choice', () => {
       state.host.providers![0] = { ...state.host.providers![0]!, connection: 'connected', capabilities: ALL }
       mount(state)
       fireEvent.click(screen.getByRole('combobox', { name: 'Thread model' }))
-      expect(screen.queryByRole('button', { name: 'Codex', exact: true })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Codex' })).not.toBeInTheDocument()
       expect(screen.queryByText('This conversation stays with Claude.')).not.toBeInTheDocument()
       cleanup()
     }

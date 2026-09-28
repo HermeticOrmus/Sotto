@@ -36,6 +36,9 @@ interface TerminalRecord {
   tail: string
   /** A pasted image's path, shown briefly in the pane. */
   pasted: { readonly path: string; readonly at: number } | null
+  inputTail: Promise<void>
+  inputVersion: number
+  inputBlocked: boolean
 }
 
 const unavailable: ToolsError = { code: 'unavailable', message: 'Terminal is not available in this window.' }
@@ -80,7 +83,10 @@ export class TerminalWorkspaceStore {
     const result = await settle(bridge.list())
     if (token !== this.listToken) return
     if (!result.ok) { this.set({ ...this.state, status: 'error', error: result.error }); return }
-    for (const terminal of result.value.terminals) this.ensureRecord(terminal.id)
+    for (const terminal of result.value.terminals) {
+      this.ensureRecord(terminal.id)
+      if (terminal.closedAt !== null) this.release(terminal.id)
+    }
     this.set({ ...this.state, status: 'ready', error: null, terminals: result.value.terminals, shell: result.value.shell })
   }
 
@@ -100,12 +106,15 @@ export class TerminalWorkspaceStore {
   async restart(bridge: TerminalWorkspaceBridge | undefined, id: string): Promise<void> {
     const record = this.records.get(id)
     if (!bridge || !record) return
+    record.inputVersion++
+    record.inputBlocked = true
     this.set({ ...this.state, busy: true, notice: null })
     record.replaying = true
     record.buffer = []
     record.tail = ''
     record.view?.setInputEnabled(false)
     const result = await settle(bridge.restart({ id }))
+    record.inputBlocked = false
     if (!result.ok) { record.replaying = false; this.fail(bridge, result.error, 'Could not restart this terminal.'); return }
     this.adopt(result.value)
     this.set({ ...this.state, busy: false })
@@ -113,26 +122,48 @@ export class TerminalWorkspaceStore {
 
   async stop(bridge: TerminalWorkspaceBridge | undefined, id: string): Promise<void> {
     if (!bridge) return
+    const record = this.records.get(id)
+    if (record) { record.inputVersion++; record.inputBlocked = true; record.view?.setInputEnabled(false) }
     this.set({ ...this.state, notice: null })
     const result = await settle(bridge.stop({ id }))
-    if (!result.ok && result.error.code !== 'not-running') this.fail(bridge, result.error, 'Could not stop this terminal.')
+    if (!result.ok && result.error.code !== 'not-running') {
+      if (record && this.records.get(id) === record) { record.inputBlocked = false; record.view?.setInputEnabled(this.terminal(id)?.status === 'running') }
+      this.fail(bridge, result.error, 'Could not stop this terminal.')
+    }
   }
 
   async close(bridge: TerminalWorkspaceBridge | undefined, id: string): Promise<void> {
     if (!bridge) return
+    const record = this.records.get(id)
+    if (record) { record.inputVersion++; record.inputBlocked = true; record.view?.setInputEnabled(false) }
     this.set({ ...this.state, busy: true, notice: null })
     const result = await settle(bridge.close({ id }))
-    if (!result.ok && result.error.code !== 'session-unavailable') { this.fail(bridge, result.error, 'Could not close this terminal.'); return }
+    if (!result.ok && result.error.code !== 'session-unavailable') {
+      if (record && this.records.get(id) === record) { record.inputBlocked = false; record.view?.setInputEnabled(this.terminal(id)?.status === 'running') }
+      this.fail(bridge, result.error, 'Could not close this terminal.'); return
+    }
     this.release(id)
     this.set({ ...this.state, busy: false })
   }
 
   write(bridge: TerminalWorkspaceBridge | undefined, id: string, data: string): void {
     const record = this.records.get(id)
-    if (!bridge || !record || record.replaying || this.terminal(id)?.status !== 'running') return
-    // Main takes at most 64 KiB per write; a large paste goes in order, chunk by chunk.
+    if (!bridge || !record || record.replaying || record.inputBlocked || this.terminal(id)?.status !== 'running') return
+    const version = record.inputVersion
+    // Keep separate key events behind every chunk of an earlier paste.
     const chunks = data.match(/[\s\S]{1,16384}/gu) ?? []
-    void chunks.reduce<Promise<unknown>>((previous, chunk) => previous.then(() => settle(bridge.write({ id, data: chunk }))), Promise.resolve())
+    record.inputTail = record.inputTail.then(async () => {
+      for (const chunk of chunks) {
+        if (this.records.get(id) !== record || record.inputVersion !== version || record.replaying || record.inputBlocked || this.terminal(id)?.status !== 'running') return
+        const result = await settle(Promise.resolve().then(() => bridge.write({ id, data: chunk })))
+        if (this.records.get(id) !== record || record.inputVersion !== version) return
+        if (!result.ok) {
+          record.inputVersion++
+          this.fail(bridge, result.error, 'Terminal input stopped. Check the command before trying again.')
+          return
+        }
+      }
+    })
   }
 
   interrupt(bridge: TerminalWorkspaceBridge | undefined, id: string): void {
@@ -227,6 +258,7 @@ export class TerminalWorkspaceStore {
 
   private replay(record: TerminalRecord, snapshot: WorkspaceTerminalSnapshot): void {
     this.upsert(snapshot.terminal)
+    if (snapshot.terminal.closedAt !== null) { this.release(snapshot.terminal.id); return }
     record.loaded = true
     if (!record.view) {
       record.pending = snapshot
@@ -262,6 +294,7 @@ export class TerminalWorkspaceStore {
 
   private receive(event: WorkspaceTerminalEvent): void {
     if (event.type === 'output') {
+      if (this.terminal(event.id)?.closedAt != null) return
       const record = this.records.get(event.id)
       if (!record) {
         const queue = this.orphans.get(event.id) ?? []
@@ -279,7 +312,9 @@ export class TerminalWorkspaceStore {
     }
     this.ensureRecord(event.terminal.id)
     this.upsert(event.terminal)
+    if (event.terminal.closedAt !== null) { this.release(event.terminal.id); return }
     const record = this.records.get(event.terminal.id)
+    if (record && event.terminal.status !== 'running') record.inputVersion++
     if (record && !record.replaying) record.view?.setInputEnabled(event.terminal.status === 'running')
   }
 
@@ -292,14 +327,17 @@ export class TerminalWorkspaceStore {
   private release(id: string): void {
     const record = this.records.get(id)
     record?.view?.dispose()
-    if (record) record.view = null
-    // The record stays for the Closed shelf; only its screen goes.
+    if (record) { record.view = null; record.buffer = []; record.pending = null }
+    this.records.delete(id)
+    this.orphans.delete(id)
+    // Metadata stays in the listing; dropping this record releases output and invalidates any pending read.
+    this.ensureRecord(id).lastOutputAt = record?.lastOutputAt ?? Number.NEGATIVE_INFINITY
   }
 
   private ensureRecord(id: string): TerminalRecord {
     let record = this.records.get(id)
     if (!record) {
-      record = { view: null, sequence: 0, replaying: false, buffer: [], loaded: false, pending: null, size: null, loadError: null, lastOutputAt: Number.NEGATIVE_INFINITY, tail: '', pasted: null }
+      record = { view: null, sequence: 0, replaying: false, buffer: [], loaded: false, pending: null, size: null, loadError: null, lastOutputAt: Number.NEGATIVE_INFINITY, tail: '', pasted: null, inputTail: Promise.resolve(), inputVersion: 0, inputBlocked: false }
       this.records.set(id, record)
     }
     return record

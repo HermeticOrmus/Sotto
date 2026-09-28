@@ -180,7 +180,7 @@ describe('working copy default', () => {
 
   it('honors a project override ahead of the global default and sends the worktree with its origin start', async () => {
     const state = fixture([actual])
-    const command = vi.fn(async () => state)
+    const command = vi.fn<(request: AgentCommand) => Promise<AgentState>>(async () => state)
     vi.stubGlobal('sotto', {
       agents: { chooseProjectDirectory: vi.fn(async () => path) },
       getSettings: vi.fn(async () => ({ threadWorkingCopyDefault: 'shared', projectThreadWorkingCopyDefaults: { [actual.id]: 'independent' } })),
@@ -246,6 +246,19 @@ describe('the managed flow’s own form', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Create thread' }))
     await waitFor(() => expect(view.onCreated).toHaveBeenCalledOnce())
     expect(command).toHaveBeenCalledWith(expect.objectContaining({ type: 'create-thread', projectId: actual.id, title: 'Spike the flake', titleSource: 'user', modelId: 'codex:model', managed: true }))
+  })
+
+  it('starts managed threads on the saved new-thread model too', async () => {
+    const state = fixture([actual])
+    state.host.models.push({ id: 'codex:other', name: 'Other model', provider: 'Codex', providerId: 'codex', ready: true })
+    state.configuration.newThreadModelId = 'codex:other'
+    const command = vi.fn<(request: AgentCommand) => Promise<AgentState>>(async () => state)
+    const view = setupManaged(command, state)
+    fireEvent.click(screen.getByRole('button', { name: /Codex/ }))
+    await screen.findByRole('textbox', { name: 'Thread name' })
+    fireEvent.click(screen.getByRole('button', { name: 'Create thread' }))
+    await waitFor(() => expect(view.onCreated).toHaveBeenCalledOnce())
+    expect(command).toHaveBeenCalledWith(expect.objectContaining({ type: 'create-thread', modelId: 'codex:other' }))
   })
 
   it('names it "New thread" and says so when no name is typed', async () => {

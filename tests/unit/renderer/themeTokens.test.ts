@@ -161,6 +161,7 @@ describe('main-window theme tokens', () => {
       'src/renderer/src/features/settings/hostDevices.css',
       'src/renderer/src/features/settings/gitSettings.css',
       'src/renderer/src/features/settings/phones.css',
+      'src/renderer/src/features/settings/hostSetup.css',
       'src/renderer/src/agents/hostBadge.css',
       'src/renderer/src/agents/requests/requests.css',
       'src/renderer/src/styles/global.css',
