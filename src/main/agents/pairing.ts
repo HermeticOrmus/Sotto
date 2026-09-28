@@ -118,6 +118,9 @@ export class PairedClients {
     return { code, expiresAt: new Date(expiresAt).toISOString() }
   }
 
+  /** Withdraws a code before it is used, so it pairs nothing. A code already spent or gone is left as it is. */
+  cancelPairingCode(code: string): void { this.codes.delete(code) }
+
   /**
    * Spends a code and pairs the client behind it. The token is returned once and kept only as a hash,
    * so a copy of `paired-clients.json` does not let anyone speak as a paired client.

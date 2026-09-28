@@ -5,7 +5,9 @@ export default tseslint.config(
   {
     ignores: [
       'artifacts/review-407/**',
+      'artifacts/review-389/**',
       'artifacts/review-377/**',
+      'artifacts/review-402/**',
       'artifacts/phase-three-themes/**',
       'artifacts/thread-browser-player/**',
       'artifacts/new-thread-defaults/**',

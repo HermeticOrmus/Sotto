@@ -211,6 +211,14 @@ export interface AppSettings {
    */
   localHostEnabled: boolean
   /**
+   * Phone access (ADR-0033): paired phones reach this computer's threads over the owner's tailnet.
+   * Applies at once; off closes the listener and removes Sotto's Tailscale Serve setting. Needs the
+   * local host.
+   */
+  phoneAccess: boolean
+  /** This computer's name as phones show it. Empty uses the Tailscale machine name, or the computer's own. */
+  phoneAccessName: string
+  /**
    * The voice coordinator (the wake phrase, the Agents room, spoken hints, the
    * widget's voice controls and assignment) is hidden for the beta. Off keeps
    * every one of those surfaces out of the window; dictation is unaffected.
@@ -299,6 +307,8 @@ const fieldSchemas = {
   streamingAsr: z.boolean(),
   autoUpdateCheck: z.boolean(),
   localHostEnabled: z.boolean(),
+  phoneAccess: z.boolean(),
+  phoneAccessName: z.string().trim().max(63),
   voiceCoordinatorEnabled: z.boolean(),
   memoryEnabled: z.boolean(),
 } satisfies { [Key in keyof AppSettings]: z.ZodType<AppSettings[Key]> }
@@ -384,6 +394,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   // On by default: this computer is still the host until the owner pairs a
   // remote one and chooses to run clients only.
   localHostEnabled: true,
+  // Off by default: nothing listens beyond this computer until the owner turns it on (ADR-0033).
+  phoneAccess: false,
+  phoneAccessName: '',
   // Off for the beta: the voice coordinator is not ready to ship, so nothing
   // voice-shaped is shown until it is turned on here.
   voiceCoordinatorEnabled: false,
@@ -482,6 +495,8 @@ export function parseSettings(input: unknown, defaults: AppSettings = DEFAULT_SE
     streamingAsr: parseField(persisted, 'streamingAsr', defaults),
     autoUpdateCheck: parseField(persisted, 'autoUpdateCheck', defaults),
     localHostEnabled: parseField(persisted, 'localHostEnabled', defaults),
+    phoneAccess: parseField(persisted, 'phoneAccess', defaults),
+    phoneAccessName: parseField(persisted, 'phoneAccessName', defaults),
     voiceCoordinatorEnabled: parseField(persisted, 'voiceCoordinatorEnabled', defaults),
     memoryEnabled: parseField(persisted, 'memoryEnabled', defaults),
   }
