@@ -74,7 +74,7 @@ function FixCommand({ fix }: { readonly fix: NonNullable<HostStatus['fix']> }): 
  * shows on its own step with main's sentence (what happened, that nothing was saved, what to do) and a
  * command to copy where there is one. SSH's own questions sit on the step that asked them.
  */
-export function HostSetupChecklist({ name, summary, host, outcome, error, question, onChange, onOpenApproval, onOpenGuide }: {
+export function HostSetupChecklist({ name, summary, host, outcome, error, approvalError, question, onChange, onOpenApproval, onOpenGuide }: {
   /** The host part of the target, which names the host until it is renamed. */
   readonly name: string
   /** What was asked for besides the host: `hostSetupSummary()`. */
@@ -84,6 +84,8 @@ export function HostSetupChecklist({ name, summary, host, outcome, error, questi
   readonly outcome: HostSetupOutcome
   /** Main's failure sentence, or one from the dialog itself. */
   readonly error: string | null
+  /** Why Open approval page did not open, shown on the Tailscale card while Tailscale still waits. */
+  readonly approvalError?: string | null | undefined
   /** SSH's question (a host key, a password or a passphrase), shown on the step that is asking. */
   readonly question?: ReactNode
   /** Back to the form; the attempt is dropped first. Absent once the host is added. */
@@ -121,6 +123,7 @@ export function HostSetupChecklist({ name, summary, host, outcome, error, questi
               {approvalUrl ? <Button ref={approval} onClick={onOpenApproval}>Open approval page</Button> : null}
               <button type="button" className="host-setup__link tt-focusable" onClick={onOpenGuide}>Why Tailscale asks</button>
             </div>
+            {approvalError ? <p className="host-setup__problem" role="alert">{approvalError}</p> : null}
           </div></div> : null}
           {state === 'active' && question ? <div className="host-setup__detail">{question}</div> : null}
           {state === 'failed' && error ? <div className="host-setup__detail"><div className="hosts-notice hosts-notice--error host-setup__card" role="alert">

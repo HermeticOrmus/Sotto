@@ -134,6 +134,8 @@ export function HostDialog({ mode, bridge, state, onClose }: {
   const [attempt, setAttempt] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  /** Why Open approval page did not open, shown on the Tailscale card; it goes when Tailscale stops waiting. */
+  const [approvalError, setApprovalError] = useState<string | null>(null)
   const [answer, setAnswer] = useState('')
   const [answering, setAnswering] = useState(false)
   const addButton = useRef<HTMLButtonElement>(null)
@@ -154,7 +156,9 @@ export function HostDialog({ mode, bridge, state, onClose }: {
   const added = addedHost !== undefined
   const connecting = sending || adding?.phase === 'connecting'
   const prompt = adding?.prompt
-  const shownError = error ?? (adding?.phase === 'error' ? adding.error ?? null : null)
+  // Once the connect has failed, main's sentence is the one that says why; one from this dialog is older.
+  const shownError = adding?.phase === 'error' ? adding.error ?? error : error
+  const approvalWaiting = adding?.tailscale?.waiting === true
   useEffect(() => {
     if (editing) return
     let alive = true
@@ -165,6 +169,7 @@ export function HostDialog({ mode, bridge, state, onClose }: {
   // version, which is saved): its row says what to update, so the dialog closes onto it.
   useEffect(() => { if (addedHost?.phase === 'connected') setConnected(true); else if (addedHost?.phase === 'error' && !connected) closeRef.current() }, [addedHost?.phase, connected])
   useEffect(() => { setAnswer('') }, [prompt?.id])
+  useEffect(() => { if (!approvalWaiting) setApprovalError(null) }, [approvalWaiting])
   const saved = new Set(state?.hosts.map(item => targetHost(item.target).toLowerCase()) ?? [])
   const offered = suggestions.filter(item => !saved.has(item.alias.toLowerCase()))
   const close = (): void => {
@@ -215,8 +220,9 @@ export function HostDialog({ mode, bridge, state, onClose }: {
   }
   const openApproval = async (): Promise<void> => {
     if (attempt === null) return
+    setApprovalError(null)
     try { await bridge.command({ type: 'open-approval', id: attempt }) }
-    catch (failure) { setError(failure instanceof Error ? failure.message : 'The approval page could not open. Nothing was changed. Try again.') }
+    catch (failure) { setApprovalError(failure instanceof Error ? failure.message : 'The approval page could not open. Nothing was changed. Try again.') }
   }
   const answerPrompt = async (): Promise<void> => {
     if (!prompt || attempt === null || answering) return
@@ -254,7 +260,7 @@ export function HostDialog({ mode, bridge, state, onClose }: {
         {editing ? (sending ? 'Saving…' : 'Save connection') : connecting ? 'Connecting…' : setup ? 'Try again' : 'Add host'}</Button>
     </>}>
     {setup ? <HostSetupChecklist name={submitted.name} summary={hostSetupSummary(submitted.user, submitted.port)} host={adding ?? addedHost} outcome={outcome}
-      error={shownError} question={question} {...(outcome === 'connected' ? {} : { onChange: change })}
+      error={shownError} approvalError={approvalError} question={question} {...(outcome === 'connected' ? {} : { onChange: change })}
       onOpenApproval={() => void openApproval()} onOpenGuide={() => void window.sotto?.openExternalLink?.(TAILSCALE_GUIDE_URL)} /> : <>
     <p className="hosts-dialog__intro">{editing ? 'The new connection is used the next time Sotto connects. A host that is on connects again now.' : 'Sotto connects as soon as you add it.'}</p>
     <form ref={formRef} className="hosts-dialog__fields" onSubmit={event => { event.preventDefault(); void submit() }}

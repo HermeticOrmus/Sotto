@@ -268,6 +268,34 @@ it('shows Tailscale approval as its own step, opens the approval page only on a 
   } finally { Object.assign(window, { sotto: previous }) }
 })
 
+it("keeps a failed Open approval page on the Tailscale card, and shows main's own failure on the failed step", async () => {
+  const stale = 'Tailscale is no longer waiting for this approval. Nothing was opened.'
+  const { bridge, command, push } = fixture([], (input, current) => { if (input.type === 'open-approval') throw new Error(stale); return current })
+  const user = userEvent.setup()
+  settings(bridge)
+  await user.click(await screen.findByRole('button', { name: 'Add host' }))
+  await user.type(within(screen.getByRole('dialog')).getByRole('combobox', { name: 'SSH host or alias' }), 'forge{Escape}')
+  await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Add host' }))
+  const dialog = screen.getByRole('dialog', { name: 'Connecting to forge' })
+  const id = (command.mock.calls[0]![0] as Extract<HostsCommand, { type: 'add' }>).host.id
+  const waiting = host({ id, name: 'forge', target: 'forge', phase: 'connecting', step: 'tailscale', tailscale: { waiting: true, url: 'https://login.tailscale.com/a/l1ab2c3' } })
+  push({ adding: waiting })
+  await user.click(within(dialog).getByRole('button', { name: 'Open approval page' }))
+  // Said on the card it belongs to; the connect itself has not failed.
+  const card = within(within(dialog).getAllByRole('listitem')[1]!).getByRole('status')
+  expect(within(card).getByRole('alert').textContent).toBe(stale)
+  expect(dialog.getAttribute('aria-labelledby') && document.getElementById(dialog.getAttribute('aria-labelledby')!)?.textContent).toBe('Connecting to forge')
+  // Tailscale stops waiting: the sentence goes with it.
+  push({ adding: { ...waiting, step: 'install', tailscale: { waiting: false } } })
+  expect(within(dialog).queryByText(stale)).toBeNull()
+  // A later failure shows main's sentence on its step.
+  const message = 'The host was not ready in time. Nothing was saved. Check that it starts on the SSH host, then add the host again.'
+  push({ adding: { ...waiting, phase: 'error', step: 'start', tailscale: { waiting: false }, error: message } })
+  const failed = within(screen.getByRole('dialog', { name: 'forge could not be added' })).getAllByRole('listitem')[4]!
+  expect(within(failed).getByRole('alert').textContent).toBe(message)
+  expect(within(screen.getByRole('dialog')).queryByText(stale)).toBeNull()
+})
+
 it('shows a failure on its own step with its fix to copy, and Try again and Change start over', async () => {
   const { bridge, command, push } = fixture([])
   const user = userEvent.setup()
