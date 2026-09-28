@@ -75,7 +75,7 @@ export const NO_PROVIDER_ON_HOST = 'No provider is connected on this host.'
 const NO_PROVIDER_HERE = 'No provider is connected on this computer.'
 const DRAFT_KEPT = ' Your draft is saved.'
 export function noProviderRefusal(where: 'host' | 'desktop', draftKept: boolean): string {
-  return (where === 'host' ? `${NO_PROVIDER_ON_HOST} Connect one in Settings → Hosts.` : `${NO_PROVIDER_HERE} Connect one in Settings → Providers.`) + (draftKept ? DRAFT_KEPT : '')
+  return (where === 'host' ? `${NO_PROVIDER_ON_HOST} Connect one in Settings > Hosts.` : `${NO_PROVIDER_HERE} Connect one in Settings > Providers.`) + (draftKept ? DRAFT_KEPT : '')
 }
 /** A host's refusal as the desktop shows it: "this host" becomes the name the user saved the host under. */
 export function nameHostInRefusal(message: string, name: string): string {

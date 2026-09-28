@@ -33,14 +33,14 @@ describe('the refusal with no provider connected', () => {
   it('on the desktop names this computer and Settings → Providers, and keeps the draft only for a send', async () => {
     const control = await disconnectedDesktop()
     expect((await control.command({ type: 'manual-send', threadId: 'session-workshop', text: 'Reply' })).error)
-      .toBe('No provider is connected on this computer. Connect one in Settings → Providers. Your draft is saved.')
+      .toBe('No provider is connected on this computer. Connect one in Settings > Providers. Your draft is saved.')
     expect((await control.command({ type: 'create-project', title: 'Site', path: join(tmpdir(), 'site') })).error)
-      .toBe('No provider is connected on this computer. Connect one in Settings → Providers.')
+      .toBe('No provider is connected on this computer. Connect one in Settings > Providers.')
   })
 
   it('from a host says "this host", which the desktop replaces with the name it saved the host under', () => {
-    expect(noProviderRefusal('host', true)).toBe('No provider is connected on this host. Connect one in Settings → Hosts. Your draft is saved.')
-    expect(nameHostInRefusal(noProviderRefusal('host', false), ' forge ')).toBe('No provider is connected on forge. Connect one in Settings → Hosts.')
+    expect(noProviderRefusal('host', true)).toBe('No provider is connected on this host. Connect one in Settings > Hosts. Your draft is saved.')
+    expect(nameHostInRefusal(noProviderRefusal('host', false), ' forge ')).toBe('No provider is connected on forge. Connect one in Settings > Hosts.')
     // Anything else, and a host saved without a name, passes through as it is.
     expect(nameHostInRefusal('Codex did not confirm the connection.', 'forge')).toBe('Codex did not confirm the connection.')
     expect(nameHostInRefusal(noProviderRefusal('host', false), '  ')).toBe(noProviderRefusal('host', false))

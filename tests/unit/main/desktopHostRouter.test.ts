@@ -29,15 +29,15 @@ describe('desktop host routing', () => {
     remote.state.error = noProviderRefusal('host', false)
     remote.command.mockImplementationOnce(async () => ({ ...remote.state, error: noProviderRefusal('host', true) }))
     expect((await router.command({ type: 'manual-send', threadId: hostEntityKey(REMOTE, 'thread'), text: 'Reply' }, desktopWindowClient())).error)
-      .toBe('No provider is connected on forge. Connect one in Settings → Hosts. Your draft is saved.')
+      .toBe('No provider is connected on forge. Connect one in Settings > Hosts. Your draft is saved.')
     remote.command.mockImplementationOnce(async () => remote.state)
     await router.command({ type: 'create-project', title: 'Site', path: '/srv/site', useExisting: true }, desktopWindowClient())
-    expect(router.shell().error).toBe('No provider is connected on forge. Connect one in Settings → Hosts.')
+    expect(router.shell().error).toBe('No provider is connected on forge. Connect one in Settings > Hosts.')
     // This computer's own refusal names this computer already and is passed on as it is.
     const own = new DesktopHostRouter(emptyDesktopState)
     own.add(local.connection)
     local.state.error = noProviderRefusal('desktop', false)
-    expect(own.shell().error).toBe('No provider is connected on this computer. Connect one in Settings → Providers.')
+    expect(own.shell().error).toBe('No provider is connected on this computer. Connect one in Settings > Providers.')
   })
   it('keeps colliding IDs distinct and dispatches every thread action to its owner', async () => {
     const router = new DesktopHostRouter(emptyDesktopState), local = fixture(LOCAL, 'local'), remote = fixture(REMOTE, 'remote')

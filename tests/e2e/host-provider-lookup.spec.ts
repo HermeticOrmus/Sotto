@@ -87,7 +87,7 @@ test('a host names itself when no provider is connected, and connects every sign
     await dialog.getByRole('button', { name: /site/ }).click()
     await dialog.getByRole('button', { name: 'Use this folder' }).click()
     const refusal = dialog.getByRole('alert')
-    await expect(refusal).toHaveText('No provider is connected on forge. Connect one in Settings → Hosts.')
+    await expect(refusal).toHaveText('No provider is connected on forge. Connect one in Settings > Hosts.')
     await capture(launched, 'no-provider', async () => {
       await expect(refusal).toBeInViewport()
       await expect(dialog.getByRole('button', { name: 'Use this folder' })).toBeInViewport()
