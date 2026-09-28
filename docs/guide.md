@@ -165,7 +165,7 @@ Which one a machine uses is a choice about your tailnet's security, and Sotto le
 
 A saved host that reconnects on its own, such as when Sotto starts after the approval has run out, waits the same way: its row reads "Waiting for your approval in Tailscale" and has **Open approval page**. If nobody approves it, the row reads "Needs attention" and Sotto stops retrying; **Connect again** asks again.
 
-While Tailscale holds a connection it answers nothing, so SSH's own keepalive would otherwise end it after 30 seconds with "Connection to … port 22 timed out". Sotto's commands allow 5 minutes while they sign in; the port forward, which is the connection a connected host lives on, still gives up after 30 seconds of silence.
+While Tailscale holds a connection it answers nothing, so SSH's own keepalive would otherwise end it after 30 seconds with "Connection to … port 22 timed out". Sotto's commands allow 5 minutes while they sign in; the port forward, which is the connection a connected host lives on, still gives up after 30 seconds of silence. A rule whose `checkPeriod` is `always` asks for every connection, the port forward and the requests Sotto sends a connected host (Stop host, Forget) included. Sotto shows the forward's request for those 30 seconds and cannot show a request's, which then fails and says to switch the host off and on, so `always` works poorly with Sotto.
 
 ### iPhone app
 

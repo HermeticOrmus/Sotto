@@ -268,6 +268,25 @@ it('shows Tailscale approval as its own step, opens the approval page only on a 
   } finally { Object.assign(window, { sotto: previous }) }
 })
 
+it('shows an approval Tailscale asks of the port forward on the Tailscale step, with the 30 seconds it has', async () => {
+  const { bridge, command, push } = fixture([])
+  const user = userEvent.setup()
+  settings(bridge)
+  await user.click(await screen.findByRole('button', { name: 'Add host' }))
+  await user.type(within(screen.getByRole('dialog')).getByRole('combobox', { name: 'SSH host or alias' }), 'forge{Escape}')
+  await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Add host' }))
+  const dialog = screen.getByRole('dialog', { name: 'Connecting to forge' })
+  const id = (command.mock.calls[0]![0] as Extract<HostsCommand, { type: 'add' }>).host.id
+  push({ adding: host({ id, name: 'forge', target: 'forge', phase: 'connecting', step: 'start', tailscale: { waiting: true, url: 'https://login.tailscale.com/a/l1ab2c3' } }) })
+  const items = within(dialog).getAllByRole('listitem')
+  expect(items.map(item => `${item.getAttribute('data-state')}: ${item.querySelector('.host-setup__title')?.textContent}`))
+    .toEqual(['done: Reached forge', 'waiting: Waiting for your approval in Tailscale', 'done: Signed in', 'done: Host installed', 'active: Starting the host…', 'todo: Pair this computer'])
+  // Where the user is: the approval, not the step the connect is on.
+  expect(items.map(item => item.getAttribute('aria-current'))).toEqual([null, 'step', null, null, null, null])
+  expect(within(items[1]!).getByRole('status').textContent).toContain('forge uses Tailscale SSH, which asks you to approve the port forward as well. Approve it in your browser within 30 seconds and Sotto carries on.')
+  expect(document.activeElement).toBe(within(items[1]!).getByRole('button', { name: 'Open approval page' }))
+})
+
 it("keeps a failed Open approval page on the Tailscale card, and shows main's own failure on the failed step", async () => {
   const stale = 'Tailscale is no longer waiting for this approval. Nothing was opened.'
   const { bridge, command, push } = fixture([], (input, current) => { if (input.type === 'open-approval') throw new Error(stale); return current })

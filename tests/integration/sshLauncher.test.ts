@@ -18,12 +18,12 @@ afterEach(async () => {
 const configuration = { target: 'user@forge', installPath: '/opt/sotto release', dataDirectory: '/data/sotto' }
 const SCRIPT_SHA = createHash('sha256').update(LAUNCH_SCRIPT_SOURCE).digest('hex')
 interface Spawned { type: string; args: string[]; tunnel: boolean; resolve: boolean; op?: string; stdinSha256: string; askpass: boolean }
-async function fixture(mode = 'started', options: { authenticationTimeoutMs?: number; approvalTimeoutMs?: number; startMs?: number; version?: string; platform?: NodeJS.Platform } = {}) {
+async function fixture(mode = 'started', options: { authenticationTimeoutMs?: number; approvalTimeoutMs?: number; startMs?: number; holdMs?: number; version?: string; platform?: NodeJS.Platform } = {}) {
   const path = await mkdtemp(join(tmpdir(), 'sotto-ssh-')); directories.push(path)
   const record = join(path, 'ssh.jsonl')
   const spawner: SpawnSsh = (_file, args, spawnOptions) => spawn(process.execPath, [resolve('tests/fixtures/fakeSsh.mjs'), ...args],
     { shell: false, windowsHide: true, stdio: [spawnOptions.stdin, 'pipe', 'pipe'],
-      env: { ...spawnOptions.env, FAKE_SSH_MODE: mode, FAKE_SSH_RECORD: record, FAKE_SSH_ROOT: path, FAKE_SSH_START_MS: String(options.startMs ?? 0), FAKE_SSH_VERSION: options.version ?? '' } })
+      env: { ...spawnOptions.env, FAKE_SSH_MODE: mode, FAKE_SSH_RECORD: record, FAKE_SSH_ROOT: path, FAKE_SSH_START_MS: String(options.startMs ?? 0), FAKE_SSH_HOLD_MS: String(options.holdMs ?? 200), FAKE_SSH_VERSION: options.version ?? '' } })
   const launcher = new SshHostLauncher({ spawn: spawner, authenticationTimeoutMs: options.authenticationTimeoutMs ?? 10_000, readyTimeoutMs: 5000,
     ...(options.approvalTimeoutMs ? { approvalTimeoutMs: options.approvalTimeoutMs } : {}),
     ...(options.platform ? { platform: options.platform } : {}) })
@@ -303,6 +303,41 @@ it('stops with tailscale-unapproved when nobody approves within the approval bud
 it("reads OpenSSH's own timeout on a connection Tailscale held as the approval not coming", async () => {
   const { launcher } = await fixture('started+tailscale-timeout')
   expect((await failure(launcher.connect(configuration))).code).toBe('tailscale-unapproved')
+})
+it('shows an approval Tailscale asks of the port forward, and says it ended after 30 seconds when none came', async () => {
+  const { launcher } = await fixture('started+tailscale-forward')
+  const steps: string[] = [], approvals: (SshApproval | null)[] = []
+  const error = await failure(launcher.connect(configuration, { onStep: step => steps.push(step), onApproval: approval => approvals.push(approval) }))
+  // The forward keeps its live keepalive, so the step stays where the connect was, and the sentence says 30 seconds.
+  expect(steps).toEqual(['reach', 'install', 'start'])
+  expect(approvals[0]).toEqual({ url: 'https://login.tailscale.com/a/l1fixture2b3c' })
+  expect(approvals.at(-1)).toBeNull()
+  expect(error.code).toBe('tailscale-unapproved')
+  expect(error.message).toBe('Tailscale SSH asked you to approve the port forward as well, and closed it after 30 seconds without an approval. Try again, and approve it in your browser when Sotto asks.')
+})
+it('connects once a held port forward is approved, and reads its later drop as a dropped connection', async () => {
+  const { launcher, path } = await fixture('drop+tailscale-forward', { holdMs: 10_000 })
+  const approvals: (SshApproval | null)[] = []
+  const dropped = new Promise<string>(resolve => {
+    void launcher.connect(configuration, { onDisconnected: resolve, onApproval: approval => {
+      approvals.push(approval)
+      if (approval?.url) setTimeout(() => void writeFile(join(path, 'approved'), ''), 200)
+    } })
+  })
+  expect(await dropped).toBe('SSH could not reach the host. Check the host name and your network, then reconnect.')
+  expect(approvals).toEqual([{ url: 'https://login.tailscale.com/a/l1fixture2b3c' }, null])
+})
+it('keeps the live keepalive for a request once connected, and says how to approve one Tailscale holds', async () => {
+  const { launcher, spawns } = await fixture('started+tailscale-request')
+  const approvals: (SshApproval | null)[] = []
+  const connection = await launcher.connect(configuration, { onApproval: approval => approvals.push(approval) })
+  const error = await failure(connection.showHostPairingCode())
+  expect(keepalives((await spawns()).find(item => item.op === 'pairing-code')!.args)).toBe('ServerAliveCountMax=2')
+  // Nothing shows an approval once connected, so none was handed over, and the sentence says how to get one.
+  expect(approvals).toEqual([])
+  expect(error.code).toBe('tailscale-unapproved')
+  expect(error.message).toBe('Tailscale SSH asked you to approve this request, and Sotto shows an approval only while it connects. Nothing was changed. Switch the host off and on, approve the connection in your browser when Sotto asks, then try again.')
+  await connection.close()
 })
 it('reads "Connection to <host> port <n> timed out" as a timeout, with the command that shows SSH\'s own words', async () => {
   const { launcher } = await fixture('port-timeout')

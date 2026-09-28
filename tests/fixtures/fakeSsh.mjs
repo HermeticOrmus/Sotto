@@ -3,7 +3,9 @@
 // the remote command on this machine against a fake host installation under FAKE_SSH_ROOT.
 // A mode may end in `+tailscale`: the launch command is then held the way Tailscale SSH's `check` mode
 // holds it, with Tailscale's banner on stderr, until a file named `approved` appears under FAKE_SSH_ROOT;
-// `+tailscale-timeout` ends the held connection the way OpenSSH's own read timeout does. FAKE_SSH_MODE_FILE,
+// `+tailscale-timeout` ends the held connection the way OpenSSH's own read timeout does. `+tailscale-forward`
+// holds the port forward instead, and `+tailscale-request` every command but the launch; both run with the live
+// keepalive, so OpenSSH ends the wait after FAKE_SSH_HOLD_MS unless it is approved first. FAKE_SSH_MODE_FILE,
 // when set, names a file holding the mode, read by every ssh, so one app run can meet several.
 import { createServer as createHttpServer } from 'node:http'
 import { connect, createServer as createNetServer } from 'node:net'
@@ -89,14 +91,19 @@ function abandonedQuestion(prompt) {
  */
 async function tailscaleCheck() {
   const approved = join(process.env.FAKE_SSH_ROOT ?? dirname(recordPath ?? '.'), 'approved')
-  if (!tailscale || configuration?.op !== 'launch' || existsSync(approved)) return true
+  const held = tailscale === 'tailscale-forward' ? tunnel : tailscale === 'tailscale-request' ? !tunnel && configuration !== undefined && configuration.op !== 'launch' : configuration?.op === 'launch'
+  if (!tailscale || !held || existsSync(approved)) return true
   record({ type: 'tailscale-held' })
   process.stderr.write('# Tailscale SSH requires an additional check.\r\n# To authenticate, visit: https://login.tailscale.com/a/l1fixture2b3c\r\n')
   if (tailscale === 'tailscale-timeout') {
     await new Promise(resolve => setTimeout(resolve, Number(process.env.FAKE_SSH_HOLD_MS ?? 200)))
     process.stderr.write('Connection to 100.106.126.4 port 22 timed out\r\n'); exit(255); return false
   }
-  while (!existsSync(approved)) await new Promise(resolve => setTimeout(resolve, 50))
+  const until = tailscale === 'tailscale' ? Infinity : Date.now() + Number(process.env.FAKE_SSH_HOLD_MS ?? 200)
+  while (!existsSync(approved)) {
+    if (Date.now() > until) { process.stderr.write('Connection to 100.106.126.4 port 22 timed out\r\n'); exit(255); return false }
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
   record({ type: 'tailscale-approved' })
   process.stderr.write('# Authentication checked with Tailscale SSH.\r\n')
   return true

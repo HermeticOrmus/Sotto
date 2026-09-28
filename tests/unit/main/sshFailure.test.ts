@@ -51,6 +51,12 @@ describe('classifySshExit', () => {
     expect(exit('# Tailscale SSH requires an additional check.\nConnection to 100.106.126.4 port 22 timed out\n', { heldForApproval: true })).toBe('tailscale-unapproved')
     expect(exit('Connection closed by 100.106.126.4 port 22\n', { heldForApproval: true })).toBe('tailscale-unapproved')
   })
+  it('says a hold on the live keepalive ended after 30 seconds, not 5 minutes', () => {
+    const held = (liveWait?: 'forward' | 'request') => classifySshExit({ exitCode: 255, stderr: 'Connection to 100.106.126.4 port 22 timed out\n', heldForApproval: true, liveWait }, 'forward-failed').message
+    expect(held()).toContain('no approval came within 5 minutes')
+    expect(held('forward')).toBe('Tailscale SSH asked you to approve the port forward as well, and closed it after 30 seconds without an approval. Try again, and approve it in your browser when Sotto asks.')
+    expect(held('request')).toContain('Sotto shows an approval only while it connects. Nothing was changed. Switch the host off and on')
+  })
   it.each([
     ['ssh: connect to host forge port 22: Connection timed out', 'ssh-unreachable'],
     ['ssh: Could not resolve hostname forge: Name or service not known', 'ssh-unreachable'],

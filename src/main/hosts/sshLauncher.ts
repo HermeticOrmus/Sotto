@@ -69,8 +69,9 @@ const KEEPALIVE_SECONDS = 15
 /**
  * OpenSSH reads nothing for ServerAliveInterval x ServerAliveCountMax before it gives up on a connection that
  * is still signing in ("Connection to forge port 22 timed out"). Tailscale SSH answers nothing while it holds a
- * connection for approval, so a command that signs in gets the approval budget and a little more, and Sotto's
- * own timer ends the wait first. The port forward, the one live connection, keeps 30 seconds.
+ * connection for approval, so a command that signs in while Sotto connects gets the approval budget and a little
+ * more, and Sotto's own timer ends the wait first. The port forward, the one live connection, and a request sent
+ * once the host is connected, when nothing shows an approval, keep 30 seconds.
  */
 const SIGN_IN_KEEPALIVES = Math.ceil(TAILSCALE_APPROVAL_MS / 1000 / KEEPALIVE_SECONDS) + 1
 const LIVE_KEEPALIVES = 2
@@ -133,6 +134,11 @@ interface SshRun {
   hostKey?: string
   /** Tailscale SSH held this process for approval. */
   held?: TailscaleHold
+  /**
+   * Set for a process that runs with the live keepalive, where a Tailscale hold ends after 30 seconds rather
+   * than waiting out the approval budget: the port forward, or a request sent once the host is connected.
+   */
+  liveWait?: 'forward' | 'request'
   /** The remote side printed something, which only a signed-in session can. */
   signedIn?: boolean
   /** Gives this process's own budget the approval wait, once Tailscale holds it. */
@@ -166,8 +172,6 @@ interface Attempt {
   step: SshSetupStep
   /** Set while Tailscale SSH holds a process of this connect for approval. */
   approval?: SshApproval
-  /** When the approval wait ends. */
-  approvalUntil?: number
   /** Restarts the sign-in timer with the approval budget, once Tailscale holds the connection. */
   onHold?: () => void
 }
@@ -220,13 +224,15 @@ export class SshHostLauncher {
       this.status(attempt, 'forwarding')
       const localPort = await (this.dependencies.localPort ?? freeLocalPort)()
       if (attempt.closed) throw attempt.failure ?? new SshFailure('cancelled')
+      // The forward signs in too, but keeps the live keepalive: within Tailscale's check period, which the launch's
+      // approval just started, it is not held. Should Tailscale hold it anyway, the checklist shows the approval
+      // and OpenSSH ends the wait after 30 seconds (ADR-0025).
       const forward = this.start(attempt, [...this.baseArguments(validated), '-N', '-T', '-n', '-o', 'ExitOnForwardFailure=yes', '-o', 'GatewayPorts=no',
-        '-L', `127.0.0.1:${localPort}:127.0.0.1:${remote.port}`, validated.target], 'ignore')
+        '-L', `127.0.0.1:${localPort}:127.0.0.1:${remote.port}`, validated.target], 'ignore', 'forward')
       void forward.exited.then(() => { if (!attempt.closed) this.fail(attempt, this.classify(forward, 'forward-failed')) })
       const deadline = Date.now() + authentication
       let verified = false
-      // The forward signs in too; should Tailscale hold it for approval, it waits as long as the launch did.
-      while (!attempt.closed && Date.now() < Math.max(deadline, attempt.approvalUntil ?? 0)) {
+      while (!attempt.closed && Date.now() < deadline) {
         try {
           const health = await Promise.race([forwardedHealth(localPort), cancelled])
           if (health.hostId !== remote.hostId || health.pid !== remote.pid || health.port !== remote.port) throw new SshFailure('forward-failed')
@@ -237,7 +243,10 @@ export class SshHostLauncher {
           await Promise.race([delay(100), cancelled])
         }
       }
-      if (!verified) throw new SshFailure(attempt.approval ? 'tailscale-unapproved' : attempt.prompt ? 'prompt-unanswered' : 'forward-timeout')
+      if (!verified) throw forward.held ? this.classify(forward, 'forward-timeout') : new SshFailure(attempt.prompt ? 'prompt-unanswered' : 'forward-timeout')
+      // The host answered through the forward, so the forward is signed in: an approval it was held for came,
+      // and its ending later is a dropped connection, not an approval that never came.
+      this.signedIn(attempt, forward)
       attempt.connected = true
       this.status(attempt, 'ready')
       return { url: `http://127.0.0.1:${localPort}`, hostId: remote.hostId, owned: remote.owned, route,
@@ -307,7 +316,7 @@ export class SshHostLauncher {
     recentEnough.set(spawner, (recentEnough.get(spawner) ?? new Set<string>()).add(executable))
   }
   private readyTimeout(): number { return this.dependencies.readyTimeoutMs ?? 30_000 }
-  /** `keepalive` is `live` for the port forward and `signing-in` for a command, which may wait for a Tailscale approval. */
+  /** `keepalive` is `signing-in` for a command sent while Sotto connects, which may wait for a Tailscale approval, and `live` otherwise. */
   private baseArguments(configuration: ValidatedSshHostConfiguration, keepalive: 'live' | 'signing-in' = 'live'): string[] {
     // Windows' OpenSSH starts the askpass helper through cmd.exe, which keeps only the first line of a
     // host-key question; at DEBUG1 the key's fingerprint also reaches stderr, where ask() reads it.
@@ -320,7 +329,7 @@ export class SshHostLauncher {
       ...(configuration.identityFile ? ['-i', configuration.identityFile, '-o', 'IdentitiesOnly=yes'] : []),
       ...(configuration.sshPort ? ['-p', String(configuration.sshPort)] : [])]
   }
-  private start(attempt: Attempt, args: string[], stdin: 'pipe' | 'ignore'): SshRun {
+  private start(attempt: Attempt, args: string[], stdin: 'pipe' | 'ignore', liveWait?: SshRun['liveWait']): SshRun {
     if (attempt.closed || !attempt.broker) throw attempt.failure ?? new SshFailure('cancelled')
     const caller = randomUUID()
     const base = this.environment()
@@ -331,7 +340,7 @@ export class SshHostLauncher {
     try { child = this.spawner()(this.executable(), args, { env, stdin }) }
     catch { attempt.broker.forget(caller); throw new SshFailure('ssh-missing') }
     let exited!: () => void
-    const run: SshRun = { caller, child, stderr: '', exited: new Promise<void>(resolve => { exited = resolve }) }
+    const run: SshRun = { caller, child, stderr: '', exited: new Promise<void>(resolve => { exited = resolve }), ...(liveWait ? { liveWait } : {}) }
     child.on('error', error => { if (!child.pid || (error as NodeJS.ErrnoException).code === 'ENOENT') { run.spawnFailed = true; exited() } })
     child.once('close', code => { run.exitCode = code; exited() })
     child.stderr?.setEncoding('utf8')
@@ -339,10 +348,15 @@ export class SshHostLauncher {
       run.stderr = (run.stderr + chunk).slice(-16_384)
       const key = run.hostKey ? undefined : /Server host key: (\S+) (\S+)/u.exec(run.stderr)
       if (key) run.hostKey = `${key[1]} key fingerprint is ${key[2]}.`
-      // What signing in says about the checklist; a live connection's stderr is not read for it.
-      if (run.signedIn || attempt.connected || attempt.closed) return
-      if (REACHED.test(chunk)) this.advance(attempt, 'sign-in')
-      if (!run.held?.url) { const hold = tailscaleHold(run.stderr); if (hold && (!run.held || hold.url)) this.hold(attempt, run, hold) }
+      // What signing in says about the checklist; a signed-in connection's stderr is not read for it.
+      if (run.signedIn || attempt.closed) return
+      if (!attempt.connected && REACHED.test(chunk)) this.advance(attempt, 'sign-in')
+      if (run.held?.url) return
+      const hold = tailscaleHold(run.stderr)
+      if (!hold || (run.held && !hold.url)) return
+      // Once the host is connected, nothing shows an approval: the hold is only remembered, for the failure's sentence.
+      if (attempt.connected) run.held = hold
+      else this.hold(attempt, run, hold)
     })
     attempt.runs.add(run)
     void run.exited.then(() => { attempt.runs.delete(run); attempt.broker?.forget(caller); this.dropPrompts(attempt, caller) })
@@ -366,8 +380,11 @@ export class SshHostLauncher {
   private async control(attempt: Attempt, operation: LaunchOperation, budgetMs: number, fallback: SshFailureCode,
     events: { readonly onOutput?: () => void; readonly onStarting?: () => void } = {}): Promise<Record<string, unknown>> {
     const configuration = attempt.configuration
-    const run = this.start(attempt, [...this.baseArguments(configuration, 'signing-in'), '-T', '-o', 'ClearAllForwardings=yes', configuration.target,
-      launchScriptCommand(configuration, operation, this.readyTimeout())], 'pipe')
+    // A request once the host is connected keeps the live keepalive: nothing shows an approval then, so a
+    // request Tailscale holds ends after 30 seconds and says how to approve, rather than waiting unseen.
+    const live = attempt.connected
+    const run = this.start(attempt, [...this.baseArguments(configuration, live ? 'live' : 'signing-in'), '-T', '-o', 'ClearAllForwardings=yes', configuration.target,
+      launchScriptCommand(configuration, operation, this.readyTimeout())], 'pipe', live ? 'request' : undefined)
     run.child.stdin?.on('error', () => undefined)
     run.child.stdin?.end(LAUNCH_SCRIPT_SOURCE)
     let result: Record<string, unknown> | undefined, buffer = '', size = 0
@@ -397,7 +414,7 @@ export class SshHostLauncher {
     try {
       if (await Promise.race([run.exited, timedOut, attempt.cancelled]) === 'timeout') {
         const asking = attempt.prompt?.caller === run.caller || attempt.queue.some(item => item.caller === run.caller)
-        run.child.kill(); throw new SshFailure(asking ? 'prompt-unanswered' : run.held && !run.signedIn ? 'tailscale-unapproved' : fallback)
+        run.child.kill(); throw asking ? new SshFailure('prompt-unanswered') : run.held && !run.signedIn ? this.classify(run, fallback) : new SshFailure(fallback)
       }
     } finally { clearTimeout(timer) }
     read(buffer)
@@ -409,7 +426,7 @@ export class SshHostLauncher {
    * what the operation was for. Never logged.
    */
   private classify(run: SshRun, fallback: SshFailureCode): SshFailure {
-    return classifySshExit({ spawnFailed: run.spawnFailed, exitCode: run.exitCode, stderr: run.stderr, heldForApproval: !!run.held && !run.signedIn }, fallback)
+    return classifySshExit({ spawnFailed: run.spawnFailed, exitCode: run.exitCode, stderr: run.stderr, heldForApproval: !!run.held && !run.signedIn, liveWait: run.liveWait }, fallback)
   }
   /** Moves the checklist forward, never back; the Tailscale step is left only by signing in. */
   private advance(attempt: Attempt, step: SshSetupStep): void {
@@ -418,13 +435,15 @@ export class SshHostLauncher {
     attempt.step = step
     attempt.callbacks.onStep?.(step)
   }
-  /** Tailscale SSH holds `run` for approval: the step, the URL, and a wait as long as the approval budget. */
+  /**
+   * Tailscale SSH holds `run` for approval: the URL, and for a command that signs in, the step and a wait as long
+   * as the approval budget. The port forward keeps its live keepalive, so its step stays where it was.
+   */
   private hold(attempt: Attempt, run: SshRun, hold: TailscaleHold): void {
     const first = !run.held
     run.held = hold
     attempt.approval = hold.url ? { url: hold.url } : {}
-    if (first) {
-      attempt.approvalUntil = Date.now() + (this.dependencies.approvalTimeoutMs ?? TAILSCALE_APPROVAL_MS)
+    if (first && !run.liveWait) {
       if (STEP_ORDER.indexOf(attempt.step) < STEP_ORDER.indexOf('install') && attempt.step !== 'tailscale') { attempt.step = 'tailscale'; attempt.callbacks.onStep?.('tailscale') }
       attempt.onHold?.()
       run.onHold?.()
@@ -435,7 +454,7 @@ export class SshHostLauncher {
   private signedIn(attempt: Attempt, run: SshRun): void {
     run.signedIn = true
     if (!run.held || !attempt.approval) return
-    delete attempt.approval; delete attempt.approvalUntil
+    delete attempt.approval
     attempt.callbacks.onApproval?.(null)
   }
   private launchFailure(result: Record<string, unknown>): SshFailure {

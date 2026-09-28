@@ -127,7 +127,14 @@ export interface SshExit {
   readonly stderr: string
   /** Tailscale SSH asked for approval on this process, and it never signed in. */
   readonly heldForApproval?: boolean | undefined
+  /** The process ran with the live keepalive, so a hold ended after 30 seconds: the port forward, or a request once connected. */
+  readonly liveWait?: 'forward' | 'request' | undefined
 }
+/** A hold that ended after 30 seconds, where the 5-minute approval wait does not apply. */
+const SHORT_HOLDS = {
+  forward: 'Tailscale SSH asked you to approve the port forward as well, and closed it after 30 seconds without an approval. Try again, and approve it in your browser when Sotto asks.',
+  request: 'Tailscale SSH asked you to approve this request, and Sotto shows an approval only while it connects. Nothing was changed. Switch the host off and on, approve the connection in your browser when Sotto asks, then try again.',
+} as const
 /**
  * Why an ssh process ended without a result, from its exit and OpenSSH's own words, falling back to what the
  * operation was for. Never logged.
@@ -138,7 +145,7 @@ export function classifySshExit(run: SshExit, fallback: SshFailureCode): SshFail
   if (run.exitCode === 127) return new SshFailure('node-missing')
   // Tailscale answers no keepalive while it holds a connection for approval, so the end of a held connection
   // (a timeout, or Tailscale closing it) means the approval never came.
-  if (run.heldForApproval) return new SshFailure('tailscale-unapproved')
+  if (run.heldForApproval) return run.liveWait ? new SshFailure('tailscale-unapproved', SHORT_HOLDS[run.liveWait]) : new SshFailure('tailscale-unapproved')
   const text = run.stderr.split(/\r?\n/u).filter(line => !/^debug\d?:/u.test(line)).join('\n')
   if (/REMOTE HOST IDENTIFICATION HAS CHANGED/iu.test(text)) return new SshFailure('host-key-changed')
   if (/Host key verification failed/iu.test(text)) return new SshFailure('host-key-rejected')

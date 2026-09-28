@@ -100,11 +100,16 @@ export function HostSetupChecklist({ name, summary, host, outcome, error, approv
   const current: HostSetupStep | undefined = outcome === 'connected' ? undefined : host?.step ?? 'reach'
   const steps = HOST_SETUP_STEPS.filter(step => step !== 'tailscale' || host?.tailscale !== undefined || current === 'tailscale')
   const at = current === undefined ? steps.length : steps.indexOf(current)
+  const waiting = outcome === 'connecting' && host?.tailscale?.waiting === true
+  // Tailscale can hold the port forward too, after the host started; its approval shows on the Tailscale step,
+  // with the 30 seconds the forward's keepalive gives it rather than the 5 minutes a sign-in gets.
+  const forwardHeld = waiting && current !== 'tailscale'
   const stateOf = (index: number, step: HostSetupStep): StepState => {
+    if (step === 'tailscale' && waiting) return 'waiting'
     if (index < at) return 'done'
     if (index > at) return 'todo'
     if (outcome === 'failed') return 'failed'
-    return step === 'tailscale' && host?.tailscale?.waiting ? 'waiting' : 'active'
+    return 'active'
   }
   return <div className="host-setup">
     <div className="host-setup__summary">
@@ -114,11 +119,14 @@ export function HostSetupChecklist({ name, summary, host, outcome, error, approv
     <ol className="host-setup__steps" aria-label="Connection steps">
       {steps.map((step, index) => {
         const state = stateOf(index, step)
-        return <li key={step} data-state={state} aria-current={state === 'active' || state === 'waiting' ? 'step' : undefined}>
+        // While Tailscale waits, that is where the user is, whichever step the connect is on.
+        return <li key={step} data-state={state} aria-current={state === 'waiting' || (state === 'active' && !waiting) ? 'step' : undefined}>
           <StepMark state={state} />
           <span className="host-setup__title">{stepTitle(step, state, name)}</span>
           {state === 'waiting' ? <div className="host-setup__detail"><div className="hosts-notice host-setup__card" role="status">
-            <p>{name} uses Tailscale SSH, which asks you to approve new connections in your browser. Sotto waits up to 5 minutes and carries on when you approve.</p>
+            <p>{forwardHeld
+              ? `${name} uses Tailscale SSH, which asks you to approve the port forward as well. Approve it in your browser within 30 seconds and Sotto carries on.`
+              : `${name} uses Tailscale SSH, which asks you to approve new connections in your browser. Sotto waits up to 5 minutes and carries on when you approve.`}</p>
             <div className="host-setup__actions">
               {approvalUrl ? <Button ref={approval} onClick={onOpenApproval}>Open approval page</Button> : null}
               <button type="button" className="host-setup__link tt-focusable" onClick={onOpenGuide}>Why Tailscale asks</button>
