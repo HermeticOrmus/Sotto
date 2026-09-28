@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { TerminalBridge, TerminalEvent, TerminalSession, TerminalSnapshot } from '../../../../src/shared/terminal'
 import type { ToolsResult } from '../../../../src/shared/tools'
 import { ToolsPanel } from '../../../../src/renderer/src/tools/ToolsPanel'
-import type { TerminalViewFactory, TerminalViewHandlers } from '../../../../src/renderer/src/tools/terminalStore'
+import { TerminalStore, type TerminalViewFactory, type TerminalViewHandlers } from '../../../../src/renderer/src/tools/terminalStore'
 import { ToolsPanelStore } from '../../../../src/renderer/src/tools/toolsPanelStore'
 import { threadsStateFixture } from '../liveAgentState'
 import { TOKEN_A, fakeFilesBridge, text } from './fakeFilesBridge'
@@ -86,6 +86,58 @@ const panel = () => screen.getByRole('complementary', { name: 'Tools' })
 const output = (id: string, sequence: number, data: string): TerminalEvent => ({ type: 'output', threadId: 'visual-gate', workspaceId: TOKEN_A, sessionId: id, data, sequence })
 
 describe('Terminal surface', () => {
+  it('orders separate input events and paste chunks without holding another session', async () => {
+    const terminal = fakeTerminal([session(ID_1), session(ID_2)])
+    const store = new TerminalStore()
+    await store.activate(terminal.bridge, 'visual-gate')
+    const first = Promise.withResolvers<ToolsResult<void>>()
+    vi.mocked(terminal.bridge.write).mockImplementationOnce(() => first.promise)
+    store.write(terminal.bridge, 'visual-gate', ID_1, 'a'.repeat(20_000))
+    store.write(terminal.bridge, 'visual-gate', ID_1, 'later event')
+    store.write(terminal.bridge, 'visual-gate', ID_2, 'independent')
+    try {
+      await waitFor(() => expect(terminal.bridge.write).toHaveBeenCalledWith(expect.objectContaining({ sessionId: ID_2, data: 'independent' })))
+      expect(vi.mocked(terminal.bridge.write).mock.calls.filter(([request]) => request.sessionId === ID_1).map(([request]) => request.data)).toEqual(['a'.repeat(16_384)])
+    } finally { first.resolve(ok(undefined)) }
+    await waitFor(() => expect(terminal.bridge.write).toHaveBeenCalledTimes(4))
+    expect(vi.mocked(terminal.bridge.write).mock.calls.filter(([request]) => request.sessionId === ID_1).map(([request]) => request.data)).toEqual(['a'.repeat(16_384), 'a'.repeat(3_616), 'later event'])
+  })
+
+  it('reports a refused input, drops its queued remainder and accepts a fresh retry', async () => {
+    const terminal = fakeTerminal([session(ID_1)])
+    const store = new TerminalStore()
+    await store.activate(terminal.bridge, 'visual-gate')
+    const first = Promise.withResolvers<ToolsResult<void>>()
+    vi.mocked(terminal.bridge.write).mockImplementationOnce(() => first.promise)
+    store.write(terminal.bridge, 'visual-gate', ID_1, 'a'.repeat(20_000))
+    store.write(terminal.bridge, 'visual-gate', ID_1, 'old queued input')
+    await waitFor(() => expect(terminal.bridge.write).toHaveBeenCalled())
+    first.reject(new Error('private transport internals'))
+    await waitFor(() => expect(store.thread('visual-gate')?.notice).toContain('Terminal input stopped'))
+    store.write(terminal.bridge, 'visual-gate', ID_1, 'fresh input')
+    await waitFor(() => expect(terminal.bridge.write).toHaveBeenLastCalledWith(expect.objectContaining({ data: 'fresh input' })))
+    expect(terminal.bridge.write).toHaveBeenCalledTimes(2)
+    expect(store.thread('visual-gate')?.notice).not.toContain('private transport internals')
+  })
+
+  it.each(['close', 'reopen'] as const)('discards queued input when %s begins', async action => {
+    const terminal = fakeTerminal([session(ID_1)])
+    const store = new TerminalStore()
+    await store.activate(terminal.bridge, 'visual-gate')
+    const first = Promise.withResolvers<ToolsResult<void>>()
+    vi.mocked(terminal.bridge.write).mockImplementationOnce(() => first.promise)
+    store.write(terminal.bridge, 'visual-gate', ID_1, 'in flight')
+    store.write(terminal.bridge, 'visual-gate', ID_1, 'old queued input')
+    await waitFor(() => expect(terminal.bridge.write).toHaveBeenCalled())
+    await store[action](terminal.bridge, 'visual-gate', ID_1)
+    first.resolve(ok(undefined))
+    if (action === 'reopen') {
+      store.write(terminal.bridge, 'visual-gate', ID_1, 'new shell input')
+      await waitFor(() => expect(terminal.bridge.write).toHaveBeenLastCalledWith(expect.objectContaining({ data: 'new shell input' })))
+    }
+    expect(vi.mocked(terminal.bridge.write).mock.calls.map(([request]) => request.data)).toEqual(action === 'reopen' ? ['in flight', 'new shell input'] : ['in flight'])
+  })
+
   it('reports a failed terminal view without leaving a running session busy', async () => {
     const terminal = fakeTerminal([session(ID_1)])
     const store = new ToolsPanelStore()

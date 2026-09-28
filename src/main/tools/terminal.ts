@@ -3,6 +3,7 @@ import { basename, join } from 'node:path'
 import { z } from 'zod'
 import type { IPty, IPtyForkOptions } from 'node-pty'
 import type { FileWorkspace } from '../../shared/files'
+import type { ToolsResult } from '../../shared/tools'
 import { terminalCreateSchema, terminalRequestSchema, terminalWriteSchema, terminalResizeSchema, terminalSessionSchema, TERMINAL_MAX_OUTPUT, type TerminalSession, type TerminalSnapshot, type TerminalEvent } from '../../shared/terminal'
 import { toolListRequestSchema } from '../../shared/tools'
 import type { FilesService } from '../files/service'
@@ -25,6 +26,7 @@ export class TerminalService extends ToolOperations {
   private readonly store: AtomicJsonStore<TerminalSession[]>
   private readonly ready: Promise<void>
   private persistence: Promise<void> = Promise.resolve()
+  private readonly inputLanes = new Map<string, Promise<ToolsResult<void>>>()
   constructor(private readonly dependencies: TerminalDependencies) {
     super()
     this.store = new AtomicJsonStore(join(dependencies.directory, 'terminal-sessions.json'), value => z.array(terminalSessionSchema).max(32).parse(value), () => [])
@@ -122,12 +124,21 @@ export class TerminalService extends ToolOperations {
     }
   }
   read(payload: unknown) { return this.run(async () => this.snapshot(await this.owned(parse(terminalRequestSchema, payload), false))) }
-  write(payload: unknown) { return this.run(async () => {
-    const request = parse(terminalWriteSchema, payload)
-    const record = await this.owned(request)
-    if (!record.pty) return fail('not-running', 'This terminal has exited. Reopen it to start a new shell.')
-    record.pty.write(request.data)
-  }) }
+  write(payload: unknown): Promise<ToolsResult<void>> {
+    const parsed = terminalWriteSchema.safeParse(payload)
+    if (!parsed.success) return this.run(async () => { parse(terminalWriteSchema, payload) })
+    const request = parsed.data
+    // Reserve order before ownership validation yields. Queued keys do not consume the active-operation cap.
+    const previous = this.inputLanes.get(request.sessionId) ?? Promise.resolve()
+    const pending = previous.then(() => this.run(async () => {
+      const record = await this.owned(request)
+      if (!record.pty) return fail('not-running', 'This terminal has exited. Reopen it to start a new shell.')
+      record.pty.write(request.data)
+    }))
+    this.inputLanes.set(request.sessionId, pending)
+    void pending.then(() => { if (this.inputLanes.get(request.sessionId) === pending) this.inputLanes.delete(request.sessionId) })
+    return pending
+  }
   resize(payload: unknown) { return this.run(async () => {
     const request = parse(terminalResizeSchema, payload)
     const record = await this.owned(request)
