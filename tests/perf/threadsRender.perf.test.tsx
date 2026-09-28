@@ -1,16 +1,16 @@
 ﻿/**
  * Measures what the window re-renders when one agent state update arrives: the Threads page with one thread
  * open, re-rendered with a state object that carries one more streaming chunk on the open thread, ten times
- * to warm up and twenty more that are timed. Uses a copy of a real Sotto data folder, and skips without one.
+ * to warm up and twenty more that are timed. Uses a copy of an explicitly selected Sotto data folder.
  *
- *   npx vitest run tests/perf/threadsRender.perf.test.tsx --disable-console-intercept
- *   SOTTO_PERF_DATA=<folder with workspace.json> to point elsewhere.
+ *   Set SOTTO_PERF_BENCH=1 and SOTTO_PERF_DATA=<folder with workspace.json>.
+ *   npx vitest run tests/perf/threadsRender.perf.test.tsx --maxWorkers=1 --disable-console-intercept
  */
 import React, { Profiler, type ReactNode } from 'react'
-import { mkdtemp, readFile, copyFile, access, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, copyFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { copyPerfHistory, hydratePerfHistory } from '../fixtures/perfWorkspace'
+import { copyPerfHistory, hydratePerfHistory, perfDataDirectory } from '../fixtures/perfWorkspace'
 import { act, cleanup, render } from '@testing-library/react'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
@@ -26,12 +26,6 @@ vi.mock('../../src/renderer/src/agents/AgentContext', () => ({ useAgents: vi.fn(
 const ITERATIONS = 20
 const WARMUP = 10
 const NOW = Date.parse('2026-09-16T12:00:00Z')
-const dataDirectory = process.env.SOTTO_PERF_DATA ?? (process.env.APPDATA ? join(process.env.APPDATA, 'sotto') : '')
-
-async function available(): Promise<boolean> {
-  if (!dataDirectory) return false
-  try { await access(join(dataDirectory, 'workspace.json')); return true } catch { return false }
-}
 
 function median(samples: number[]): number {
   const sorted = [...samples].sort((a, b) => a - b)
@@ -63,10 +57,11 @@ function withChunk(state: AgentState, threadId: string, chunk: string): AgentSta
 }
 
 describe('threads render cost', async () => {
-  const present = await available()
+  const dataDirectory = await perfDataDirectory()
+  const present = dataDirectory !== null
   let directory = ''
   beforeAll(async () => {
-    if (!present) return
+    if (!dataDirectory) return
     // The measurement never touches the live folder.
     directory = await mkdtemp(join(tmpdir(), 'sotto-perf-'))
     await copyFile(join(dataDirectory, 'workspace.json'), join(directory, 'workspace.json'))

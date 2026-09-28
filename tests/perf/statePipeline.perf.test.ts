@@ -2,15 +2,15 @@
 /**
  * Measures what one published state costs on the way from main to the window, using a copy of a real
  * Sotto data folder: clone, attachment preview decoration, the IPC serialisation both ways, and the
- * preload's schema parse. Skips when no data folder is available.
+ * preload's schema parse. Requires an explicit benchmark request and data folder.
  *
- *   npx vitest run tests/perf/statePipeline.perf.test.ts
- *   SOTTO_PERF_DATA=<folder with workspace.json and attachment-previews.json> to point elsewhere.
+ *   Set SOTTO_PERF_BENCH=1 and SOTTO_PERF_DATA=<folder with workspace.json and attachment-previews.json>.
+ *   npx vitest run tests/perf/statePipeline.perf.test.ts --maxWorkers=1
  */
-import { mkdtemp, readFile, copyFile, access, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, copyFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { copyPerfHistory, hydratePerfHistory } from '../fixtures/perfWorkspace'
+import { copyPerfHistory, hydratePerfHistory, perfDataDirectory } from '../fixtures/perfWorkspace'
 import { deserialize, serialize } from 'node:v8'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { agentShell, agentStateSchema, defaultAgentConfiguration, type AgentHostSnapshot, type AgentState, type AgentThreadDetail } from '../../src/shared/agents'
@@ -19,12 +19,6 @@ import { AttachmentPreviews } from '../../src/main/agents/attachmentPreviews'
 import { AttachmentStore } from '../../src/main/agents/attachmentStore'
 
 const ITERATIONS = 20
-const dataDirectory = process.env.SOTTO_PERF_DATA ?? (process.env.APPDATA ? join(process.env.APPDATA, 'sotto') : '')
-
-async function available(): Promise<boolean> {
-  if (!dataDirectory) return false
-  try { await access(join(dataDirectory, 'workspace.json')); return true } catch { return false }
-}
 
 function median(samples: number[]): number {
   const sorted = [...samples].sort((a, b) => a - b)
@@ -54,10 +48,11 @@ function stateAround(host: AgentHostSnapshot): AgentState {
 }
 
 describe('state pipeline cost', async () => {
-  const present = await available()
+  const dataDirectory = await perfDataDirectory()
+  const present = dataDirectory !== null
   let directory = ''
   beforeAll(async () => {
-    if (!present) return
+    if (!dataDirectory) return
     // The measurement never touches the live folder: the previews store may tidy or rewrite its file.
     directory = await mkdtemp(join(tmpdir(), 'sotto-perf-'))
     await copyPerfHistory(dataDirectory, directory)
