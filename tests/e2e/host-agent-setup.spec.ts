@@ -119,14 +119,23 @@ async function connectAgents(page: Page): Promise<void> {
   })
   await page.reload()
 }
+/** Types a host through Add host's Another SSH host, the last entry of its Device list. */
+async function typeAHost(page: Page, target: string): Promise<void> {
+  const form = page.getByRole('dialog', { name: 'Add host' })
+  await expect(form.getByRole('combobox', { name: 'Device' })).toBeFocused()
+  await page.keyboard.press('End')
+  await page.keyboard.press('Enter')
+  const field = form.getByRole('textbox', { name: 'SSH host' })
+  await expect(field).toBeFocused()
+  await field.fill(target)
+}
 /** Settings > Hosts, Add host, forge, and Start setup on the model the picker starts on. */
 async function startSetup(page: Page): Promise<void> {
   await openPage(page, 'Settings')
   await page.getByRole('tab', { name: 'Hosts', exact: true }).click()
   await page.getByRole('button', { name: 'Add host', exact: true }).click()
   const form = page.getByRole('dialog', { name: 'Add host' })
-  await form.getByRole('combobox', { name: 'SSH host or alias' }).fill('forge')
-  await page.keyboard.press('Escape')
+  await typeAHost(page, 'forge')
   await expect(form.getByRole('radio', { name: 'Have my agent set this up' })).toBeChecked()
   await expect(form.getByRole('combobox', { name: 'Model' })).toHaveValue('claude:test')
   await form.getByRole('button', { name: 'Start setup' }).click()
@@ -148,8 +157,7 @@ test('Add host follows a setup thread as it checks forge, waits in the thread, a
     await openPage(page, 'Settings')
     await page.getByRole('tab', { name: 'Hosts', exact: true }).click()
     await page.getByRole('button', { name: 'Add host', exact: true }).click()
-    await page.getByRole('dialog', { name: 'Add host' }).getByRole('combobox', { name: 'SSH host or alias' }).fill('forge')
-    await page.keyboard.press('Escape')
+    await typeAHost(page, 'forge')
     await capture(launched, 'agent-setup-choose')
     await page.keyboard.press('Escape')
     await expect(page.getByRole('dialog')).toHaveCount(0)

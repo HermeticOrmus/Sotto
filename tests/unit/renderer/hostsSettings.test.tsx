@@ -5,28 +5,59 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { HostsSettings } from '../../../src/renderer/src/features/settings/HostsSettings'
 import { HostQuestionDialog } from '../../../src/renderer/src/features/settings/HostQuestionDialog'
 import { ThreadWorkingCopy } from '../../../src/renderer/src/agents/ThreadWorkingCopy'
-import type { HostsBridge, HostsCommand, HostsState, HostStatus, SshHostSuggestion } from '../../../src/shared/hosts'
+import type { HostsBridge, HostsCommand, HostsState, HostStatus } from '../../../src/shared/hosts'
+import type { HostDevice, TailscaleConnectOutcome, TailscaleSummary } from '../../../src/shared/hostDevices'
 import { hostVersionMismatch } from '../../../src/shared/hostProtocol'
 
 afterEach(cleanup)
 const LOCAL = '11111111-1111-4111-8111-111111111111'
 const REMOTE = '22222222-2222-4222-8222-222222222222'
-const SUGGESTIONS: SshHostSuggestion[] = [
-  { alias: 'forge', detail: 'zach@forge.tail5728ca.ts.net', source: 'config' },
-  { alias: 'pihole', detail: 'pi@100.77.163.67', source: 'config' },
-  { alias: 'buildbox.example.net', port: 2200, detail: 'buildbox.example.net:2200', source: 'known-hosts' },
+const DAY = 24 * 60 * 60_000
+/** What main's merge gives for the recorded tailnet and SSH setup (see tests/unit/main/hostTailscale.test.ts). */
+const DEVICES: HostDevice[] = [
+  { target: 'forge', name: 'forge', os: 'Linux', tailscale: { online: true, ssh: true }, sshConfiguration: true, names: ['forge.tail5728ca.ts.net', 'forge', '100.64.0.4'] },
+  { target: 'pihole.tail5728ca.ts.net', name: 'pihole', os: 'Linux', tailscale: { online: true, ssh: false }, names: ['pihole.tail5728ca.ts.net', 'pihole', '100.64.0.5'] },
+  { target: 'spark', name: 'spark', sshConfiguration: true, detail: 'zach@spark.lan', names: ['spark', 'spark.lan'] },
+  { target: 'buildbox.example.net', name: 'buildbox.example.net', knownHost: true, port: 2200, detail: 'buildbox.example.net:2200', names: ['buildbox.example.net'] },
+  { target: 'omarchy.tail5728ca.ts.net', name: 'omarchy', os: 'Linux', tailscale: { online: false, ssh: true, lastSeen: new Date(Date.now() - 8 * DAY - 60_000).toISOString() }, unavailable: 'offline', names: ['omarchy.tail5728ca.ts.net', 'omarchy'] },
+  { target: 'iphone-15-pro.tail5728ca.ts.net', name: 'iphone-15-pro', os: 'iOS', tailscale: { online: true, ssh: false }, unavailable: 'phone', names: ['iphone-15-pro.tail5728ca.ts.net', 'iphone-15-pro', 'localhost'] },
 ]
+const RUNNING: TailscaleSummary = { state: 'running', user: 'millZach', loginName: 'millZach@github', deviceCount: 5 }
+/** The SSH setup alone, as main lists it while Tailscale is off or missing. */
+const sshOnly = (devices: HostDevice[]): HostDevice[] => devices.filter(item => item.sshConfiguration || item.knownHost)
+  .map(({ target, name, names, detail, port, sshConfiguration, knownHost }) => ({ target, name, names, ...(detail ? { detail } : {}), ...(port ? { port } : {}), ...(sshConfiguration ? { sshConfiguration } : {}), ...(knownHost ? { knownHost } : {}) }))
 function host(patch: Partial<HostStatus> = {}): HostStatus {
   return { id: REMOTE, hostId: REMOTE, name: 'Build box', target: 'build', identityFile: '', installPath: '/opt/sotto', dataDirectory: '/data', phase: 'connected', enabled: true, ...patch }
 }
 /** A bridge whose state the test moves on, the way main's broadcasts do. */
-function fixture(hosts: HostStatus[] = [host()], answer?: (command: HostsCommand, state: HostsState) => HostsState | Promise<HostsState>) {
+function fixture(hosts: HostStatus[] = [host()], answer?: (command: HostsCommand, state: HostsState) => HostsState | Promise<HostsState>,
+  options: { tailscale?: TailscaleSummary; connect?: () => Promise<TailscaleConnectOutcome> } = {}) {
   let state: HostsState = { localHostEnabled: true, localHostRunning: true, localHostId: LOCAL, activeHostId: LOCAL, hosts }
+  let tailscale = options.tailscale ?? RUNNING
   const listeners = new Set<(value: HostsState) => void>()
   const push = (next: Partial<HostsState>): void => { state = { ...state, ...next }; act(() => { for (const listener of listeners) listener(state) }) }
   const command = vi.fn<HostsBridge['command']>(async input => { if (answer) state = await answer(input, state); return state })
-  const bridge: HostsBridge = { get: async () => state, command, onChanged: listener => { listeners.add(listener); return () => listeners.delete(listener) }, sshSuggestions: vi.fn(async () => SUGGESTIONS) }
-  return { bridge, command, push, state: () => state }
+  const devices = vi.fn(async () => ({ tailscale, devices: tailscale.state === 'running' ? DEVICES : sshOnly(DEVICES) }))
+  const connectTailscale = vi.fn(options.connect ?? (async (): Promise<TailscaleConnectOutcome> => 'connected'))
+  const openTailscaleDownload = vi.fn(async () => undefined)
+  const bridge: HostsBridge = { get: async () => state, command, onChanged: listener => { listeners.add(listener); return () => listeners.delete(listener) },
+    devices, tailscale: vi.fn(async () => tailscale), connectTailscale, openTailscaleDownload }
+  return { bridge, command, push, state: () => state, devices, connectTailscale, openTailscaleDownload, setTailscale: (next: TailscaleSummary) => { tailscale = next } }
+}
+/** Opens Add host and waits for its device list. */
+async function openAddHost(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await screen.findByRole('button', { name: 'Add host' }))
+  const dialog = screen.getByRole('dialog', { name: 'Add host' })
+  const picker = within(dialog).getByRole('combobox', { name: 'Device' })
+  await waitFor(() => expect(within(dialog).queryByText('Looking for your devices…')).toBeNull())
+  return { dialog, picker }
+}
+/** Switches Add host to typing a host, through the list's last entry. */
+async function typeAHost(user: ReturnType<typeof userEvent.setup>, dialog: HTMLElement) {
+  const picker = within(dialog).getByRole('combobox', { name: 'Device' })
+  if (picker.getAttribute('aria-expanded') !== 'true') await user.click(picker)
+  await user.click(within(dialog).getByRole('option', { name: /^Another SSH host/ }))
+  return within(dialog).getByRole('textbox', { name: 'SSH host' })
 }
 const settings = (bridge: HostsBridge) => render(<HostsSettings localHostEnabled onLocalHostChange={async () => true} bridge={bridge} />)
 
@@ -141,7 +172,8 @@ it('edits a connection with its username, port and folders split out, and saves 
   await user.click(await screen.findByRole('button', { name: 'More for Build box' }))
   await user.click(screen.getByRole('menuitem', { name: 'Edit connection' }))
   const dialog = screen.getByRole('dialog', { name: 'Edit connection to Build box' })
-  expect(within(dialog).getByRole('combobox', { name: 'SSH host or alias' })).toHaveProperty('value', 'forge')
+  expect(within(dialog).getByRole('textbox', { name: 'SSH host' })).toHaveProperty('value', 'forge')
+  expect(within(dialog).queryByRole('combobox')).toBeNull()
   expect(within(dialog).getByRole('textbox', { name: 'Username (optional)' })).toHaveProperty('value', 'zach')
   expect(within(dialog).getByRole('textbox', { name: 'Port (optional)' })).toHaveProperty('value', '2222')
   expect(within(dialog).getByText('client-1')).toBeTruthy()
@@ -151,33 +183,228 @@ it('edits a connection with its username, port and folders split out, and saves 
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
 })
 
-it('suggests hosts from the SSH setup in a combobox, and Escape closes the list before the dialog', async () => {
-  const { bridge, command } = fixture([host({ target: 'forge', name: 'forge' })]), user = userEvent.setup()
+it('lists the devices Sotto can see, in groups, with greyed ones read out with their reason', async () => {
+  const { bridge } = fixture([host({ target: 'zach@spark', name: 'Spark box' })]), user = userEvent.setup()
   settings(bridge)
-  await user.click(await screen.findByRole('button', { name: 'Add host' }))
-  const dialog = screen.getByRole('dialog', { name: 'Add host' })
-  const field = within(dialog).getByRole('combobox', { name: 'SSH host or alias' })
-  expect(document.activeElement).toBe(field)
-  // forge is already saved, so it is not offered again.
-  await waitFor(() => expect(within(dialog).getAllByRole('option').map(option => option.querySelector('b')?.textContent)).toEqual(['pihole', 'buildbox.example.net']))
-  expect(field.getAttribute('aria-expanded')).toBe('true')
-  await user.type(field, 'build')
-  expect(within(dialog).getAllByRole('option')).toHaveLength(1)
-  await user.keyboard('{ArrowDown}')
-  expect(field.getAttribute('aria-activedescendant')).toBe(within(dialog).getByRole('option').id)
+  const { dialog, picker } = await openAddHost(user)
+  // The list opens with the dialog, on the Device field.
+  expect(document.activeElement).toBe(picker)
+  expect(picker.getAttribute('aria-expanded')).toBe('true')
+  const groups = within(within(dialog).getByRole('listbox', { name: 'Device' })).getAllByRole('group')
+  expect(groups.map(group => group.getAttribute('aria-label'))).toEqual(['Can connect', "Can't use now"])
+  expect(within(groups[0]!).getAllByRole('option').map(option => option.textContent)).toEqual([
+    'forgeLinux · Tailscale SSH · SSH configuration',
+    'piholeLinux · Tailscale, SSH server not checked',
+    'buildbox.example.netbuildbox.example.net:2200 · Known hosts',
+  ])
+  const greyed = within(groups[1]!).getAllByRole('option')
+  expect(greyed.map(option => [option.textContent, option.getAttribute('aria-disabled')])).toEqual([
+    // spark is already a saved host, so it is not offered again.
+    ['sparkzach@spark.lan · SSH configuration · Already added as Spark box', 'true'],
+    ['omarchyLinux · Tailscale SSH · Offline, last seen 8 days ago', 'true'],
+    ['iphone-15-proiOS · Tailscale · A phone cannot run the host', 'true'],
+  ])
+  const options = within(dialog).getAllByRole('option')
+  expect(options.at(-1)!.textContent).toBe('Another SSH host…Type a host name or user@server')
+  expect(within(dialog).getByText("Don't see your machine? Install Tailscale on it and sign in as millZach@github.")).toBeTruthy()
+  // Arrow keys reach the greyed entries too, so their reason is heard; Enter leaves them be.
+  expect(picker.getAttribute('aria-activedescendant')).toBe(options[0]!.id)
+  await user.keyboard('{ArrowDown}{ArrowDown}{ArrowDown}{ArrowDown}')
+  expect(picker.getAttribute('aria-activedescendant')).toBe(greyed[1]!.id)
   await user.keyboard('{Enter}')
-  expect(field).toHaveProperty('value', 'buildbox.example.net')
-  expect(within(dialog).getByRole('textbox', { name: 'Port (optional)' })).toHaveProperty('value', '2200')
-  expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: 'Add host' }))
-  await user.click(field)
-  expect(field.getAttribute('aria-expanded')).toBe('true')
+  expect(picker.getAttribute('aria-expanded')).toBe('true')
+  // Typing jumps to a name; Enter picks it and closes the list.
+  await user.keyboard('b')
+  expect(picker.getAttribute('aria-activedescendant')).toBe(options[2]!.id)
+  await user.keyboard('{Enter}')
+  expect(picker.getAttribute('aria-expanded')).toBe('false')
+  expect(picker.textContent).toBe('buildbox.example.netbuildbox.example.net:2200 · Known hosts')
+  expect(document.activeElement).toBe(picker)
+  // The list opens again on the chosen device, and Escape closes it before the dialog.
+  await user.keyboard('{ArrowDown}')
+  expect(picker.getAttribute('aria-expanded')).toBe('true')
+  expect(picker.getAttribute('aria-activedescendant')).toBe(options[2]!.id)
   await user.keyboard('{Escape}')
-  expect(field.getAttribute('aria-expanded')).toBe('false')
+  expect(picker.getAttribute('aria-expanded')).toBe('false')
   expect(screen.getByRole('dialog', { name: 'Add host' })).toBeTruthy()
   await user.keyboard('{Escape}')
   expect(screen.queryByRole('dialog')).toBeNull()
-  expect(command).not.toHaveBeenCalled()
   await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Add host' })))
+})
+
+it('adds a picked device by its SSH alias or tailnet name, named as the list names it', async () => {
+  const { bridge, command } = fixture([]), user = userEvent.setup()
+  settings(bridge)
+  const { dialog, picker } = await openAddHost(user)
+  await user.keyboard('{ArrowDown}{Enter}')
+  expect(picker.textContent).toContain('pihole')
+  // Username and Port come from the SSH setup; they are fields only for a host typed by hand.
+  expect(within(dialog).queryByRole('textbox', { name: 'Username (optional)' })).toBeNull()
+  await user.click(within(dialog).getByRole('button', { name: 'Add host' }))
+  expect(command).toHaveBeenCalledWith({ type: 'add', host: { id: expect.any(String), name: 'pihole', target: 'pihole.tail5728ca.ts.net', installPath: '~/.local/share/sotto-host', dataDirectory: '~/.sotto', identityFile: '' } })
+  cleanup()
+  const second = fixture([])
+  settings(second.bridge)
+  const again = await openAddHost(user)
+  await user.click(within(again.dialog).getByRole('option', { name: /^buildbox/ }))
+  await user.click(within(again.dialog).getByRole('button', { name: 'Add host' }))
+  expect(second.command).toHaveBeenCalledWith({ type: 'add', host: expect.objectContaining({ name: 'buildbox.example.net', target: 'buildbox.example.net', sshPort: 2200 }) })
+})
+
+it('says so when the devices or Tailscale cannot be read, and still offers Another SSH host', async () => {
+  const user = userEvent.setup()
+  const { bridge } = fixture([])
+  const broken: HostsBridge = { ...bridge, devices: async () => { throw new Error('IPC failed') }, tailscale: async () => { throw new Error('IPC failed') } }
+  settings(broken)
+  const row = await screen.findByRole('region', { name: 'Tailscale' })
+  expect((await within(row).findByRole('status')).textContent).toBe('Sotto could not check Tailscale on this computer. Nothing was changed. Come back to this window to check again.')
+  await user.click(screen.getByRole('button', { name: 'Add host' }))
+  const dialog = screen.getByRole('dialog', { name: 'Add host' })
+  expect((await within(dialog).findByText(/could not read the devices/)).textContent).toBe('Sotto could not read the devices on this computer. Nothing was changed. Choose Another SSH host to type one.')
+  expect(within(dialog).getAllByRole('option').map(option => option.querySelector('b')?.textContent)).toEqual(['Another SSH host…'])
+})
+
+it('opens and closes the list on a click with no key before it, the way a screen reader activates it', async () => {
+  const { bridge } = fixture([]), user = userEvent.setup()
+  settings(bridge)
+  const { picker } = await openAddHost(user)
+  expect(picker.getAttribute('aria-expanded')).toBe('true')
+  act(() => { picker.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 0 })) })
+  expect(picker.getAttribute('aria-expanded')).toBe('false')
+  act(() => { picker.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 0 })) })
+  expect(picker.getAttribute('aria-expanded')).toBe('true')
+  // Enter opens once: the click a browser adds after it does not close the list again.
+  await user.keyboard('{Escape}{Enter}')
+  expect(picker.getAttribute('aria-expanded')).toBe('true')
+})
+
+it('types a host through Another SSH host, and Choose from your devices goes back to the list', async () => {
+  const { bridge, command } = fixture([]), user = userEvent.setup()
+  settings(bridge)
+  const { dialog } = await openAddHost(user)
+  await user.keyboard('{End}{Enter}')
+  const field = within(dialog).getByRole('textbox', { name: 'SSH host' })
+  expect(document.activeElement).toBe(field)
+  expect(within(dialog).queryByRole('combobox')).toBeNull()
+  await user.type(field, 'zach@10.0.0.42')
+  await user.type(within(dialog).getByRole('textbox', { name: 'Port (optional)' }), '2222')
+  await user.click(within(dialog).getByRole('button', { name: 'Choose from your devices' }))
+  const picker = within(dialog).getByRole('combobox', { name: 'Device' })
+  expect(document.activeElement).toBe(picker)
+  expect(picker.getAttribute('aria-expanded')).toBe('true')
+  // What was typed gives way to the list: nothing is chosen, so nothing is added.
+  await user.keyboard('{Escape}')
+  await user.click(within(dialog).getByRole('button', { name: 'Add host' }))
+  expect(within(dialog).getByRole('alert').textContent).toBe('Choose a device, or choose Another SSH host… to type one.')
+  expect(command).not.toHaveBeenCalled()
+  // A device chosen first starts the typed host, and comes back with its own route after an edit.
+  await user.click(picker)
+  await user.click(within(dialog).getByRole('option', { name: /^forge/ }))
+  const typed = await typeAHost(user, dialog)
+  expect(typed).toHaveProperty('value', 'forge')
+  await user.type(typed, '-lab')
+  await user.click(within(dialog).getByRole('button', { name: 'Choose from your devices' }))
+  expect(within(dialog).getByRole('combobox', { name: 'Device' }).textContent).toContain('forge')
+  await user.keyboard('{Escape}')
+  await user.click(within(dialog).getByRole('button', { name: 'Add host' }))
+  expect(command).toHaveBeenCalledWith({ type: 'add', host: expect.objectContaining({ name: 'forge', target: 'forge' }) })
+})
+
+it('shows Tailscale under This computer, and connects it from Add host', async () => {
+  const user = userEvent.setup()
+  const running = fixture([])
+  settings(running.bridge)
+  const row = await screen.findByRole('region', { name: 'Tailscale' })
+  await waitFor(() => expect(row.textContent).toContain('Connected as millZach · 5 devices on your tailnet'))
+  expect(within(row).queryByRole('button')).toBeNull()
+  cleanup()
+
+  let finish: ((outcome: TailscaleConnectOutcome) => void) | undefined
+  const off = fixture([], undefined, { tailscale: { state: 'off' }, connect: () => new Promise(resolve => { finish = resolve }) })
+  settings(off.bridge)
+  const offRow = await screen.findByRole('region', { name: 'Tailscale' })
+  await waitFor(() => expect(offRow.textContent).toContain('Off on this computer. Connect to reach your other machines.'))
+  expect(within(offRow).getByRole('button', { name: 'Connect to Tailscale' })).toBeTruthy()
+  const { dialog, picker } = await openAddHost(user)
+  // The dialog asks too, above the Device list, which still has focus; the list holds the SSH setup alone meanwhile.
+  expect(document.activeElement).toBe(picker)
+  expect(within(dialog).getByText(/Tailscale is off on this computer\./)).toBeTruthy()
+  expect(within(dialog).getAllByRole('option').map(option => option.querySelector('b')?.textContent)).toEqual(['forge', 'spark', 'buildbox.example.net', 'Another SSH host…'])
+  expect(within(dialog).getByText('Connect to Tailscale to see the machines on your tailnet here.')).toBeTruthy()
+  // Inside Add host, Connect to Tailscale is the primary action, as the prototype drew it; on the Hosts page it is not.
+  expect(within(dialog).getByRole('button', { name: 'Connect to Tailscale' }).className).toContain('tt-button--primary')
+  expect(within(offRow).getByRole('button', { name: 'Connect to Tailscale' }).className).toContain('tt-button--secondary')
+  await user.click(within(dialog).getByRole('button', { name: 'Connect to Tailscale' }))
+  expect(off.connectTailscale).toHaveBeenCalledTimes(1)
+  expect(within(dialog).getByRole('button', { name: 'Connecting…' })).toHaveProperty('disabled', true)
+  off.setTailscale(RUNNING)
+  await act(async () => { finish!('connected') })
+  // Once Tailscale is up, the prompt goes and the tailnet's devices fill in.
+  await waitFor(() => expect(within(dialog).queryByText(/Tailscale is off/)).toBeNull())
+  expect(document.activeElement).toBe(within(dialog).getByRole('combobox', { name: 'Device' }))
+  await user.keyboard('{ArrowDown}')
+  await waitFor(() => expect(within(dialog).getAllByRole('option')).toHaveLength(DEVICES.length + 1))
+  expect(off.devices).toHaveBeenCalledTimes(2)
+  expect(offRow.textContent).toContain('Connected as millZach')
+})
+
+it('says to finish signing in when Tailscale opens its page, and fills in once it is signed in', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true })
+  try {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    const off = fixture([], undefined, { tailscale: { state: 'off' }, connect: async () => 'sign-in-opened' })
+    settings(off.bridge)
+    const row = await screen.findByRole('region', { name: 'Tailscale' })
+    await user.click(await within(row).findByRole('button', { name: 'Connect to Tailscale' }))
+    expect((await within(row).findByRole('status')).textContent).toBe('Sign in to Tailscale in your browser. Sotto lists your devices once you have.')
+    // While the sign-in goes on, the button opens the same page again rather than starting another connect.
+    await user.click(within(row).getByRole('button', { name: 'Open sign-in page' }))
+    expect(off.connectTailscale).toHaveBeenCalledTimes(2)
+    expect(within(row).getByRole('button', { name: 'Open sign-in page' })).toBeTruthy()
+    expect(within(row).getByRole('status').textContent).toBe('Sign in to Tailscale in your browser. Sotto lists your devices once you have.')
+    off.setTailscale(RUNNING)
+    await act(async () => { await vi.advanceTimersByTimeAsync(3_000) })
+    await waitFor(() => expect(row.textContent).toContain('Connected as millZach'))
+    expect(within(row).queryByRole('status')).toBeNull()
+  } finally { vi.useRealTimers() }
+})
+
+it('reads the devices again when Tailscale stops while Add host is open, so the list and the prompt agree', async () => {
+  const user = userEvent.setup()
+  const running = fixture([])
+  settings(running.bridge)
+  const { dialog } = await openAddHost(user)
+  expect(within(dialog).getAllByRole('option')).toHaveLength(DEVICES.length + 1)
+  // Disconnect from the tray, then back to the window.
+  running.setTailscale({ state: 'off' })
+  act(() => { window.dispatchEvent(new Event('focus')) })
+  await waitFor(() => expect(within(dialog).getByText(/Tailscale is off on this computer\./)).toBeTruthy())
+  await waitFor(() => expect(within(dialog).getAllByRole('option').map(option => option.querySelector('b')?.textContent)).toEqual(['forge', 'spark', 'buildbox.example.net', 'Another SSH host…']))
+  expect(running.devices).toHaveBeenCalledTimes(2)
+  expect(within(dialog).getByText('Connect to Tailscale to see the machines on your tailnet here.')).toBeTruthy()
+  expect(within(dialog).queryByText(/Don't see your machine\?/)).toBeNull()
+})
+
+it('says in words when Tailscale does not connect, and offers Get Tailscale when it is not installed', async () => {
+  const user = userEvent.setup()
+  const failing = fixture([], undefined, { tailscale: { state: 'off' }, connect: async () => 'failed' })
+  settings(failing.bridge)
+  const row = await screen.findByRole('region', { name: 'Tailscale' })
+  await user.click(await within(row).findByRole('button', { name: 'Connect to Tailscale' }))
+  expect((await within(row).findByRole('status')).textContent).toBe('Tailscale did not connect. Open the Tailscale app on this computer and connect from there.')
+  cleanup()
+  const missing = fixture([], undefined, { tailscale: { state: 'missing' } })
+  settings(missing.bridge)
+  const missingRow = await screen.findByRole('region', { name: 'Tailscale' })
+  await waitFor(() => expect(missingRow.textContent).toContain('Not installed. Any machine you reach over SSH works without it.'))
+  await user.click(within(missingRow).getByRole('button', { name: 'Get Tailscale' }))
+  expect(missing.openTailscaleDownload).toHaveBeenCalledTimes(1)
+  const { dialog } = await openAddHost(user)
+  expect(within(dialog).getByText(/Tailscale is not installed\./)).toBeTruthy()
+  expect(within(dialog).getByRole('button', { name: 'Get Tailscale' })).toBeTruthy()
+  // SSH configuration entries still list.
+  expect(within(dialog).getByRole('option', { name: /^forge/ }).textContent).toBe('forgeSSH configuration')
+  expect(within(dialog).getByText('Get Tailscale to see the machines on your tailnet here.')).toBeTruthy()
 })
 
 it('turns Add host into the setup checklist once pressed, asks SSH questions on their step, and says when the host is connected', async () => {
@@ -185,9 +412,8 @@ it('turns Add host into the setup checklist once pressed, asks SSH questions on 
   const { bridge, command, push, state } = fixture([], (input, current) => input.type === 'add' ? new Promise<HostsState>(resolve => { resolveAdd = resolve }) : current)
   const user = userEvent.setup()
   settings(bridge)
-  await user.click(await screen.findByRole('button', { name: 'Add host' }))
-  const dialog = screen.getByRole('dialog', { name: 'Add host' })
-  await user.type(within(dialog).getByRole('combobox', { name: 'SSH host or alias' }), 'forge')
+  const { dialog } = await openAddHost(user)
+  await user.type(await typeAHost(user, dialog), 'forge')
   await user.type(within(dialog).getByRole('textbox', { name: 'Username (optional)' }), 'zach')
   await user.type(within(dialog).getByRole('textbox', { name: 'Port (optional)' }), '2222')
   await user.click(within(dialog).getByRole('button', { name: 'Add host' }))
@@ -241,9 +467,9 @@ it('shows Tailscale approval as its own step, opens the approval page only on a 
   try {
     const user = userEvent.setup()
     settings(bridge)
-    await user.click(await screen.findByRole('button', { name: 'Add host' }))
-    await user.type(within(screen.getByRole('dialog')).getByRole('combobox', { name: 'SSH host or alias' }), 'forge{Escape}')
-    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Add host' }))
+    const { dialog: form } = await openAddHost(user)
+    await user.click(within(form).getByRole('option', { name: /^forge/ }))
+    await user.click(within(form).getByRole('button', { name: 'Add host' }))
     const dialog = screen.getByRole('dialog', { name: 'Connecting to forge' })
     const id = (command.mock.calls[0]![0] as Extract<HostsCommand, { type: 'add' }>).host.id
     const waiting = host({ id, name: 'forge', target: 'forge', phase: 'connecting', step: 'tailscale', tailscale: { waiting: true, url: 'https://login.tailscale.com/a/l1ab2c3' } })
@@ -277,9 +503,9 @@ it('shows an approval Tailscale asks of the port forward on the Tailscale step, 
   const { bridge, command, push } = fixture([])
   const user = userEvent.setup()
   settings(bridge)
-  await user.click(await screen.findByRole('button', { name: 'Add host' }))
-  await user.type(within(screen.getByRole('dialog')).getByRole('combobox', { name: 'SSH host or alias' }), 'forge{Escape}')
-  await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Add host' }))
+  const { dialog: form } = await openAddHost(user)
+  await user.click(within(form).getByRole('option', { name: /^forge/ }))
+  await user.click(within(form).getByRole('button', { name: 'Add host' }))
   const dialog = screen.getByRole('dialog', { name: 'Connecting to forge' })
   const id = (command.mock.calls[0]![0] as Extract<HostsCommand, { type: 'add' }>).host.id
   push({ adding: host({ id, name: 'forge', target: 'forge', phase: 'connecting', step: 'start', tailscale: { waiting: true, url: 'https://login.tailscale.com/a/l1ab2c3' } }) })
@@ -297,9 +523,9 @@ it("keeps a failed Open approval page on the Tailscale card, and shows main's ow
   const { bridge, command, push } = fixture([], (input, current) => { if (input.type === 'open-approval') throw new Error(stale); return current })
   const user = userEvent.setup()
   settings(bridge)
-  await user.click(await screen.findByRole('button', { name: 'Add host' }))
-  await user.type(within(screen.getByRole('dialog')).getByRole('combobox', { name: 'SSH host or alias' }), 'forge{Escape}')
-  await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Add host' }))
+  const { dialog: form } = await openAddHost(user)
+  await user.click(within(form).getByRole('option', { name: /^forge/ }))
+  await user.click(within(form).getByRole('button', { name: 'Add host' }))
   const dialog = screen.getByRole('dialog', { name: 'Connecting to forge' })
   const id = (command.mock.calls[0]![0] as Extract<HostsCommand, { type: 'add' }>).host.id
   const waiting = host({ id, name: 'forge', target: 'forge', phase: 'connecting', step: 'tailscale', tailscale: { waiting: true, url: 'https://login.tailscale.com/a/l1ab2c3' } })
@@ -326,13 +552,16 @@ it('shows a failure on its own step with its fix to copy, and Try again and Chan
   // After setup, which puts its own clipboard in place.
   const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined)
   settings(bridge)
-  await user.click(await screen.findByRole('button', { name: 'Add host' }))
-  const form = screen.getByRole('dialog', { name: 'Add host' })
+  const { dialog: form } = await openAddHost(user)
+  // A form that cannot be sent says so in the form.
+  await user.keyboard('{Escape}')
+  await user.click(within(form).getByRole('button', { name: 'Add host' }))
+  expect(within(form).getByRole('alert').textContent).toBe('Choose a device, or choose Another SSH host… to type one.')
+  const typed = await typeAHost(user, form)
   await user.type(within(form).getByRole('textbox', { name: 'Port (optional)' }), '99999')
   await user.click(within(form).getByRole('button', { name: 'Add host' }))
-  // A form that cannot be sent says so in the form.
   expect(within(form).getByRole('alert').textContent).toBe('Enter an SSH host or alias, such as forge or user@server.')
-  await user.type(within(form).getByRole('combobox', { name: 'SSH host or alias' }), 'forge{Escape}')
+  await user.type(typed, 'forge')
   await user.click(within(form).getByRole('button', { name: 'Add host' }))
   expect(within(form).getByRole('alert').textContent).toBe('Enter a port between 1 and 65535, or leave Port empty to use your SSH configuration.')
   await user.clear(within(form).getByRole('textbox', { name: 'Port (optional)' }))
@@ -364,7 +593,7 @@ it('shows a failure on its own step with its fix to copy, and Try again and Chan
   // Change drops the attempt and gives the form back with what was typed, focused.
   await user.click(within(dialog).getByRole('button', { name: /^Change/ }))
   expect(command).toHaveBeenLastCalledWith({ type: 'cancel-add', id: retried.host.id })
-  const field = within(screen.getByRole('dialog', { name: 'Add host' })).getByRole('combobox', { name: 'SSH host or alias' })
+  const field = within(screen.getByRole('dialog', { name: 'Add host' })).getByRole('textbox', { name: 'SSH host' })
   expect(field).toHaveProperty('value', 'forge')
   await waitFor(() => expect(document.activeElement).toBe(field))
   await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }))
@@ -375,12 +604,12 @@ it('goes back to the form when main refuses the add before connecting', async ()
   const { bridge } = fixture([], input => { if (input.type === 'add') throw new Error('forge is already saved as Forge. Nothing was saved. Switch it on in the list instead.'); throw new Error('unexpected') })
   const user = userEvent.setup()
   settings(bridge)
-  await user.click(await screen.findByRole('button', { name: 'Add host' }))
-  await user.type(within(screen.getByRole('dialog')).getByRole('combobox', { name: 'SSH host or alias' }), 'forge{Escape}')
-  await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Add host' }))
+  const { dialog: form } = await openAddHost(user)
+  await user.click(within(form).getByRole('option', { name: /^forge/ }))
+  await user.click(within(form).getByRole('button', { name: 'Add host' }))
   const dialog = await screen.findByRole('dialog', { name: 'Add host' })
   expect(within(dialog).getByRole('alert').textContent).toBe('forge is already saved as Forge. Nothing was saved. Switch it on in the list instead.')
-  expect(within(dialog).getByRole('combobox', { name: 'SSH host or alias' })).toHaveProperty('value', 'forge')
+  expect(within(dialog).getByRole('combobox', { name: 'Device' }).textContent).toContain('forge')
 })
 
 it("says on a saved host's row that Tailscale is waiting for approval, and opens the page on a press", async () => {
@@ -442,10 +671,9 @@ it("waits with a saved host's SSH question while a Hosts dialog is open", async 
 it('names a host with a long name within the limit, and says in words when the host and username are too long', async () => {
   const { bridge, command } = fixture([]), user = userEvent.setup()
   settings(bridge)
-  await user.click(await screen.findByRole('button', { name: 'Add host' }))
-  const dialog = screen.getByRole('dialog', { name: 'Add host' })
+  const { dialog } = await openAddHost(user)
   const long = `${'build-'.repeat(20)}box.example.net`
-  await user.click(within(dialog).getByRole('combobox', { name: 'SSH host or alias' }))
+  await user.click(await typeAHost(user, dialog))
   await user.paste(long)
   await user.click(within(dialog).getByRole('textbox', { name: 'Username (optional)' }))
   await user.paste('z')
@@ -456,9 +684,8 @@ it('names a host with a long name within the limit, and says in words when the h
   cleanup()
   const second = fixture([])
   settings(second.bridge)
-  await user.click(await screen.findByRole('button', { name: 'Add host' }))
-  const again = screen.getByRole('dialog', { name: 'Add host' })
-  await user.click(within(again).getByRole('combobox', { name: 'SSH host or alias' }))
+  const { dialog: again } = await openAddHost(user)
+  await user.click(await typeAHost(user, again))
   await user.paste(`${'a'.repeat(250)}.net`)
   await user.click(within(again).getByRole('textbox', { name: 'Username (optional)' }))
   await user.paste('zach')

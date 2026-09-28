@@ -1,10 +1,11 @@
 import React from 'react'
-import { act, cleanup, render, screen, within } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, expect, it, vi } from 'vitest'
 import { HostsSettings } from '../../../src/renderer/src/features/settings/HostsSettings'
 import { HostQuestionDialog } from '../../../src/renderer/src/features/settings/HostQuestionDialog'
 import type { HostSetupChoice, HostSetupState, HostsBridge, HostsCommand, HostsState, HostStatus } from '../../../src/shared/hosts'
+import type { HostDevice } from '../../../src/shared/hostDevices'
 
 // Have my agent set this up in Add host (ADR-0035, issue #431): the two choices, the setup view that follows the
 // setup thread, Close and Stop setup, and Have my agent fix this under a failed step of Add it.
@@ -14,19 +15,31 @@ const CHOICE: HostSetupChoice = { models: [
   { id: 'claude:opus', name: 'Claude Opus 5.5', provider: 'Claude Code' },
   { id: 'codex:gpt', name: 'GPT-6', provider: 'Codex' },
 ], modelId: 'codex:gpt' }
+/** The one device Add host lists: an alias from the SSH configuration. */
+const DEVICES: HostDevice[] = [{ target: 'forge', name: 'forge', names: ['forge'], sshConfiguration: true }]
 function fixture(choice: HostSetupChoice | undefined = CHOICE, answer?: (command: HostsCommand, state: HostsState) => HostsState) {
   let state: HostsState = { localHostEnabled: true, localHostRunning: true, localHostId: LOCAL, activeHostId: LOCAL, hosts: [], ...(choice ? { setupChoice: choice } : {}) }
   const listeners = new Set<(value: HostsState) => void>()
   const push = (next: Partial<HostsState>): void => { state = { ...state, ...next }; act(() => { for (const listener of listeners) listener(state) }) }
   // Main broadcasts every change it makes, as well as answering the command with it.
   const command = vi.fn<HostsBridge['command']>(async input => { if (answer) { state = answer(input, state); for (const listener of listeners) listener(state) } return state })
-  const bridge: HostsBridge = { get: async () => state, command, onChanged: listener => { listeners.add(listener); return () => listeners.delete(listener) }, sshSuggestions: vi.fn(async () => []) }
+  const bridge: HostsBridge = { get: async () => state, command, onChanged: listener => { listeners.add(listener); return () => listeners.delete(listener) }, devices: async () => ({ tailscale: { state: 'missing' as const }, devices: DEVICES }), tailscale: async () => ({ state: 'missing' as const }),
+    connectTailscale: async () => 'failed' as const, openTailscaleDownload: async () => undefined }
   return { bridge, command, push }
 }
 const setupState = (patch: Partial<HostSetupState> = {}): HostSetupState => ({ id: 'setup', name: 'forge', target: 'zach@forge', threadId: `host:${LOCAL}:thread`, threadTitle: 'Set up forge',
   modelName: 'GPT-6', phase: 'running', byAgent: [], ...patch })
 const attempt = (patch: Partial<HostStatus & { purpose: 'check' | 'add' }>): HostStatus & { purpose: 'check' | 'add' } => ({ id: '33333333-3333-4333-8333-333333333333', name: 'forge', target: 'zach@forge', identityFile: '', installPath: '~/.local/share/sotto-host',
   dataDirectory: '~/.sotto', enabled: true, phase: 'connecting', purpose: 'check', ...patch })
+/** Switches Add host to typing a host, through the device list's last entry, and types it. */
+async function typeAHost(user: ReturnType<typeof userEvent.setup>, value: string) {
+  const dialog = screen.getByRole('dialog', { name: 'Add host' })
+  const picker = await within(dialog).findByRole('combobox', { name: 'Device' })
+  await waitFor(() => expect(within(dialog).queryByText('Looking for your devices…')).toBeNull())
+  if (picker.getAttribute('aria-expanded') !== 'true') await user.click(picker)
+  await user.click(await within(dialog).findByRole('option', { name: /^Another SSH host/ }))
+  await user.type(within(dialog).getByRole('textbox', { name: 'SSH host' }), value)
+}
 const settings = (bridge: HostsBridge) => render(<HostsSettings localHostEnabled onLocalHostChange={async () => true} bridge={bridge} />)
 
 it('offers both ways to add, chooses the agent first on the model used most, and starts a setup for the typed device', async () => {
@@ -43,7 +56,7 @@ it('offers both ways to add, chooses the agent first on the model used most, and
   expect((model as HTMLSelectElement).value).toBe('codex:gpt')
   expect(within(dialog).getByRole('button', { name: 'Start setup' })).toBeTruthy()
   await user.selectOptions(model, 'claude:opus')
-  await user.type(within(dialog).getByRole('combobox', { name: 'SSH host or alias' }), 'forge')
+  await typeAHost(user, 'forge')
   await user.type(within(dialog).getByLabelText(/Username/), 'zach')
   await user.click(within(dialog).getByRole('button', { name: 'Start setup' }))
   const sent = command.mock.calls.map(([value]) => value).find(value => value.type === 'start-setup')
@@ -68,7 +81,7 @@ it('follows the setup thread: the agent line, the checklist with the agent\'s st
   const user = userEvent.setup()
   settings(bridge)
   await user.click(await screen.findByRole('button', { name: 'Add host' }))
-  await user.type(screen.getByRole('combobox', { name: 'SSH host or alias' }), 'zach@forge')
+  await typeAHost(user, 'zach@forge')
   await user.click(screen.getByRole('button', { name: 'Start setup' }))
   const id = (command.mock.calls.find(([value]) => value.type === 'start-setup')![0] as { id: string }).id
   const dialog = await screen.findByRole('dialog', { name: 'Setting up forge' })
@@ -105,7 +118,7 @@ it('says the host is connected when the agent\'s add connects, and Done puts the
   const user = userEvent.setup()
   settings(bridge)
   await user.click(await screen.findByRole('button', { name: 'Add host' }))
-  await user.type(screen.getByRole('combobox', { name: 'SSH host or alias' }), 'zach@forge')
+  await typeAHost(user, 'zach@forge')
   await user.click(screen.getByRole('button', { name: 'Start setup' }))
   const id = (command.mock.calls.find(([value]) => value.type === 'start-setup')![0] as { id: string }).id
   push({ setup: setupState({ id, phase: 'connected', byAgent: ['install'], attempt: attempt({ phase: 'connected', purpose: 'add' }) }) })
@@ -148,7 +161,7 @@ it('offers Have my agent fix this under a failed step of Add it, naming the fail
   settings(bridge)
   await user.click(await screen.findByRole('button', { name: 'Add host' }))
   await user.click(screen.getByRole('radio', { name: 'Add it' }))
-  await user.type(screen.getByRole('combobox', { name: 'SSH host or alias' }), 'forge')
+  await typeAHost(user, 'forge')
   await user.click(within(screen.getByRole('dialog', { name: 'Add host' })).getByRole('button', { name: 'Add host' }))
   const added = command.mock.calls.find(([value]) => value.type === 'add')![0] as Extract<HostsCommand, { type: 'add' }>
   push({ adding: { ...added.host, enabled: true, phase: 'error', step: 'install', reason: 'node-too-new', error: 'The SSH host runs Node 26.1.0. Nothing was saved.' } })

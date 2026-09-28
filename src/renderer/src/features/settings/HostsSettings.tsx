@@ -5,6 +5,7 @@ import { Button } from '../../components/Button'
 import { Toggle } from '../../components/Toggle'
 import { ConfirmationDialog } from '../../components/ConfirmationDialog'
 import { HostDialog, HostsModal, type HostDialogMode } from './HostDialog'
+import { TailscaleRow, useTailscale } from './TailscaleConnect'
 import './hosts.css'
 
 /** What a saved host's row says about it, after "SSH forge ·". */
@@ -144,6 +145,7 @@ export function HostsSettings({ localHostEnabled, onLocalHostChange, bridge = wi
   const [forgetId, setForgetId] = useState<string | null>(null)
   const [stopId, setStopId] = useState<string | null>(null)
   const addButton = useRef<HTMLButtonElement>(null)
+  const tailscale = useTailscale(bridge)
   useEffect(() => {
     if (!bridge) return
     let alive = true
@@ -180,6 +182,7 @@ export function HostsSettings({ localHostEnabled, onLocalHostChange, bridge = wi
       <div className="hosts-local__copy"><h3>This computer</h3><p>Runs threads on this computer beside your remote hosts. A change takes effect after you restart Sotto. Saved data stays.</p></div>
       <Toggle label="Run the local host" checked={localHostEnabled} onCheckedChange={enabled => { void onLocalHostChange(enabled) }} />
     </div>
+    {bridge ? <TailscaleRow control={tailscale} /> : null}
     {state && state.localHostRunning !== localHostEnabled && <div className="hosts-restart"><p>Restart Sotto to apply the local host setting.</p><Button variant="secondary" onClick={() => void run({ type: 'restart' })}>Restart Sotto</Button></div>}
     <p>Dictation and automatic paste always use this computer. They do not paste into a remote host.</p>
     <div className="hosts-heading"><h3>Remote hosts</h3><Button ref={addButton} variant="secondary" disabled={!bridge} onClick={() => setDialog({ kind: 'add' })}><Plus size={16} aria-hidden="true" />Add host</Button></div>
@@ -191,7 +194,7 @@ export function HostsSettings({ localHostEnabled, onLocalHostChange, bridge = wi
       {state && !state.hosts.length ? <p className="hosts-empty">No remote hosts yet.</p> : null}
     </div>
     {error && <p className="hosts-error" role="alert">{error}</p>}
-    {dialog && bridge ? <HostDialog key={dialog.kind === 'edit' ? dialog.host.id : dialog.kind} mode={dialog} bridge={bridge} state={state} onClose={closeDialog} /> : null}
+    {dialog && bridge ? <HostDialog key={dialog.kind === 'edit' ? dialog.host.id : dialog.kind} mode={dialog} bridge={bridge} state={state} tailscale={tailscale} onClose={closeDialog} /> : null}
     {renaming ? <RenameDialog host={renaming} onClose={() => setRenameId(null)} onRename={async name => {
       if (!bridge) return 'Hosts are not available in this window.'
       try { setState(await bridge.command({ type: 'rename', id: renaming.id, name })); return null }

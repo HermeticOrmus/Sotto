@@ -81,6 +81,16 @@ async function capture(launched: LaunchedSotto, name: string): Promise<void> {
   }
 }
 const steps = (page: Page) => page.getByRole('list', { name: 'Connection steps' }).getByRole('listitem')
+/** Types a host through Add host's Another SSH host, the last entry of its Device list (this run's profile lists no devices). */
+async function typeAHost(page: Page, target: string): Promise<void> {
+  const form = page.getByRole('dialog', { name: 'Add host' })
+  await expect(form.getByRole('combobox', { name: 'Device' })).toBeFocused()
+  await page.keyboard.press('End')
+  await page.keyboard.press('Enter')
+  const field = form.getByRole('textbox', { name: 'SSH host' })
+  await expect(field).toBeFocused()
+  await field.fill(target)
+}
 /** Each step's name, without the card under it. */
 const titles = (page: Page) => page.getByRole('list', { name: 'Connection steps' }).locator('.host-setup__title')
 
@@ -112,8 +122,7 @@ test('Add host shows each step, waits for Tailscale approval, shows a failure on
     await writeFile(modeFile, 'node-new')
     await page.getByRole('button', { name: 'Add host', exact: true }).click()
     const form = page.getByRole('dialog', { name: 'Add host' })
-    await form.getByRole('combobox', { name: 'SSH host or alias' }).fill('forge')
-    await page.keyboard.press('Escape')
+    await typeAHost(page, 'forge')
     await form.getByRole('button', { name: 'Add host', exact: true }).click()
     const failed = page.getByRole('dialog', { name: 'forge could not be added' })
     await expect(failed).toBeVisible({ timeout: 60_000 })
@@ -130,8 +139,7 @@ test('Add host shows each step, waits for Tailscale approval, shows a failure on
     // Waiting: Tailscale SSH holds the connection until it is approved in the browser.
     await writeFile(modeFile, 'run+tailscale')
     await page.getByRole('button', { name: 'Add host', exact: true }).click()
-    await page.getByRole('dialog', { name: 'Add host' }).getByRole('combobox', { name: 'SSH host or alias' }).fill('forge')
-    await page.keyboard.press('Escape')
+    await typeAHost(page, 'forge')
     await page.getByRole('dialog', { name: 'Add host' }).getByRole('button', { name: 'Add host', exact: true }).click()
     const connecting = page.getByRole('dialog', { name: 'Connecting to forge' })
     await expect(connecting).toBeVisible()
