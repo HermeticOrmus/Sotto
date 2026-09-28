@@ -27,6 +27,26 @@ export async function existingWorkingDirectory(path: string): Promise<string> {
   return canonical
 }
 function pathKey(path: string): string { const key = resolve(path); return process.platform === 'win32' ? key.toLowerCase() : key }
+
+// A host has separate thread and terminal services. They still share Git's registry,
+// including when their projects start in different linked checkouts of one repository.
+const registryOperations = new Map<string, Promise<void>>()
+function coordinateRegistry(run: RunGit): RunGit {
+  return async (cwd, args) => {
+    const readsRegistry = args[0] === 'worktree' || args[0] === 'switch' || (args[0] === 'branch' && args.includes('-m'))
+    if (!readsRegistry) return run(cwd, args)
+    const common = (await run(cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim()
+    const key = pathKey(await realpath(common))
+    const previous = registryOperations.get(key) ?? Promise.resolve()
+    const operation = previous.then(() => run(cwd, args))
+    // A rejected command keeps its original error but cannot poison the next operation.
+    const settled = operation.then(() => undefined, () => undefined)
+    registryOperations.set(key, settled)
+    try { return await operation }
+    finally { if (registryOperations.get(key) === settled) registryOperations.delete(key) }
+  }
+}
+
 function registeredWorktrees(output: string): Array<{ path: string; branch: string | undefined; locked: boolean; prunable: boolean }> {
   return output.split('\0\0').filter(Boolean).map(record => {
     const fields = record.split('\0')
@@ -67,7 +87,11 @@ const DEPENDENCY_FOLDER = /(^|\/)node_modules\/$/u
  * WorkspaceHost before ensure.
  */
 export class ThreadWorktrees {
-  constructor(private readonly directory: string, private readonly git: RunGit = runWorktreeGit, private readonly home: WorktreeHome = THREAD_WORKTREE_HOME) {}
+  private readonly git: RunGit
+
+  constructor(private readonly directory: string, git: RunGit = runWorktreeGit, private readonly home: WorktreeHome = THREAD_WORKTREE_HOME) {
+    this.git = coordinateRegistry(git)
+  }
 
   /**
    * Start from origin, T3's way (ADR-0014, amended September 24, 2026): fetch the base when origin has it, fall back
