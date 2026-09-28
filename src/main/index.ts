@@ -804,7 +804,7 @@ async function createRuntime(): Promise<NativeRuntimeController> {
       ? { isTrusted: (prompt) => systemPreferences.isTrustedAccessibilityClient(prompt) }
       : ALWAYS_TRUSTED_ACCESSIBILITY
   const output = new OutputService({
-    clipboard: e2eState === null ? clipboard : createE2EClipboard(e2eState),
+    clipboard: e2eState === null ? clipboard : createE2EClipboard(e2eState, e2eConfiguration?.scenario),
     widget: windows,
     delay: (milliseconds) =>
       new Promise((resolve) => {
