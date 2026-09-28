@@ -38,7 +38,7 @@
 /* A chip group needs its own room: the fixed-width second column sized for one select wraps three chips
    onto two lines well before the window is actually narrow. The label column gives up the space instead. */
 .account-rows > .account-row--chips { grid-template-columns: minmax(160px, 1fr) minmax(0, auto); }
-.account-rows input:not([type='checkbox']), .account-rows select { width: 100%; min-width: 0; height: 36px; padding: 6px 14px; border: 1px solid var(--tt-hairline); border-radius: 999px; background: var(--tt-field); color: var(--tt-text); font: inherit; font-size: 13px; }
+.account-rows input:not([type='checkbox'], [type='range']), .account-rows select { width: 100%; min-width: 0; height: 36px; padding: 6px 14px; border: 1px solid var(--tt-hairline); border-radius: 999px; background: var(--tt-field); color: var(--tt-text); font: inherit; font-size: 13px; }
 .account-rows .agent-checkbox { display: flex; }
 .account-connection { display: flex; align-items: center; gap: 20px; padding: 16px 0; }
 .account-connection p { flex: 1; color: var(--tt-text-muted); }
@@ -150,7 +150,7 @@
 .settings-view .provider-default { grid-template-columns: minmax(0, 1fr) minmax(140px, 240px); align-items: center; gap: 22px; padding: 20px 0; border-top: 1px solid var(--tt-hairline); }
 .settings-view .account-rows > label, .settings-view .account-rows > .account-row { grid-template-columns: minmax(0, 1fr) minmax(140px, 240px); gap: 12px 22px; padding: 18px 0; font-size: 15px; }
 .settings-view .account-rows > .account-row--chips { grid-template-columns: minmax(160px, 1fr) minmax(0, auto); }
-.settings-view .account-rows input:not([type='checkbox']), .settings-view .account-rows select { min-height: 38px; padding: 7px 12px; border-radius: 8px; font-size: 14px; }
+.settings-view .account-rows input:not([type='checkbox'], [type='range']), .settings-view .account-rows select { min-height: 38px; padding: 7px 12px; border-radius: 8px; font-size: 14px; }
 .settings-view .account-connection { flex-wrap: wrap; }
 .settings-view .account-connection p { flex: 1 1 230px; font-size: 14px; line-height: 1.5; }
 .settings-view .agent-fields label, .settings-view .agent-checkbox, .settings-view .agent-voice-license summary { font-size: 14px; }
