@@ -391,6 +391,8 @@ export function App({ createMicrophoneTest = () => new BrowserMicrophoneTest() }
           platform={app.platform}
           dictation={app.dictation}
           entries={app.history}
+          recovery={app.dictationRecovery}
+          onDismissRecovery={app.actions.dismissDictationRecovery}
           historyStatus={app.historyStatus}
           onStart={app.actions.start}
           onStop={app.actions.stop}
