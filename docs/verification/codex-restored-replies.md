@@ -29,3 +29,10 @@ A preliminary 0.1.26 full run finished with 6,311 passed, 152 skipped and three 
 The native read-only protocol probe confirmed the sampled conversation still has assistant items. The [official App Server reference](https://learn.chatgpt.com/docs/app-server) describes `thread/read` and `thread/turns/list`; actual 0.159.0 behavior was checked locally because the reference's paginated-history limitation did not match the installed client's successful reads.
 
 This verification did not package, install or release the fix. macOS was not tested. The native desktop inspection helper was unavailable, so visual verification used the rebuilt Electron application through Playwright with an isolated synthetic profile.
+
+
+## iOS gate follow-up
+
+The final desktop suite passed with 6,315 tests passed and 152 skipped; Windows and Linux CI passed. Two iOS CI attempts on `11091559` failed before test assertions in `XCUIApplication.launch()` on the large simulator. Both carried `DebuggerLLDB.DebuggerVersionStore.StoreError` and `no debugger version`. Every small-device test passed, and later large-device tests ran. This is a separate launch failure exposed while delivering the PR.
+
+The next probe changes only the Test action's debugger/launcher selection. The normal Run action remains debuggable. XML parsing confirms the target remains enabled, and the complete macOS UI gate remains the runtime validation. The configuration follows [XcodeGen's test-action generation](https://github.com/yonaskolb/XcodeGen/blob/master/Sources/XcodeGenKit/SchemeGenerator.swift#L281-L282). The failure loop is `sh apps/ios/Scripts/verify-ui.sh` on the macOS runner; local Windows cannot execute Xcode, so this platform-bound check cannot be reduced to a local seconds-long loop. The PR records its outcome.
