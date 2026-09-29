@@ -296,6 +296,8 @@ export const agentWorkingCopyOptionsRequestSchema = z.string().min(1).max(512)
 
 export const agentThreadSchema = z.object({
   hostLabel: z.string().max(80).optional(), remoteHost: z.boolean().optional(), clientConnected: z.boolean().optional(),
+  /** Set by the desktop while this thread's host restarts for an update and the desktop reconnects to it (ADR-0040). */
+  clientReconnecting: z.boolean().optional(),
   hostId: z.uuid().optional(),
   id, providerId: providerIdSchema.optional(), projectId: providerEntityId, title: id, modelId: z.string(),
   /** Who named this thread: the user by hand, Sotto through the thread's own provider, or the stand-in/provider name.

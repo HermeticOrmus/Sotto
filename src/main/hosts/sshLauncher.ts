@@ -6,11 +6,12 @@ import { createServer } from 'node:net'
 import { z } from 'zod'
 import { parseSshResolution, validateSshHost, type SshHostConfiguration, type SshRoute, type ValidatedSshHostConfiguration } from './sshConfiguration'
 import { CONTROL_OPTIONS, openSshVersion, spawnSsh, sshExecutable, tooOld, type SpawnSsh } from './sshProcess'
-import { HOST_STOP_REPLY_MS, LAUNCH_SCRIPT_SOURCE, launchScriptCommand, type LaunchOperation } from './launchScript'
+import { HOST_DOWNLOAD_TIMEOUT_MS, HOST_STOP_DRAIN_MS, HOST_STOP_REPLY_MS, LAUNCH_SCRIPT_SOURCE, launchScriptCommand, type LaunchOperation } from './launchScript'
 import { AskpassBroker, type AskpassQuestion } from './sshAskpass'
 import { LAUNCH_REASONS, SshFailure, classifySshExit, failureFix, type SshFailureCode } from './sshFailure'
 import { tailscaleHold, type TailscaleHold } from './tailscaleApproval'
 import { TAILSCALE_APPROVAL_MS, type HostSetupStep } from '../../shared/hosts'
+import { HOST_ARCHIVE_PATTERN, type HostUpdateStep } from '../../shared/hostUpdates'
 import { version as desktopVersion } from '../../../package.json'
 export { SshFailure, type SshFailureCode }
 export type { SshHostConfiguration, SshRoute }
@@ -33,6 +34,20 @@ export interface SshCallbacks {
   readonly onDisconnected?: (message: string) => void
 }
 export interface SshPairingCode { readonly hostId: string; readonly code: string; readonly expiresAt: string }
+/**
+ * One operation of a host update (ADR-0040), as the desktop asks for it. The restart names no host: the launcher
+ * sends the one this connection reached, so an update can only ever restart the host it is connected to.
+ */
+export type SshHostUpdateOperation =
+  | Extract<LaunchOperation, { op: 'update-fetch' | 'update-install' }>
+  | (Extract<LaunchOperation, { op: 'update-receive' }> & { readonly archive: Uint8Array })
+  | { readonly op: 'update-restart'; readonly version: string }
+export interface SshHostUpdateOptions {
+  /** Cancel update: ends the operation's ssh. A download on the host stops within a second of it on a POSIX host. */
+  readonly signal?: AbortSignal
+  /** The step the host moved on to while the operation runs: the checksum after a download, unpacking, the restart. */
+  readonly onStep?: (step: HostUpdateStep) => void
+}
 export interface SshHostConnection {
   readonly url: string
   readonly hostId: string
@@ -42,6 +57,8 @@ export interface SshHostConnection {
   showHostPairingCode(): Promise<SshPairingCode>
   revokeClient(clientId: string): Promise<boolean>
   stopHost(): Promise<boolean>
+  /** One operation of a host update on this host. A failure the host reports comes back as its `error` result; a lost connection throws. */
+  updateHost(operation: SshHostUpdateOperation, options?: SshHostUpdateOptions): Promise<SshHostUpdateResult>
   close(): Promise<void>
 }
 export interface SshLauncherDependencies {
@@ -62,6 +79,18 @@ const readySchema = healthSchema.extend({ type: z.literal('ready'), owned: z.boo
 const pairingSchema = z.object({ type: z.literal('pairing-code'), code: z.string().min(1).max(256), expiresAt: z.string().datetime(), hostId: z.uuid() })
 const revokedSchema = z.object({ type: z.literal('revoked'), revoked: z.boolean(), hostId: z.uuid() })
 const stoppedSchema = z.object({ type: z.literal('host-stopped'), stopped: z.boolean(), hostId: z.uuid().nullable() })
+const archiveName = z.string().regex(HOST_ARCHIVE_PATTERN)
+/** What a host update's operation answers. Its `error` reasons are the launch script's own codes, which main turns into sentences. */
+const updateResultSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('update-fetched'), file: archiveName, sha256: z.string().regex(/^[0-9a-f]{64}$/u) }),
+  z.object({ type: z.literal('update-received'), size: z.number().int().positive() }),
+  z.object({ type: z.literal('update-installed'), version: z.string().max(64) }),
+  readySchema,
+  z.object({ type: z.literal('error'), reason: z.string().max(64), file: archiveName.optional(), restarted: z.boolean().optional(),
+    range: z.string().max(64).optional(), node: z.string().max(32).optional(), cause: z.string().max(64).optional() }),
+])
+export type SshHostUpdateResult = z.infer<typeof updateResultSchema>
+const updateStepSchema = z.enum(['check', 'install', 'restart'])
 /** Admin requests run after SSH is signed in; this bounds the work itself, on top of any prompt. */
 const REQUEST_BUDGET_MS = 15_000
 const OUTPUT_LIMIT = 65_536
@@ -251,7 +280,8 @@ export class SshHostLauncher {
       this.status(attempt, 'ready')
       return { url: `http://127.0.0.1:${localPort}`, hostId: remote.hostId, owned: remote.owned, route,
         close: () => this.closeAttempt(attempt), showHostPairingCode: () => this.pairingCode(attempt), revokeClient: clientId => this.revokeClient(attempt, clientId),
-        stopHost: async () => { try { return await this.stopHost(attempt) } finally { await this.closeAttempt(attempt) } } }
+        stopHost: async () => { try { return await this.stopHost(attempt) } finally { await this.closeAttempt(attempt) } },
+        updateHost: (operation, options) => this.updateHost(attempt, operation, options) }
     } catch (error) {
       await this.closeAttempt(attempt)
       const failure = attempt.failure ?? (error instanceof Error ? error : new SshFailure('ssh-failed'))
@@ -378,7 +408,9 @@ export class SshHostLauncher {
    * The last JSON line on stdout is the result; anything a login profile printed before it is skipped.
    */
   private async control(attempt: Attempt, operation: LaunchOperation, budgetMs: number, fallback: SshFailureCode,
-    events: { readonly onOutput?: () => void; readonly onStarting?: () => void } = {}): Promise<Record<string, unknown>> {
+    events: { readonly onOutput?: () => void; readonly onStarting?: () => void; readonly onUpdateStep?: (step: HostUpdateStep) => void
+      /** What goes on stdin in place of the launch script: the archive, for the receive script. */
+      readonly stdin?: Uint8Array; readonly signal?: AbortSignal } = {}): Promise<Record<string, unknown>> {
     const configuration = attempt.configuration
     // A request once the host is connected keeps the live keepalive: nothing shows an approval then, so a
     // request Tailscale holds ends after 30 seconds and says how to approve, rather than waiting unseen.
@@ -386,12 +418,13 @@ export class SshHostLauncher {
     const run = this.start(attempt, [...this.baseArguments(configuration, live ? 'live' : 'signing-in'), '-T', '-o', 'ClearAllForwardings=yes', configuration.target,
       launchScriptCommand(configuration, operation, this.readyTimeout())], 'pipe', live ? 'request' : undefined)
     run.child.stdin?.on('error', () => undefined)
-    run.child.stdin?.end(LAUNCH_SCRIPT_SOURCE)
+    run.child.stdin?.end(events.stdin ?? LAUNCH_SCRIPT_SOURCE)
     let result: Record<string, unknown> | undefined, buffer = '', size = 0
     const read = (line: string): void => {
       const value = resultLine(line.trim())
       if (!value) return
       if (value.type === 'starting') events.onStarting?.()
+      else if (value.type === 'update-step') { const step = updateStepSchema.safeParse(value.step); if (step.success) events.onUpdateStep?.(step.data) }
       // The launch command's first line, which only a signed-in session prints; the first output already said so.
       else if (value.type !== 'signed-in') result = value
     }
@@ -407,12 +440,16 @@ export class SshHostLauncher {
     let timer: ReturnType<typeof setTimeout> | undefined
     let expire!: (value: 'timeout') => void
     const timedOut = new Promise<'timeout'>(resolve => { expire = resolve })
+    const signal = events.signal
+    const aborted = new Promise<'aborted'>(resolve => { if (signal?.aborted) resolve('aborted'); else signal?.addEventListener('abort', () => resolve('aborted'), { once: true }) })
     const arm = (milliseconds: number): void => { clearTimeout(timer); timer = setTimeout(() => expire('timeout'), milliseconds) }
     arm(budgetMs)
     // Held by Tailscale, the command gets the approval wait on top of its own budget.
     run.onHold = () => arm((this.dependencies.approvalTimeoutMs ?? TAILSCALE_APPROVAL_MS) + budgetMs)
     try {
-      if (await Promise.race([run.exited, timedOut, attempt.cancelled]) === 'timeout') {
+      const ended = await Promise.race([run.exited, timedOut, aborted, attempt.cancelled])
+      if (ended === 'aborted') { run.child.kill(); throw new SshFailure('cancelled') }
+      if (ended === 'timeout') {
         const asking = attempt.prompt?.caller === run.caller || attempt.queue.some(item => item.caller === run.caller)
         run.child.kill(); throw asking ? new SshFailure('prompt-unanswered') : run.held && !run.signedIn ? this.classify(run, fallback) : new SshFailure(fallback)
       }
@@ -520,11 +557,12 @@ export class SshHostLauncher {
     attempt.callbacks.onPrompt?.(null)
     this.nextPrompt(attempt)
   }
-  private async request<T>(attempt: Attempt, operation: LaunchOperation, failure: SshFailureCode, budgetMs: number, parse: (value: Record<string, unknown>) => T | undefined): Promise<T> {
+  private async request<T>(attempt: Attempt, operation: LaunchOperation, failure: SshFailureCode, budgetMs: number, parse: (value: Record<string, unknown>) => T | undefined,
+    events: Parameters<SshHostLauncher['control']>[4] = {}): Promise<T> {
     if (attempt.busy) throw new SshFailure('request-busy')
     attempt.busy = true
     try {
-      const value = parse(await this.control(attempt, operation, (this.dependencies.authenticationTimeoutMs ?? 120_000) + budgetMs, failure))
+      const value = parse(await this.control(attempt, operation, (this.dependencies.authenticationTimeoutMs ?? 120_000) + budgetMs, failure, events))
       if (value === undefined) throw new SshFailure(failure)
       return value
     } finally { attempt.busy = false }
@@ -553,6 +591,23 @@ export class SshHostLauncher {
       const stopped = stoppedSchema.safeParse(value)
       return stopped.success && (stopped.data.hostId === null || stopped.data.hostId === hostId) ? stopped.data.stopped : undefined
     })
+  }
+  /**
+   * One operation of a host update, sent to the host this connection reached. Each has its own budget on top of signing
+   * in: two downloads, a copy, an unpack, or a stop and up to two starts (the new version, then the old one again).
+   */
+  private updateHost(attempt: Attempt, operation: SshHostUpdateOperation, options: SshHostUpdateOptions = {}): Promise<SshHostUpdateResult> {
+    if (attempt.closed || !attempt.connected || !attempt.ready) return Promise.reject(new SshFailure('not-connected', 'Connect to the SSH host before updating it.'))
+    const hostId = attempt.ready.hostId
+    let launch: LaunchOperation, budget: number, stdin: Uint8Array | undefined
+    if (operation.op === 'update-restart') { launch = { op: 'update-restart', hostId, version: operation.version }; budget = HOST_STOP_DRAIN_MS + 2 * this.readyTimeout() + 10_000 }
+    else if (operation.op === 'update-receive') { launch = { op: 'update-receive', file: operation.file, size: operation.size }; budget = 10 * 60_000; stdin = operation.archive }
+    else if (operation.op === 'update-fetch') { launch = operation; budget = 2 * HOST_DOWNLOAD_TIMEOUT_MS + 10_000 }
+    else { launch = operation; budget = 2 * 60_000 }
+    return this.request(attempt, launch, 'update-failed', budget, value => {
+      const parsed = updateResultSchema.safeParse(value)
+      return parsed.success ? parsed.data : undefined
+    }, { ...(stdin ? { stdin } : {}), ...(options.signal ? { signal: options.signal } : {}), ...(options.onStep ? { onUpdateStep: options.onStep } : {}) })
   }
   private status(attempt: Attempt, status: SshConnectionStatus): void { attempt.callbacks.onStatus?.(status) }
   private fail(attempt: Attempt, error: Error): void {

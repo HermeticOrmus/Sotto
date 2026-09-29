@@ -12,7 +12,7 @@ import { desktopWindowClient } from '../../src/main/agents/hostService'
 import { DesktopHosts, reconnectDelayMs } from '../../src/main/hosts/desktopHosts'
 import { DesktopHostRouter } from '../../src/main/hosts/desktopHostRouter'
 import { emptyDesktopState } from '../../src/main/hosts/inactiveLocalHost'
-import { SshFailure, SshHostLauncher, type SshCallbacks, type SshHostConnection, type SshHostConfiguration } from '../../src/main/hosts/sshLauncher'
+import { SshFailure, SshHostLauncher, type SshCallbacks, type SshHostConnection, type SshHostConfiguration, type SshHostUpdateOperation, type SshHostUpdateResult } from '../../src/main/hosts/sshLauncher'
 import { E2EAgentHost, e2eAgentReasoner } from '../../src/main/e2e/agentEffects'
 import { hostEntityKey } from '../../src/shared/clientIdentity'
 import type { RemoteHost } from '../../src/shared/hosts'
@@ -32,6 +32,9 @@ let owned = true, stopResult: boolean | Error = true
 let tunnelUrl: (() => string) | undefined
 /** Runs before a stop answers; the real host closes its listener, dropping every peer, before it replies. */
 let beforeStopReply: () => Promise<void> = async () => undefined
+/** What the fixture host answers to each operation of an update; by default it has none. */
+const noUpdates = async (): Promise<SshHostUpdateResult> => { throw new Error('This fixture host has no update.') }
+let updateHost: (operation: SshHostUpdateOperation) => Promise<SshHostUpdateResult> = noUpdates
 const pause = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 /** Revokes the way the launch script does, through the host's admin endpoint, which closes the revoked peer before replying. */
 async function adminRevoke(clientId: string): Promise<boolean> {
@@ -67,6 +70,7 @@ class FixtureSsh extends SshHostLauncher {
       showHostPairingCode: async () => ({ ...host.pairing.issuePairingCode(), hostId: reportedHostId }),
       revokeClient: adminRevoke,
       stopHost: async () => { stops.push(reportedHostId); await beforeStopReply(); if (stopResult instanceof Error) throw stopResult; return stopResult },
+      updateHost: async operation => updateHost(operation),
     }
   }
   override answerPrompt(id: string, answer: string): void {
@@ -81,7 +85,7 @@ beforeEach(async () => {
   reportedHostId = host.descriptor!.hostId
   credentials = new AgentCredentials(join(root, 'desktop'), new HostCredentialEncryption('synthetic-desktop-credential-key')); await credentials.load()
   router = new DesktopHostRouter(emptyDesktopState)
-  launchers.length = 0; failures.length = 0; stops.length = 0; answers.length = 0; askOnConnect = undefined; onConnect = undefined; opened.length = 0; scheduled.length = 0; retryDelay = () => 0; owned = true; stopResult = true; beforeStopReply = async () => undefined; tunnelUrl = undefined
+  launchers.length = 0; failures.length = 0; stops.length = 0; answers.length = 0; askOnConnect = undefined; onConnect = undefined; opened.length = 0; scheduled.length = 0; retryDelay = () => 0; owned = true; stopResult = true; beforeStopReply = async () => undefined; tunnelUrl = undefined; updateHost = noUpdates
   manager = newManager()
   await manager.start()
 })
@@ -671,5 +675,98 @@ describe('a host from before protocol v1 froze', () => {
     expect(manager.get().hosts[0]!.owned).toBeUndefined()
     expect(manager.get().hosts[0]!.error).toBe(hostVersionMismatch(packageVersion, undefined, false))
     expect(scheduled).toEqual([])
+  })
+})
+
+describe('updating a host from the Threads page (ADR-0040)', () => {
+  const providers = () => ({ codex: new E2EAgentHost(), claude: new E2EAgentHost(), grok: new E2EAgentHost(), devin: new E2EAgentHost() })
+  /** A thread on the host, connected, so its row on the Threads page has something to lose. */
+  async function remoteThread(): Promise<string> {
+    await manager.command({ type: 'select', hostId: reportedHostId })
+    const client = desktopWindowClient('desktop-test')
+    await router.command({ type: 'configure', patch: { provider: 'codex', enabledProviders: ['codex'] } }, client)
+    await router.command({ type: 'connect', provider: 'codex' }, client)
+    const state = await router.command({ type: 'create-project', provider: 'codex', title: 'Remote', path: root, useExisting: true }, client)
+    const project = state.host.projects.find(item => item.path === root)!
+    const threadId = randomUUID()
+    await router.command({ type: 'create-thread', projectId: project.id, threadId, title: 'Remote task', modelId: state.host.models[0]!.id, managed: false, workingCopy: 'shared' }, client)
+    const qualified = hostEntityKey(reportedHostId, threadId)
+    await router.command({ type: 'select-thread', threadId: qualified }, client)
+    return qualified
+  }
+  const row = (id: string) => router.shell().host.threads.find(thread => thread.id === id)
+  beforeEach(async () => {
+    // The fixture host runs an older Sotto than this computer.
+    await manager.close(); await host.close()
+    host = await startHeadlessHost({ dataDirectory: join(root, 'remote'), port: 0, providers: providers(), reasoner: e2eAgentReasoner, sottoVersion: '0.0.1' })
+    manager = newManager(); await manager.start()
+  })
+  it('knows which Sotto a connected host runs, and offers it to an update with the folders it is installed in', async () => {
+    const remote = await add()
+    expect(manager.get().hosts[0]).toMatchObject({ phase: 'connected', version: '0.0.1' })
+    expect(manager.updateCandidates()).toEqual([{ id: remote.id, name: 'Forge fixture', hostId: reportedHostId, version: '0.0.1', owned: true, installPath: '/opt/sotto', dataDirectory: '/data/sotto' }])
+    await manager.command({ type: 'disconnect', id: remote.id })
+    expect(manager.get().hosts[0]!.version).toBeUndefined()
+    expect(manager.updateCandidates()).toEqual([])
+  })
+  it('keeps the host\'s threads on the page through the restart, reading Reconnecting, and connects to the new version in their place', async () => {
+    const remote = await add()
+    const thread = await remoteThread()
+    expect(row(thread)).toMatchObject({ clientConnected: true })
+    updateHost = async operation => {
+      expect(operation).toEqual({ op: 'update-restart', version: packageVersion })
+      // The old host stops, which drops this computer's socket; its thread stays, and says why it cannot send.
+      await host.close()
+      await vi.waitFor(() => expect(row(thread)).toMatchObject({ clientConnected: false, clientReconnecting: true }))
+      expect(router.shell().activeThreadId).toBe(thread)
+      host = await startHeadlessHost({ dataDirectory: join(root, 'remote'), port: 0, providers: providers(), reasoner: e2eAgentReasoner })
+      return { type: 'ready', v: 1, status: 'ready', hostId: reportedHostId, pid: process.pid, port: host.descriptor!.port, owned: true }
+    }
+    expect(await manager.restartForUpdate(remote.id, packageVersion)).toMatchObject({ type: 'ready' })
+    expect(manager.get().hosts[0]).toMatchObject({ phase: 'connected', version: packageVersion })
+    expect(row(thread)).toMatchObject({ id: thread })
+    expect(row(thread)!.clientReconnecting).toBeUndefined()
+    // The same thread, still selected, on a fresh connection, with no retry left behind.
+    expect(router.shell().activeThreadId).toBe(thread)
+    expect(launchers).toHaveLength(2)
+    expect(scheduled).toEqual([])
+    expect(manager.updateCandidates()[0]!.version).toBe(packageVersion)
+  })
+  it('takes the threads off the page once the host cannot be reached again, and says why on its row', async () => {
+    const remote = await add()
+    const thread = await remoteThread()
+    updateHost = async () => { await host.close(); throw new SshFailure('update-failed') }
+    failures.push(new SshFailure('archive-missing'))
+    await expect(manager.restartForUpdate(remote.id, packageVersion)).rejects.toMatchObject({ code: 'update-failed' })
+    expect(row(thread)).toBeUndefined()
+    expect(manager.get().hosts[0]).toMatchObject({ phase: 'error', error: 'The host installation was not found. Check its folder on the SSH host and reconnect.' })
+  })
+  it('carries on over the same connection when the host refuses the restart before stopping anything', async () => {
+    const remote = await add()
+    const thread = await remoteThread()
+    updateHost = async () => ({ type: 'error', reason: 'update-stop-failed' })
+    expect(await manager.restartForUpdate(remote.id, packageVersion)).toEqual({ type: 'error', reason: 'update-stop-failed' })
+    expect(launchers).toHaveLength(1)
+    expect(row(thread)).toMatchObject({ clientConnected: true })
+    expect(row(thread)!.clientReconnecting).toBeUndefined()
+    // The connection is still the host's: a later drop reconnects as any drop does.
+    launchers[0]!.callbacks!.onDisconnected!('dropped')
+    await vi.waitFor(() => expect(manager.get().hosts[0]!.phase).toBe('connected'))
+    expect(launchers).toHaveLength(2)
+  })
+  it('reconnects a connection dropped while an update is under way, although the user\'s own commands on the host wait', async () => {
+    const remote = await add()
+    manager.useUpdates({ state: () => [], command: async () => undefined, subscribe: () => () => undefined,
+      busy: id => id === remote.id ? 'Sotto is updating the host on Forge fixture. Nothing was changed. Wait for the update to finish, then try again.' : undefined })
+    await expect(manager.command({ type: 'disconnect', id: remote.id })).rejects.toThrow('Sotto is updating the host on Forge fixture.')
+    launchers[0]!.callbacks!.onDisconnected!('dropped')
+    await vi.waitFor(() => expect(manager.get().hosts[0]!.phase).toBe('connected'))
+    expect(launchers).toHaveLength(2)
+  })
+  it('refuses a restart for a host Sotto did not start', async () => {
+    owned = false
+    const remote = await add()
+    await expect(manager.restartForUpdate(remote.id, packageVersion)).rejects.toThrow('Sotto did not start the host on Forge fixture')
+    expect(manager.get().hosts[0]!.phase).toBe('connected')
   })
 })

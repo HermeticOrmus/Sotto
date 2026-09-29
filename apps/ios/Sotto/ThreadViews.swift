@@ -17,8 +17,24 @@ struct ThreadView: View {
     private var detail: ThreadDetail? { model.detail(for: ref) }
     var body: some View {
         VStack(spacing: 0) {
-            Picker("Show", selection: $pane) { ForEach(Pane.allCases) { Text($0.rawValue).tag($0) } }
-                .pickerStyle(.segmented).padding(.horizontal, 16).padding(.vertical, 8)
+            VStack(alignment: .leading, spacing: 9) {
+                Text(thread?.title ?? "Thread").font(.figtree(25, .title2, .semibold))
+                    .fixedSize(horizontal: false, vertical: true).accessibilityAddTraits(.isHeader)
+                Text("\(Words.provider(thread?.providerId)) · \(model.name(ref.hostID))")
+                    .font(.figtree(13, .footnote)).foregroundStyle(Palette.muted)
+            }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 22).padding(.vertical, 10)
+            HStack(spacing: 24) {
+                ForEach(Pane.allCases) { choice in
+                    Button { pane = choice } label: {
+                        Text(choice.rawValue).font(.figtree(15, .subheadline))
+                            .foregroundStyle(pane == choice ? Palette.ink : Palette.muted).frame(minHeight: 44)
+                            .overlay(alignment: .bottom) { Rectangle().fill(pane == choice ? Palette.accent : .clear).frame(height: 2) }
+                    }.buttonStyle(.plain).accessibilityAddTraits(pane == choice ? .isSelected : [])
+                        .accessibilityIdentifier("thread-pane-\(choice.rawValue.lowercased())")
+                }
+                Spacer(minLength: 0)
+            }.padding(.horizontal, 22)
+            Divider().overlay(Palette.hairline)
             ComputerBanner(hostID: ref.hostID).padding(.horizontal, 16)
             if let problem = model.detailProblem, model.online(ref.hostID) {
                 VStack(alignment: .leading, spacing: 8) {
@@ -32,20 +48,20 @@ struct ThreadView: View {
             }
         }
         .background(Palette.canvas)
-        .navigationTitle(thread?.title ?? "Thread").navigationBarTitleDisplayMode(.inline)
+        .navigationTitle(model.name(ref.hostID)).navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(Palette.canvas, for: .navigationBar)
         .toolbar(.hidden, for: .tabBar)
         .safeAreaInset(edge: .bottom, spacing: 0) { ComposerView(ref: ref) { shown = $0.id; open = $0 } }
         .task(id: ref) { await model.select(ref); offer() }
         .onDisappear { Task { if model.selected == ref { await model.select(nil) } } }
-        .onChange(of: thread?.requests.first?.id) { _, _ in offer() }
+        .onChange(of: thread?.requests.map(\.id)) { _, _ in offer() }
         .sheet(item: $open, onDismiss: { if let shown { setAside.insert(shown) }; shown = nil; offer() }) { request in
             RequestSheet(ref: ref, request: request).presentationDetents([.medium, .large]).presentationDragIndicator(.visible)
         }
     }
     /// Opens the thread's waiting request once; after "Not now" it waits in the reply box.
     private func offer() {
-        guard open == nil, let request = thread?.requests.first, !setAside.contains(request.id) else { return }
+        guard open == nil, let request = thread?.requests.first(where: { !setAside.contains($0.id) }) else { return }
         shown = request.id; open = request
     }
 }
@@ -112,12 +128,10 @@ private struct MessageBubble: View, Equatable {
                 .background(Palette.bubble, in: UnevenRoundedRectangle(topLeadingRadius: 20, bottomLeadingRadius: 20, bottomTrailingRadius: 6, topTrailingRadius: 20))
                 .frame(maxWidth: .infinity, alignment: .trailing).padding(.leading, 48)
         } else if message.role == "assistant" {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(provider).font(.caption).foregroundStyle(Palette.muted).padding(.leading, 6)
-                content.padding(.horizontal, 14).padding(.vertical, 10)
-                    .background(Palette.surface, in: UnevenRoundedRectangle(topLeadingRadius: 20, bottomLeadingRadius: 6, bottomTrailingRadius: 20, topTrailingRadius: 20))
-                    .overlay(UnevenRoundedRectangle(topLeadingRadius: 20, bottomLeadingRadius: 6, bottomTrailingRadius: 20, topTrailingRadius: 20).stroke(Palette.hairline, lineWidth: 1))
-            }.frame(maxWidth: .infinity, alignment: .leading).padding(.trailing, 24)
+            VStack(alignment: .leading, spacing: 12) {
+                Text(provider).font(.figtree(13, .footnote, .semibold)).foregroundStyle(Palette.muted)
+                content.lineSpacing(4)
+            }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 10)
         } else {
             Text(message.text).font(.footnote).foregroundStyle(Palette.muted).frame(maxWidth: .infinity)
         }
@@ -237,8 +251,20 @@ private struct ComposerView: View {
         VStack(spacing: 0) {
             Divider().overlay(Palette.hairline)
             if let request = model.thread(ref)?.requests.first {
-                Button(request.kind == "permission" ? "Review the permission" : "Answer the question") { openRequest(request) }
-                    .buttonStyle(ActionStyle(wide: true)).padding(12)
+                let requests = model.thread(ref)?.requests ?? []
+                if requests.count > 1 {
+                    Menu {
+                        ForEach(requests) { pending in
+                            Button(pending.questions?.first?.question ?? pending.text) { openRequest(pending) }
+                        }
+                    } label: {
+                        Label("Review \(requests.count) requests", systemImage: "questionmark.bubble")
+                            .frame(maxWidth: .infinity, minHeight: 48)
+                    }.buttonStyle(ActionStyle(wide: true)).padding(12).accessibilityIdentifier("thread-requests")
+                } else {
+                    Button(request.kind == "permission" ? "Review the permission" : "Answer the question") { openRequest(request) }
+                        .buttonStyle(ActionStyle(wide: true)).padding(12)
+                }
             } else {
                 HStack(alignment: .bottom, spacing: 8) {
                     TextField("Reply", text: Binding(get: { model.drafts[ref.id] ?? "" }, set: { model.drafts[ref.id] = $0 }), axis: .vertical)
@@ -297,6 +323,9 @@ private struct RequestSheet: View {
                         permission(current, thread)
                     } else {
                         question(current, thread)
+                    }
+                    if !current.supported || !model.mayAnswer(ref.hostID) || current.kind == "permission" {
+                        Button("Not now") { dismiss() }.buttonStyle(PlainStyle(wide: true))
                     }
                     if let feedback = model.feedback { Text(feedback).font(.subheadline).accessibilityAddTraits(.updatesFrequently) }
                 } else {

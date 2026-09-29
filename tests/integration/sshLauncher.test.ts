@@ -8,6 +8,8 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { SshFailure, SshHostLauncher, type SshApproval, type SshPrompt } from '../../src/main/hosts/sshLauncher'
 import { CONTROL_OPTIONS, type SpawnSsh } from '../../src/main/hosts/sshProcess'
 import { LAUNCH_SCRIPT_SOURCE } from '../../src/main/hosts/launchScript'
+import { createServer } from 'node:http'
+import { hostRelease, localArchiveName, releasesPage, sha256, sidecar, tarGz } from '../fixtures/hostArchive'
 
 const directories: string[] = [], launchers: SshHostLauncher[] = [], hosts: number[] = []
 afterEach(async () => {
@@ -18,13 +20,13 @@ afterEach(async () => {
 const configuration = { target: 'user@forge', installPath: '/opt/sotto release', dataDirectory: '/data/sotto' }
 const SCRIPT_SHA = createHash('sha256').update(LAUNCH_SCRIPT_SOURCE).digest('hex')
 interface Spawned { type: string; args: string[]; tunnel: boolean; resolve: boolean; op?: string; stdinSha256: string; askpass: boolean }
-async function fixture(mode = 'started', options: { authenticationTimeoutMs?: number; approvalTimeoutMs?: number; startMs?: number; holdMs?: number; version?: string; platform?: NodeJS.Platform } = {}) {
+async function fixture(mode = 'started', options: { authenticationTimeoutMs?: number; approvalTimeoutMs?: number; startMs?: number; holdMs?: number; version?: string; platform?: NodeJS.Platform; readyTimeoutMs?: number } = {}) {
   const path = await mkdtemp(join(tmpdir(), 'sotto-ssh-')); directories.push(path)
   const record = join(path, 'ssh.jsonl')
   const spawner: SpawnSsh = (_file, args, spawnOptions) => spawn(process.execPath, [resolve('tests/fixtures/fakeSsh.mjs'), ...args],
     { shell: false, windowsHide: true, stdio: [spawnOptions.stdin, 'pipe', 'pipe'],
       env: { ...spawnOptions.env, FAKE_SSH_MODE: mode, FAKE_SSH_RECORD: record, FAKE_SSH_ROOT: path, FAKE_SSH_START_MS: String(options.startMs ?? 0), FAKE_SSH_HOLD_MS: String(options.holdMs ?? 200), FAKE_SSH_VERSION: options.version ?? '' } })
-  const launcher = new SshHostLauncher({ spawn: spawner, authenticationTimeoutMs: options.authenticationTimeoutMs ?? 10_000, readyTimeoutMs: 5000,
+  const launcher = new SshHostLauncher({ spawn: spawner, authenticationTimeoutMs: options.authenticationTimeoutMs ?? 10_000, readyTimeoutMs: options.readyTimeoutMs ?? 5000,
     ...(options.approvalTimeoutMs ? { approvalTimeoutMs: options.approvalTimeoutMs } : {}),
     ...(options.platform ? { platform: options.platform } : {}) })
   launchers.push(launcher)
@@ -352,4 +354,66 @@ it('reports a Node too new on the installation step, after SSH signed in', async
   expect(error.code).toBe('node-too-new')
   expect(error.message).toBe('The SSH host runs Node 26.1.0, which is newer than this host release supports. Install Node 24 for that SSH account, then reconnect.')
   expect(steps).toEqual(['reach', 'install'])
+})
+
+// A host update over the same path (ADR-0040): the real launch script behind the fake ssh, a stand-in releases page.
+async function installedFlat(path: string): Promise<void> {
+  const install = join(path, 'opt', 'sotto release', 'host')
+  await mkdir(install, { recursive: true })
+  await writeFile(join(install, '..', 'package.json'), JSON.stringify({ version: '1.0.0', type: 'module' }))
+  await copyFile(resolve('tests/fixtures/fakeSshHost.mjs'), join(install, 'index.js'))
+}
+const runningHost = async (path: string): Promise<number> => (JSON.parse(await readFile(join(path, 'data', 'sotto', 'host-listener.json'), 'utf8')) as { pid: number }).pid
+it('updates a host it started over SSH: the host downloads and checks, unpacks beside it, and restarts into the new version', async () => {
+  // Each start gets the 30 seconds a real one does: the restart starts a host while the whole suite runs beside it.
+  const { launcher, path, spawns } = await fixture('run', { readyTimeoutMs: 30_000 })
+  await installedFlat(path)
+  const connection = await launcher.connect(configuration)
+  hosts.push(await runningHost(path))
+  const archive = tarGz(hostRelease('9.9.9', await readFile(resolve('tests/fixtures/fakeSshHost.mjs'), 'utf8')))
+  const file = localArchiveName('9.9.9')
+  const page = await releasesPage(new Map<string, Uint8Array | string>([[`/v9.9.9/${file}`, archive], [`/v9.9.9/${file}.sha256`, sidecar(archive, file)]]))
+  try {
+    const steps: string[] = []
+    const fetched = await connection.updateHost({ op: 'update-fetch', version: '9.9.9', releasesUrl: page.url }, { onStep: step => steps.push(step) })
+    expect(fetched).toEqual({ type: 'update-fetched', file, sha256: sha256(archive) })
+    expect(await connection.updateHost({ op: 'update-install', version: '9.9.9', file, sha256: sha256(archive) }, { onStep: step => steps.push(step) })).toEqual({ type: 'update-installed', version: '9.9.9' })
+    const ready = await connection.updateHost({ op: 'update-restart', version: '9.9.9' }, { onStep: step => steps.push(step) })
+    expect(ready).toMatchObject({ type: 'ready', owned: true, hostId: connection.hostId })
+    if (ready.type === 'ready') hosts.push(ready.pid)
+    expect(steps).toEqual(['check', 'install', 'restart'])
+    // The restart names the host this connection reached, and every operation took the launch script on stdin.
+    const updates = (await spawns()).filter(item => item.op?.startsWith('update-'))
+    expect(updates.map(item => item.op)).toEqual(['update-fetch', 'update-install', 'update-restart'])
+    for (const item of updates) expect(item.stdinSha256).toBe(SCRIPT_SHA)
+    expect(await readFile(join(path, 'opt', 'sotto release', 'current'), 'utf8')).toBe('9.9.9\n')
+  } finally { await page.close() }
+})
+it('copies an archive to the host over SSH with the receive script and the archive on stdin', async () => {
+  const { launcher, path, spawns } = await fixture('run')
+  await installedFlat(path)
+  const connection = await launcher.connect(configuration)
+  hosts.push(await runningHost(path))
+  const archive = tarGz(hostRelease('9.9.9', 'export {}'))
+  const file = localArchiveName('9.9.9')
+  expect(await connection.updateHost({ op: 'update-receive', file, size: archive.byteLength, archive })).toEqual({ type: 'update-received', size: archive.byteLength })
+  expect(sha256(await readFile(join(path, 'opt', 'sotto release', 'versions', '.incoming', file)))).toBe(sha256(archive))
+  expect((await spawns()).find(item => item.op === 'update-receive')!.stdinSha256).toBe(sha256(archive))
+})
+it('ends the ssh of an update step when the update is cancelled, and keeps the connection', async () => {
+  const { launcher, path } = await fixture('run')
+  await installedFlat(path)
+  const connection = await launcher.connect(configuration)
+  hosts.push(await runningHost(path))
+  // A releases page that never answers, so the download waits until it is cancelled.
+  const silent = createServer(() => undefined)
+  await new Promise<void>(done => silent.listen(0, '127.0.0.1', done))
+  const address = silent.address() as { port: number }
+  try {
+    const cancel = new AbortController()
+    const pending = connection.updateHost({ op: 'update-fetch', version: '9.9.9', releasesUrl: `http://127.0.0.1:${address.port}` }, { signal: cancel.signal })
+    setTimeout(() => cancel.abort(), 300)
+    expect((await failure(pending)).code).toBe('cancelled')
+    expect(await connection.showHostPairingCode()).toMatchObject({ code: 'ABC123' })
+  } finally { silent.closeAllConnections(); await new Promise(done => silent.close(done)) }
 })

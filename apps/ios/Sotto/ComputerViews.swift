@@ -32,14 +32,22 @@ struct ComputersView: View {
 }
 
 private struct ComputerRow: View {
+    @Environment(\.dynamicTypeSize) private var textSize
     let name: String
     let status: ComputerStatus
     var body: some View {
         HStack(spacing: 12) {
             ComputerDot(status: status, size: 10)
-            Text(name).fontWeight(.semibold).lineLimit(1)
-            Spacer(minLength: 8)
-            Text(status.words).foregroundStyle(Palette.muted)
+            if textSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(name).fontWeight(.semibold).fixedSize(horizontal: false, vertical: true)
+                    Text(status.words).foregroundStyle(Palette.muted).fixedSize(horizontal: false, vertical: true)
+                }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 12)
+            } else {
+                Text(name).fontWeight(.semibold).lineLimit(1)
+                Spacer(minLength: 8)
+                Text(status.words).foregroundStyle(Palette.muted)
+            }
             Image(systemName: "chevron.right").font(.footnote).foregroundStyle(Palette.muted).accessibilityHidden(true)
         }
         .padding(.horizontal, 16).frame(minHeight: 52).contentShape(Rectangle())

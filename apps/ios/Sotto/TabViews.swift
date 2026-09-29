@@ -1,316 +1,201 @@
 import SwiftUI
 import SottoCore
 
-// MARK: Needs you
-
-/// Home: every question and permission waiting on the user on every computer, answerable in place,
-/// then what is working. A computer that can't be reached gets a line and hides nothing else.
-struct NeedsYouView: View {
-    @EnvironmentObject var model: AppModel
-    var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 12) {
-                ComputerStrip()
-                FeedbackBanner()
-                ForEach(unreachable, id: \.hostID) { computer in UnreachableNote(computer: computer) }
-                if waiting.isEmpty {
-                    if let checking { Checking(place: checking) } else { NothingWaiting(place: place) }
-                }
-                ForEach(waiting) { item in RequestCard(item: item) }
-                if !working.isEmpty {
-                    SectionLabel("Working")
-                    ForEach(working) { row in
-                        NavigationLink(value: ThreadRoute(ref: row.ref)) { WorkingRow(row: row) }.buttonStyle(.plain)
-                        Divider().overlay(Palette.hairline)
-                    }
-                }
-            }.padding(.horizontal, 16).padding(.bottom, 24)
-        }
-        .refreshable { await model.refresh() }
-        .page("Needs you")
-    }
-    private var lists: [ComputerThreads] { model.lists }
-    private var waiting: [Waiting] { ThreadGroups.waiting(lists, show: model.show) }
-    private var working: [HostedThread] { ThreadGroups.working(lists, show: model.show) }
-    private var unreachable: [ComputerThreads] { ThreadGroups.unreachable(lists, show: model.show) }
-    private var place: String {
-        if case .only(let hostID) = model.show { return model.name(hostID) }
-        return model.computers.count == 1 ? model.name(model.computers[0].hostID) : "your computers"
-    }
-    /// The computers the strip admits that are still connecting: "Nothing needs you" would be a guess.
-    private var checking: String? {
-        let names = lists.filter { model.show.admits($0.hostID) && $0.status == .connecting }.map(\.name)
-        if names.isEmpty { return nil }
-        return names.count == 1 ? names[0] : "your computers"
-    }
-}
-
-private struct Checking: View {
-    let place: String
-    var body: some View {
-        HStack(spacing: 10) {
-            ProgressView().controlSize(.small)
-            Text("Checking \(place)…").foregroundStyle(Palette.muted)
-        }
-        .frame(maxWidth: .infinity).padding(.vertical, 26)
-        .accessibilityElement(children: .combine)
-    }
-}
-
-private struct NothingWaiting: View {
-    let place: String
-    var body: some View {
-        VStack(spacing: 6) {
-            Image(systemName: "checkmark").font(.title2).foregroundStyle(Palette.accent).accessibilityHidden(true)
-            Text("Nothing needs you").fontWeight(.semibold)
-            Text("Questions and permissions from threads on \(place) appear here.")
-                .font(.subheadline).foregroundStyle(Palette.muted).multilineTextAlignment(.center)
-        }
-        .frame(maxWidth: .infinity).padding(.vertical, 26).padding(.horizontal, 20)
-        .overlay(RoundedRectangle(cornerRadius: 20).stroke(Palette.border, style: StrokeStyle(lineWidth: 1, dash: [5, 4])))
-        .accessibilityElement(children: .combine)
-    }
-}
-
-/// One computer this iPhone can't reach: anything waiting there shows once it's back.
-private struct UnreachableNote: View {
-    @EnvironmentObject var model: AppModel
-    let computer: ComputerThreads
-    var body: some View {
-        HStack(alignment: .center, spacing: 10) {
-            Image(systemName: "desktopcomputer").foregroundStyle(Palette.muted).accessibilityHidden(true)
-            sentence.font(.subheadline).fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 4)
-            Button("Try again") { Task { await model.connect(computer.hostID) } }
-                .buttonStyle(PlainStyle(compact: true))
-                .accessibilityLabel("Try reaching \(computer.name) again")
-        }
-        .accessibilityElement(children: .contain)
-    }
-    private var sentence: Text {
-        Text("Can’t reach \(computer.name).").fontWeight(.semibold).foregroundColor(Palette.ink)
-            + Text(" Anything waiting there shows here once it’s back.").foregroundColor(Palette.muted)
-    }
-}
-
-private struct WorkingRow: View {
-    let row: HostedThread
-    var body: some View {
-        HStack(spacing: 12) {
-            StatusDot(state: .working)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(row.thread.title).fontWeight(.semibold).lineLimit(1)
-                Text(line).font(.subheadline).foregroundStyle(Palette.muted).lineLimit(1)
-            }
-            Spacer(minLength: 0)
-            Image(systemName: "chevron.right").font(.footnote).foregroundStyle(Palette.muted).accessibilityHidden(true)
-        }
-        .frame(minHeight: 44).contentShape(Rectangle())
-        .accessibilityElement(children: .combine)
-    }
-    private var line: String {
-        var parts: [String] = [Words.provider(row.thread.providerId), row.computer]
-        if let ago = Words.ago(row.thread.summary?.runningTurnStartedAt) { parts.append("started \(ago)") }
-        return parts.joined(separator: " · ")
-    }
-}
-
-/// The top of a card: the thread, how long ago, and where it is. A press opens the thread.
-private struct CardHeader: View {
-    let row: HostedThread
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 8) {
-                StatusDot(state: ThreadState(row.thread))
-                Text(row.thread.title).font(.subheadline).fontWeight(.semibold).lineLimit(1)
-                Spacer(minLength: 4)
-                if let ago = Words.ago(row.thread.summary?.lastMessageAt) { Text(ago).font(.footnote).foregroundStyle(Palette.muted) }
-            }
-            Text(Words.place(row)).font(.footnote).foregroundStyle(Palette.muted).lineLimit(1)
-        }
-        .frame(minHeight: 44).contentShape(Rectangle())
-    }
-}
-
-/// One waiting request. A tap on a choice answers it on the thread's own computer; nothing is chosen
-/// or sent for the user.
-struct RequestCard: View {
-    @EnvironmentObject var model: AppModel
-    let item: Waiting
-    private var row: HostedThread { item.thread }
-    private var request: AgentRequest { item.request }
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            NavigationLink(value: ThreadRoute(ref: row.ref)) { CardHeader(row: row) }
-                .buttonStyle(.plain).accessibilityLabel("Open \(row.thread.title) on \(row.computer)")
-            Text(headline).fixedSize(horizontal: false, vertical: true)
-            if let command = request.context?.command { CommandBox(command: command) }
-            actions
-        }.card()
-    }
-    private var headline: String {
-        if request.kind == "permission", request.context?.command != nil { return "\(Words.provider(row.thread.providerId)) wants to run a command." }
-        if let questions = request.questions, questions.count == 1 { return questions[0].question }
-        return request.text
-    }
-    private var enabled: Bool { model.canAnswer(request, in: row.ref) && !model.answering(row.ref.hostID) }
-    @ViewBuilder private var actions: some View {
-        if !request.supported {
-            explain("This request can’t be answered here. Open the thread to see it.")
-        } else if !model.mayAnswer(row.ref.hostID) {
-            explain("This iPhone can’t answer on \(row.computer) yet. Turn on Can answer for it in Sotto on \(row.computer), or answer there.")
-        } else if request.kind == "permission" {
-            permission
-        } else if let options = request.oneTapOptions {
-            VStack(spacing: 6) {
-                ForEach(options) { option in
-                    Button { answer(option: option) } label: { OptionLabel(option: option) }.buttonStyle(ChoiceStyle())
-                }
-            }.disabled(!enabled)
-        } else { openThread("Answer") }
-    }
-    @ViewBuilder private var permission: some View {
-        if let choices = request.cardPermissionChoices {
-            HStack(spacing: 8) {
-                ForEach(choices.sorted { $0.kind == "deny" && $1.kind != "deny" }) { choice in
-                    if choice.kind == "deny" { Button(choice.label) { answer(choice: choice.id) }.buttonStyle(PlainStyle(wide: true)) }
-                    else { Button(choice.label) { answer(choice: choice.id) }.buttonStyle(ActionStyle(wide: true)) }
-                }
-            }.disabled(!enabled)
-            if (request.permissionChoices?.count ?? 0) > choices.count { openThread("More choices") }
-        } else if request.permissionChoices == nil {
-            HStack(spacing: 8) {
-                Button("Deny") { answer(choice: "deny") }.buttonStyle(PlainStyle(wide: true))
-                Button("Allow") { answer(choice: "allow") }.buttonStyle(ActionStyle(wide: true))
-            }.disabled(!enabled)
-        } else { openThread("Answer in the thread") }
-    }
-    private func explain(_ text: String) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(text).font(.subheadline).foregroundStyle(Palette.muted)
-            openThread("Open thread")
-        }
-    }
-    private func openThread(_ label: String) -> some View {
-        NavigationLink(value: ThreadRoute(ref: row.ref)) { Text(label).frame(maxWidth: .infinity) }.buttonStyle(PlainStyle(wide: true))
-    }
-    private func answer(choice: String) { Task { await model.answer(request, in: row.ref, choice: choice) } }
-    private func answer(option: RequestOption) {
-        Task {
-            if let question = request.questions?.first {
-                await model.answer(request, in: row.ref, answers: [question.id: QuestionAnswer(optionIds: [option.id])])
-            } else { await model.answer(request, in: row.ref, choice: option.id) }
-        }
-    }
-}
-
-private struct OptionLabel: View {
-    let option: RequestOption
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(option.label).fontWeight(.semibold)
-            if let description = option.description { Text(description).font(.footnote).foregroundStyle(Palette.muted) }
-        }
-    }
-}
-
-// MARK: Threads
-
-/// Every computer's threads as one list, most recent first; the strip narrows it to one computer.
+/// Focus reads only host list summaries. Opening a thread subscribes to its detail.
 struct ThreadsView: View {
     @EnvironmentObject var model: AppModel
-    @State private var filter = ThreadFilter.all
+    @State private var query = ""
     @State private var settledExpanded = false
+    @FocusState private var searching: Bool
     var body: some View {
-        let rows = ThreadGroups.merged(model.lists, show: model.show, filter: filter)
-        let unsettled = rows.filter { !$0.settled }
-        let settled = rows.filter(\.settled)
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                ComputerStrip().padding(.bottom, 8)
-                FeedbackBanner().padding(.bottom, 8)
-                Picker("Show", selection: $filter) { ForEach(ThreadFilter.allCases) { Text($0.rawValue).tag($0) } }
-                    .pickerStyle(.segmented).padding(.bottom, 6)
-                if rows.isEmpty { Text(emptyText).foregroundStyle(Palette.muted).padding(.vertical, 28) }
-                ForEach(unsettled) { row in
-                    NavigationLink(value: ThreadRoute(ref: row.ref)) { ThreadRow(row: row) }.buttonStyle(.plain)
-                    Divider().overlay(Palette.hairline).padding(.leading, 48)
+        let groups = FocusThreads(model.lists, show: model.show, query: query)
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 0) {
+                ComputerMenu().padding(.bottom, 6)
+                searchPill.padding(.bottom, 12)
+                HStack(spacing: 18) {
+                    (Text("\(groups.working.count)").foregroundColor(Palette.accent) + Text(" working"))
+                    Text("\(groups.requestCount) \(groups.requestCount == 1 ? "needs" : "need") you")
+                }.font(.figtree(13, .footnote)).foregroundStyle(Palette.muted)
+            }.padding(.horizontal, 22).padding(.bottom, 8)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                FeedbackBanner().padding(.top, 8)
+                ForEach(model.lists.filter { model.show.admits($0.hostID) && $0.status != .online }, id: \.hostID) { computer in
+                    connectionNote(computer).padding(.top, 12)
                 }
-                if !settled.isEmpty {
-                    Button { settledExpanded.toggle() } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: settledExpanded ? "chevron.down" : "chevron.right").font(.caption)
-                            Text("Settled").fontWeight(.semibold)
-                            Spacer()
-                            Text("\(settled.count)")
-                        }.foregroundStyle(Palette.muted).frame(minHeight: 48).contentShape(Rectangle())
+                if groups.isEmpty {
+                    Text(groups.searching ? "No matching threads." : model.anyConnecting ? "Reading threads…" : "No threads here yet. Start one in Sotto on your computer.")
+                        .foregroundStyle(Palette.muted).padding(.vertical, 28)
+                }
+                if !groups.questions.isEmpty {
+                    FocusHeading("Needs your answer", count: groups.questions.count)
+                    ForEach(groups.questions) { row in threadLink(row, style: .question).padding(.bottom, 10) }
+                }
+                if !groups.working.isEmpty {
+                    FocusHeading("Working now", count: groups.working.count)
+                    ForEach(groups.working) { row in threadLink(row, style: .working).padding(.bottom, 10) }
+                }
+                if !groups.recent.isEmpty {
+                    FocusHeading("Recent", count: groups.recent.count)
+                    ForEach(groups.recent) { row in threadLink(row, style: .recent); Divider().overlay(Palette.hairline) }
+                }
+                if !groups.settled.isEmpty {
+                    if groups.searching { FocusHeading("Settled", count: groups.settled.count) }
+                    else {
+                        Button { settledExpanded.toggle() } label: {
+                            HStack(spacing: 9) {
+                                Image(systemName: settledExpanded ? "chevron.down" : "chevron.right").font(.caption)
+                                Text("Settled"); Spacer(); Text("\(groups.settled.count)")
+                            }.font(.figtree(15, .subheadline)).foregroundStyle(Palette.muted)
+                                .frame(minHeight: 52).contentShape(Rectangle())
+                        }.buttonStyle(.plain).padding(.top, 16)
+                            .accessibilityIdentifier("settled-threads")
+                            .accessibilityLabel(settledExpanded ? "Hide settled threads" : "Show settled threads")
+                            .accessibilityValue("\(groups.settled.count) threads, \(settledExpanded ? "expanded" : "collapsed")")
                     }
-                    .buttonStyle(.plain).padding(.top, 12)
-                    .accessibilityLabel(settledExpanded ? "Hide settled threads" : "Show settled threads")
-                    .accessibilityValue("\(settled.count) threads, \(settledExpanded ? "expanded" : "collapsed")")
-                    if settledExpanded {
-                        ForEach(settled) { row in
-                            NavigationLink(value: ThreadRoute(ref: row.ref)) { ThreadRow(row: row) }.buttonStyle(.plain)
-                            Divider().overlay(Palette.hairline).padding(.leading, 48)
-                        }
+                    if settledExpanded || groups.searching {
+                        ForEach(groups.settled) { row in threadLink(row, style: .recent); Divider().overlay(Palette.hairline) }
                     }
                 }
-            }.padding(.horizontal, 16).padding(.bottom, 24)
-        }
-        .refreshable { await model.refresh() }
-        .page("Threads")
+                }.padding(.horizontal, 22).padding(.bottom, 24)
+            }.scrollDismissesKeyboard(.interactively).refreshable { await model.refresh() }
+        }.page("Threads")
     }
-    private var place: String {
-        if case .only(let hostID) = model.show { return model.name(hostID) }
-        return model.computers.count == 1 ? model.name(model.computers[0].hostID) : "your computers"
-    }
-    private var emptyText: String {
-        if model.anyConnecting { return "Reading threads…" }
-        if filter == .all { return "No threads on \(place) yet. Start one in Sotto on the computer." }
-        return "No threads here."
-    }
-}
-
-/// A thread: what it's doing, then its computer and project. A computer that can't be reached shows
-/// its threads as it last shared them, in muted text.
-struct ThreadRow: View {
-    let row: HostedThread
-    var body: some View {
-        HStack(spacing: 12) {
-            ProviderBadge(providerID: row.thread.providerId, state: state)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(row.thread.title).fontWeight(.semibold).lineLimit(1).foregroundStyle(row.status == .unreachable ? Palette.muted : Palette.ink)
-                line.font(.subheadline).lineLimit(1)
+    private var searchPill: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "magnifyingglass").foregroundStyle(Palette.muted).accessibilityHidden(true)
+            TextField("Search threads", text: $query, prompt: Text("Search threads").foregroundStyle(Palette.muted))
+                .focused($searching)
+                .font(.figtree(16, .body)).textInputAutocapitalization(.never).autocorrectionDisabled()
+                .submitLabel(.search).onSubmit { searching = false }
+                .accessibilityLabel("Search threads").accessibilityIdentifier("thread-search")
+            if !query.isEmpty {
+                Button { query = ""; searching = true } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(Palette.muted).frame(width: 44, height: 44)
+                }.buttonStyle(.plain).accessibilityLabel("Clear search")
             }
-            Spacer(minLength: 0)
-        }
-        .frame(minHeight: 56).contentShape(Rectangle())
-        .accessibilityElement(children: .combine)
+        }.padding(.leading, 16).padding(.trailing, query.isEmpty ? 16 : 2).frame(minHeight: 48)
+            .background(Palette.raised, in: Capsule())
+            .overlay(Capsule().stroke(searching ? Palette.accent : Palette.hairline, lineWidth: 1))
     }
-    private var state: ThreadState { ThreadState(row.thread) }
-    private var words: String { row.status == .unreachable ? ComputerStatus.unreachable.words : state.words }
-    private var color: Color {
-        if row.status == .unreachable { return Palette.muted }
-        if state.waitsOnYou { return Palette.warning }
-        switch state {
-        case .working, .waiting, .compacting: return Palette.accent
-        case .failed: return Palette.danger
-        default: return Palette.muted
+    private func threadLink(_ row: HostedThread, style: FocusRow.Style) -> some View {
+        NavigationLink(value: ThreadRoute(ref: row.ref)) { FocusRow(row: row, style: style) }
+            .buttonStyle(.plain).accessibilityIdentifier("thread-\(row.id)")
+    }
+    private func connectionNote(_ computer: ComputerThreads) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text(computer.status == .connecting ? "Checking \(computer.name)…" : "Can’t reach \(computer.name). Showing its last shared threads.")
+                .font(.figtree(13, .footnote)).foregroundStyle(Palette.muted)
+            if computer.status == .unreachable {
+                Button("Reconnect to \(computer.name)") { Task { await model.connect(computer.hostID) } }
+                    .font(.figtree(14, .subheadline)).frame(minHeight: 44).buttonStyle(.plain).foregroundStyle(Palette.accent)
+            }
         }
     }
-    private var rest: String { [row.computer, row.project].compactMap { $0 }.joined(separator: " · ") }
-    private var line: Text { Text(words).foregroundColor(color) + Text(" · " + rest).foregroundColor(Palette.muted) }
 }
 
-/// The agent's initial with the thread's state dot.
-private struct ProviderBadge: View {
-    let providerID: String?
-    let state: ThreadState
+private struct ComputerMenu: View {
+    @EnvironmentObject var model: AppModel
     var body: some View {
-        Text(String(Words.provider(providerID).prefix(1)))
-            .font(.figtree(14, .footnote, .bold)).foregroundStyle(Palette.muted)
-            .frame(width: 36, height: 36).background(Palette.raised, in: RoundedRectangle(cornerRadius: 10))
-            .overlay(alignment: .topTrailing) { StatusDot(state: state, size: 10).padding(2).background(Palette.canvas, in: Circle()).offset(x: 4, y: -4) }
-            .accessibilityHidden(true)
+        Menu {
+            Picker("Computer", selection: $model.show) {
+                Text("All computers").tag(ComputerFilter.all)
+                ForEach(model.computers, id: \.hostID) { computer in
+                    Text("\(computer.name) · \(model.status(computer.hostID).words)").tag(ComputerFilter.only(computer.hostID))
+                }
+            }
+        } label: {
+            HStack(spacing: 7) {
+                if case .only(let id) = model.show { ComputerDot(status: model.status(id), size: 5) }
+                else { Image(systemName: "laptopcomputer").font(.caption) }
+                Text(title)
+                Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold))
+            }.font(.figtree(14, .subheadline)).foregroundStyle(Palette.muted).frame(minHeight: 44)
+        }.accessibilityLabel("Choose a computer").accessibilityValue(title).accessibilityIdentifier("computer-filter")
+    }
+    private var title: String {
+        if case .only(let id) = model.show { return model.name(id) }
+        return "All computers"
+    }
+}
+
+private struct FocusHeading: View {
+    let title: String
+    let count: Int
+    init(_ title: String, count: Int) { self.title = title; self.count = count }
+    var body: some View {
+        HStack { Text(title); Spacer(); Text("\(count)") }
+            .font(.figtree(13, .footnote, .semibold)).foregroundStyle(Palette.muted)
+            .padding(.top, 22).padding(.bottom, 12).accessibilityAddTraits(.isHeader)
+    }
+}
+
+private struct FocusRow: View {
+    enum Style { case question, working, recent }
+    let row: HostedThread
+    let style: Style
+    private var state: ThreadState { ThreadState(row.thread) }
+    var body: some View {
+        Group {
+            switch style {
+            case .question:
+                VStack(alignment: .leading, spacing: 9) {
+                    Label("Needs you", systemImage: "questionmark.circle").font(.figtree(12, .caption)).foregroundStyle(Palette.warning)
+                    title
+                    if let request = row.thread.requests.first {
+                        Text(request.questions?.first?.question ?? request.text).font(.figtree(15, .subheadline))
+                            .foregroundStyle(Palette.muted).lineLimit(2)
+                    }
+                    metadata
+                    HStack {
+                        Text(row.thread.requests.count > 1 ? "Review \(row.thread.requests.count) requests" : row.thread.requests.first?.kind == "permission" ? "Review permission" : "Review question")
+                        Spacer(); Image(systemName: "chevron.right").accessibilityHidden(true)
+                    }.font(.figtree(14, .subheadline, .semibold)).foregroundStyle(Palette.warning).padding(.top, 3)
+                }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Palette.warningSurface, in: UnevenRoundedRectangle(bottomTrailingRadius: 14, topTrailingRadius: 14))
+                    .overlay(alignment: .leading) { Rectangle().fill(Palette.warning).frame(width: 2) }
+            case .working:
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(alignment: .firstTextBaseline) { status; Spacer(minLength: 8); timestamp }
+                    title
+                    Text(workDescription).font(.figtree(15, .subheadline)).foregroundStyle(Palette.muted).lineLimit(2)
+                    Divider().overlay(Palette.hairline).padding(.top, 3)
+                    metadata
+                }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Palette.surface, in: RoundedRectangle(cornerRadius: 17))
+                    .overlay(RoundedRectangle(cornerRadius: 17).stroke(Palette.hairline, lineWidth: 1))
+            case .recent:
+                VStack(alignment: .leading, spacing: 7) {
+                    HStack(alignment: .firstTextBaseline, spacing: 12) { title; Spacer(minLength: 0); timestamp }
+                    if !row.reachable || state == .failed { status }
+                    metadata
+                }.frame(maxWidth: .infinity, minHeight: 56, alignment: .leading).padding(.vertical, 14)
+            }
+        }.contentShape(Rectangle()).accessibilityElement(children: .combine)
+    }
+    private var title: some View {
+        Text(row.thread.title).font(.figtree(style == .working ? 18 : 16, .headline, .semibold))
+            .foregroundStyle(Palette.ink).lineLimit(3).fixedSize(horizontal: false, vertical: true)
+    }
+    private var metadata: some View {
+        Text([row.project, Words.provider(row.thread.providerId), row.computer].compactMap { $0 }.joined(separator: " · "))
+            .font(.figtree(12, .caption)).foregroundStyle(Palette.muted).fixedSize(horizontal: false, vertical: true)
+    }
+    private var timestamp: some View {
+        Text(Words.ago(row.thread.summary?.runningTurnStartedAt ?? row.thread.summary?.lastMessageAt) ?? "")
+            .font(.figtree(11, .caption2)).foregroundStyle(Palette.muted).fixedSize(horizontal: false, vertical: true)
+    }
+    private var status: some View {
+        HStack(spacing: 6) {
+            if row.reachable { StatusDot(state: state, size: 5) }
+            Text(row.reachable ? state.words : row.status.words)
+        }.font(.figtree(12, .caption)).foregroundStyle(!row.reachable ? Palette.muted : state == .failed ? Palette.danger : Palette.accent)
+    }
+    private var workDescription: String {
+        if state == .compacting { return "Making room in the thread’s context." }
+        if state == .waiting { return "A background command is still running." }
+        if row.thread.status != "running", !(row.thread.backgroundWork ?? []).isEmpty { return "Background agents are still working." }
+        return "\(Words.provider(row.thread.providerId)) is working on \(row.computer)."
     }
 }

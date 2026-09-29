@@ -70,7 +70,7 @@ public struct ComputerThreads: Sendable {
     }
 }
 
-/// A thread with the computer it lives on: a row on Threads, or a card's thread on Needs you.
+/// A thread with the computer it lives on, used by Focus rows and request counts.
 public struct HostedThread: Identifiable, Sendable {
     public let ref: ThreadRef; public let computer: String; public let status: ComputerStatus
     public let project: String?; public let thread: ThreadSummary
@@ -79,13 +79,13 @@ public struct HostedThread: Identifiable, Sendable {
     public var reachable: Bool { status == .online }
 }
 
-/// One request waiting on the user, with the thread it belongs to: a card on Needs you.
+/// One request waiting on the user, with the thread and computer it belongs to.
 public struct Waiting: Identifiable, Sendable {
     public let thread: HostedThread; public let request: AgentRequest
     public var id: String { thread.id + "/" + request.id }
 }
 
-/// The strip at the top of Needs you and Threads: every computer, or one.
+/// The computer menu on Threads: every computer, or one.
 public enum ComputerFilter: Hashable, Sendable {
     case all, only(String)
     public func admits(_ hostID: String) -> Bool {

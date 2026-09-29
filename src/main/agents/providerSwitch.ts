@@ -9,7 +9,7 @@ import { ActivitySubscribers, cloneActivitySnapshot, subscribeActivitySnapshots 
 import { join, resolve } from 'node:path'
 import { EMPTY_AGENT_HOST, PROVIDER_LABELS, parsePublicProviderEntityId, providerIdSchema, publicProviderEntityId, type AgentCapabilities, type AgentHostSnapshot, type AgentProviderStatus, type ProviderId } from '../../shared/agents'
 import { resolveModel } from '../../shared/modelCatalog'
-import { providerProblemOf } from './providerProblem'
+import { ProviderUnavailable, providerProblemOf } from './providerProblem'
 import { confirmedSettingsSnapshot, type ActivitySubscriptionOptions, type AgentHost, type AgentHostCommand, type AgentHostResult, type AgentSkillScope, type RestoredThreadHistory, type ShortTextPrompt, type ThreadHistorySource, type ThreadHostEvent, type ThreadReadPurpose } from './host'
 
 /** Public IDs are opaque to callers and reversible only at the provider boundary. */
@@ -170,7 +170,11 @@ export class ConfiguredProviderHost implements AgentHost {
         const snapshot = await this.options.hosts[id].connect()
         if (slot.epoch !== epoch) { if (!slot.wanted) this.options.hosts[id].disconnect(); return }
         this.accept(id, snapshot)
-        if (!snapshot.connected) this.failed(id, new Error(snapshot.error || `${PROVIDER_LABELS[id]} did not confirm the connection.`))
+        // A refusal an adapter returns (Claude Code's and Devin's) keeps the reason it named, as a thrown one does.
+        if (!snapshot.connected) {
+          const message = snapshot.error || `${PROVIDER_LABELS[id]} did not confirm the connection.`
+          this.failed(id, snapshot.problem ? new ProviderUnavailable(snapshot.problem, message, snapshot.version || undefined, snapshot.requiredVersion) : new Error(message))
+        }
       } catch (error) { if (slot.epoch === epoch) this.failed(id, error) }
       finally { if (slot.epoch === epoch) { slot.connecting = undefined; this.publish() } }
     })()

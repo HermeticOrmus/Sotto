@@ -352,6 +352,17 @@ describe('Threads manual composer', () => {
     expect(screen.queryByText(/Enter to send/)).not.toBeInTheDocument()
     expect(screen.getByLabelText('Thread transcript')).toHaveTextContent('Add a preview button')
   })
+
+  it('keeps the draft while the thread\'s host restarts for an update, and says that is why it cannot send (ADR-0040)', () => {
+    const state = manualState()
+    state.host.threads = state.host.threads.map(thread => ({ ...thread, clientConnected: false, clientReconnecting: true }))
+    const { prompt } = mount(state)
+    fireEvent.change(prompt(), { target: { value: 'After the update' } })
+    expect(prompt()).toBeEnabled()
+    expect(prompt()).toHaveValue('After the update')
+    expect(screen.getByRole('button', { name: 'Send prompt' })).toBeDisabled()
+    expect(screen.getByText('Its host is restarting after an update. Your draft stays here.')).toBeVisible()
+  })
 })
 
 describe('Threads project folders', () => {

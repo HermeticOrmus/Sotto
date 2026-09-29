@@ -2,6 +2,7 @@ import { z } from 'zod'
 import type { HostDeviceList, TailscaleConnectOutcome, TailscaleSummary } from './hostDevices'
 import { providerIdSchema } from './agents'
 import type { HostProviderAction, HostProviderActionResult, HostProviderJobState, HostSignInRequest, ProviderSignInView } from './hostProviders'
+import { hostUpdateCommandSchema, type HostUpdateState } from './hostUpdates'
 
 export const HOSTS_GET = 'hosts:get'
 export const HOSTS_COMMAND = 'hosts:command'
@@ -58,6 +59,8 @@ export interface HostStatus extends Omit<RemoteHost, 'enabled'> {
   reason?: string | undefined
   /** Set once a host setup check reached the host and it answered. A check pairs nothing and saves nothing. */
   checked?: boolean | undefined
+  /** The Sotto version the host said it runs, once it has answered on this connection (ADR-0040). */
+  version?: string | undefined
 }
 /** A model the host setup thread can run on: one of this computer's ready models. */
 export interface HostSetupModel { readonly id: string; readonly name: string; readonly provider: string }
@@ -108,6 +111,11 @@ export interface HostsState {
   setupChoice?: HostSetupChoice
   /** The provider job running or last ended (ADR-0035): an agent installing, updating or fixing a host's provider. */
   providerJob?: HostProviderJobState
+  /**
+   * Hosts that run an older Sotto than this computer, and each one's update (ADR-0040), in saved order. A host the
+   * user answered Not now for is left out until Sotto next starts.
+   */
+  updates?: HostUpdateState[]
 }
 export const hostsCommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('add'), host: remoteHostSchema.omit({ enabled: true }) }).strict(),
@@ -140,6 +148,8 @@ export const hostsCommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('stop-provider-job'), id: z.uuid() }).strict(),
   z.object({ type: z.literal('restart') }).strict(),
   z.object({ type: z.literal('select'), hostId: z.uuid() }).strict(),
+  /** One press in the Threads page's host update panel, for one saved host (ADR-0040). */
+  hostUpdateCommandSchema,
 ])
 export type HostsCommand = z.infer<typeof hostsCommandSchema>
 

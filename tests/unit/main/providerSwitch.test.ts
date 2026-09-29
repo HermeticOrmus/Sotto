@@ -416,4 +416,25 @@ describe('independent thread providers', () => {
     f.host.disconnect('grok')
     expect((await f.host.snapshot('codex')).providers?.find(provider => provider.id === 'grok')?.requiredVersion).toBeUndefined()
   })
+
+  it('keeps the reason a connect returns in its snapshot, as Claude Code and Devin return a refusal (#476)', async () => {
+    const f = await fixture()
+    const refuse = (adapter: FakeProviderHost, fields: Partial<AgentHostSnapshot>) => vi.spyOn(adapter, 'connect').mockImplementationOnce(async () => {
+      Object.assign(adapter.state, { connected: false, ...fields })
+      return adapter.snapshot()
+    })
+    refuse(f.adapters.claude, { error: 'Sign in to Claude Code with your Claude subscription.', problem: 'signed-out', version: '2.1.281' })
+    refuse(f.adapters.grok, { error: 'Use Grok CLI 1.0.5 or newer.', problem: 'too-old', version: '0.9.12', requiredVersion: '1.0.5' })
+    const snapshot = await f.host.connect()
+    const status = (id: string) => snapshot.providers?.find(provider => provider.id === id)
+    expect(status('claude')).toMatchObject({ connection: 'error', problem: 'signed-out', version: '2.1.281', error: 'Sign in to Claude Code with your Claude subscription.' })
+    expect(status('grok')).toMatchObject({ connection: 'error', problem: 'too-old', version: '0.9.12', requiredVersion: '1.0.5' })
+    // A refusal that names no reason still reads as not startable, with no reason invented.
+    f.host.disconnect('claude')
+    refuse(f.adapters.claude, { error: 'Claude Code did not answer.', problem: undefined })
+    await f.host.connect('claude')
+    const unnamed = (await f.host.snapshot('codex')).providers?.find(provider => provider.id === 'claude')
+    expect(unnamed).toMatchObject({ connection: 'error', error: 'Claude Code did not answer.' })
+    expect(unnamed?.problem).toBeUndefined()
+  })
 })

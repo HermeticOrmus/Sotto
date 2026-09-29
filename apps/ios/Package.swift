@@ -10,7 +10,7 @@ let modelSources = ["Sotto/AppModel.swift", "Tests/SottoAppModelTests"]
 let appDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Sotto")
 let otherAppFiles = (try? FileManager.default.contentsOfDirectory(atPath: appDirectory.path)) ?? []
 modelTests = [.testTarget(name: "SottoAppModelTests", dependencies: ["SottoCore"], path: ".",
-    exclude: ["Sources", "Scripts", "Sotto.xcodeproj", "README.md", "ExportOptions.example.plist", "Tests/SottoCoreTests"]
+    exclude: ["Sources", "Scripts", "Sotto.xcodeproj", "README.md", "ExportOptions.example.plist", "Tests/SottoCoreTests", "Tests/SottoUITests"]
         + otherAppFiles.filter { $0 != "AppModel.swift" }.map { "Sotto/" + $0 }, sources: modelSources)]
 #endif
 let package = Package(name: "SottoCore", platforms: [.iOS(.v17), .macOS(.v13)],

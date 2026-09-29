@@ -17,6 +17,8 @@ type Command = AgentConnection['command']
 type Section = 'open' | 'settled'
 
 const plural = (count: number, noun: string): string => `${count} ${noun}${count === 1 ? '' : 's'}`
+/** What follows a row's status while its provider is out of reach: Reconnecting while its host restarts for an update. */
+const disconnectedLabel = (row: ThreadRow): string => row.connected ? '' : row.reconnecting ? ' · Reconnecting' : ' · Disconnected'
 
 function Indicators({ working, needs, id }: { readonly working: number; readonly needs: number; readonly id?: string }): ReactNode {
   if (!working && !needs) return null
@@ -106,7 +108,7 @@ const ThreadNavRow = memo(function ThreadNavRow({ row, current, open, busy, unse
       <span id={detailsId} className="tt-visually-hidden">{copyDetails}</span>
       <span className="thread-nav__metadata">
         <span className="thread-nav__provider" title={[row.provider, row.model?.name].filter(Boolean).join(' · ')}>{row.provider}<span className="thread-nav__model">{row.model ? ` · ${row.model.name}` : ''}</span></span>
-        <span id={statusId} className="thread-nav__status" data-state={row.state} data-waiting={row.waitingFor ?? undefined} data-unseen={finished || undefined} data-disconnected={row.connected ? undefined : true} title={status + (row.connected ? '' : ' · Disconnected')}><span className="tt-visually-hidden">{row.provider}, </span>{status}{row.connected ? '' : ' · Disconnected'}</span>
+        <span id={statusId} className="thread-nav__status" data-state={row.state} data-waiting={row.waitingFor ?? undefined} data-unseen={finished || undefined} data-disconnected={row.connected ? undefined : true} title={status + disconnectedLabel(row)}><span className="tt-visually-hidden">{row.provider}, </span>{status}{disconnectedLabel(row)}</span>
       </span>
       <span className="thread-nav__branch" data-working-copy-state={copy.status} title={branchName !== copyLabel ? `${branchName} · ${copyLabel}` : copyLabel}>
         <WorkingCopyIcon size={12} aria-hidden="true" />{row.thread.hostLabel ? <span>{row.thread.hostLabel} · </span> : null}
