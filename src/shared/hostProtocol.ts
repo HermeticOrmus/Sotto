@@ -67,7 +67,9 @@ function compareSottoVersions(hostVersion: string | undefined, clientVersion: st
 export function hostVersionMismatch(clientVersion: string, hostVersion: string | undefined, owned: boolean): string {
   if (hostIsNewer(hostVersion, clientVersion)) return 'This host is running a newer version of Sotto than this computer. Nothing on the host was lost. Update Sotto on this computer, then connect again.'
   const stop = owned ? 'press Stop host' : 'stop the host on that machine'
-  return `This host is running a different version of Sotto. Nothing on the host was lost. Put the Sotto ${clientVersion} host in its installation folder, ${stop}, then connect again.`
+  // A host that said which older Sotto it runs is offered an update on the Threads page (ADR-0040).
+  const update = hostIsOlder(hostVersion, clientVersion) ? 'Update it from the Threads page, or put' : 'Put'
+  return `This host is running a different version of Sotto. Nothing on the host was lost. ${update} the Sotto ${clientVersion} host in its installation folder, ${stop}, then connect again.`
 }
 export const HOST_MAX_FRAME_BYTES = 16 * 1024 * 1024
 export const HOST_EVENT_PAGE_SIZE = 256
