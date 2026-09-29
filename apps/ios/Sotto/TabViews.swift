@@ -65,7 +65,8 @@ struct ThreadsView: View {
     private var searchPill: some View {
         HStack(spacing: 10) {
             Image(systemName: "magnifyingglass").foregroundStyle(Palette.muted).accessibilityHidden(true)
-            TextField("Search threads", text: $query).focused($searching)
+            TextField("Search threads", text: $query, prompt: Text("Search threads").foregroundStyle(Palette.muted))
+                .focused($searching)
                 .font(.figtree(16, .body)).textInputAutocapitalization(.never).autocorrectionDisabled()
                 .submitLabel(.search).onSubmit { searching = false }
                 .accessibilityLabel("Search threads").accessibilityIdentifier("thread-search")
