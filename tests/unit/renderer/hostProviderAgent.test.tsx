@@ -121,6 +121,15 @@ it('follows the job on its tile, with Show thread and Stop, and says how it ende
   rerender(view(job({ phase: 'stopped' })))
   expect(tile('Devin')).toHaveTextContent('Stopped. Anything the agent installed on forge stays there, and the thread Install Devin on forge stays in your Threads list.')
   await waitFor(() => expect(within(tile('Devin')).getByRole('button', { name: 'Have my agent install Devin on forge' })).toHaveFocus())
+  // A tile changing while focus is elsewhere leaves focus where it is: only the tile whose pressed control went takes it.
+  const toggle = screen.getByRole('button', { name: 'Hide providers on forge' })
+  toggle.focus()
+  rerender(view(job({ phase: 'stopped' }), PROVIDERS.map(item => item.id === 'claude' ? status('claude', { connection: 'connected', version: '2.1.281' }) : item)))
+  expect(toggle).toHaveFocus()
+  ;(document.activeElement as HTMLElement).blur()
+  rerender(view(job({ phase: 'stopped' }), PROVIDERS.map(item => item.id === 'claude' ? status('claude', { problem: 'signed-out', version: '2.1.281' }) : item)))
+  await new Promise(resolve => setTimeout(resolve, 0))
+  expect(document.body).toHaveFocus()
   // Found: the host sees Devin, which waits for the user to sign in.
   rerender(view(job({ phase: 'found' }), PROVIDERS.map(item => item.id === 'devin' ? { ...item, problem: 'signed-out' as const, version: '2026.9.1' } : item)))
   expect(tile('Devin')).toHaveTextContent('Not signed in')

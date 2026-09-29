@@ -101,12 +101,29 @@ function ProviderTile({ host, provider, status, bridge, job, onSignIn, onAgent }
   const actions = useRef<HTMLDivElement>(null)
   // A new settled state from the host says more than the last press's note; passing through Connecting does not.
   useEffect(() => { if (tile.kind !== 'connecting') setNote(current => current && current.kind !== tile.kind ? null : current) }, [tile.kind])
+  /** The control in this tile's actions that last held focus, while it holds it or was taken away holding it. */
+  const held = useRef<HTMLElement | null>(null)
   // The control pressed goes when the tile changes (Stop, the host finding it): focus moves to the tile's new first action
-  // rather than being dropped. Not while a dialog is open over the page; the agent dialog hands focus on as it closes.
+  // rather than being dropped. Only when this tile's own control was the one taken away: another tile changing, or this one
+  // changing while focus is elsewhere, moves nothing. Not while a dialog is open over the page; the agent dialog hands
+  // focus on as it closes.
   useEffect(() => {
+    const gone = held.current
+    if (!gone || gone.isConnected) return
+    held.current = null
     const focused = document.activeElement
     if ((focused === null || focused === document.body || !focused.isConnected) && !document.querySelector('[role="dialog"]')) actions.current?.querySelector<HTMLElement>('button:not(:disabled)')?.focus()
   }, [tile.kind])
+  const focusIn = (event: React.FocusEvent<HTMLDivElement>): void => { if (event.target instanceof HTMLElement) held.current = event.target }
+  // Focus leaving for somewhere else lets go. A control removed or disabled while focused (Stop turning into Stopping…)
+  // lost focus to the app rather than to the user, so it stays held for the effect above to replace.
+  const focusOut = (event: React.FocusEvent<HTMLDivElement>): void => {
+    const target = event.target
+    queueMicrotask(() => {
+      const dropped = !target.isConnected || target instanceof HTMLButtonElement && target.disabled
+      if (held.current === target && !dropped && !actions.current?.contains(document.activeElement)) held.current = null
+    })
+  }
   const act = async (action: Pending): Promise<void> => {
     const before = tile.kind
     setPending(action); setNote(null)
@@ -163,7 +180,7 @@ function ProviderTile({ host, provider, status, bridge, job, onSignIn, onAgent }
     <p className="host-provider__state"><span className="host-provider__dot" aria-hidden="true" />{tile.state}</p>
     {working ? <p className="host-provider__detail">In the thread <b>{working.threadTitle}</b> on this computer.</p>
       : tile.detail ? <p className="host-provider__detail">{tile.detail}</p> : null}
-    <div ref={actions} className="host-provider__act">{action()}</div>
+    <div ref={actions} className="host-provider__act" onFocus={focusIn} onBlur={focusOut}>{action()}</div>
     <p className="host-provider__note" role="status">{shownNote}</p>
   </li>
 }
