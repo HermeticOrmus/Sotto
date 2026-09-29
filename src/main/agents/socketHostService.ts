@@ -358,6 +358,8 @@ export class SocketHostService implements HostService {
   }
   /** Whether the host runs its providers' sign-ins for this client (ADR-0037). */
   offersSignIn(): boolean { return this.features.includes('provider-sign-in') }
+  /** Whether the host shows its client updates to this client and runs them for it (#480). */
+  offersClientUpdates(): boolean { return this.features.includes('client-updates') }
   /**
    * A provider's own sign-in on the host (ADR-0037). The answer carries the page's address and the code while it waits;
    * the caller hands the window neither the address nor anything to keep. A host that does not list `provider-sign-in`

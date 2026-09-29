@@ -27,9 +27,11 @@ export const HOST_PROTOCOL_VERSION = 1 as const
  * `host-folders` request with one folder's subfolders on the host machine, for the Add project dialog's folder browser.
  * `provider-sign-in`: the host runs one of its providers' own sign-in for the client that asks, and answers the
  * `sign-in-start`, `sign-in-read`, `sign-in-code` and `sign-in-cancel` requests (ADR-0037). Only a headless host offers
- * it: the desktop's phone listener does not.
+ * it: the desktop's phone listener does not. `client-updates`: the host's shell carries its client updates for the client to
+ * show, and the host takes the `queue-client-updates` command, which updates its clients one at a time (ADR-0021, #480).
+ * Only a headless host offers it, and a client shows a host's client updates only when the host lists it.
  */
-export const HOST_FEATURES = ['detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders', 'provider-sign-in'] as const
+export const HOST_FEATURES = ['detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders', 'provider-sign-in', 'client-updates'] as const
 export type HostFeature = typeof HOST_FEATURES[number]
 /**
  * Whether a host's Sotto version is later than this client's, by release number. A version that cannot

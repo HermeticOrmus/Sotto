@@ -109,7 +109,7 @@ async function npmPrefixes(environment: NodeJS.ProcessEnv, home: string): Promis
 }
 
 /** mise's data folder: its own variable, then the XDG data home, then `%LOCALAPPDATA%\mise` on Windows. */
-function miseDataFolder(environment: NodeJS.ProcessEnv, home: string, windows: boolean): string | undefined {
+export function miseDataFolder(environment: NodeJS.ProcessEnv, home: string, windows: boolean): string | undefined {
   const own = absolute(environment.MISE_DATA_DIR)
   if (own) return own
   if (!windows) return join(absolute(environment.XDG_DATA_HOME) ?? join(home, '.local', 'share'), 'mise')

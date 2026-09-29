@@ -64,6 +64,11 @@ export interface SocketServerOptions {
    * desktop's phone listener, which then neither lists `provider-sign-in` nor answers its requests.
    */
   signIns?: Pick<ProviderSignIns, 'start' | 'read' | 'code' | 'cancel'>
+  /**
+   * The headless host updates its clients for a paired client that asks (`queue-client-updates`, #480). Absent on the
+   * desktop's phone listener, which then neither lists `client-updates` nor takes the command.
+   */
+  clientUpdates?: boolean
 }
 /**
  * A settled receipt answers a retried command for this long, which covers a reconnect after a lost
@@ -94,7 +99,8 @@ export async function startSocketServer(options: SocketServerOptions) {
   const sottoVersion = options.sottoVersion ?? packageVersion
   const hostId = service.shell().hostId
   if (!hostId) throw new Error('The host must have an identity before listening.')
-  const features = HOST_FEATURES.filter(feature => feature !== 'provider-sign-in' || options.signIns !== undefined)
+  const features = HOST_FEATURES.filter(feature => (feature !== 'provider-sign-in' || options.signIns !== undefined)
+    && (feature !== 'client-updates' || options.clientUpdates === true))
   const { signIns } = options
   /** A sign-in's own refusal keeps its sentence; anything else is the host's failure to run it. */
   const signingIn = async <T>(op: HostRequest['op'], run: () => T | Promise<T>): Promise<T> => {
@@ -205,7 +211,8 @@ export async function startSocketServer(options: SocketServerOptions) {
       return shell(peer)
     }
     const input = request.command
-    const refusal = remoteCommandRefusal(input, { mayAnswer: options.mayAnswer?.(peer.client) ?? false, askingProviderModes: askingProviderModes(input) })
+    const refusal = remoteCommandRefusal(input, { mayAnswer: options.mayAnswer?.(peer.client) ?? false, askingProviderModes: askingProviderModes(input),
+      clientUpdates: options.clientUpdates === true })
     if (refusal) throw new Refusal(refusal)
     const recorded = !UNRECEIPTED.has(input.type)
     if (recorded) makeRoomForReceipt()
