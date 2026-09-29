@@ -129,13 +129,14 @@ public struct HostSnapshot: Decodable, Sendable {
     public let projects: [Project]; public let providers: [Provider]?
     public let capabilities: ProviderCapabilities
 }
-public struct Project: Decodable, Sendable { public let id: String; public let title: String }
+public struct Project: Decodable, Sendable { public let id: String; public let title: String; public let workspaceSettledAt: String? }
 public struct Provider: Decodable, Sendable { public let id: String; public let connection: String; public let capabilities: ProviderCapabilities }
 public struct ProviderCapabilities: Decodable, Sendable { public let submit: Bool; public let interrupt: Bool; public let questions: Bool; public let permissions: Bool }
 public struct ThreadSummary: Decodable, Identifiable, Sendable {
     public let id: String; public let hostId: String?; public let projectId: String; public let title: String
     public let providerId: String?; public let status: String; public let requests: [AgentRequest]
     public let earlierAvailable: Bool?; public let archivedAt: String?; public let summary: Summary?
+    public let workspaceSettledAt: String?; public let settledAt: String?; public let settledOverride: String?
     /// What a row reads about the thread's history without holding it.
     public struct Summary: Decodable, Sendable {
         public let lastMessageAt: String?; public let runningTurnStartedAt: String?
@@ -159,11 +160,11 @@ public struct Activity: Decodable, Identifiable, Sendable {
         return changes.count == 1 ? first.path : "\(first.path) and \(changes.count - 1) more"
     }
 }
-public struct Message: Decodable, Identifiable, Sendable {
+public struct Message: Decodable, Identifiable, Equatable, Sendable {
     public let id: String; public let role: String; public let text: String; public let commandId: String?
     public let attachments: [Attachment]?
 }
-public struct Attachment: Decodable, Identifiable, Sendable { public let id: String; public let name: String }
+public struct Attachment: Decodable, Identifiable, Equatable, Sendable { public let id: String; public let name: String }
 public struct DeliveryReceipt: Decodable, Sendable { public let threadId: String; public let draftId: String }
 public struct Delivery: Decodable, Sendable { public let threadId: String; public let draftId: String; public let status: String }
 public struct AgentRequest: Decodable, Equatable, Identifiable, Sendable {

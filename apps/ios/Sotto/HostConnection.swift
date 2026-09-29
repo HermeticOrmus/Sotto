@@ -8,7 +8,7 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
 }
 
 @MainActor final class HostConnection {
-    var onPush: ((JSONValue) -> Void)?
+    var onPush: ((IncomingFrame, Int) -> Void)?
     var onDisconnect: (() -> Void)?
     private let redirects = NoRedirects()
     private var made: URLSession?
@@ -25,7 +25,8 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
     }
     private var socket: URLSessionWebSocketTask?
     private var reader: Task<Void, Never>?
-    private var pending: [String: CheckedContinuation<JSONValue, Error>] = [:]
+    private var pending: [String: CheckedContinuation<Received<JSONValue>, Error>] = [:]
+    private var received = 0
     private var deadlines: [String: Task<Void, Never>] = [:]
     private var session = ""
     private var generation = UUID()
@@ -55,7 +56,7 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
         let result = try await post(endpoint: endpoint, route: "/v1/revoke", token: token)
         guard result["revoked"].bool == true else { throw ClientError.invalidProtocol }
     }
-    func connect(endpoint: HostEndpoint, pairing: Pairing) async throws -> Hello {
+    func connect(endpoint: HostEndpoint, pairing: Pairing) async throws -> Received<Hello> {
         disconnect()
         let current = generation
         let result = try await post(endpoint: endpoint, route: "/v1/session", token: pairing.token)
@@ -72,7 +73,7 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
                     let message = try await task.receive()
                     let data: Data
                     switch message { case .string(let text): data = Data(text.utf8); case .data(let bytes): data = bytes; @unknown default: throw ClientError.invalidProtocol }
-                    let frame = try Wire.decode(data)
+                    let frame = try await Wire.readFrame(data)
                     guard let self, self.generation == current else { return }
                     self.receive(frame)
                 } catch {
@@ -81,23 +82,27 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
                 }
             }
         }
-        let hello = try await call(["op": .string("hello")]).decode(Hello.self)
+        let helloResult = try await callReceived(Wire.snapshotHello)
+        let hello = try await Wire.readValue(helloResult.value, as: Hello.self)
         guard hello.hostId == pairing.hostId, hello.clientId == pairing.clientId else { disconnect(); throw ClientError.invalidIdentity }
         try hello.shell.validate(hostID: pairing.hostId)
-        return hello
+        return Received(hello, sequence: helloResult.sequence)
     }
     /// Ends the connection and its URL session for good, when its computer is removed.
     func close() {
         disconnect(); made?.invalidateAndCancel(); made = nil
     }
     func disconnect() {
-        generation = UUID(); reader?.cancel(); reader = nil
+        generation = UUID(); received = 0; reader?.cancel(); reader = nil
         socket?.cancel(with: .goingAway, reason: nil); socket = nil; session = ""
         let waiting = pending; pending.removeAll()
         deadlines.values.forEach { $0.cancel() }; deadlines.removeAll()
         waiting.values.forEach { $0.resume(throwing: ClientError.disconnected) }
     }
     func call(_ operation: [String: JSONValue], id: String = UUID().uuidString) async throws -> JSONValue {
+        try await callReceived(operation, id: id).value
+    }
+    func callReceived(_ operation: [String: JSONValue], id: String = UUID().uuidString) async throws -> Received<JSONValue> {
         guard let socket, !session.isEmpty else { throw ClientError.disconnected }
         let data = try Wire.request(id: id, session: session, operation: operation)
         guard data.count <= Wire.maximumFrameBytes else { throw ClientError.invalidRequest }
@@ -113,16 +118,15 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
             }
         }
     }
-    private func receive(_ frame: JSONValue) {
-        if frame["event"].string != nil { onPush?(frame); return }
-        guard let id = frame["id"].string else { return }
-        if frame["ok"].bool == true { finish(id: id, result: .success(frame["result"])) }
-        else if let failure = try? frame["error"].decode(WireFailure.self) {
-            // Preserve a typed refusal so the store can distinguish it from lost acknowledgements.
-            finish(id: id, result: .failure(HostRefusal(failure: failure)))
-        } else { finish(id: id, result: .failure(ClientError.invalidProtocol)) }
+    private func receive(_ frame: IncomingFrame) {
+        received += 1
+        switch frame {
+        case .reply(let id, let result): finish(id: id, result: .success(Received(result, sequence: received)))
+        case .refusal(let id, let failure): finish(id: id, result: .failure(HostRefusal(failure: failure)))
+        default: onPush?(frame, received)
+        }
     }
-    private func finish(id: String, result: Result<JSONValue, Error>) {
+    private func finish(id: String, result: Result<Received<JSONValue>, Error>) {
         deadlines.removeValue(forKey: id)?.cancel(); pending.removeValue(forKey: id)?.resume(with: result)
     }
     private func post(endpoint: HostEndpoint, route: String, token: String? = nil, body: JSONValue? = nil) async throws -> JSONValue {

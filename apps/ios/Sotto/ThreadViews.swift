@@ -20,6 +20,12 @@ struct ThreadView: View {
             Picker("Show", selection: $pane) { ForEach(Pane.allCases) { Text($0.rawValue).tag($0) } }
                 .pickerStyle(.segmented).padding(.horizontal, 16).padding(.vertical, 8)
             ComputerBanner(hostID: ref.hostID).padding(.horizontal, 16)
+            if let problem = model.detailProblem, model.online(ref.hostID) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(problem).foregroundStyle(Palette.muted)
+                    Button("Try again") { Task { await model.select(ref) } }.buttonStyle(PlainStyle(compact: true))
+                }.frame(maxWidth: .infinity, alignment: .leading).padding(16)
+            }
             switch pane {
             case .messages: MessagesPane(ref: ref, detail: detail)
             case .activity: ActivityPane(detail: detail, online: model.online(ref.hostID))
@@ -62,9 +68,10 @@ private struct MessagesPane: View {
                             .buttonStyle(PlainStyle(compact: true)).frame(maxWidth: .infinity).disabled(!online)
                     }
                     if let detail {
-                        ForEach(detail.messages) { message in MessageBubble(message: message, provider: Words.provider(thread?.providerId)) }
-                    } else {
-                        Text(online ? "Reading this thread…" : "Reconnect to read this thread.").foregroundStyle(Palette.muted).padding(.vertical, 24)
+                        ForEach(detail.messages) { message in MessageBubble(message: message, provider: Words.provider(thread?.providerId)).equatable() }
+                    } else if model.detailProblem == nil || !online {
+                        Text(model.status(ref.hostID) == .unreachable ? "Reconnect to read this thread." : "Reading this thread…")
+                            .foregroundStyle(Palette.muted).padding(.vertical, 24)
                     }
                     ForEach(model.pending(for: ref)) { item in UnconfirmedRow(item: item, text: model.submitted[item.id]) { dismissMarker = item } }
                     if let text = model.failedReplies[ref.id] {
@@ -95,7 +102,7 @@ private struct MessagesPane: View {
     }
 }
 
-private struct MessageBubble: View {
+private struct MessageBubble: View, Equatable {
     let message: Message
     let provider: String
     var body: some View {
