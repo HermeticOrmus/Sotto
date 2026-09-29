@@ -43,7 +43,7 @@ export type SshHostUpdateOperation =
   | (Extract<LaunchOperation, { op: 'update-receive' }> & { readonly archive: Uint8Array })
   | { readonly op: 'update-restart'; readonly version: string }
 export interface SshHostUpdateOptions {
-  /** Cancel update: ends the operation's ssh, which the host's step does not outlive for long. */
+  /** Cancel update: ends the operation's ssh. A download on the host stops within a second of it on a POSIX host. */
   readonly signal?: AbortSignal
   /** The step the host moved on to while the operation runs: the checksum after a download, unpacking, the restart. */
   readonly onStep?: (step: HostUpdateStep) => void
@@ -87,7 +87,7 @@ const updateResultSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('update-installed'), version: z.string().max(64) }),
   readySchema,
   z.object({ type: z.literal('error'), reason: z.string().max(64), file: archiveName.optional(), restarted: z.boolean().optional(),
-    range: z.string().max(64).optional(), node: z.string().max(32).optional() }),
+    range: z.string().max(64).optional(), node: z.string().max(32).optional(), cause: z.string().max(64).optional() }),
 ])
 export type SshHostUpdateResult = z.infer<typeof updateResultSchema>
 const updateStepSchema = z.enum(['check', 'install', 'restart'])

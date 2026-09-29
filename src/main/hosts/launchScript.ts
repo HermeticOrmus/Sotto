@@ -31,6 +31,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
 const http = require('node:http');
+const net = require('node:net');
 const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
 const cfg = JSON.parse(process.argv[process.argv[1] === '-' ? 2 : 1]);
@@ -89,6 +90,15 @@ const discover = async () => {
   const owned = descriptor.startedBy === 'launch-script' || (!!legacy && legacy.pid === live.pid);
   return { v: 1, status: 'ready', hostId: live.hostId, pid: live.pid, port: live.port, owned };
 };
+// Whether something already listens on the host's fixed port, which a host that could not start was asked to use.
+const portAnswers = port => new Promise(resolve => {
+  if (!Number.isInteger(port) || port < 1) { resolve(false); return; }
+  const socket = net.connect({ host: '127.0.0.1', port });
+  socket.setTimeout(1000);
+  socket.once('connect', () => { socket.destroy(); resolve(true); });
+  socket.once('timeout', () => { socket.destroy(); resolve(false); });
+  socket.once('error', () => resolve(false));
+});
 const lockHolder = async () => {
   try { const value = JSON.parse(await fs.readFile(lockPath, 'utf8')); return Number.isInteger(value.pid) && alive(value.pid) ? value.pid : null; }
   catch { return null; }
@@ -120,7 +130,7 @@ const start = async () => {
     const current = await discover();
     if (current) return { type: 'ready', ...current };
     // A child that lost the lock to a host another launch started a moment earlier exits at once; that host is waited for instead.
-    if ((childFailed || child.exitCode !== null || child.signalCode !== null) && (await lockHolder()) === null) throw new Error('host-start-failed');
+    if ((childFailed || child.exitCode !== null || child.signalCode !== null) && (await lockHolder()) === null) throw new Error((await portAnswers(cfg.remotePort)) ? 'port-taken' : 'host-start-failed');
     await pause(100);
   }
   if (child.exitCode === null && child.signalCode === null) { try { child.kill('SIGTERM'); } catch {} }
@@ -198,10 +208,16 @@ const satisfies = (version, range) => String(range).split(/\s+/).every(token => 
   const difference = compareVersions(versionParts(version), versionParts(match[2]));
   return match[1] === '>=' ? difference >= 0 : difference < 0;
 });
+// A download stops once the ssh that asked for it has gone, as it has after Cancel update: without a terminal nothing
+// else tells this process, and a download left running would only hold the installation folder's bandwidth. A POSIX
+// process whose parent ends is given another one; Windows, where only Sotto's tests run this, keeps the old number.
+const orphaned = new AbortController();
+const parent = process.ppid;
+setInterval(() => { if (process.ppid !== parent) orphaned.abort(); }, 500).unref();
 const download = async (url, limit) => {
   if (typeof fetch !== 'function') throw new Error('download-unreachable');
   let response;
-  try { response = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(cfg.downloadTimeoutMs) }); }
+  try { response = await fetch(url, { redirect: 'follow', signal: AbortSignal.any([AbortSignal.timeout(cfg.downloadTimeoutMs), orphaned.signal]) }); }
   catch { throw new Error('download-unreachable'); }
   if (response.status === 404) throw new Error('archive-unavailable');
   if (!response.ok || !response.body) throw new Error('download-failed');
@@ -280,17 +296,19 @@ const restartForUpdate = async () => {
     const ready = await start();
     await prune([version, previous]);
     return ready;
-  } catch {
-    // The new version did not start: point back at the old one and start it again.
-    await writePointer(previous);
-    try { await start(); return { type: 'error', reason: 'update-start-failed', restarted: true }; }
-    catch { return { type: 'error', reason: 'update-start-failed', restarted: false }; }
+  } catch (error) {
+    // The new version did not start: point back at the old one and start it again, whatever the pointer's write says.
+    const cause = error && typeof error.message === 'string' && error.message.length <= 64 ? error.message : 'host-start-failed';
+    await writePointer(previous).catch(() => undefined);
+    try { await start(); return { type: 'error', reason: 'update-start-failed', restarted: true, cause }; }
+    catch { return { type: 'error', reason: 'update-start-failed', restarted: false, cause }; }
   }
 };
 const runUpdate = async () => {
+  // A download writes only its own file, so it runs without the lock: a cancelled one still finishing never holds up the next.
+  if (cfg.op === 'update-fetch') return fetchUpdate();
   await takeUpdateLock();
   try {
-    if (cfg.op === 'update-fetch') return await fetchUpdate();
     if (cfg.op === 'update-install') return await installUpdate();
     if (cfg.op === 'update-restart') return await restartForUpdate();
     return { type: 'failed' };
@@ -332,13 +350,18 @@ const output = fs.createWriteStream(partial);
 let size = 0, ended = false;
 const incomplete = () => { if (ended) return; ended = true; output.destroy(); fs.rmSync(partial, { force: true }); say({ type: 'error', reason: 'copy-incomplete' }); };
 output.on('error', incomplete);
-process.stdin.on('data', chunk => { size += chunk.length; if (size > cfg.size) { incomplete(); process.stdin.destroy(); } else output.write(chunk); });
+// The disk sets the pace: stdin waits while the file catches up, so an archive never piles up in memory.
+process.stdin.on('data', chunk => {
+  size += chunk.length;
+  if (size > cfg.size) { incomplete(); process.stdin.destroy(); return; }
+  if (!output.write(chunk)) { process.stdin.pause(); output.once('drain', () => process.stdin.resume()); }
+});
 process.stdin.on('error', incomplete);
 process.stdin.on('end', () => output.end(() => {
   if (ended) return;
   if (size !== cfg.size) { incomplete(); return; }
+  try { fs.renameSync(partial, target); } catch { incomplete(); return; }
   ended = true;
-  fs.renameSync(partial, target);
   say({ type: 'update-received', size });
 }));
 `

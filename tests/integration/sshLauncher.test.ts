@@ -20,13 +20,13 @@ afterEach(async () => {
 const configuration = { target: 'user@forge', installPath: '/opt/sotto release', dataDirectory: '/data/sotto' }
 const SCRIPT_SHA = createHash('sha256').update(LAUNCH_SCRIPT_SOURCE).digest('hex')
 interface Spawned { type: string; args: string[]; tunnel: boolean; resolve: boolean; op?: string; stdinSha256: string; askpass: boolean }
-async function fixture(mode = 'started', options: { authenticationTimeoutMs?: number; approvalTimeoutMs?: number; startMs?: number; holdMs?: number; version?: string; platform?: NodeJS.Platform } = {}) {
+async function fixture(mode = 'started', options: { authenticationTimeoutMs?: number; approvalTimeoutMs?: number; startMs?: number; holdMs?: number; version?: string; platform?: NodeJS.Platform; readyTimeoutMs?: number } = {}) {
   const path = await mkdtemp(join(tmpdir(), 'sotto-ssh-')); directories.push(path)
   const record = join(path, 'ssh.jsonl')
   const spawner: SpawnSsh = (_file, args, spawnOptions) => spawn(process.execPath, [resolve('tests/fixtures/fakeSsh.mjs'), ...args],
     { shell: false, windowsHide: true, stdio: [spawnOptions.stdin, 'pipe', 'pipe'],
       env: { ...spawnOptions.env, FAKE_SSH_MODE: mode, FAKE_SSH_RECORD: record, FAKE_SSH_ROOT: path, FAKE_SSH_START_MS: String(options.startMs ?? 0), FAKE_SSH_HOLD_MS: String(options.holdMs ?? 200), FAKE_SSH_VERSION: options.version ?? '' } })
-  const launcher = new SshHostLauncher({ spawn: spawner, authenticationTimeoutMs: options.authenticationTimeoutMs ?? 10_000, readyTimeoutMs: 5000,
+  const launcher = new SshHostLauncher({ spawn: spawner, authenticationTimeoutMs: options.authenticationTimeoutMs ?? 10_000, readyTimeoutMs: options.readyTimeoutMs ?? 5000,
     ...(options.approvalTimeoutMs ? { approvalTimeoutMs: options.approvalTimeoutMs } : {}),
     ...(options.platform ? { platform: options.platform } : {}) })
   launchers.push(launcher)
@@ -365,7 +365,8 @@ async function installedFlat(path: string): Promise<void> {
 }
 const runningHost = async (path: string): Promise<number> => (JSON.parse(await readFile(join(path, 'data', 'sotto', 'host-listener.json'), 'utf8')) as { pid: number }).pid
 it('updates a host it started over SSH: the host downloads and checks, unpacks beside it, and restarts into the new version', async () => {
-  const { launcher, path, spawns } = await fixture('run')
+  // Each start gets the 30 seconds a real one does: the restart starts a host while the whole suite runs beside it.
+  const { launcher, path, spawns } = await fixture('run', { readyTimeoutMs: 30_000 })
   await installedFlat(path)
   const connection = await launcher.connect(configuration)
   hosts.push(await runningHost(path))

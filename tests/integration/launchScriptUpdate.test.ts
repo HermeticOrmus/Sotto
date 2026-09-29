@@ -3,6 +3,7 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { copyFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { createServer } from 'node:http'
 import { afterEach, expect, it, vi } from 'vitest'
 import { HOST_ARCHIVE_LIMIT_BYTES, HOST_DOWNLOAD_TIMEOUT_MS, HOST_STOP_DRAIN_MS, LAUNCH_SCRIPT_SOURCE, NODE_CHECK_SOURCE, NODE_PROBE_SOURCE, RECEIVE_SCRIPT_SOURCE, type LaunchOperation } from '../../src/main/hosts/launchScript'
 import { hostRelease, localArchiveName, releasesPage, sha256, sidecar, tarGz } from '../fixtures/hostArchive'
@@ -28,7 +29,7 @@ async function fixture() {
   await mkdir(join(installPath, 'host'), { recursive: true })
   await writeFile(join(installPath, 'package.json'), JSON.stringify({ version: '1.0.0', type: 'module' }))
   await copyFile(resolve('tests/fixtures/fakeSshHost.mjs'), join(installPath, 'host/index.js'))
-  return { directory, installPath, dataDirectory: join(directory, 'data'), remotePort: 0, readyTimeoutMs: 5000, stopDrainMs: HOST_STOP_DRAIN_MS,
+  return { directory, installPath, dataDirectory: join(directory, 'data'), remotePort: 0, readyTimeoutMs: 30_000, stopDrainMs: HOST_STOP_DRAIN_MS,
     downloadTimeoutMs: HOST_DOWNLOAD_TIMEOUT_MS, archiveLimit: HOST_ARCHIVE_LIMIT_BYTES }
 }
 type Configuration = Awaited<ReturnType<typeof fixture>>
@@ -111,7 +112,7 @@ it('starts the old version again, and points back at it, when the new one does n
   expect(last(await run(configuration, { op: 'update-fetch', version: NEW, releasesUrl }))).toMatchObject({ type: 'update-fetched' })
   expect(last(await run(configuration, { op: 'update-install', version: NEW, file: FILE, sha256: sha256(archive) }))).toMatchObject({ type: 'update-installed' })
   const restarted = last(await run(configuration, { op: 'update-restart', hostId: HOST_ID, version: NEW }))
-  expect(restarted).toEqual({ type: 'error', reason: 'update-start-failed', restarted: true })
+  expect(restarted).toEqual({ type: 'error', reason: 'update-start-failed', restarted: true, cause: 'host-start-failed' })
   const running = await descriptor(configuration)
   hosts.push(running.pid)
   expect(alive(running.pid)).toBe(true)
@@ -144,8 +145,7 @@ it('deletes a download whose checksum does not match the release, and installs n
   const releasesUrl = await publish(archive, `${'0'.repeat(64)}  ${FILE}\n`)
   const fetched = await run(configuration, { op: 'update-fetch', version: NEW, releasesUrl })
   expect(last(fetched)).toEqual({ type: 'error', reason: 'checksum-mismatch', file: FILE })
-  await expect(readdir(join(configuration.installPath, 'versions', '.incoming'))).rejects.toMatchObject({ code: 'ENOENT' })
-  expect(await readdir(join(configuration.installPath, 'versions'))).toEqual([])
+  expect(await readdir(join(configuration.installPath, 'versions')).catch(() => [])).toEqual([])
 })
 
 it('says the releases page could not be reached, or has no archive for this machine, naming the archive it asked for', async () => {
@@ -184,17 +184,47 @@ it('refuses an archive that is not the release it was asked for, or needs anothe
   }
 })
 
-it('runs one update at a time in a folder, and takes over a lock whose process has gone', async () => {
+it('installs and restarts one update at a time in a folder, and takes over a lock whose process has gone', async () => {
   const configuration = await fixture()
+  const install = { op: 'update-install', version: NEW, file: FILE, sha256: 'a'.repeat(64) }
   const holder = spawn(process.execPath, ['-e', 'setInterval(() => undefined, 1000)'], { stdio: 'ignore', windowsHide: true })
   children.push(holder)
   await new Promise(resolve => holder.once('spawn', resolve))
   await mkdir(join(configuration.installPath, 'versions', '.update-lock'), { recursive: true })
   await writeFile(join(configuration.installPath, 'versions', '.update-lock', 'pid'), String(holder.pid))
-  expect(last(await run(configuration, { op: 'update-fetch', version: NEW, releasesUrl: 'http://127.0.0.1:1' }))).toEqual({ type: 'error', reason: 'update-busy' })
+  expect(last(await run(configuration, install))).toEqual({ type: 'error', reason: 'update-busy' })
+  expect(last(await run(configuration, { op: 'update-restart', hostId: HOST_ID, version: NEW }))).toEqual({ type: 'error', reason: 'update-busy' })
   holder.kill()
   await vi.waitFor(() => expect(alive(holder.pid!)).toBe(false))
-  expect(last(await run(configuration, { op: 'update-fetch', version: NEW, releasesUrl: 'http://127.0.0.1:1' }))).toMatchObject({ reason: 'download-unreachable' })
+  expect(last(await run(configuration, install))).toEqual({ type: 'error', reason: 'update-missing' })
+})
+
+it('downloads without the lock, so a cancelled download still finishing never holds up the next update', async () => {
+  const configuration = await fixture()
+  // A releases page that never answers: the download waits, as one does after Cancel update until it notices.
+  const silent = createServer(() => undefined)
+  await new Promise<void>(done => silent.listen(0, '127.0.0.1', done))
+  pages.push({ close: () => new Promise(done => { silent.closeAllConnections(); silent.close(() => done()) }) })
+  const pending = run(configuration, { op: 'update-fetch', version: NEW, releasesUrl: `http://127.0.0.1:${(silent.address() as { port: number }).port}` })
+  await new Promise(resolve => setTimeout(resolve, 300))
+  expect(last(await run(configuration, { op: 'update-install', version: NEW, file: FILE, sha256: 'a'.repeat(64) }))).toEqual({ type: 'error', reason: 'update-missing' })
+  for (const child of children) if (child.exitCode === null) child.kill()
+  await pending
+})
+
+it('says another program has the host\'s port when a host with a gone process left its record and cannot start', async () => {
+  const configuration = await fixture()
+  const taken = createServer(() => undefined)
+  await new Promise<void>(done => taken.listen(0, '127.0.0.1', done))
+  pages.push({ close: () => new Promise(done => taken.close(() => done())) })
+  const port = (taken.address() as { port: number }).port
+  await mkdir(configuration.dataDirectory, { recursive: true })
+  // The record of a host that has gone, on the fixed port another program now listens on.
+  const gone = spawn(process.execPath, ['-e', 'process.exit(0)'], { stdio: 'ignore', windowsHide: true })
+  await new Promise(resolve => gone.once('exit', resolve))
+  await writeFile(join(configuration.dataDirectory, 'host-listener.json'), JSON.stringify({ v: 1, hostId: HOST_ID, pid: gone.pid, port }))
+  const outcome = await run({ ...configuration, remotePort: port }, { op: 'launch' })
+  expect(last(outcome)).toEqual({ type: 'error', reason: 'port-taken' })
 })
 
 it('never restarts a host it did not start, and leaves it running', async () => {
