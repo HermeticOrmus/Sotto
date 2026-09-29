@@ -68,6 +68,7 @@ public struct ComputerThreads: Sendable {
 public struct HostedThread: Identifiable, Sendable {
     public let ref: ThreadRef; public let computer: String; public let status: ComputerStatus
     public let project: String?; public let thread: ThreadSummary
+    public let settled: Bool
     public var id: String { ref.id }
     public var reachable: Bool { status == .online }
 }
@@ -92,12 +93,13 @@ public enum ThreadGroups {
     /// threads of a computer that can't be reached after the rest, as it last shared them.
     public static func merged(_ computers: [ComputerThreads], show: ComputerFilter = .all, filter: ThreadFilter = .all) -> [HostedThread] {
         let rows = computers.filter { show.admits($0.hostID) }.flatMap(hosted).filter { filter.admits($0.thread) }
-        return rows.enumerated().sorted { a, b in
-            if a.element.reachable != b.element.reachable { return a.element.reachable }
-            let x = latest(a.element.thread), y = latest(b.element.thread)
-            if x != y { return (x ?? .distantPast) > (y ?? .distantPast) }
+        // Parse each timestamp once, not twice on every comparison. Lists refresh while agents work.
+        let dated = rows.enumerated().map { (row: $0.element, offset: $0.offset, date: latest($0.element.thread) ?? .distantPast) }
+        return dated.sorted { a, b in
+            if a.row.reachable != b.row.reachable { return a.row.reachable }
+            if a.date != b.date { return a.date > b.date }
             return a.offset < b.offset
-        }.map(\.element)
+        }.map(\.row)
     }
     /// Each open request with its thread, on computers that can be reached: a request on a computer
     /// that can't be reached can't be answered, so it waits there until the computer is back.
@@ -113,11 +115,19 @@ public enum ThreadGroups {
         computers.filter { show.admits($0.hostID) && $0.status == .unreachable }
     }
     static func hosted(_ computer: ComputerThreads) -> [HostedThread] {
-        let titles = Dictionary(computer.projects.map { ($0.id, $0.title) }, uniquingKeysWith: { first, _ in first })
-        return computer.threads.filter { $0.archivedAt == nil }.map { thread in
+        let projects = Dictionary(computer.projects.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return computer.threads.map { thread in
             HostedThread(ref: ThreadRef(hostID: computer.hostID, threadID: thread.id), computer: computer.name,
-                         status: computer.status, project: titles[thread.projectId], thread: thread)
+                         status: computer.status, project: projects[thread.projectId]?.title, thread: thread,
+                         settled: isSettled(thread, project: projects[thread.projectId]))
         }
+    }
+    /// Match shared/threadActivity.ts: workspace settlement is inherited, while an explicit active
+    /// provider override clears provider settlement but never an archive or workspace grouping.
+    public static func isSettled(_ thread: ThreadSummary, project: Project? = nil) -> Bool {
+        func present(_ value: String?) -> Bool { value?.isEmpty == false }
+        return present(thread.workspaceSettledAt) || present(project?.workspaceSettledAt) || present(thread.archivedAt)
+            || (thread.settledOverride != "active" && (thread.settledOverride == "settled" || present(thread.settledAt)))
     }
     /// When the thread last moved: its last message or the start of its running turn, whichever is later.
     static func latest(_ thread: ThreadSummary) -> Date? {

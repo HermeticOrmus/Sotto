@@ -220,7 +220,11 @@ private struct OptionLabel: View {
 struct ThreadsView: View {
     @EnvironmentObject var model: AppModel
     @State private var filter = ThreadFilter.all
+    @State private var settledExpanded = false
     var body: some View {
+        let rows = ThreadGroups.merged(model.lists, show: model.show, filter: filter)
+        let unsettled = rows.filter { !$0.settled }
+        let settled = rows.filter(\.settled)
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 ComputerStrip().padding(.bottom, 8)
@@ -228,16 +232,34 @@ struct ThreadsView: View {
                 Picker("Show", selection: $filter) { ForEach(ThreadFilter.allCases) { Text($0.rawValue).tag($0) } }
                     .pickerStyle(.segmented).padding(.bottom, 6)
                 if rows.isEmpty { Text(emptyText).foregroundStyle(Palette.muted).padding(.vertical, 28) }
-                ForEach(rows) { row in
+                ForEach(unsettled) { row in
                     NavigationLink(value: ThreadRoute(ref: row.ref)) { ThreadRow(row: row) }.buttonStyle(.plain)
                     Divider().overlay(Palette.hairline).padding(.leading, 48)
+                }
+                if !settled.isEmpty {
+                    Button { settledExpanded.toggle() } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: settledExpanded ? "chevron.down" : "chevron.right").font(.caption)
+                            Text("Settled").fontWeight(.semibold)
+                            Spacer()
+                            Text("\(settled.count)")
+                        }.foregroundStyle(Palette.muted).frame(minHeight: 48).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain).padding(.top, 12)
+                    .accessibilityLabel(settledExpanded ? "Hide settled threads" : "Show settled threads")
+                    .accessibilityValue("\(settled.count) threads, \(settledExpanded ? "expanded" : "collapsed")")
+                    if settledExpanded {
+                        ForEach(settled) { row in
+                            NavigationLink(value: ThreadRoute(ref: row.ref)) { ThreadRow(row: row) }.buttonStyle(.plain)
+                            Divider().overlay(Palette.hairline).padding(.leading, 48)
+                        }
+                    }
                 }
             }.padding(.horizontal, 16).padding(.bottom, 24)
         }
         .refreshable { await model.refresh() }
         .page("Threads")
     }
-    private var rows: [HostedThread] { ThreadGroups.merged(model.lists, show: model.show, filter: filter) }
     private var place: String {
         if case .only(let hostID) = model.show { return model.name(hostID) }
         return model.computers.count == 1 ? model.name(model.computers[0].hostID) : "your computers"

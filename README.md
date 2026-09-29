@@ -72,7 +72,7 @@ Dictation history stays on your computer, and you can turn it off. If completed 
 
 If thread messages cannot be saved, Sotto keeps them in memory and retries while it is open. The warning stays until they are saved. Restore storage access before quitting; unsaved messages cannot survive a restart.
 
-The iPhone app, in development, talks only to your own Sotto host, through your private Tailscale address. It looks the host's name up through Tailscale's own name service on the phone, pairs with a code the host prints, and never answers a permission unless you have allowed it on the host.
+The iPhone app keeps unsettled threads visible and puts settled work under an expandable **Settled** row, as on desktop. It is in development and talks only to your own Sotto host, through your private Tailscale address. It looks the host's name up through Tailscale's own name service on the phone, pairs with a code the host prints, and never answers a permission unless you have allowed it on the host.
 
 ## Build from source
 
