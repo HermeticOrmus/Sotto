@@ -9,3 +9,10 @@
 - [x] Record verification and limitations. The installed application and original profile remain untouched.
 
 No UI design changes. The existing transcript should show its original messages in its existing layout.
+
+PR delivery:
+
+- [x] Merge current `main` (0.1.26) into the repair branch.
+- [x] Address review findings: shared saved-content validation, consistent native identity proof, negotiated remote events, and current documentation.
+- [x] Verify seeded/unwatched repairs, ambiguous native IDs, different saved words, legacy remote clients, and the rebuilt Electron reconnect/reload journey.
+Delivery: open the PR, finish the final gates, resolve valid review findings, and merge with a merge commit only once green. Then delete the remote branch and remove the owned worktree. The PR records delivery status.

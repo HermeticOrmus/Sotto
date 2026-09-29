@@ -1,6 +1,6 @@
 # Codex replies after restart
 
-Verified on Windows, September 29, 2026, against Sotto 0.1.24's source. The installed application was 0.1.24 and the native Codex client reported 0.159.0.
+Verified on Windows, September 29, 2026, first against Sotto 0.1.24 and then with the final review fixes on the 0.1.26 base. The installed application was 0.1.24 and the native Codex client reported 0.159.0.
 
 ## Failure and cause
 
@@ -14,16 +14,18 @@ Codex now checks exact native identity and the message digest before publishing 
 
 A read-only SQLite connection backed up the affected local profile into a temporary directory. Applying the repair to that copy identified nine affected Codex threads and removed fifty duplicate receipts, with zero assistant replies removed. One opening window changed from zero to sixty-four assistant replies. The temporary copy was deleted; the original profile and installed app were not modified. No real conversation text was printed or retained as evidence.
 
-- Regression coverage: 35 focused tests passed across six files. Coverage includes both clean restart and previously saved duplicates, projection rebuild, same-text outside input, nested client IDs, conflicting client IDs, mismatched content/roles/command identity, and history redaction.
+- Initial regression coverage: 35 focused tests passed across six files. After review, 49 tests passed across the store/log/socket suites and 15 passed across the Codex identity suites (overlapping files). The final activity-anchor correction passed all 10 tests in the log and saved-history suites. Coverage includes both clean restart and previously saved duplicates, projection rebuild, same-text outside input, nested client IDs, conflicting client IDs, mismatched content/roles/command identity, and history redaction.
 - Typecheck, lint, notices and production build passed.
 - `npx playwright test tests/e2e/codex-restored-history.spec.ts` passed with the real adapter over the scripted Codex subprocess. It checks the reply remains visible and the user prompt appears once after reconnect and renderer reload.
 - Visually inspected dark and light at 1280x800, minimum 820x560, and 1600x1000 with reduced motion. Windows display scaling makes the screenshot pixel dimensions larger than the window's logical dimensions. Captures: [dark](../../artifacts/codex-restored-replies/dark.png), [light](../../artifacts/codex-restored-replies/light.png), [minimum](../../artifacts/codex-restored-replies/minimum.png), [wide with reduced motion](../../artifacts/codex-restored-replies/wide-reduced-motion.png).
-- `npm test -- --maxWorkers=2`: 6,250 passed, 151 skipped, one failed (472 files passed, 39 skipped, one failed). The sole failure was the Git-action fixture's initial `git push` to its temporary local bare repository: `unexpected disconnect while reading sideband packet`. It failed before exercising the assertion and passed in an isolated rerun. No Git-action code was changed. The full run is not reported as green. Output: `artifacts/codex-restored-replies/full-suite.txt`.
+- Initial 0.1.24 `npm test -- --maxWorkers=2`: 6,250 passed, 151 skipped, one failed (472 files passed, 39 skipped, one failed). The sole failure was the Git-action fixture's initial `git push` to its temporary local bare repository: `unexpected disconnect while reading sideband packet`. It failed before exercising the assertion and passed in an isolated rerun. No Git-action code was changed. The full run is not reported as green.
+
+The full suite is rerun for the PR. A preliminary 0.1.26 run reached a timeout in the Devin mode matrix; it is not a green result. The PR records the final local and CI outcomes.
 
 ## Review and limits
 
-Standards review checked provider-owned identity, text-free operational logging, history privacy, authority preservation, event replay and the unchanged UI. Spec review checked the exact user-only window, existing affected records, restart/reload, and outside input. The new event does not reset a history epoch or grant authority. No model turn was sent to a real provider during diagnosis.
+[The two-axis review](codex-restored-replies-review.md) prompted shared saved-content validation, remote feature negotiation, conservative identity checks, and preservation of activity anchors. Standards review checked provider-owned identity, text-free operational logging, history privacy, authority preservation, event replay and the unchanged UI. Spec review checked the exact user-only window, existing affected records, restart/reload, and outside input. The new event does not reset a history epoch or grant authority. No model turn was sent to a real provider during diagnosis.
 
 The native read-only protocol probe confirmed the sampled conversation still has assistant items. The [official App Server reference](https://learn.chatgpt.com/docs/app-server) describes `thread/read` and `thread/turns/list`; actual 0.159.0 behavior was checked locally because the reference's paginated-history limitation did not match the installed client's successful reads.
 
-The fix is local and uncommitted on `fix/codex-restored-replies`. It has not been packaged, installed, pushed or released. macOS was not tested. The native desktop inspection helper was unavailable, so visual verification used the rebuilt Electron application through Playwright with an isolated synthetic profile.
+This verification did not package, install or release the fix. macOS was not tested. The native desktop inspection helper was unavailable, so visual verification used the rebuilt Electron application through Playwright with an isolated synthetic profile.

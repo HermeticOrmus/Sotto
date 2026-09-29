@@ -6,7 +6,7 @@ import { DatabaseSync, type SQLOutputValue, type StatementSync } from 'node:sqli
 
 import { summarizeThread, type AgentMessage, type AgentThreadSummary } from '../../shared/agents'
 import { agentActivitySchema, MAX_AGENT_ACTIVITIES, type AgentActivity } from '../../shared/agentActivity'
-import { threadEventSchema, type StoredThreadEvent, type ThreadEvent } from '../../shared/threadEvents'
+import { sameMessageContent, threadEventSchema, type StoredThreadEvent, type ThreadEvent } from '../../shared/threadEvents'
 import { isImmutableActivities } from './activitySnapshots'
 
 /** The first window a pane is given, and what each later request adds, both counted in turns. */
@@ -425,6 +425,12 @@ export class ThreadStore {
       .all(threadId).map(row => ({ id: String(row.message_id), role: String(row.role) as 'user' | 'assistant' }))
   }
 
+  /** One indexed message; identity repairs never read the whole transcript. */
+  message(threadId: string, messageId: string): AgentMessage | undefined {
+    const row = this.statement('SELECT * FROM messages WHERE thread_id = ? AND message_id = ?').get(threadId, messageId)
+    return row === undefined ? undefined : messageOf(row)
+  }
+
   /** Whether the thread holds this message: one indexed lookup, never a read of the thread. */
   hasMessage(threadId: string, messageId: string): boolean {
     return this.statement('SELECT 1 AS found FROM messages WHERE thread_id = ? AND message_id = ? LIMIT 1').get(threadId, messageId) !== undefined
@@ -551,16 +557,14 @@ function applyEvent(db: DatabaseSync, threadId: string, event: ThreadEvent,
           message.attachments === undefined ? null : JSON.stringify(message.attachments), threadId, message.id)
       return
     }
-    case 'message-aliased':
-      // Identity comes from the adapter; equality is checked against the durable
-      // words too. A mistaken/stale alias can never take distinct content away.
-      prepare(`DELETE FROM messages AS duplicate WHERE thread_id = ? AND message_id = ? AND message_id <> ?
-        AND EXISTS (SELECT 1 FROM messages AS canonical WHERE canonical.thread_id = duplicate.thread_id
-          AND canonical.message_id = ? AND canonical.role = duplicate.role AND canonical.text = duplicate.text
-          AND (duplicate.command_id IS NULL OR duplicate.command_id = canonical.command_id)
-          AND (duplicate.attachments IS NULL OR duplicate.attachments = canonical.attachments))`)
-        .run(threadId, event.messageId, event.canonicalId, event.canonicalId)
+    case 'message-aliased': {
+      const read = (id: string) => prepare('SELECT * FROM messages WHERE thread_id = ? AND message_id = ?').get(threadId, id)
+      const duplicate = read(event.messageId), canonical = read(event.canonicalId)
+      if (event.messageId !== event.canonicalId && duplicate && canonical && sameMessageContent(messageOf(duplicate), messageOf(canonical))) {
+        prepare('DELETE FROM messages WHERE thread_id = ? AND message_id = ?').run(threadId, event.messageId)
+      }
       return
+    }
     case 'messages-reset':
       prepare('DELETE FROM messages WHERE thread_id = ?').run(threadId)
       return

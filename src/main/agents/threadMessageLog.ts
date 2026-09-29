@@ -1,6 +1,6 @@
 import { summarizeThread, type AgentMessage, type AgentThreadSummary } from '../../shared/agents'
 import type { AgentActivity } from '../../shared/agentActivity'
-import type { ThreadEvent } from '../../shared/threadEvents'
+import { sameMessageContent, type ThreadEvent } from '../../shared/threadEvents'
 import type { StoredMessageIdentity, ThreadHostEvent } from './host'
 import { isImmutableActivities } from './activitySnapshots'
 
@@ -306,22 +306,31 @@ export class ThreadMessageLog {
 
   /** An exact native alias, already corroborated by the adapter. The store also
    * checks the two receipts' content before removing a duplicate from its view. */
-  alias(threadId: string, messageId: string, canonicalId: string): void {
+  alias(threadId: string, messageId: string, canonicalId: string, readStored?: (messageId: string) => AgentMessage | undefined): void {
     const track = this.tracks.get(threadId)
     if (!track || messageId === canonicalId || !track.ids.has(messageId) || !track.ids.has(canonicalId)) return
-    const duplicate = track.messages?.find(message => message.id === messageId)
-    const canonical = track.messages?.find(message => message.id === canonicalId)
-    if (duplicate && canonical && (duplicate.role !== canonical.role || duplicate.text !== canonical.text
-      || duplicate.commandId && duplicate.commandId !== canonical.commandId
-      || duplicate.attachments && JSON.stringify(duplicate.attachments) !== JSON.stringify(canonical.attachments))) return
+    // A seeded ID has no words. Ask the store instead of assuming its content agrees;
+    // an unavailable store is not permission to remove anything from the log.
+    const read = readStored ?? ((id: string) => this.message(threadId, id))
+    const duplicate = read(messageId), canonical = read(canonicalId)
+    if (!duplicate || !canonical || !sameMessageContent(duplicate, canonical)) return
+    const order = track.order.filter(id => id !== messageId)
+    const userIds = track.userIds.filter(id => id !== messageId)
+    const last = track.last?.id === messageId ? read(order.at(-1)!) : undefined
+    const lastUser = track.lastUser?.id === messageId ? read(userIds.at(-1)!) : undefined
+    const lastAssistant = track.lastAssistant?.id === messageId ? read(order.findLast(id => !userIds.includes(id))!) : undefined
+    // Keep activity anchors and summaries on the newest remaining message, which
+    // can be a later reply rather than the older canonical prompt.
+    if (track.last?.id === messageId && !last || track.lastUser?.id === messageId && !lastUser
+      || track.lastAssistant?.id === messageId && !lastAssistant) return
     track.ids.delete(messageId)
-    track.order = track.order.filter(id => id !== messageId)
-    track.userIds = track.userIds.filter(id => id !== messageId)
+    track.order = order
+    track.userIds = userIds
     if (track.messages) track.messages = track.messages.filter(message => message.id !== messageId)
-    if (track.last?.id === messageId) track.last = canonical ? { ...canonical } : undefined
-    if (track.lastUser?.id === messageId) track.lastUser = canonical ? { ...canonical } : undefined
-    if (track.lastAssistant?.id === messageId) track.lastAssistant = canonical ? { ...canonical } : undefined
-    if (track.lastTextId === messageId) track.lastTextId = canonicalId
+    if (last) { track.last = { ...last }; track.lastMessageAt = last.createdAt }
+    if (lastUser) track.lastUser = { ...lastUser }
+    if (lastAssistant) track.lastAssistant = { ...lastAssistant }
+    if (track.lastTextId === messageId) track.lastTextId = order.findLast(id => read(id)?.text.length)
     this.emit(threadId, { kind: 'message-aliased', at: new Date().toISOString(), messageId, canonicalId })
   }
 

@@ -18,6 +18,8 @@
 
 Sotto runs the Claude Code, Codex, Grok Build and Devin clients you already have, and keeps every thread in one sidebar. It is free, open source and in beta.
 
+Saved Codex conversations keep both sides after a restart. Opening a thread also repairs repeated prompts saved by earlier versions.
+
 ## What it does
 
 - **One sidebar for every agent.** Each provider keeps its own sign-in and models. Sotto keeps the threads. Stop still reaches running work when its last prompt is unconfirmed.
@@ -33,8 +35,6 @@ Thread drafts save automatically while you type, including while other threads a
 New threads open in Unsettled with the defaults saved in Settings → Agents. An existing empty thread is reused only while it is unsettled, its known model, effort and permission choices match those defaults, and no setting change is pending.
 
 In Settings, **Test microphone** checks the same input selected for dictation. Changing the input clears the previous test.
-
-Saved Codex conversations keep both sides after a restart. Opening a thread also repairs repeated prompts saved by earlier versions.
 
 Terminal mode keeps closed terminals on its Closed shelf until you quit. Reopen starts the same command with fresh output; Stop keeps the output readable.
 

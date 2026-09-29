@@ -55,3 +55,42 @@ it.each([false, true])('keeps Codex replies in the stored opening window after r
     off(); store.close(); await f.cleanup()
   }
 })
+
+
+it('preserves a replay ID claimed by two turns and a saved receipt with different words', async () => {
+  const f = await codexFixture()
+  const store = new ThreadStore(join(f.root, 'threads.sqlite')); store.open()
+  f.adapter.useThreadHistory(store)
+  const off = f.adapter.subscribeEvents(({ threadId, event }) => store.append(threadId, event))
+  const threadId = randomUUID()
+  try {
+    await f.host.connect()
+    await f.host.execute({ type: 'create-project', commandId: randomUUID(), projectId: f.projectId, title: 'History', path: f.root })
+    await f.host.execute({ type: 'create-thread', commandId: randomUUID(), threadId, projectId: f.projectId, title: 'History', modelId: f.modelId })
+    for (let i = 0; i < 2; i++) {
+      await f.host.execute({ type: 'send', commandId: randomUUID(), messageId: randomUUID(), threadId, text: 'Repeated words' })
+      await f.driver.completeTurn(threadId, `Reply ${i}`)
+      await expect.poll(async () => (await f.host.snapshot()).threads.find(t => t.id === threadId)?.status).toBe('idle')
+    }
+    const nativeId = await f.realId(threadId)
+    f.host.disconnect(); await f.adapter.closed()
+    const path = join(f.root, 'codex-threads.json')
+    const aliases = JSON.parse(await readFile(path, 'utf8'))
+    const turns = aliases[threadId].messageIdentities
+    for (const turn of turns) turn.messages[0].nativeIds.push('ambiguous-receipt')
+    turns[0].messages[0].nativeIds.push('different-receipt')
+    await writeFile(path, JSON.stringify(aliases))
+    for (const [id, text] of [['ambiguous-receipt', 'Repeated words'], ['different-receipt', 'Different words']]) {
+      store.append(threadId, { kind: 'message-added', at: new Date().toISOString(), message: { id: id!, text: text!, role: 'user', createdAt: new Date().toISOString() } })
+    }
+    const before = store.readMessages(threadId).messages
+    const sessions = join(f.root, 'home', 'sessions'); await mkdir(sessions, { recursive: true })
+    await writeFile(join(sessions, `rollout-${nativeId}.jsonl`), JSON.stringify({ timestamp: new Date().toISOString(), type: 'event_msg', payload: {
+      type: 'item_completed', item: { type: 'UserMessage', id: 'ambiguous-receipt', content: [{ type: 'text', text: 'Repeated words' }] },
+    } }) + '\n')
+    await f.host.connect()
+    expect(store.readMessages(threadId).messages).toEqual(before)
+    store.rebuild()
+    expect(store.readMessages(threadId).messages).toEqual(before)
+  } finally { off(); store.close(); await f.cleanup() }
+})

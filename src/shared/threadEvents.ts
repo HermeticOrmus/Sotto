@@ -1,5 +1,12 @@
 import { z } from 'zod'
-import { agentMessageSchema } from './agents'
+import { agentMessageSchema, type AgentMessage } from './agents'
+
+/** Identity is proved separately by the adapter. A duplicate must carry no distinct words or metadata. */
+export function sameMessageContent(duplicate: AgentMessage, canonical: AgentMessage): boolean {
+  return duplicate.role === canonical.role && duplicate.text === canonical.text
+    && (duplicate.commandId === undefined || duplicate.commandId === canonical.commandId)
+    && (duplicate.attachments === undefined || JSON.stringify(duplicate.attachments) === JSON.stringify(canonical.attachments))
+}
 
 /**
  * Who asked for a recorded answer. A thread's log is Sotto's own history, so an answer says where it

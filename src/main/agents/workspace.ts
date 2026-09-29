@@ -1017,6 +1017,12 @@ export class WorkspaceHost implements AgentHost {
     try { return this.threadStore.messageIdentities(threadId) }
     catch { return [] }
   }
+  message(threadId: string, messageId: string): AgentMessage | undefined {
+    if (this.storeUnavailable) return undefined
+    this.writeEvents()
+    try { return this.threadStore.message(threadId, messageId) }
+    catch { return undefined }
+  }
   /** Indexed historical task classification, never live monitoring or task/result text. */
   activity(threadId: string, activityId: string, historyEpoch?: string): AgentActivity | undefined {
     if (this.subagentUnavailable) return undefined
