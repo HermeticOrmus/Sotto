@@ -70,11 +70,13 @@ it('does not renew idle age through recurring empty Grok history reads', async (
   let gate: { entered: ReturnType<typeof Promise.withResolvers<void>>; release: ReturnType<typeof Promise.withResolvers<void>> } | undefined
   try {
     await f.host.connect()
-    const owned = f.adapter as unknown as { rpc: { request: Request }; reaper: SessionReaper; historyReads: Map<string, Promise<void>> }
+    const owned = f.adapter as unknown as { processes: Map<string, { rpc: { request: Request } }>; reaper: SessionReaper; historyReads: Map<string, Promise<void>> }
     expect(await f.host.execute({ type: 'create-project', commandId: randomUUID(), projectId: f.projectId, title: 'Synthetic project', path: f.root })).toEqual({ accepted: true })
     expect(await f.host.execute({ type: 'create-thread', commandId: randomUUID(), threadId: id, projectId: f.projectId, modelId: f.modelId, title: 'Synthetic idle thread' })).toEqual({ accepted: true })
-    const request = owned.rpc.request.bind(owned.rpc)
-    vi.spyOn(owned.rpc, 'request').mockImplementation(async (method, params, accept) => {
+    // Each thread session has its own Grok process, and its history is read there.
+    const rpc = owned.processes.get(id)!.rpc
+    const request = rpc.request.bind(rpc)
+    vi.spyOn(rpc, 'request').mockImplementation(async (method, params, accept) => {
       if (method === '_x.ai/session/updates' && gate) {
         gate.entered.resolve()
         await gate.release.promise

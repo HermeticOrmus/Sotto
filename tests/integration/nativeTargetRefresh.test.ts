@@ -33,7 +33,8 @@ it.each(['codex', 'claude', 'grok'] as const)('%s sends and confirms while anoth
       const poll = log.poll.bind(log)
       vi.spyOn(log, 'poll').mockImplementation(async () => { entered(); await gate; return poll() })
     } else {
-      const rpc = (f.adapter as unknown as { rpc: { request(method: string, params: Record<string, unknown>, ...args: unknown[]): Promise<void> } }).rpc
+      // Each Grok thread runs its own process, so the history read to hold is on the unrelated thread's own.
+      const rpc = (f.adapter as unknown as { processes: Map<string, { rpc: { request(method: string, params: Record<string, unknown>, ...args: unknown[]): Promise<void> } }> }).processes.get(unrelated)!.rpc
       const request = rpc.request.bind(rpc)
       vi.spyOn(rpc, 'request').mockImplementation(async (method, params, ...args) => { if (method === '_x.ai/session/updates' && params.sessionId === nativeId) { entered(); await gate }; return request(method, params, ...args) })
     }

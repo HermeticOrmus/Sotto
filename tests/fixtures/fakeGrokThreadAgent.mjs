@@ -2,16 +2,16 @@ import { createInterface } from 'node:readline'
 import { spawn } from 'node:child_process'
 import { clearInterval } from 'node:timers'
 import { randomUUID } from 'node:crypto'
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync, writeSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 const root = process.argv[2]
 const path = name => join(root, name)
 const read = (name, fallback) => { try { return JSON.parse(readFileSync(path(name), 'utf8')) } catch { return fallback } }
 if (process.argv.includes('inspect')) { process.stdout.write(JSON.stringify(read('skills.json', { skills: [] }))); process.exit(0) }
-// Sotto's side writing (ADR-0026): its own `agent --no-leader stdio` process on a throwaway home, never the
-// thread's leader. It records each frame it was sent in oneshot.jsonl as it arrives (the client kills it
-// on close), never in requests.jsonl or the native sessions, and answers from oneshot.json.
-if (process.argv.includes('--no-leader')) {
+// Sotto's side writing (ADR-0026): its own tool-free `agent --no-leader stdio` process on a throwaway home,
+// never a thread's process. It records each frame it was sent in oneshot.jsonl as it arrives (the client
+// kills it on close), never in requests.jsonl or the native sessions, and answers from oneshot.json.
+if (process.argv.includes('--deny')) {
  const script = read('oneshot.json', {})
  const reply = frame => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...frame }) + '\n')
  const call = { args: process.argv.slice(3), cwd: process.cwd(), home: process.env.GROK_HOME }
@@ -37,19 +37,73 @@ if (process.argv.includes('--no-leader')) {
  // The thread agent below never starts in this process: module evaluation waits here until the call ends.
  await new Promise(() => {})
 }
-const sessions = read('native-sessions.json', {})
-// Leader work survives proxy restart, but replies for the departed proxy are not rerouted.
-for (const session of Object.values(sessions)) delete session.promptId
-const save = () => writeFileSync(path('native-sessions.json'), JSON.stringify(sessions))
+// Sotto runs one of these per thread session, as Grok's own `agent --no-leader stdio` (T3 Code's shape), so
+// several share this root at once. The durable store stays one native-sessions.json that tests read and
+// seed, and each process writes back only the sessions it holds, under a lock, so none overwrites another's.
+// A session is held by the process that created or loaded it; one nobody holds is read from disk.
+const sessions = {}
+const resident = new Set()
+const pause = new Int32Array(new SharedArrayBuffer(4))
+/** Whether a process is still running. One that cannot be signalled but exists counts as running. */
+const running = pid => { try { process.kill(pid, 0); return true } catch (error) { return error.code === 'EPERM' } }
+/**
+ * The lock file names its holder. A holder killed mid-write leaves it behind, and it is taken over only once that
+ * process is gone, never after a length of time: a holder a busy machine has paused is still holding it.
+ */
+function locked(work) {
+ const lock = path('native-sessions.lock')
+ for (;;) {
+  try { const fd = openSync(lock, 'wx'); try { writeSync(fd, String(process.pid)) } finally { closeSync(fd) } break } catch (error) {
+   if (!['EEXIST', 'EPERM', 'EACCES', 'EBUSY'].includes(error.code)) throw error
+   try {
+    const before = statSync(lock, { bigint: true }).ino
+    const holder = Number(readFileSync(lock, 'utf8'))
+    // An empty file is a holder between creating it and writing its name; the same file is checked before removing.
+    if (holder && !running(holder) && statSync(lock, { bigint: true }).ino === before) rmSync(lock, { force: true })
+   } catch { /* Released meanwhile. */ }
+   Atomics.wait(pause, 0, 0, 2)
+  }
+ }
+ try { return work() } finally { rmSync(lock, { force: true }) }
+}
+// Which process holds each resident session, so a command for a session goes to its holder and no other.
+const holders = () => path('holders')
+function holding(sessionId, held) {
+ mkdirSync(holders(), { recursive: true })
+ const file = join(holders(), sessionId)
+ if (held) { writeFileSync(file, String(process.pid)); return }
+ try { if (Number(readFileSync(file, 'utf8')) === process.pid) rmSync(file, { force: true }) } catch { /* Not held here. */ }
+}
+/** The running process holding a session resident, if any. */
+function holderOf(sessionId) {
+ try { const pid = Number(readFileSync(join(holders(), sessionId), 'utf8')); return pid && running(pid) ? pid : undefined } catch { return undefined }
+}
+const stored = () => read('native-sessions.json', {})
+// Another process may be halfway through writing the store, so a read takes the lock as a write does.
+const current = () => locked(stored)
+const save = () => { if (Object.keys(sessions).length) locked(() => { const all = stored(); Object.assign(all, sessions); writeFileSync(path('native-sessions.json'), JSON.stringify(all)) }) }
+// A session taken from disk carries no prompt: the process that owned its prompt is gone, and its reply
+// is never rerouted to another process.
+function hold(sessionId) {
+ if (!sessions[sessionId]) { const session = current()[sessionId]; if (!session) return undefined; delete session.promptId; sessions[sessionId] = session }
+ return sessions[sessionId]
+}
+/** Put back a session this process does not hold resident, so a later load reads it fresh from disk. */
+function letGo(sessionId) { if (!resident.has(sessionId) && sessions[sessionId]) { save(); delete sessions[sessionId] } }
 const send = frame => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...frame }) + '\n')
-const record = frame => appendFileSync(path('requests.jsonl'), JSON.stringify(frame) + '\n')
+// Every record names the process that received it, so a test can tell one thread's process from another's.
+const record = frame => appendFileSync(path('requests.jsonl'), JSON.stringify({ ...frame, process: process.pid }) + '\n')
+// A process is one binary: the version it reports is the one it started as, whatever script.json says later.
+const startup = read('script.json', {})
+record({ method: 'fixture/process', params: { pid: process.pid, version: startup.cliVersion ?? '1.0.5' } })
 const defaultCatalog = { currentModelId: 'fixture-model', availableModels: [{ modelId: 'fixture-model', name: 'Fixture Grok', _meta: { supportsReasoningEffort: true, reasoningEffort: 'high', reasoningEfforts: [{ id: 'high' }] } }] }
 // script.json may carry a whole catalog, so a case can reproduce Grok's own highest-first level list.
 const catalogOf = script => script.catalog ?? defaultCatalog
 const pending = new Map(); let serial = 5000
+/** A `session/new` answer held back by `holdCreate`. */
+let heldCreate
 // Mirrors Grok 1.0.5 as probed through SessionStart hooks: _meta applies when a session starts or is
 // loaded while not resident; loading a resident session can add always-approve but never removes it.
-const resident = new Set()
 const nativeMode = meta => meta?.yoloMode ? 'bypassPermissions' : meta?.autoMode ? 'auto' : 'default'
 // Sotto must always state both flags explicitly, never both on, and never swap the agent profile.
 function checkPolicy(meta) {
@@ -57,7 +111,7 @@ function checkPolicy(meta) {
 }
 function update(sessionId, update, extension = false, notify = true, meta = {}) {
  const entry = { timestamp: Math.floor(Date.now()/1000), method: extension ? '_x.ai/session/update' : 'session/update', params: { sessionId, update, _meta: {eventId:read('script.json',{}).reusedEventIds ? `${sessionId}-2` : randomUUID(),agentTimestampMs:Date.now(),...meta} } }
- sessions[sessionId].updates.push(entry); save()
+ hold(sessionId).updates.push(entry); save()
  if (notify) send(entry)
 }
 function complete(sessionId, text, reason = 'end_turn') {
@@ -84,6 +138,8 @@ function validate(frame, request) {
  return undefined
 }
 createInterface({input:process.stdin}).on('line', line => {
+ // A process can start, answer and end between two ticks, so it looks for a command before each frame.
+ check()
  const frame = JSON.parse(line); record(frame)
  if (!frame.method) {
   const request = pending.get(frame.id)
@@ -93,31 +149,34 @@ createInterface({input:process.stdin}).on('line', line => {
   pending.delete(frame.id); return
  }
  const p = frame.params ?? {}; const script = read('script.json', {})
- if (frame.method === 'initialize') send({id:frame.id,result:{protocolVersion:script.protocolVersion ?? 1,agentCapabilities:{loadSession:true,mcpCapabilities:{http:script.browserHttp ?? true},promptCapabilities:{image:false,audio:false,embeddedContext:true}},authMethods:[{id:'cached_token'}],_meta:{agentVersion:script.cliVersion ?? '1.0.5',modelState:catalogOf(script)}}})
+ if (frame.method === 'initialize') send({id:frame.id,result:{protocolVersion:script.protocolVersion ?? 1,agentCapabilities:{loadSession:true,mcpCapabilities:{http:script.browserHttp ?? true},promptCapabilities:{image:false,audio:false,embeddedContext:true}},authMethods:[{id:'cached_token'}],_meta:{agentVersion:startup.cliVersion ?? '1.0.5',modelState:catalogOf(script)}}})
  else if (frame.method === 'authenticate') { if (!script.ignoreAuthenticate) send({id:frame.id,result:{}}) }
  else if (frame.method === 'session/new') {
   checkPolicy(p._meta)
-  const sessionId = randomUUID(); sessions[sessionId] = {cwd:p.cwd,updates:[],permissionMode:nativeMode(p._meta)}; resident.add(sessionId); save()
+  const sessionId = randomUUID(); sessions[sessionId] = {cwd:p.cwd,updates:[],permissionMode:nativeMode(p._meta)}; resident.add(sessionId); holding(sessionId, true); save()
   record({method:'fixture/session-resident',params:{sessionId,resident:true}})
   const reply = () => send({id:frame.id,result:{sessionId,models:catalogOf(script)}})
-  if (script.delayCreate) setTimeout(reply,script.delayCreate); else reply()
+  // `holdCreate` keeps the answer until a `release-create` command, so a test can act while a create is open.
+  if (script.holdCreate) heldCreate = reply
+  else if (script.delayCreate) setTimeout(reply,script.delayCreate); else reply()
  }
  else if (frame.method === 'session/load') {
   checkPolicy(p._meta)
-  if (!sessions[p.sessionId]) send({id:frame.id,error:{code:-32602,message:'Missing session'}})
-  else if (script.rejectLoad) send({id:frame.id,error:{code:-32603,message:'Rejected load'}})
+  if (!hold(p.sessionId)) send({id:frame.id,error:{code:-32602,message:'Missing session'}})
+  else if (script.rejectLoad) { letGo(p.sessionId); send({id:frame.id,error:{code:-32603,message:'Rejected load'}}) }
   else {
    const session = sessions[p.sessionId]
    if (!resident.has(p.sessionId)) session.permissionMode = nativeMode(p._meta)
    else if (p._meta?.yoloMode) session.permissionMode = 'bypassPermissions'
-   resident.add(p.sessionId); save()
+   resident.add(p.sessionId); holding(p.sessionId, true); save()
    record({method:'fixture/session-resident',params:{sessionId:p.sessionId,resident:true}})
    send({id:frame.id,result:{models:catalogOf(script),_meta:{sessionId:p.sessionId}}})
   }
  }
  else if (frame.method === '_x.ai/session/close') {
   if (script.rejectClose) { send({id:frame.id,error:{code:-32603,message:'Rejected close'}}); return }
-  const closed = resident.delete(p.sessionId)
+  const closed = resident.delete(p.sessionId); holding(p.sessionId, false)
+  letGo(p.sessionId)
   record({method:'fixture/session-resident',params:{sessionId:p.sessionId,resident:false}})
   send({id:frame.id,result:{result:{success:true,outcome:closed ? 'closed' : 'notResident'}}})
  }
@@ -130,13 +189,15 @@ createInterface({input:process.stdin}).on('line', line => {
  }
  else if (frame.method === '_x.ai/session/updates') {
   if (script.ignoreHistory) return
-  const updates = (sessions[p.sessionId]?.updates ?? []).slice(0,script.historyVisibleCount); const page = updates.slice(p.offset,p.offset+p.limit)
+  // Durable history is readable whether or not this process holds the session.
+  const updates = ((sessions[p.sessionId] ?? current()[p.sessionId])?.updates ?? []).slice(0,script.historyVisibleCount); const page = updates.slice(p.offset,p.offset+p.limit)
   // A real page carries whatever the session's tools printed. The padding is a field the adapter's
   // schema drops, so the line is page-sized without the test keeping a page-sized message.
   const padding = script.historyPadBytes ? {padding:'x'.repeat(script.historyPadBytes)} : {}
   send({id:frame.id,result:{updates:page,totalCount:updates.length,hasMore:p.offset+page.length<updates.length,...padding}})
  }
  else if (frame.method === 'session/prompt') {
+  if (!resident.has(p.sessionId)) appendFileSync(path('violations.jsonl'), JSON.stringify({reason:'Prompt for a session this process has not loaded'})+'\n')
   if (script.writeCwd) writeFileSync(join(sessions[p.sessionId].cwd, 'native-cwd-proof.txt'), p.prompt[0].text)
   if (script.rejectPrompt) { send({id:frame.id,error:{code:-32602,message:'Rejected'}}); return }
   sessions[p.sessionId].promptId = frame.id; save()
@@ -145,11 +206,33 @@ createInterface({input:process.stdin}).on('line', line => {
  }
  else if (frame.method === 'session/cancel') complete(p.sessionId,'','cancelled')
  else send({id:frame.id,error:{code:-32601,message:'Unknown method'}})
-}).on('close', () => {save();clearInterval(control);process.exit(0)})
+}).on('close', () => {
+ // No leader keeps a session once its process ends: what this process held is no longer resident anywhere.
+ save(); clearInterval(control)
+ for (const sessionId of resident) { holding(sessionId, false); record({method:'fixture/session-resident',params:{sessionId,resident:false}}) }
+ process.exit(0)
+})
+// Several processes read control.json. A command for a session another running process holds is that process's
+// alone; one for a session nobody holds, or with no session, goes to whichever process claims it first. A command
+// is carried out once: its claim is a file only one process can create.
 let last
-const control = setInterval(() => {
+function claim(command) {
+ if (command.type === 'release-create' && !heldCreate) return false
+ if (command.sessionId && !resident.has(command.sessionId)) { const holder = holderOf(command.sessionId); if (holder && holder !== process.pid) return false }
+ try { mkdirSync(path('control-claims'), {recursive:true}); writeFileSync(path(`control-claims/${command.id}`), String(process.pid), {flag:'wx'}); return true }
+ catch { return 'taken' }
+}
+function check() {
  if (!existsSync(path('control.json'))) return
- const command = read('control.json', {}); if (!command.id || command.id === last) return; last = command.id
+ const command = read('control.json', {}); if (!command.id || command.id === last) return
+ const claimed = claim(command); if (!claimed) return
+ last = command.id; if (claimed === 'taken') return
+ if (command.sessionId && !hold(command.sessionId)) return
+ try { run(command) } finally { if (command.sessionId) letGo(command.sessionId) }
+}
+const control = setInterval(check, 10)
+function run(command) {
+ if (command.type === 'release-create') { const reply = heldCreate; heldCreate = undefined; reply?.() }
  if (command.type === 'complete') complete(command.sessionId,command.text,command.reason)
  if (command.type === 'takeover') update(command.sessionId,{sessionUpdate:'user_message_chunk',content:{type:'text',text:command.text}},false,command.notify ?? false)
  if (command.type === 'chunk') update(command.sessionId,{sessionUpdate:'agent_message_chunk',content:{type:'text',text:command.text}},false,true,command.meta)
@@ -179,4 +262,4 @@ const control = setInterval(() => {
   const id = ++serial; pending.set(id,{kind:'unreadable'})
   send({id,method:command.method,params:{sessionId:command.sessionId,toolCallId:String(id),questions:[{question:command.text,options:[]}]}})
  }
-},10)
+}
