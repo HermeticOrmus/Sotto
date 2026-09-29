@@ -1,3 +1,4 @@
+import { sameMessageContent } from '../../shared/threadEvents'
 import { browserCodexConfig, type BrowserAgentTools } from './browserAgentServer'
 import type { ScopedThreadTools } from './threadToolServer'
 import { existingWorkingDirectory } from './threadWorktrees'
@@ -482,7 +483,7 @@ export class CodexAppServerHost implements AgentHost {
           pending.push(message); this.pendingLogMessages.set(sessionId, pending)
           return
         }
-        this.addMessage(sessionId, message); this.orderMessages(sessionId); this.emit()
+        this.addRolloutMessage(sessionId, message); this.reconcileMessages(sessionId); this.emit()
       }
     } })
     // A resumed thread is read back from Codex in full, so what the store already holds is recognised
@@ -724,7 +725,7 @@ export class CodexAppServerHost implements AgentHost {
     catch (error) {
       // A failed read cannot hide native-authored input. Without corroboration,
       // buffered rows remain external and management must stop for review.
-      if (generation === this.generation) { this.flushLogMessages(id); this.orderMessages(id); this.emit() }
+      if (generation === this.generation) { this.flushLogMessages(id); this.reconcileMessages(id); this.emit() }
       throw error
     }
     finally { if (this.threadReads.get(id) === work) this.threadReads.delete(id); this.scheduleOutdatedStop() }
@@ -732,7 +733,7 @@ export class CodexAppServerHost implements AgentHost {
   /** What a read that applied the thread does last, whether it read the whole transcript or the newest turn alone. */
   private settleRead(id: string): void {
     this.histories.add(id)
-    this.flushLogMessages(id); this.orderMessages(id)
+    this.flushLogMessages(id); this.reconcileMessages(id)
     const read = this.ensureThread(id)
     if (!this.aliases[id]!.pendingSettings) { delete read.historyStatus; delete read.historyError }
   }
@@ -847,7 +848,7 @@ export class CodexAppServerHost implements AgentHost {
         thread.status = 'error'; thread.historyStatus = 'error'; thread.historyError = error.message
         this.emit()
       }
-      if (generation === this.generation) { this.flushLogMessages(id); this.orderMessages(id); this.emit() }
+      if (generation === this.generation) { this.flushLogMessages(id); this.reconcileMessages(id); this.emit() }
       throw error
     }).finally(() => {
       this.resuming.delete(id); this.scheduleOutdatedStop()
@@ -861,8 +862,28 @@ export class CodexAppServerHost implements AgentHost {
     this.log.add(id, known ? { ...message, createdAt: known.createdAt } : message)
   }
   private flushLogMessages(id: string): void {
-    for (const message of this.pendingLogMessages.get(id) ?? []) this.addMessage(id, message)
+    for (const message of this.pendingLogMessages.get(id) ?? []) this.addRolloutMessage(id, message)
     this.pendingLogMessages.delete(id)
+  }
+  /** One complete native identity, never an ID claimed by another canonical message. */
+  private canonicalReplay(id: string, message: AgentMessage) {
+    const records = this.aliases[id]!.messageIdentities.flatMap(turn => turn.messages)
+    if (records.some(record => record.id === message.id)) return undefined
+    const candidates = records.filter(record => record.nativeIds.includes(message.id))
+    const record = candidates.length === 1 ? candidates[0] : undefined
+    return record?.complete && record.role === message.role && record.digest === promptDigest(message.text) ? record : undefined
+  }
+  private storedMessage(id: string, messageId: string): AgentMessage | undefined {
+    return this.history?.message ? this.history.message(id, messageId) : this.log.message(id, messageId)
+  }
+  private addRolloutMessage(id: string, message: AgentMessage): void {
+    const record = this.canonicalReplay(id, message)
+    const canonical = record && this.storedMessage(id, record.id)
+    if (canonical && sameMessageContent(message, canonical)) {
+      this.log.alias(id, message.id, canonical.id, messageId => this.storedMessage(id, messageId))
+      return
+    }
+    this.addMessage(id, message)
   }
   private identityItem(item: z.infer<typeof itemSchema>): IdentityItem | undefined {
     if (item.type !== 'userMessage' && item.type !== 'agentMessage') return
@@ -872,24 +893,18 @@ export class CodexAppServerHost implements AgentHost {
   private stableMessageId(id: string, turnId: string, itemId: string): string {
     return this.aliases[id]!.messageIdentities.find(turn => turn.turnId === turnId)?.messages.find(m => m.nativeIds.includes(itemId))?.id ?? itemId
   }
-  /**
-   * Put the window in the order Codex's own turn identities give it, and drop the rollout rows a turn
-   * has since corroborated. This is the order a pane draws rather than a change to what was said: the
-   * record keeps the events in the order they arrived.
-   */
-  private orderMessages(id: string): void {
-    const held = this.log.messages(id)
+  /** Repair corroborated native duplicates, then order the held window by native turn identity. */
+  private reconcileMessages(id: string): void {
     const rewound = new Set(this.aliases[id]!.rewoundMessageIds)
     const records = this.aliases[id]!.messageIdentities.flatMap(turn => turn.messages)
     const order = new Map(records.map((m, index) => [m.id, index]))
-    this.log.arrange(id, message => {
-      if (rewound.has(message.id)) return false
-      if (order.has(message.id)) return true
-      const aliases = records.filter(record => record.nativeIds.includes(message.id) && record.role === message.role && record.digest === promptDigest(message.text))
-      // Exact native/rollout aliases corroborated by a complete ordered snapshot;
-      // raw watcher input without that evidence remains a separate takeover event.
-      return aliases.length !== 1 || !held.some(m => m.id === aliases[0]!.id)
-    }, message => order.get(message.id) ?? Number.MAX_SAFE_INTEGER)
+    for (const nativeId of new Set(records.flatMap(record => record.nativeIds))) {
+      if (order.has(nativeId) || !this.log.has(id, nativeId)) continue
+      const duplicate = this.storedMessage(id, nativeId)
+      const canonical = duplicate && this.canonicalReplay(id, duplicate)
+      if (canonical) this.log.alias(id, nativeId, canonical.id, messageId => this.storedMessage(id, messageId))
+    }
+    this.log.arrange(id, message => !rewound.has(message.id), message => order.get(message.id) ?? Number.MAX_SAFE_INTEGER)
   }
   private applyItem(id: string, item: z.infer<typeof itemSchema>, turnId?: string, createdAt?: string,
     lifecycle: { phase: 'started' | 'completed' | 'history'; startedAtMs?: number | undefined; completedAtMs?: number | undefined; afterMessageId?: string | undefined; terminal?: boolean | undefined } = { phase: 'history' }): void {
@@ -969,7 +984,7 @@ export class CodexAppServerHost implements AgentHost {
       if (item.type === 'userMessage' || item.type === 'agentMessage') anchor = this.stableMessageId(id, turn.id, item.id)
     }
     this.activity.turn(thread, turn, live)
-    if (order) this.orderMessages(id)
+    if (order) this.reconcileMessages(id)
     if (!this.runningTurns.has(id) || this.runningTurns.get(id) === turn.id || turn.status === 'inProgress') {
       thread.lastTurn = { id: turn.id, status: turn.status === 'inProgress' ? 'running' : turn.status }
     }
@@ -1005,7 +1020,7 @@ export class CodexAppServerHost implements AgentHost {
     // Corroborate aliases before exposing legacy rollout rows to authority
     // observers. Unmatched rows remain visible as external input.
     if (completeHistory || this.histories.has(id)) this.flushLogMessages(id)
-    this.orderMessages(id)
+    this.reconcileMessages(id)
     if (confirmsRewind && JSON.stringify([...this.log.userMessageIds(id)]) === JSON.stringify(rewind.retainedUsers)) {
       alias.historyEpoch = randomUUID(); this.ensureThread(id).historyEpoch = alias.historyEpoch
       delete alias.pendingRollback

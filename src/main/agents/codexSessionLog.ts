@@ -13,7 +13,7 @@ const entrySchema = z.object({ timestamp: z.string(), ordinal: z.number().option
 const textContent = z.array(z.object({ type: z.string(), text: z.string().optional() }))
 const userEvent = z.object({ type: z.string(), id: z.string().optional(), message: z.string().optional(), text: z.string().optional(),
   client_id: z.string().nullish(), images: z.array(z.string()).optional(), local_images: z.array(z.string()).optional(),
-  content: textContent.optional(), item: z.object({ type: z.string(), id: z.string().optional(), content: textContent.optional() }).optional() })
+  content: textContent.optional(), item: z.object({ type: z.string(), id: z.string().optional(), client_id: z.string().nullish(), content: textContent.optional() }).optional() })
 type Tail = { path?: string | undefined; offset: number; buffer: Buffer[]; bufferedBytes: number; discarding: boolean; own: Map<string, string>; seen: Set<string>; identities: CodexRolloutIdentities }
 
 /** Rollout event messages are authored input; response_item user messages can be injected instructions. */
@@ -113,7 +113,9 @@ export class CodexSessionLogWatcher {
       if (tail.seen.has(id)) return
       tail.seen.add(id)
       const digest = promptDigest(text)
-      if (event.client_id && tail.own.get(event.client_id) === digest) return
+      const clientId = item?.client_id ?? event.client_id
+      const conflictingClient = item?.client_id && event.client_id && item.client_id !== event.client_id
+      if (!conflictingClient && clientId && tail.own.get(clientId) === digest) return
       // No-client legacy rows stay unowned until complete turn history can
       // corroborate an exact alias. Text alone must not hide native input.
       if (!this.stopped) this.options.onMessage(threadId, { id, role: 'user', text, createdAt: entry.timestamp })

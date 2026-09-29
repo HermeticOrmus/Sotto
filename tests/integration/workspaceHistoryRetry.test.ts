@@ -44,6 +44,17 @@ function failWrites() {
   return vi.spyOn(ThreadStore.prototype, 'appendMany').mockImplementation(() => { throw new Error('Synthetic unavailable storage') })
 }
 
+it('withholds identity repair evidence while newer words are waiting to be saved', async () => {
+  const { adapter, host } = await fixture()
+  adapter.publish(added())
+  expect(host.message('session-workshop', 'reply')?.text).toBe('First chunk')
+  const append = failWrites()
+  adapter.publish(appended())
+  expect(host.message('session-workshop', 'reply')).toBeUndefined()
+  append.mockRestore()
+  await expect.poll(() => host.message('session-workshop', 'reply')?.text).toBe('First chunk continued')
+})
+
 it('retains failed events in order through incoming text, an organization save, retry and restart', async () => {
   const { directory, adapter, host } = await fixture()
   const append = failWrites()

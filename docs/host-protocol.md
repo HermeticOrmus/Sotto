@@ -15,7 +15,7 @@ Nothing v1 carries is renamed, removed or given a new meaning. A change that nee
 Every host advertises two things beside `v`:
 
 - `sottoVersion`: the Sotto release the host runs, such as `0.1.16`. It says which build answered; it is not a compatibility rule by itself.
-- `features`: the host features it offers. This build offers eight: `detail-delta`, `git-refs` for the branch picker's request, `git-changed-files` for the commit dialog's, `git-pull-request` for the Pull request surface's, `attachment-staging` for the `stage-attachment` and `attachment-content` requests (ADR-0031), `host-folders` for the folder browser's request (ADR-0025, September 26 amendment), `provider-sign-in` for the four sign-in requests (ADR-0037), and `client-updates` for the `queue-client-updates` and `cancel-client-updates` commands (ADR-0021, September 29 amendment). A headless host lists all eight; the desktop's phone listener lists all but `provider-sign-in` and `client-updates`.
+- `features`: the host features it offers. This build offers nine: `message-aliases` for native message identity repairs, `detail-delta`, `git-refs` for the branch picker's request, `git-changed-files` for the commit dialog's, `git-pull-request` for the Pull request surface's, `attachment-staging` for the `stage-attachment` and `attachment-content` requests (ADR-0031), `host-folders` for the folder browser's request (ADR-0025, September 26 amendment), `provider-sign-in` for the four sign-in requests (ADR-0037), and `client-updates` for the `queue-client-updates` and `cancel-client-updates` commands (ADR-0021, September 29 amendment). A headless host lists all nine; the desktop's phone listener lists all but `provider-sign-in` and `client-updates`.
 
 A client reads `/v1/health` before it opens a session, and uses a feature only when the host lists it. It never finds out by sending a request and reading the refusal. Feature names it does not know are ignored.
 
@@ -104,3 +104,8 @@ When a thread is too large to send, its `error` push names it. A client does not
 | `too_large` | The answer or push would not fit in one frame. Nothing on the host was lost. |
 
 Every `message` is plain copy for the user. None is logged with a prompt, a transcript, a token or a pairing code.
+
+
+### Message identity repairs
+
+A client that includes `message-aliases` in hello's `accepts` may receive `message-aliased` events in hello, event pages and shell pushes. Each carries `at`, `messageId` and `canonicalId`; only the duplicate projection row is removed, after comparing the saved content. Original events remain. Without this opt-in the host omits these events and advances `latestSeq` over them, even when a page becomes empty. Such clients read the corrected history from thread detail; the original version 1 event union is unchanged for them.

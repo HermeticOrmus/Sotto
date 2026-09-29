@@ -1,5 +1,12 @@
 import { z } from 'zod'
-import { agentMessageSchema } from './agents'
+import { agentMessageSchema, type AgentMessage } from './agents'
+
+/** Identity is proved separately by the adapter. A duplicate must carry no distinct words or metadata. */
+export function sameMessageContent(duplicate: AgentMessage, canonical: AgentMessage): boolean {
+  return duplicate.role === canonical.role && duplicate.text === canonical.text
+    && (duplicate.commandId === undefined || duplicate.commandId === canonical.commandId)
+    && (duplicate.attachments === undefined || JSON.stringify(duplicate.attachments) === JSON.stringify(canonical.attachments))
+}
 
 /**
  * Who asked for a recorded answer. A thread's log is Sotto's own history, so an answer says where it
@@ -24,6 +31,8 @@ export const threadEventSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('message-added'), at, message: agentMessageSchema, redacted }).strict(),
   z.object({ kind: z.literal('message-text-appended'), at, messageId: z.string().min(1).max(512), appendText: z.string().max(100_000), redacted }).strict(),
   z.object({ kind: z.literal('message-replaced'), at, message: agentMessageSchema, redacted }).strict(),
+  /** Native identity proves two receipts describe one message; retain the canonical receipt. */
+  z.object({ kind: z.literal('message-aliased'), at, messageId: z.string().min(1).max(512), canonicalId: z.string().min(1).max(512) }).strict(),
   /** A confirmed rewind: everything projected for this thread is dropped and the new epoch recorded. */
   z.object({ kind: z.literal('messages-reset'), at, historyEpoch: z.string().max(512).optional() }).strict(),
   /**

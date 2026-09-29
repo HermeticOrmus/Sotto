@@ -147,3 +147,6 @@ sizes; the identity check is the one that would show first on a much longer thre
 ```sh
 SOTTO_PERF_BENCH=1 npx vitest run tests/perf/codexOpenApply.perf.test.ts --maxWorkers=1 --disable-console-intercept
 ```
+
+
+September 29: the adapter method is now named `reconcileMessages`, because it also repairs corroborated saved duplicates. The benchmark follows that name; the measurements above describe the earlier implementation.

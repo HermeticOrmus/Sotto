@@ -94,6 +94,8 @@ export interface StoredMessageIdentity { readonly id: string; readonly role: 'us
 export interface ThreadHistorySource {
   /** Every message the store holds for a thread, by ID and role, oldest first. */
   messageIdentities(threadId: string): readonly StoredMessageIdentity[]
+  /** One indexed message, for checking a native identity repair against the saved words. */
+  message?(threadId: string, messageId: string): AgentMessage | undefined
   /** Bounded activity evidence for this history epoch; undefined means it must be read afresh. */
   activities?(threadId: string, historyEpoch?: string): readonly AgentActivity[] | undefined
   /** Indexed text-free classification for a native task older than the activity window. */

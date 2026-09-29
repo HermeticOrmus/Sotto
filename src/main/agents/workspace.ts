@@ -1017,6 +1017,13 @@ export class WorkspaceHost implements AgentHost {
     try { return this.threadStore.messageIdentities(threadId) }
     catch { return [] }
   }
+  message(threadId: string, messageId: string): AgentMessage | undefined {
+    if (this.storeUnavailable) return undefined
+    this.writeEvents()
+    if (this.pendingEvents.has(threadId)) return undefined
+    try { return this.threadStore.message(threadId, messageId) }
+    catch { return undefined }
+  }
   /** Indexed historical task classification, never live monitoring or task/result text. */
   activity(threadId: string, activityId: string, historyEpoch?: string): AgentActivity | undefined {
     if (this.subagentUnavailable) return undefined
@@ -1149,7 +1156,7 @@ export class WorkspaceHost implements AgentHost {
   private noteWritten(threadId: string, events: readonly ThreadEvent[]): void {
     const entry = this.storedAnchors.get(threadId)
     if (!entry) return
-    if (events.some(event => event.kind === 'messages-reset')) { this.storedAnchors.delete(threadId); return }
+    if (events.some(event => event.kind === 'messages-reset' || event.kind === 'message-aliased')) { this.storedAnchors.delete(threadId); return }
     let changed = false
     for (const event of events) {
       if (event.kind === 'message-added' && entry.answers.get(event.message.id) === false) { entry.answers.set(event.message.id, true); changed = true }
