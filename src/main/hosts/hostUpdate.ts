@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { hostIsOlder } from '../../shared/hostProtocol'
 import { HOST_ARCHIVE_PATTERN, HOST_RELEASES_URL, hostArchiveName, type HostUpdateAction, type HostUpdateFailure, type HostUpdatePhase, type HostUpdateRoute, type HostUpdateState, type HostUpdateStep } from '../../shared/hostUpdates'
 import { HOST_ARCHIVE_LIMIT_BYTES, HOST_DOWNLOAD_TIMEOUT_MS } from './launchScript'
+import { SshFailure } from './sshFailure'
 import type { SshHostUpdateOperation, SshHostUpdateOptions, SshHostUpdateResult } from './sshLauncher'
 
 /** A saved host that is connected, or kept reachable for Stop host, and has said which Sotto it runs. */
@@ -190,7 +191,11 @@ export class HostUpdates {
       step('restart')
       let restarted: SshHostUpdateResult | undefined
       try { restarted = await this.options.hosts.restart(entry.id, to) }
-      catch { restarted = undefined }
+      catch (error) {
+        // Refused before it was sent (the host is not Sotto's any more, or not connected): nothing was stopped.
+        if (!(error instanceof SshFailure) || error.code === 'request-busy' || error.code === 'not-connected') throw new UpdateStopped('restart-not-sent', 'restart')
+        restarted = undefined
+      }
       if (restarted?.type === 'error') throw new UpdateStopped(restarted.reason, 'restart', restarted)
       // Connected again, the host says what it runs; a connection lost during the restart is decided by that alone.
       const now = this.options.hosts.candidates().find(item => item.id === entry.id)
@@ -261,6 +266,7 @@ export class HostUpdates {
       case 'node-unsupported': return say(`Sotto ${to}'s host needs Node ${stopped.detail.range ?? 'another version'}, and ${name} runs Node ${stopped.detail.node ?? 'another version'}, so nothing was installed.`, `Install that Node for the SSH account on ${name}, then try again.`)
       case 'update-busy': return say(`Another Sotto is updating the host on ${name} right now, so this one stopped before changing anything.`, 'Wait a minute, then try again.')
       case 'update-not-owned': return say(`Sotto did not start the host now running on ${name}, so it did not restart it. ${to} is installed beside ${from}.`, `Stop the host on ${name}, then connect to it again from Settings > Hosts, and Sotto starts ${to}.`)
+      case 'restart-not-sent': return say(`Sotto could not ask ${name}'s host to restart, so ${to} is installed beside ${from}, which still runs.`, `Try again, or press Stop host for ${name} in Settings > Hosts and switch it on again, which starts ${to}.`)
       case 'update-stop-failed': return say(`${name}'s host did not stop, so Sotto left ${from} running.`, `Try again, or stop the host on ${name} by hand, then connect to it again.`)
       case 'update-start-failed': return stopped.detail.restarted
         ? say(`${to} installed on ${name}, but its host did not start, so Sotto started ${from} again.`, `Try again, or see what the new host says: press Stop host for ${name} in Settings > Hosts, then run the commands below on ${name}.`, `${name}'s threads are back. Nothing was lost.`)

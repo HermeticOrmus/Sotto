@@ -34,6 +34,8 @@ export interface HostUpdateSource {
   busy(id: string): string | undefined
   subscribe(listener: () => void): () => void
 }
+/** The launch script's answers to a restart that it gave before stopping anything, so the host runs as it did. */
+const UNTOUCHED_RESTARTS: ReadonlySet<string> = new Set(['update-not-owned', 'update-stop-failed', 'update-busy', 'update-missing', 'update-invalid'])
 /** The commands that act on one saved host's connection, which wait while that host is being updated. */
 const CONNECTION_COMMANDS: ReadonlySet<HostsCommand['type']> = new Set<HostsCommand['type']>(['save', 'set-enabled', 'connect', 'disconnect', 'stop-host', 'forget'])
 /**
@@ -200,9 +202,17 @@ export class DesktopHosts {
     this.clearRetry(id)
     const registered = active!.registeredHostId
     if (registered) { this.held.set(id, registered); delete active!.registeredHostId; this.options.router.setReconnecting(registered, true) }
-    try { return await active!.tunnel!.updateHost({ op: 'update-restart', version }, options) }
+    let result: SshHostUpdateResult | undefined, unsent = false
+    try { result = await active!.tunnel!.updateHost({ op: 'update-restart', version }, options); return result }
+    catch (error) { unsent = error instanceof SshFailure && (error.code === 'request-busy' || error.code === 'not-connected'); throw error }
     finally {
-      if (!this.closed && this.saved.includes(host) && host.enabled !== false) {
+      // Nothing was stopped: the restart was never sent, or the host refused it before stopping anything. The same
+      // connection carries on, and the threads read as they did.
+      const untouched = unsent || (result?.type === 'error' && UNTOUCHED_RESTARTS.has(result.reason))
+      if (untouched && this.live.get(id) === active && this.status.get(id)?.phase === 'connected') {
+        active!.closing = false
+        if (registered) { this.held.delete(id); active!.registeredHostId = registered; this.options.router.setReconnecting(registered, false) }
+      } else if (!this.closed && this.saved.includes(host) && host.enabled !== false) {
         // A reconnect, with the backoff behind it: the row reads Reconnecting…, as it does after a drop.
         this.retries.set(id, { timer: undefined, attempt: 0, active: undefined })
         await this.open(host).catch(() => undefined)
@@ -703,7 +713,10 @@ export class DesktopHosts {
       if (entry.active && (this.live.get(host.id) !== entry.active || entry.active.closing)) return
       // A host switched off is not reconnected, whatever scheduled this.
       if (host.enabled === false) { this.retries.delete(host.id); return }
-      void this.command({ type: 'connect', id: host.id }).catch(() => undefined)
+      // Sotto's own retry, not the user's Connect, so an update under way on this host does not hold it back: a connection
+      // dropped partway through an update is one the update needs back.
+      if (this.closed || !this.saved.includes(host)) return
+      void this.open(host).catch(() => undefined)
     }, (this.options.retryDelayMs ?? reconnectDelayMs)(entry.attempt))
     entry.attempt += 1
     this.retries.set(host.id, entry)

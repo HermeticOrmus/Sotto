@@ -224,6 +224,14 @@ describe('an update', () => {
     await vi.waitFor(() => expect(one().failure?.message).toBe('The connection to forge closed while its host restarted, and it came back on 0.1.22.'))
     expect(one().failure?.kept).toBe('forge\'s threads are back. Nothing was lost.')
   })
+  it('says the old version still runs when the restart could not be asked for, and nothing was stopped', async () => {
+    const { hosts, updates, one, settled } = setup()
+    hosts.restart = async () => { throw new Error('Sotto did not start the host on forge, so it cannot stop it. Stop it on that machine.') }
+    await updates.command(ID, 'update')
+    await settled()
+    expect(one()).toMatchObject({ phase: 'failed', failure: { step: 'restart',
+      message: `Sotto could not ask forge's host to restart, so ${DESKTOP} is installed beside 0.1.22, which still runs.`, kept: 'forge still runs 0.1.22. Nothing was lost.' } })
+  })
   it('does not restart a host Sotto did not start, and offers the commands instead', async () => {
     const { hosts, updates, one } = setup()
     hosts.list = [forge({ owned: false })]; hosts.emit()

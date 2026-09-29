@@ -741,6 +741,28 @@ describe('updating a host from the Threads page (ADR-0040)', () => {
     expect(row(thread)).toBeUndefined()
     expect(manager.get().hosts[0]).toMatchObject({ phase: 'error', error: 'The host installation was not found. Check its folder on the SSH host and reconnect.' })
   })
+  it('carries on over the same connection when the host refuses the restart before stopping anything', async () => {
+    const remote = await add()
+    const thread = await remoteThread()
+    updateHost = async () => ({ type: 'error', reason: 'update-stop-failed' })
+    expect(await manager.restartForUpdate(remote.id, packageVersion)).toEqual({ type: 'error', reason: 'update-stop-failed' })
+    expect(launchers).toHaveLength(1)
+    expect(row(thread)).toMatchObject({ clientConnected: true })
+    expect(row(thread)!.clientReconnecting).toBeUndefined()
+    // The connection is still the host's: a later drop reconnects as any drop does.
+    launchers[0]!.callbacks!.onDisconnected!('dropped')
+    await vi.waitFor(() => expect(manager.get().hosts[0]!.phase).toBe('connected'))
+    expect(launchers).toHaveLength(2)
+  })
+  it('reconnects a connection dropped while an update is under way, although the user\'s own commands on the host wait', async () => {
+    const remote = await add()
+    manager.useUpdates({ state: () => [], command: async () => undefined, subscribe: () => () => undefined,
+      busy: id => id === remote.id ? 'Sotto is updating the host on Forge fixture. Nothing was changed. Wait for the update to finish, then try again.' : undefined })
+    await expect(manager.command({ type: 'disconnect', id: remote.id })).rejects.toThrow('Sotto is updating the host on Forge fixture.')
+    launchers[0]!.callbacks!.onDisconnected!('dropped')
+    await vi.waitFor(() => expect(manager.get().hosts[0]!.phase).toBe('connected'))
+    expect(launchers).toHaveLength(2)
+  })
   it('refuses a restart for a host Sotto did not start', async () => {
     owned = false
     const remote = await add()
