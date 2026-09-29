@@ -97,7 +97,8 @@ struct Live {
             if id == "release" {
                 row["requests"] = [["id": "release-target", "kind": "question",
                     "text": "Which release should I prepare?", "options": [
-                        ["id": "testflight", "label": "TestFlight"], ["id": "desktop", "label": "Desktop"]]]]
+                        ["id": "testflight", "label": "TestFlight"], ["id": "desktop", "label": "Desktop"]]],
+                    ["id": "release-permission", "kind": "permission", "text": "Allow reading the release checklist?", "options": []]]
             }
             if id == "wiring" { row["backgroundWork"] = [["type": "agent"]] }
             if id == "settings" || id == "notes" { row["settledAt"] = date }

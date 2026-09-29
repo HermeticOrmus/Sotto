@@ -54,14 +54,14 @@ struct ThreadView: View {
         .safeAreaInset(edge: .bottom, spacing: 0) { ComposerView(ref: ref) { shown = $0.id; open = $0 } }
         .task(id: ref) { await model.select(ref); offer() }
         .onDisappear { Task { if model.selected == ref { await model.select(nil) } } }
-        .onChange(of: thread?.requests.first?.id) { _, _ in offer() }
+        .onChange(of: thread?.requests.map(\.id)) { _, _ in offer() }
         .sheet(item: $open, onDismiss: { if let shown { setAside.insert(shown) }; shown = nil; offer() }) { request in
             RequestSheet(ref: ref, request: request).presentationDetents([.medium, .large]).presentationDragIndicator(.visible)
         }
     }
     /// Opens the thread's waiting request once; after "Not now" it waits in the reply box.
     private func offer() {
-        guard open == nil, let request = thread?.requests.first, !setAside.contains(request.id) else { return }
+        guard open == nil, let request = thread?.requests.first(where: { !setAside.contains($0.id) }) else { return }
         shown = request.id; open = request
     }
 }
@@ -251,8 +251,20 @@ private struct ComposerView: View {
         VStack(spacing: 0) {
             Divider().overlay(Palette.hairline)
             if let request = model.thread(ref)?.requests.first {
-                Button(request.kind == "permission" ? "Review the permission" : "Answer the question") { openRequest(request) }
-                    .buttonStyle(ActionStyle(wide: true)).padding(12)
+                let requests = model.thread(ref)?.requests ?? []
+                if requests.count > 1 {
+                    Menu {
+                        ForEach(requests) { pending in
+                            Button(pending.questions?.first?.question ?? pending.text) { openRequest(pending) }
+                        }
+                    } label: {
+                        Label("Review \(requests.count) requests", systemImage: "questionmark.bubble")
+                            .frame(maxWidth: .infinity, minHeight: 48)
+                    }.buttonStyle(ActionStyle(wide: true)).padding(12).accessibilityIdentifier("thread-requests")
+                } else {
+                    Button(request.kind == "permission" ? "Review the permission" : "Answer the question") { openRequest(request) }
+                        .buttonStyle(ActionStyle(wide: true)).padding(12)
+                }
             } else {
                 HStack(alignment: .bottom, spacing: 8) {
                     TextField("Reply", text: Binding(get: { model.drafts[ref.id] ?? "" }, set: { model.drafts[ref.id] = $0 }), axis: .vertical)
@@ -311,6 +323,9 @@ private struct RequestSheet: View {
                         permission(current, thread)
                     } else {
                         question(current, thread)
+                    }
+                    if !current.supported || !model.mayAnswer(ref.hostID) || current.kind == "permission" {
+                        Button("Not now") { dismiss() }.buttonStyle(PlainStyle(wide: true))
                     }
                     if let feedback = model.feedback { Text(feedback).font(.subheadline).accessibilityAddTraits(.updatesFrequently) }
                 } else {

@@ -6,6 +6,7 @@ mkdir -p .build-ui
 run_dir=$(mktemp -d .build-ui/run-XXXXXX)
 xcrun simctl list runtimes --json > .build-ui/runtimes.json
 xcrun simctl list devicetypes --json > .build-ui/devicetypes.json
+xcrun simctl help ui > "$run_dir/simctl-ui-help.txt" 2>&1
 python3 - <<'PY' > .build-ui/devices.tsv
 import json
 from pathlib import Path
@@ -34,6 +35,13 @@ while IFS="$(printf '\t')" read -r size device_type runtime; do
     # Large-device screenshots also exercise the operating system's reduced-motion setting.
     if [ "$size" = large ]; then
         xcrun simctl spawn "$device_id" defaults write com.apple.Accessibility ReduceMotionEnabled -bool YES
+        # Relaunch the simulator so SpringBoard applies the accessibility preference.
+        xcrun simctl shutdown "$device_id"
+        xcrun simctl boot "$device_id"
+        xcrun simctl bootstatus "$device_id" -b
+        xcrun simctl ui "$device_id" content_size accessibility-large
+        xcrun simctl ui "$device_id" content_size > "$run_dir/large-content-size.txt"
+        grep -qi 'accessibility-large' "$run_dir/large-content-size.txt"
     fi
     xcrun simctl status_bar "$device_id" override --time '9:41' --dataNetwork wifi --wifiMode active --wifiBars 3 --batteryState charged --batteryLevel 100
     result="$run_dir/$size.xcresult"

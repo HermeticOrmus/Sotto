@@ -144,7 +144,7 @@ private struct FocusRow: View {
                     }
                     metadata
                     HStack {
-                        Text(row.thread.requests.first?.kind == "permission" ? "Review permission" : "Review question")
+                        Text(row.thread.requests.count > 1 ? "Review \(row.thread.requests.count) requests" : row.thread.requests.first?.kind == "permission" ? "Review permission" : "Review question")
                         Spacer(); Image(systemName: "chevron.right").accessibilityHidden(true)
                     }.font(.figtree(14, .subheadline, .semibold)).foregroundStyle(Palette.warning).padding(.top, 3)
                 }.padding(16).frame(maxWidth: .infinity, alignment: .leading)

@@ -7,6 +7,7 @@ import XCTest
 
     override func setUpWithError() throws {
         continueAfterFailure = false
+        XCUIDevice.shared.orientation = .portrait
         app.launchArguments = ["--ui-fixture", "--reset-ui-preferences"]
         app.launch()
         XCTAssertTrue(app.textFields["thread-search"].waitForExistence(timeout: 15))
@@ -19,10 +20,10 @@ import XCTest
         attachment.lifetime = .keepAlways
         add(attachment)
     }
-    private func reveal(_ element: XCUIElement) {
+    private func reveal(_ element: XCUIElement, swipingDown: Bool = false) {
         for _ in 0..<8 {
             if element.exists && element.isHittable { return }
-            app.swipeUp()
+            if swipingDown { app.swipeDown() } else { app.swipeUp() }
         }
         XCTAssertTrue(element.isHittable, "The control must remain reachable by scrolling")
     }
@@ -34,10 +35,10 @@ import XCTest
         XCTAssertTrue(app.tabBars.buttons["Computers"].exists)
         XCTAssertTrue(app.tabBars.buttons["Settings"].exists)
         XCTAssertTrue(row("release").exists)
-        XCTAssertTrue(row("iphone").exists)
+        reveal(row("iphone"))
         reveal(row("wiring"))
         XCTAssertTrue(row("wiring").label.contains("Working"), "Background work must not read Done")
-        app.swipeDown()
+        reveal(app.textFields["thread-search"], swipingDown: true)
         capture("focus-dark")
 
         let search = app.textFields["thread-search"]
@@ -79,6 +80,25 @@ import XCTest
         XCTAssertTrue(app.buttons["Not now"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Which release should I prepare?"].exists)
         capture("thread-question")
+        reveal(app.buttons["Not now"])
+        app.buttons["Not now"].tap()
+        let permission = "Allow reading the release checklist?"
+        XCTAssertTrue(app.staticTexts[permission].waitForExistence(timeout: 5), "Deferring the first request exposes the second")
+        capture("thread-second-request")
+        reveal(app.buttons["Not now"])
+        app.buttons["Not now"].tap()
+        let requests = app.buttons["thread-requests"]
+        XCTAssertTrue(requests.waitForExistence(timeout: 5))
+        requests.tap()
+        app.buttons["Which release should I prepare?"].tap()
+        XCTAssertTrue(app.staticTexts["Which release should I prepare?"].waitForExistence(timeout: 5))
+        reveal(app.buttons["Not now"])
+        app.buttons["Not now"].tap()
+        XCTAssertTrue(requests.waitForExistence(timeout: 5))
+        requests.tap()
+        app.buttons[permission].tap()
+        XCTAssertTrue(app.staticTexts[permission].waitForExistence(timeout: 5), "Both unanswered requests remain reachable from the composer")
+        reveal(app.buttons["Not now"])
         app.buttons["Not now"].tap()
         back()
         app.tabBars.buttons["Computers"].tap()
@@ -108,9 +128,53 @@ import XCTest
         XCTAssertEqual(light.value as? String, "Selected", "Appearance persists across launch")
         reveal(larger)
         XCTAssertEqual(larger.value as? String, "1", "Larger text persists across launch")
+        reveal(app.buttons["setting-dark"], swipingDown: true)
         app.buttons["setting-dark"].tap()
         XCTAssertEqual(app.buttons["setting-dark"].value as? String, "Selected")
         app.tabBars.buttons["Threads"].tap()
         capture("focus-dark-larger-text")
+    }
+
+    func testComputerScopePreservesSearchAndLandscape() {
+        let filter = app.buttons["computer-filter"]
+        let search = app.textFields["thread-search"]
+        let lighting = app.buttons["thread-22222222-2222-4222-8222-222222222222/lighting"]
+        filter.tap()
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Laptop")).firstMatch.tap()
+        XCTAssertEqual(filter.value as? String, "Laptop")
+        XCTAssertTrue(row("release").exists)
+        XCTAssertFalse(lighting.exists)
+
+        filter.tap()
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Studio Mac")).firstMatch.tap()
+        XCTAssertEqual(filter.value as? String, "Studio Mac")
+        reveal(lighting)
+        XCTAssertFalse(row("release").exists)
+        capture("offline-computer-scope")
+        reveal(search, swipingDown: true)
+        search.tap()
+        search.typeText("lighting\n")
+        filter.tap()
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Laptop")).firstMatch.tap()
+        XCTAssertEqual(search.value as? String, "lighting")
+        XCTAssertTrue(app.staticTexts["No matching threads."].exists)
+        filter.tap()
+        app.buttons["All computers"].tap()
+        reveal(lighting)
+        XCTAssertEqual(search.value as? String, "lighting")
+        reveal(search, swipingDown: true)
+        app.buttons["Clear search"].tap()
+        search.typeText("\n")
+
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let landscape = NSPredicate { _, _ in
+            let frame = self.app.windows.firstMatch.frame
+            return frame.width > frame.height
+        }
+        expectation(for: landscape, evaluatedWith: app.windows.firstMatch)
+        waitForExpectations(timeout: 5)
+        capture("focus-landscape")
+        XCTAssertTrue(app.tabBars.buttons["Settings"].isHittable)
+        XCUIDevice.shared.orientation = .portrait
     }
 }
