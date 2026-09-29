@@ -61,7 +61,8 @@ export interface BrowserPlayerProps {
 export function BrowserPlayer({ state, focusedThreadId, bridge, store, autoShow = true, playerStore = browserPlayerStore }: BrowserPlayerProps): ReactNode {
   const chrome = useToolsPanelChrome(store)
   const tasks = useBrowserTasks(store.browser)
-  const ids = state.host.threads.map(thread => thread.id).join('\n')
+  // A thread on another host keeps its browser there. Asking this window about it throws, and that throw unmounts the window.
+  const ids = state.host.threads.filter(thread => !thread.remoteHost).map(thread => thread.id).join('\n')
   useEffect(() => { store.browser.watchTasks(bridge, ids.split('\n').filter(Boolean)) }, [bridge, store, ids])
 
   const task = focusedThreadId === null ? undefined : tasks.find(item => item.threadId === focusedThreadId && state.host.threads.some(thread => thread.id === item.threadId))

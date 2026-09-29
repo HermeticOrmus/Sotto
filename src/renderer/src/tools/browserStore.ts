@@ -65,7 +65,11 @@ export class BrowserStore {
     for (const threadId of threadIds) {
       if (this.taskThreads.has(threadId)) continue
       this.taskThreads.add(threadId)
-      void settle(bridge.tasks({ threadId })).then(result => {
+      // A foreign host id throws before the promise exists. One of those must not skip the rest,
+      // and must not stay marked watched, or the next pass never tries it again.
+      let listed: Promise<ToolsResult<readonly BrowserTask[]>>
+      try { listed = settle(bridge.tasks({ threadId })) } catch { this.taskThreads.delete(threadId); continue }
+      void listed.then(result => {
         if (!result.ok) { this.taskThreads.delete(threadId); return }
         for (const task of result.value) this.receiveTask(task)
       })
