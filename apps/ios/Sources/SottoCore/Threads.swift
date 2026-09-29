@@ -2,23 +2,29 @@ import Foundation
 
 /// How the phone words and sorts a thread. Pure, so the list, the tabs and the tests read one answer.
 public enum ThreadState: String, Sendable {
-    case needsAnswer, asked, working, failed, done
+    case needsAnswer, asked, working, waiting, compacting, failed, done
 
     public init(_ thread: ThreadSummary) {
         if let request = thread.requests.first { self = request.kind == "permission" ? .needsAnswer : .asked }
-        else if thread.status == "running" { self = .working }
         else if thread.status == "error" { self = .failed }
-        else { self = .done }
+        else if thread.compaction?.status == "running" { self = .compacting }
+        else if thread.status == "running" { self = .working }
+        else if let work = thread.backgroundWork, !work.isEmpty {
+            self = work.allSatisfy { $0.type == "command" } ? .waiting : .working
+        } else { self = .done }
     }
     public var words: String {
         switch self {
         case .needsAnswer: return "Needs your answer"
         case .asked: return "Asked you a question"
         case .working: return "Working"
+        case .waiting: return "Waiting"
+        case .compacting: return "Compacting context"
         case .failed: return "Turn failed"
         case .done: return "Done"
         }
     }
+    public var workInProgress: Bool { self == .working || self == .waiting || self == .compacting }
     public var waitsOnYou: Bool { self == .needsAnswer || self == .asked }
 }
 
@@ -106,9 +112,9 @@ public enum ThreadGroups {
     public static func waiting(_ computers: [ComputerThreads], show: ComputerFilter = .all) -> [Waiting] {
         merged(computers, show: show).filter(\.reachable).flatMap { row in row.thread.requests.map { Waiting(thread: row, request: $0) } }
     }
-    /// Threads with a turn running and nothing asked, on computers that can be reached.
+    /// Foreground, confirmed background and compaction work with nothing asked, on reachable computers.
     public static func working(_ computers: [ComputerThreads], show: ComputerFilter = .all) -> [HostedThread] {
-        merged(computers, show: show).filter { $0.reachable && $0.thread.status == "running" && $0.thread.requests.isEmpty }
+        merged(computers, show: show).filter { $0.reachable && ThreadState($0.thread).workInProgress }
     }
     /// The computers the strip admits that this iPhone can't reach.
     public static func unreachable(_ computers: [ComputerThreads], show: ComputerFilter = .all) -> [ComputerThreads] {

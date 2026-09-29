@@ -106,7 +106,7 @@ struct StatusDot: View {
     private var color: Color {
         switch state {
         case .needsAnswer, .asked: return Palette.warning
-        case .working: return Palette.accent
+        case .working, .waiting, .compacting: return Palette.accent
         case .failed: return Palette.danger
         case .done: return Palette.muted.opacity(0.55)
         }

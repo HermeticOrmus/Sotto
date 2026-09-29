@@ -137,6 +137,10 @@ public struct ThreadSummary: Decodable, Identifiable, Sendable {
     public let providerId: String?; public let status: String; public let requests: [AgentRequest]
     public let earlierAvailable: Bool?; public let archivedAt: String?; public let summary: Summary?
     public let workspaceSettledAt: String?; public let settledAt: String?; public let settledOverride: String?
+    public let backgroundWork: [BackgroundWork]?; public let compaction: Compaction?
+    /// Current provider-confirmed work only; never infer it from retained activity or messages.
+    public struct BackgroundWork: Decodable, Sendable { public let type: String }
+    public struct Compaction: Decodable, Sendable { public let status: String }
     /// What a row reads about the thread's history without holding it.
     public struct Summary: Decodable, Sendable {
         public let lastMessageAt: String?; public let runningTurnStartedAt: String?
