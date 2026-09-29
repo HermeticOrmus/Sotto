@@ -135,7 +135,8 @@ export class SocketHostService implements HostService {
     })
     if (generation !== this.generation) { this.frames.close(); throw new HostConnectionError('This host connection was closed.', 'disconnected') }
     try {
-      const accepts = this.features.includes('detail-delta') ? { accepts: ['detail-delta'] } : {}
+      const accepted = (['detail-delta', 'client-updates'] as const).filter(feature => this.features.includes(feature))
+      const accepts = accepted.length ? { accepts: [...accepted] } : {}
       const hello = this.read(hostHelloSchema, await this.call({ op: 'hello', afterSeq: this.catchesUp ? this.latestSeq : NO_EVENTS_AFTER, ...accepts }))
       if (hello.hostId !== session.hostId) throw new HostConnectionError('The host identity changed. Connect again.', 'unauthenticated')
       this.hostVersion = hello.sottoVersion; this.features = hello.features

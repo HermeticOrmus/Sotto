@@ -566,6 +566,25 @@ describe('host version and features', () => {
     } finally { await phone.close() }
   })
 
+  it('sends the mise channel and the waiting state only to a client that accepts client-updates, and the rest as it knew them (#480)', async () => {
+    const reading = { id: 'codex' as const, installed: '0.155.1', published: '0.158.0', behind: true, channel: 'mise' as const, command: 'mise upgrade codex',
+      canInstall: true, checkedAt: '2026-09-29T12:00:00.000Z', state: 'queued' as const }
+    const service: HostService = {
+      shell: () => ({ ...host.service.shell(), clientUpdates: [reading] }), state: () => host.service.state(), threadDetail: id => host.service.threadDetail(id),
+      command: (command, identity) => host.service.command(command, identity), events: () => [], subscribe: () => () => undefined,
+    }
+    // A client accepts client-updates in its hello when the host lists it; one from before #480, or the iPhone client, never does.
+    for (const [offered, expected] of [[true, { channel: 'mise', state: 'queued' }], [false, { channel: 'unknown', state: 'idle' }]] as const) {
+      const server = await startSocketServer({ service, pairing: host.pairing, clientUpdates: offered })
+      try {
+        const paired = await host.pairing.redeem(host.pairing.issuePairingCode().code, offered ? 'Desktop' : 'Older desktop')
+        const client = new SocketHostService({ url: 'http://127.0.0.1:' + server.descriptor.port, token: paired.token }); clients.push(client)
+        await client.connect()
+        expect(client.shell().clientUpdates, String(offered)).toEqual([expect.objectContaining(expected)])
+      } finally { await server.close() }
+    }
+  })
+
   it('keeps the version sentence for an unreadable push from a host of another version when a thread once too large arrives', async () => {
     const message = (text: string) => ({ id: 'reply', role: 'assistant' as const, text, createdAt: '2026-09-23T00:00:00.000Z' })
     let current: AgentThreadDetail = { threadId: 'streaming', revision: 1, messages: [message('Hello')] }

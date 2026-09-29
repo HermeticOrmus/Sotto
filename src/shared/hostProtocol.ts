@@ -6,7 +6,7 @@ import { gitChangedFilesRequestSchema } from './gitChangedFiles'
 import { gitPullRequestRequestSchema } from './gitPullRequests'
 import { hostFoldersRequestSchema } from './hostFolders'
 import { PASTED_CODE_MAX } from './hostProviders'
-import { providerIdSchema } from './agents'
+import { providerIdSchema, type ProviderClientUpdate } from './agents'
 
 /**
  * Protocol version 1 is frozen (ADR-0025; every message is listed in docs/host-protocol.md). A later host
@@ -33,6 +33,14 @@ export const HOST_PROTOCOL_VERSION = 1 as const
  */
 export const HOST_FEATURES = ['detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders', 'provider-sign-in', 'client-updates'] as const
 export type HostFeature = typeof HOST_FEATURES[number]
+/**
+ * A client update as a client that does not accept `client-updates` can read it: the mise channel, which such a client
+ * does not know, reads as one it will not drive, and a client waiting in the update line reads as not started. Every
+ * other field it does not know is optional and ignored.
+ */
+export function clientUpdateForOlderClient(update: ProviderClientUpdate): ProviderClientUpdate {
+  return { ...update, ...(update.channel === 'mise' ? { channel: 'unknown' as const } : {}), ...(update.state === 'queued' ? { state: 'idle' as const } : {}) }
+}
 /**
  * Whether a host's Sotto version is later than this client's, by release number. A version that cannot
  * be read, such as a host from before v1 froze that advertises none, is never newer.
