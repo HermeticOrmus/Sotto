@@ -9,17 +9,17 @@ Threads is the default tab. Questions and permissions lead, followed by working 
 ## Deliverables and acceptance
 
 - [x] Record the chosen prototype and revised scope; update the glossary, overview and guide.
-- [ ] Implement the Focus hierarchy, persistent search pill, computer menu and Threads badge in SwiftUI.
-- [ ] Keep reachable requests and active work visible even when settled; keep at-rest settled work collapsed and expose matching settled results during search.
-- [ ] Count foreground work, confirmed background agents, background commands and running compaction correctly; unreachable snapshots do not claim live activity.
-- [ ] Replace the Needs you tab with Settings; preserve question, permission, reply, interrupt and recovery paths through thread detail.
-- [ ] Persist phone-only appearance and Larger text; preserve system accessibility text sizes.
+- [x] Implement the Focus hierarchy, persistent search pill, computer menu and Threads badge in SwiftUI.
+- [x] Keep reachable requests and active work visible even when settled; keep at-rest settled work collapsed and expose matching settled results during search.
+- [x] Count foreground work, confirmed background agents, background commands and running compaction correctly; unreachable snapshots do not claim live activity.
+- [x] Replace the Needs you tab with Settings; preserve question, permission, reply, interrupt and recovery paths through thread detail. Every pending request is reachable through the request menu.
+- [x] Persist phone-only appearance and Larger text; preserve system accessibility text sizes. Runtime verification remains below.
 - [ ] Run relevant native tests and simulator compilation, root CI gates and the required standards/spec review; record actual results separately.
 - [ ] Inspect native Threads, Settings, computer selection, search, Settled and request detail in light/dark, smaller/larger phone layouts, larger/accessibility text, reduced motion and with the keyboard visible.
 - [ ] Verify a live paired-phone journey and report delivery state separately from source and simulator completion.
 
 ## Current state and unresolved checks
 
-The approved browser study exercised fictional data and interactions; those checks establish the selected design only. Native implementation is in progress in `.worktrees/ios-focus`. No native test, simulator, live-device or release result is claimed by this plan. Replace the open checklist items with evidence as each finishes, and link the verification note here.
+The native implementation is in [PR #474](https://github.com/millZach/Sotto/pull/474). Local typecheck, lint and notices checks passed. The full local suite, current native CI and simulator inspection remain in progress. The initial Mac run compiled the app and passed the Swift package tests before it was superseded by review fixes. Both GPT standards/spec passes identified the same two request-access findings, fixed in `26860622` and confirmed resolved by follow-up review; the Grok cross-check is pending. No live-device or release result is claimed here.
 
 The highest-risk regressions are a waiting request hidden under Settled, a working background agent shown as Done, a cached offline snapshot shown as live work, a search that omits settled matches, or Settings shrinking system accessibility text. The actual connected journey must still establish correct authority handling and no automatic resend after an ambiguous delivery.

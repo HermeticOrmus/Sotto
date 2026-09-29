@@ -37,6 +37,7 @@ import XCTest
         XCTAssertTrue(row("release").exists)
         reveal(row("iphone"))
         reveal(row("wiring"))
+        XCTAssertTrue(app.textFields["thread-search"].isHittable, "Search stays above the scrolling thread list")
         XCTAssertTrue(row("wiring").label.contains("Working"), "Background work must not read Done")
         reveal(app.textFields["thread-search"], swipingDown: true)
         capture("focus-dark")
@@ -58,6 +59,7 @@ import XCTest
         XCTAssertTrue(search.waitForExistence(timeout: 15))
         let settled = app.buttons["settled-threads"]
         reveal(settled)
+        XCTAssertTrue(search.isHittable, "Search remains visible at the bottom of the list")
         XCTAssertFalse(row("settings").exists)
         settled.tap()
         reveal(row("settings"))

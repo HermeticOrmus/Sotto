@@ -43,7 +43,7 @@ struct Live {
     @Published private(set) var found: FoundHost?
     /// Whether the Add computer sheet is over the tabs.
     @Published var adding = false
-    /// The strip on Needs you and Threads.
+    /// The computer menu on Threads.
     @Published var show = ComputerFilter.all
     @Published private var openDetail: ThreadDetail?
     @Published private(set) var detailProblem: String?
@@ -504,7 +504,7 @@ struct Live {
             await dispatch(command, operation: operation)
         } catch { feedback = error.localizedDescription }
     }
-    /// Answers a request in any thread: from its card on Needs you, or from the open thread's sheet.
+    /// Answers a request from the open thread's sheet, after rechecking the computer's authority.
     func answer(_ request: AgentRequest, in ref: ThreadRef, choice: String? = nil, text: String = "", answers: [String: QuestionAnswer] = [:]) async {
         guard let thread = self.thread(ref), canAnswer(request, in: ref), let computer = self.computer(ref.hostID) else { return }
         do {

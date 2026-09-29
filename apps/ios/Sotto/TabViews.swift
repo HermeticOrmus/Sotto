@@ -9,14 +9,17 @@ struct ThreadsView: View {
     @FocusState private var searching: Bool
     var body: some View {
         let groups = FocusThreads(model.lists, show: model.show, query: query)
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 0) {
                 ComputerMenu().padding(.bottom, 6)
                 searchPill.padding(.bottom, 12)
                 HStack(spacing: 18) {
                     (Text("\(groups.working.count)").foregroundColor(Palette.accent) + Text(" working"))
                     Text("\(groups.requestCount) \(groups.requestCount == 1 ? "needs" : "need") you")
                 }.font(.figtree(13, .footnote)).foregroundStyle(Palette.muted)
+            }.padding(.horizontal, 22).padding(.bottom, 8)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
                 FeedbackBanner().padding(.top, 8)
                 ForEach(model.lists.filter { model.show.admits($0.hostID) && $0.status != .online }, id: \.hostID) { computer in
                     connectionNote(computer).padding(.top, 12)
@@ -55,8 +58,9 @@ struct ThreadsView: View {
                         ForEach(groups.settled) { row in threadLink(row, style: .recent); Divider().overlay(Palette.hairline) }
                     }
                 }
-            }.padding(.horizontal, 22).padding(.bottom, 24)
-        }.scrollDismissesKeyboard(.interactively).refreshable { await model.refresh() }.page("Threads")
+                }.padding(.horizontal, 22).padding(.bottom, 24)
+            }.scrollDismissesKeyboard(.interactively).refreshable { await model.refresh() }
+        }.page("Threads")
     }
     private var searchPill: some View {
         HStack(spacing: 10) {

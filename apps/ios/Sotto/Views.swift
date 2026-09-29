@@ -63,7 +63,13 @@ enum Palette {
 
 extension Font {
     static func figtree(_ size: CGFloat, _ style: Font.TextStyle, _ weight: Font.Weight = .regular) -> Font {
-        .custom("Figtree-Regular", size: size, relativeTo: style).weight(weight)
+        let face: String
+        switch weight {
+        case .bold, .heavy, .black: face = "Figtree-Bold"
+        case .semibold, .medium: face = "Figtree-SemiBold"
+        default: face = "Figtree-Regular"
+        }
+        return .custom(face, size: size, relativeTo: style)
     }
     static let mono = Font.system(.subheadline, design: .monospaced)
 }
