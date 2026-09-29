@@ -190,7 +190,15 @@ export class HostSetup implements HostSetupSource, HostSetupToolHandlers {
       this.emit()
       return
     }
-    if (this.current !== run || run.phase !== 'starting') return
+    if (this.current !== run) return
+    // Stop setup pressed while the thread was being made: the brief went after the stop could interrupt anything, so
+    // the tool goes and the turn it began is interrupted now.
+    if (run.phase === 'stopped' && run.threadId) {
+      this.end(run)
+      await this.options.threads.interrupt(run.threadId).catch(() => undefined)
+      return
+    }
+    if (run.phase !== 'starting') return
     run.phase = 'running'
     this.emit()
   }

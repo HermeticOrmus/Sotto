@@ -130,7 +130,10 @@ export class HostProviderJobs implements HostProviderJobSource {
       this.emit()
       return
     }
-    if (this.current !== job || job.phase !== 'starting') return
+    if (this.current !== job) return
+    // Stopped while the thread was being made: the brief went after the stop could interrupt anything, so interrupt now.
+    if (job.phase === 'stopped') { await this.interruptStopped(job); return }
+    if (job.phase !== 'starting') return
     job.phase = 'running'
     this.emit()
     // Found meanwhile, by a check the user or the host ran: the job is already over.
@@ -143,6 +146,12 @@ export class HostProviderJobs implements HostProviderJobSource {
     this.end(job)
     this.emit()
     if (job.threadId) await this.options.threads.interrupt(job.threadId).catch(() => undefined)
+  }
+  /** A job stopped before its thread took the brief: the tool goes and the turn the brief began is interrupted. */
+  private async interruptStopped(job: Job): Promise<void> {
+    if (!job.threadId) return
+    this.end(job)
+    await this.options.threads.interrupt(job.threadId).catch(() => undefined)
   }
   /** The job is over: its thread's tool goes. */
   private end(job: Job): void { if (job.threadId) this.revokeTool?.(job.threadId) }

@@ -167,6 +167,27 @@ describe('a provider job', () => {
     }
   })
 
+  it('interrupts its thread when Stop lands before the brief was sent', async () => {
+    const f = fixture()
+    const events: string[] = []
+    let release: () => void = () => undefined
+    f.threads.start.mockImplementationOnce(async request => {
+      request.created('thread-1')
+      await new Promise<void>(resolve => { release = resolve })
+      events.push('send')
+    })
+    f.threads.interrupt.mockImplementation(async () => { events.push('interrupt') })
+    const starting = f.jobs.command(start())
+    await vi.waitFor(() => expect(f.jobs.state()?.threadId).toBe('host:local:thread-1'))
+    await f.jobs.command({ type: 'stop-provider-job', id: JOB })
+    release()
+    await starting
+    expect(events.slice(events.indexOf('send'))).toContain('interrupt')
+    expect(f.jobs.state()?.phase).toBe('stopped')
+    expect(f.revoked).toContain('thread-1')
+    expect(await f.jobs.run('thread-1', 'provider_status')).toMatchObject({ isError: true })
+  })
+
   it('gives back the tile when no thread was made, and keeps a thread that did not take its brief to look at', async () => {
     const f = fixture()
     f.threads.start.mockImplementationOnce(async () => { throw new Error('Connect Claude Code before creating a project.') })
