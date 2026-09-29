@@ -15,6 +15,10 @@ async function oneShots(root: string): Promise<Record<string, unknown>[]> {
   return (await readFile(join(root, 'oneshot.jsonl'), 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line) as Record<string, unknown>)
 }
 const flag = (args: unknown, name: string): string | undefined => { const list = args as string[]; return list.includes(name) ? list[list.indexOf(name) + 1] : undefined }
+/** The fake's own number for a request Sotto holds: Sotto's key also names the app-server that asked it. */
+export const nativeRequestId = (requestId: string): string | number => JSON.parse(requestId.replace(/^rpc:\d+:/u, '')) as string | number
+/** What the fake recorded of the app-servers Sotto started: each one's introduction, and each thread start or resume on it. */
+export interface ServedRecord { pid: number; method: 'initialize' | 'thread/start' | 'thread/resume'; threadId?: string }
 export interface RecordedRpc { id?: string | number; method?: string; params?: Record<string, unknown>; result?: Record<string, unknown> }
 /** The thread history requests among `requests`, in order: `turns` for the newest-turn check, `read` for a whole-transcript read. */
 export function historyReads(requests: readonly RecordedRpc[]): ('turns' | 'read')[] {
@@ -62,6 +66,8 @@ export async function codexFixture(root?: string, wrapped = false, requestTimeou
   const fixture = { root, adapter, registry, host, projectId: 'project', modelId: 'fixture-model', script, realId,
     // A settings change comes back with the snapshot Codex's confirmation produced; a delayed reply loses it (#318).
     settings: { snapshot: true, loseConfirmation: () => script({ delay: { method: 'thread/settings/update', ms: requestTimeoutMs + 1000 }, suppressNotifications: true }) },
+    // Every app-server started from now on answers `initialize` as the newer client.
+    clientUpdate: { provider: 'codex' as const, install: async () => { await script({ version: 'codex/0.200.0' }); return '0.200.0' } },
     sideWriting: {
       answer: (text: string) => writeFile(join(root, 'oneshot.json'), JSON.stringify({ text })),
       calls: async () => (await oneShots(root)).map(call => ({ cwd: String(call.cwd), model: flag(call.args, '--model'), material: String(call.input) })),
@@ -82,8 +88,15 @@ export async function codexFixture(root?: string, wrapped = false, requestTimeou
       requests,
       restart: async () => { host.disconnect(); await adapter.closed(); return codexFixture(root, wrapped, requestTimeoutMs, session) },
     },
+    /** Every app-server the fake saw start, and what each was asked to start or resume. */
+    servers: async (): Promise<ServedRecord[]> => (await readFile(join(root, 'servers.jsonl'), 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line) as ServedRecord),
+    /** The process id of the app-server that last started or resumed this thread. */
+    serverOf: async (sessionId: string): Promise<number | undefined> => {
+      const codexThreadId = await realId(sessionId)
+      return (await fixture.servers()).findLast(record => record.threadId === codexThreadId)?.pid
+    },
     sessions: {
-      // One app-server child serves every thread; a session start is this thread's own resume.
+      // Each thread's session runs in its own app-server; a session start is this thread's own resume.
       starts: async (id: string) => {
         const codexThreadId = await realId(id)
         return (await requests()).filter(record => record.method === 'thread/resume' && record.params?.threadId === codexThreadId).length

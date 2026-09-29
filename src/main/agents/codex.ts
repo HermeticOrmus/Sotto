@@ -6,7 +6,6 @@ import { randomUUID } from 'node:crypto'
 import { NativeUsage } from './nativeUsage'
 import { bracketCompaction } from './compactionActivity'
 import { compactionPending, compactionSchema } from '../../shared/compaction'
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
@@ -26,19 +25,18 @@ import { ActivitySubscribers, cloneActivitySnapshot, immutableActivities, isImmu
 import { findExecutable, nativeEnvironment, writeWithCodexExec } from './subscriptionCodex'
 import { withCliPath } from './cliLookup'
 import { CodexSessionLogWatcher, promptDigest, textOf } from './codexSessionLog'
-import { answerRequest, declineRequest, pendingRequest, requestKey, type CodexPendingRequest } from './codexRequests'
+import { answerRequest, declineRequest, pendingRequest, type CodexPendingRequest } from './codexRequests'
 import { needsPerson, unreadableRequest } from './nativeRequests'
 import { effortAfterChange, validatePromptAttachments, validateThreadOptions } from './threadOptions'
 import { CodexActivityProjection, codexItemSchema } from './codexActivity'
 import { ProviderUnavailable } from './providerProblem'
 import { SessionReaper } from './sessionReaper'
+import { CodexProcess, Uncertain, type RpcApply, type RpcFrame, type RpcRejected } from './codexProcess'
 import { codexTurnIdentitySchema, compatibleClient, identityTurn, messageIdentity, messageOrigin, reconcileMessageIdentities, type CodexTurnIdentity, type IdentityItem } from './codexMessageIdentity'
 
-const MAX_OUTPUT_BYTES = 1024 * 1024
-// Legacy history and completed turns can echo multiple screenshot batches. Keep a
-// separate history budget rather than limiting a frame to one submitted prompt.
-const MAX_FRAME_BYTES = 128 * 1024 * 1024
-const MAX_QUEUED_BYTES = MAX_FRAME_BYTES * 2
+/** What a thread shows when its own app-server stopped under a running turn. */
+const SESSION_ENDED = 'Codex stopped before this reply finished, so it may be cut short. Send a message to carry on.'
+const clientInfo = { clientInfo: { name: 'sotto', title: 'Sotto threads', version: '1.0' }, capabilities: { experimentalApi: true } }
 const threadPolicy = { approvalPolicy: 'on-request', approvalsReviewer: 'user', sandbox: 'workspace-write' } as const
 // Codex's previous policy is auto-accept-edits; preserve it for old aliases and
 // creation without an explicit selection. Shapes verified with generated 0.154 schemas.
@@ -80,7 +78,6 @@ const personalInstructions = 'This is a personal Sotto conversation, without a p
 
 type Alias = z.infer<typeof aliasSchema>
 type Origin = z.infer<typeof originSchema>
-const rpcSchema = z.object({ id: z.union([z.string(), z.number()]).optional(), method: z.string().optional(), params: z.unknown().optional(), result: z.unknown().optional(), error: z.unknown().optional() })
 const itemSchema = codexItemSchema
 const turnSchema = z.object({ id: z.string(), status: z.enum(['inProgress', 'completed', 'interrupted', 'failed']), items: z.array(itemSchema).default([]), startedAt: z.number().nullish(),
   itemsView: z.enum(['notLoaded', 'summary', 'full']).default('full'),
@@ -100,7 +97,10 @@ const notificationSchema = z.object({ threadId: z.string(), turnId: z.string().o
   startedAtMs: z.number().optional(), completedAtMs: z.number().optional(), summaryIndex: z.number().optional(), message: z.string().optional(),
   error: z.object({ message: z.string() }).optional(), willRetry: z.boolean().optional(), status: z.object({ type: z.string() }).optional(),
   explanation: z.string().nullish(), plan: z.array(z.object({ step: z.string(), status: z.string() })).optional() })
-class Uncertain extends Error {}
+/** A thread's own app-server would not start. */
+class SessionUnavailable extends Error {
+  constructor(cause: unknown) { super('Codex could not start this thread’s session. Nothing was sent. Try again, or reconnect Codex.', { cause }) }
+}
 class SettingsUnconfirmed extends Error {
   constructor() { super('Codex did not confirm this thread’s settings. Choose the thread settings again before sending.') }
 }
@@ -126,8 +126,13 @@ class Rejected extends Error {
     if (this.missingThreadId) this.message = 'Codex could not find this thread’s saved session. Create a new thread to continue.'
   }
 }
-type Waiter = { resolve: () => void; reject: (error: Error) => void; apply: (value: unknown) => Promise<void> | void;
-  onRejected: (() => Promise<void> | void) | undefined; timer: ReturnType<typeof setTimeout> }
+/** A request Codex made of Sotto, with the process that made it: only that process can take its answer. */
+type HeldRequest = CodexPendingRequest & { server: CodexProcess }
+/** A thread's own app-server, and the client revision it was launched from (see `clientUpdated`). */
+type Runtime = { server: CodexProcess; clientRevision: number }
+/** A request's key among every process's: each app-server numbers its own requests from the start. */
+const heldKey = (server: CodexProcess, id: string | number): string => `rpc:${server.serial}:${JSON.stringify(id)}`
+type ModelList = AgentHostSnapshot['models']
 
 export interface CodexAppServerHostOptions {
   userDataPath: string; executable?: string; args?: string[]; codexHome?: string; requestTimeoutMs?: number; pollIntervalMs?: number
@@ -166,9 +171,8 @@ export class CodexAppServerHost implements AgentHost {
   private readonly fileSummaries = new Map<string, string>()
   private activity = new CodexActivityProjection()
   private readonly completedMessages = new Set<string>()
-  private readonly requests = new Map<string, CodexPendingRequest>()
+  private readonly requests = new Map<string, HeldRequest>()
   private readonly inFlightRequestIds = new Set<string>()
-  private readonly waiters = new Map<string, Waiter>()
   private readonly settingsConfirmations = new Map<string, { desired: Alias['pendingSettings']; settle: (confirmed: boolean) => void }>()
   private readonly listeners = new Set<(snapshot: AgentHostSnapshot) => void>()
   private readonly activityListeners = new ActivitySubscribers()
@@ -178,7 +182,24 @@ export class CodexAppServerHost implements AgentHost {
   })
   private readonly unconfirmedDispatchSessionIds = new Set<string>()
   private readonly creating = new Set<string>()
-  private child: ChildProcessWithoutNullStreams | undefined
+  /**
+   * The provider's own app-server: the version, models, account, skills and settings reads. It never holds a
+   * thread, so it never runs a turn, and one that stops is started again when next needed.
+   */
+  private provider: CodexProcess | undefined
+  private providerStarting: Promise<CodexProcess> | undefined
+  /** Each thread's own app-server, started on its first need and ended when the reaper stops its session. */
+  private readonly runtimes = new Map<string, Runtime>()
+  private readonly launching = new Map<string, Promise<CodexProcess>>()
+  /** Every app-server this adapter started that has not closed yet. */
+  private readonly processes = new Set<CodexProcess>()
+  /** The client this connection launches app-servers from, found again when it is updated. */
+  private executable: string | undefined
+  /** Which client new app-servers start from, moved on by each client update; a thread's keeps the one it started with. */
+  private clientRevision = 0
+  /** Threads whose app-server is an outdated process (CONTEXT.md): each stops as soon as its thread is not busy. */
+  private readonly outdated = new Set<string>()
+  private outdatedTimer: ReturnType<typeof setImmediate> | undefined
   private watcher: CodexSessionLogWatcher | undefined
   private readonly pendingLogMessages = new Map<string, AgentMessage[]>()
   /** This adapter's append path: every change to what a thread said leaves through it as an event. */
@@ -188,7 +209,6 @@ export class CodexAppServerHost implements AgentHost {
   private stopping: Promise<void> = Promise.resolve()
   private frames: Promise<void> = Promise.resolve()
   private writing: Promise<void> = Promise.resolve()
-  private nextId = 0
   private generation = 0
   private skillsRevision = 0
   private readonly loadedSkillCwds = new Set<string>()
@@ -207,24 +227,237 @@ export class CodexAppServerHost implements AgentHost {
       stop: id => this.stopSession(id),
     })
   }
-  /** A turn, an unanswered request, an unconfirmed write or a command mid-dispatch all hold a session open. */
+  /**
+   * A turn, an unanswered request, an unconfirmed write, a thread still being created, a command mid-dispatch or a
+   * reply the thread's app-server still owes Sotto (a late one included, since it can still be applied) all hold a
+   * session open.
+   */
   private busy(id: string): boolean {
     const thread = this.threads.get(id)
-    return this.dispatching.has(id) || this.runningTurns.has(id) || this.unconfirmedDispatchSessionIds.has(id)
-      || this.resuming.has(id) || this.opening.has(id) || this.threadReads.has(id)
+    return this.dispatching.has(id) || this.creating.has(id) || this.runningTurns.has(id) || this.unconfirmedDispatchSessionIds.has(id)
+      || this.resuming.has(id) || this.opening.has(id) || this.threadReads.has(id) || this.launching.has(id) || !!this.runtimes.get(id)?.server.owed
       || !!thread && (thread.status === 'running' || thread.requests.length > 0)
       || compactionPending(this.aliases[id]?.compaction) || !!this.aliases[id]?.pendingSettings || !!this.aliases[id]?.pendingRollback
   }
   /**
-   * Drop the resumed native thread. The app-server offers no close for one thread, so stopping means
-   * forgetting the runtime: the next action resumes it again. The rollout tail stays where it is, because
-   * reading it from the start again would report every past native message as a fresh takeover.
+   * End the thread's own app-server: the next action starts another and resumes the thread on it. The rollout
+   * tail stays where it is, because reading it from the start again would report every past native message as
+   * a fresh takeover.
    */
   private stopSession(id: string): void {
     this.live.delete(id)
     this.log.release(id)
     this.resuming.delete(id)
     this.opening.delete(id)
+    this.outdated.delete(id)
+    const runtime = this.runtimes.get(id)
+    // An idle app-server is let go gently: its input closes and it has the request deadline to finish writing.
+    if (runtime) { this.runtimes.delete(id); this.endServer(runtime.server, 'gently') }
+  }
+  private codexHome(): string { return this.options.codexHome ?? process.env.CODEX_HOME ?? join(homedir(), '.codex') }
+  /** Start an app-server from `executable`. What it says reaches `frame` only while this connection lasts. */
+  private spawnServer(executable: string): CodexProcess {
+    const generation = this.generation
+    const server = new CodexProcess({ executable, args: this.options.args ?? ['app-server', '--stdio', ...configArguments], cwd: this.options.userDataPath,
+      env: withCliPath({ ...nativeEnvironment(), CODEX_HOME: this.codexHome() }, executable), requestTimeoutMs: this.options.requestTimeoutMs ?? 15000,
+      enqueue: task => this.enqueue(task),
+      onFrame: (from, frame) => generation === this.generation ? this.frame(from, frame) : Promise.resolve(),
+      onLost: lost => this.lost(lost),
+      rejection: error => new Rejected(error) })
+    this.processes.add(server)
+    void server.closed.then(() => { this.processes.delete(server) })
+    return server
+  }
+  /**
+   * Let an app-server go; `closed()` waits for it. `now` is for disconnecting, `gently` for an idle thread's, and
+   * `whenIdle` lets one still answering a read finish it first.
+   */
+  private endServer(server: CodexProcess, how: 'now' | 'gently' | 'whenIdle' = 'now'): void {
+    if (how === 'whenIdle') server.endWhenIdle(); else server.end(how === 'gently' ? this.options.requestTimeoutMs ?? 15000 : undefined)
+    this.stopping = Promise.all([this.stopping, server.closed]).then(() => undefined)
+  }
+  /** Every app-server's frames are applied one at a time, in the order each sent them. */
+  private enqueue(task: () => Promise<void>): Promise<void> {
+    const run = this.frames.then(task)
+    this.frames = run.catch(() => undefined)
+    return run
+  }
+  /** Introduce Sotto to an app-server: the version it answers with, and the models it lists. */
+  private async probe(server: CodexProcess): Promise<{ version: string; models: ModelList | undefined }> {
+    let version = ''
+    await this.rpc('initialize', clientInfo, value => {
+      const result = z.object({ userAgent: z.string().optional(), version: z.string().optional() }).parse(value)
+      version = result.version ?? result.userAgent ?? ''
+    }, undefined, server)
+    server.write({ method: 'initialized' })
+    try {
+      const models: ModelList = []
+      const cursors = new Set<string>()
+      let cursor: string | undefined
+      do {
+        await this.rpc('model/list', { limit: 100, includeHidden: false, ...(cursor ? { cursor } : {}) }, value => {
+          const result = z.object({ data: z.array(z.object({ model: z.string(), displayName: z.string(), hidden: z.boolean().optional(),
+            supportedReasoningEfforts: z.array(z.object({ reasoningEffort: z.string() })).optional(), defaultReasoningEffort: z.string().optional(), inputModalities: z.array(z.string()).default(['text', 'image']),
+          })), nextCursor: z.string().nullish() }).parse(value)
+          models.push(...result.data.filter(m => !m.hidden).map(m => ({ id: m.model, name: m.displayName, provider: 'Codex', ready: true,
+            reasoningEfforts: orderReasoningEfforts(m.supportedReasoningEfforts?.map(option => option.reasoningEffort) ?? []),
+            ...(m.defaultReasoningEffort ? { defaultReasoningEffort: m.defaultReasoningEffort } : {}),
+            runtimeModes: [...agentRuntimeModeSchema.options], supportsImages: m.inputModalities.includes('image'),
+          })))
+          cursor = result.nextCursor ?? undefined
+        }, undefined, server)
+        if (cursor) {
+          if (cursors.has(cursor)) throw new Error('Codex repeated a model catalog page.')
+          cursors.add(cursor)
+        }
+      } while (cursor)
+      return { version, models }
+    } catch { return { version, models: undefined } }
+  }
+  /**
+   * Start the provider's app-server again after it stopped. One that cannot start fails only the read that needed
+   * it: every thread runs its own app-server, so nothing else is stopped, and the next read tries again.
+   */
+  private providerServer(): Promise<CodexProcess> {
+    this.providerStarting ??= (async () => {
+      const generation = this.generation
+      const clientRevision = this.clientRevision
+      const server = this.spawnServer(this.executable!)
+      try {
+        await this.rpc('initialize', clientInfo, undefined, undefined, server)
+        server.write({ method: 'initialized' })
+      } catch (error) {
+        this.endServer(server)
+        throw new Error('Codex could not be started to answer this. Nothing was lost, and threads that are working carry on. Try again, or reconnect Codex if it keeps happening.', { cause: error })
+      }
+      if (generation !== this.generation) { this.endServer(server); throw new Uncertain('Codex connection changed while starting.') }
+      // A client update landed meanwhile and brought its own provider app-server; this one ran the old client.
+      if (clientRevision !== this.clientRevision && this.provider?.alive) { this.endServer(server); return this.provider }
+      this.provider = server
+      return server
+    })().finally(() => { this.providerStarting = undefined })
+    return this.providerStarting
+  }
+  /**
+   * The thread's own app-server, started and introduced when it has none. A thread's live work goes to it
+   * alone, and what it asks is answered on it. One started after `clientUpdated` runs the new client.
+   */
+  private runtimeServer(id: string): Promise<CodexProcess> {
+    const running = this.runtimes.get(id)
+    if (running?.server.alive) return Promise.resolve(running.server)
+    const pending = this.launching.get(id)
+    if (pending) return pending
+    // One that can no longer be written to is ended rather than left running beside its replacement.
+    if (running) { this.runtimes.delete(id); this.endServer(running.server) }
+    const generation = this.generation
+    const launch = (async () => {
+      if (!this.executable || !this.state.connected) throw new Error('Connect to Codex before sending a command.')
+      const clientRevision = this.clientRevision
+      const server = this.spawnServer(this.executable)
+      try {
+        // Only the provider's app-server says which version is installed: a thread's may be finishing on a replaced client.
+        await this.rpc('initialize', clientInfo, undefined, undefined, server)
+        server.write({ method: 'initialized' })
+      } catch (error) {
+        this.endServer(server)
+        throw new SessionUnavailable(error)
+      }
+      if (generation !== this.generation || !this.state.connected) { this.endServer(server); throw new Error('Codex connection changed while starting this thread.') }
+      this.runtimes.set(id, { server, clientRevision })
+      // Launched from a client an update replaced meanwhile: it moves too, once its thread is idle.
+      if (clientRevision !== this.clientRevision) { this.outdated.add(id); this.scheduleOutdatedStop() }
+      return server
+    })().finally(() => { if (this.launching.get(id) === launch) this.launching.delete(id) })
+    this.launching.set(id, launch)
+    return launch
+  }
+  /** An app-server stopped without Sotto ending it. */
+  private lost(server: CodexProcess): void {
+    this.stopping = Promise.all([this.stopping, server.closed]).then(() => undefined)
+    // The provider's own is started again when next needed; nothing it held was a thread's.
+    if (server === this.provider) { this.provider = undefined; return }
+    for (const [id, runtime] of this.runtimes) if (runtime.server === server) this.runtimeLost(id, runtime)
+  }
+  /**
+   * One thread's app-server stopped. That is this thread's failure, not the provider's: the others keep running,
+   * a turn it was running is failed with a plain sentence, and the thread's next action starts it again.
+   */
+  private runtimeLost(id: string, runtime: Runtime): void {
+    if (this.runtimes.get(id) !== runtime) return
+    this.runtimes.delete(id); this.live.delete(id); this.outdated.delete(id); this.reaper.forget(id); this.log.release(id)
+    // What it asked can no longer be answered.
+    for (const [key, pending] of [...this.requests]) if (pending.server === runtime.server) this.removeRequest(key)
+    this.settingsConfirmations.get(id)?.settle(false)
+    const alias = this.aliases[id]
+    const thread = alias ? this.ensureThread(id) : undefined
+    if (alias && thread && alias.compaction?.status === 'running') {
+      alias.compaction = { ...alias.compaction, status: 'uncertain', error: 'Native compaction was interrupted when Codex stopped. Its result is read from Codex; it will not be retried.' }
+      thread.compaction = alias.compaction
+      void this.persist().catch(() => undefined)
+    }
+    const turnId = this.runningTurns.get(id)
+    if (thread && (turnId || thread.status === 'running')) {
+      thread.status = 'error'
+      if (turnId) {
+        this.terminalTurns.add(turnId); this.runningTurns.delete(id)
+        thread.lastTurn = { id: turnId, status: 'failed' }
+        this.activity.turn(thread, { id: turnId, status: 'failed', error: { message: SESSION_ENDED } }, true)
+      }
+    }
+    this.emit()
+  }
+  /**
+   * The client on disk was replaced while Sotto stayed connected (ADR-0021). Every thread runs its own app-server,
+   * so nothing is disconnected: the client is found again (an update may have moved it), a new provider app-server
+   * reads its version and models, and each thread moves to it as it goes idle. An idle thread's app-server stops
+   * now the way the reaper stops one, and its next action starts the new client; a busy one finishes on the old
+   * client first. No turn is cancelled and no request is answered.
+   */
+  async clientUpdated(): Promise<void> {
+    if (!this.state.connected) return
+    const generation = this.generation
+    const executable = this.options.executable ?? await findExecutable()
+    if (generation !== this.generation || !this.state.connected) return
+    if (!executable) throw new Error('Codex was updated, but Sotto cannot find it now. Threads that are working carry on and nothing was lost. Check the Codex install, then connect Codex again.')
+    const server = this.spawnServer(executable)
+    let probed: Awaited<ReturnType<CodexAppServerHost['probe']>>
+    try { probed = await this.probe(server) }
+    catch (error) {
+      this.endServer(server)
+      if (generation !== this.generation) return
+      throw new Error('Codex was updated, but the new version did not start. Threads that are working carry on and nothing was lost. Connect Codex again to try the new version.', { cause: error })
+    }
+    if (generation !== this.generation || !this.state.connected) { this.endServer(server); return }
+    // Set together, so an app-server is launched either from the old client and counted old, or from the new one.
+    const previous = this.provider
+    this.provider = server; this.executable = executable; this.clientRevision++
+    // The old one finishes any read it was asked for first; it never holds a turn.
+    if (previous) this.endServer(previous, 'whenIdle')
+    this.state.version = probed.version || this.state.version
+    if (probed.models) this.state.models = probed.models
+    this.skillsRevision++; this.loadedSkillCwds.clear()
+    for (const id of this.runtimes.keys()) this.outdated.add(id)
+    this.emit()
+    this.stopOutdated()
+  }
+  /**
+   * Stop each thread's app-server still running a replaced client whose thread is not busy, as the reaper would.
+   * A watched thread keeps a session, so it is started again on the new client straight away.
+   */
+  private stopOutdated(): void {
+    for (const id of [...this.outdated]) {
+      const runtime = this.runtimes.get(id)
+      if (!runtime || runtime.clientRevision === this.clientRevision) { this.outdated.delete(id); continue }
+      if (this.busy(id)) continue
+      this.reaper.forget(id)
+      this.stopSession(id)
+      if (this.state.connected && this.observed.has(id) && this.aliases[id]) void this.open(id).catch(() => { this.ensureThread(id).status = 'error'; this.emit() })
+    }
+  }
+  /** Look again once whatever is running now has finished: a thread stops being busy in many places. */
+  private scheduleOutdatedStop(): void {
+    if (!this.outdated.size || this.outdatedTimer) return
+    this.outdatedTimer = setImmediate(() => { this.outdatedTimer = undefined; this.stopOutdated() })
   }
   async connect(): Promise<AgentHostSnapshot> {
     this.shutdown(false); await this.closed()
@@ -261,71 +494,19 @@ export class CodexAppServerHost implements AgentHost {
       this.watcher.observe(alias.codexThreadId)
       for (const origin of alias.origins) this.watcher.sentDigest(alias.codexThreadId, origin.messageId, origin.digest)
     }
-    const child = spawn(executable, this.options.args ?? ['app-server', '--stdio', ...configArguments], {
-      cwd: this.options.userDataPath, env: withCliPath({ ...nativeEnvironment(), CODEX_HOME: codexHome }, executable), windowsHide: true, shell: false, stdio: 'pipe',
-    })
-    this.child = child
-    let buffer: string[] = []; let bufferedBytes = 0; let stderrBytes = 0; let queuedBytes = 0
-    const ended = new Promise<void>(resolve => child.once('close', () => { if (this.child === child) this.lostChild(); resolve() }))
-    this.stopping = ended
-    child.on('error', () => { if (this.child === child) this.lostChild() })
-    child.stdin.on('error', () => { if (this.child === child) this.lostChild() })
-    child.stdout.setEncoding('utf8')
-    child.stdout.on('data', (chunk: string) => {
-      if (this.child !== child) return
-      let start = 0
-      while (start < chunk.length) {
-        const newline = chunk.indexOf('\n', start)
-        const part = chunk.slice(start, newline < 0 ? undefined : newline)
-        buffer.push(part); bufferedBytes += Buffer.byteLength(part)
-        if (bufferedBytes > MAX_FRAME_BYTES) { this.lostChild(); return }
-        if (newline < 0) break
-        // Count each chunk once; repeatedly measuring an accumulating base64 frame is quadratic.
-        const line = buffer.join(''); const bytes = bufferedBytes
-        buffer = []; bufferedBytes = 0; start = newline + 1
-        if (!line.trim()) continue
-        queuedBytes += bytes
-        if (queuedBytes > MAX_QUEUED_BYTES) { this.lostChild(); return }
-        this.frames = this.frames.then(async () => {
-          try { if (this.child === child) await this.frame(rpcSchema.parse(JSON.parse(line))) }
-          finally { queuedBytes -= bytes }
-        }).catch(() => { if (this.child === child) this.lostChild() })
-      }
-    })
-    child.stderr.on('data', (chunk: Buffer) => { stderrBytes += chunk.length; if (stderrBytes > MAX_OUTPUT_BYTES && this.child === child) this.lostChild() })
+    this.executable = executable
+    const provider = this.spawnServer(executable)
+    this.provider = provider
+    const current = (): boolean => generation === this.generation && this.provider === provider
     try {
-      await this.rpc('initialize', { clientInfo: { name: 'sotto', title: 'Sotto threads', version: '1.0' }, capabilities: { experimentalApi: true } }, value => {
-        const result = z.object({ userAgent: z.string().optional(), version: z.string().optional() }).parse(value)
-        this.state.version = result.version ?? result.userAgent ?? ''
-      })
-      this.write({ method: 'initialized' })
-      this.state.models = []; delete this.state.error
-      try {
-        const models: AgentHostSnapshot['models'] = []
-        const cursors = new Set<string>()
-        let cursor: string | undefined
-        do {
-          await this.rpc('model/list', { limit: 100, includeHidden: false, ...(cursor ? { cursor } : {}) }, value => {
-            const result = z.object({ data: z.array(z.object({ model: z.string(), displayName: z.string(), hidden: z.boolean().optional(),
-              supportedReasoningEfforts: z.array(z.object({ reasoningEffort: z.string() })).optional(), defaultReasoningEffort: z.string().optional(), inputModalities: z.array(z.string()).default(['text', 'image']),
-            })), nextCursor: z.string().nullish() }).parse(value)
-            models.push(...result.data.filter(m => !m.hidden).map(m => ({ id: m.model, name: m.displayName, provider: 'Codex', ready: true,
-              reasoningEfforts: orderReasoningEfforts(m.supportedReasoningEfforts?.map(option => option.reasoningEffort) ?? []),
-              ...(m.defaultReasoningEffort ? { defaultReasoningEffort: m.defaultReasoningEffort } : {}),
-              runtimeModes: [...agentRuntimeModeSchema.options], supportsImages: m.inputModalities.includes('image'),
-            })))
-            cursor = result.nextCursor ?? undefined
-          })
-          if (cursor) {
-            if (cursors.has(cursor)) throw new Error('Codex repeated a model catalog page.')
-            cursors.add(cursor)
-          }
-        } while (cursor)
-        this.state.models = models
-      } catch { this.state.models = []; this.state.error = 'Codex models could not be listed. Check Codex and reconnect.' }
-      if (this.child !== child) throw new Error('Codex disconnected while connecting.')
+      const probed = await this.probe(provider)
+      this.state.version = probed.version
+      this.state.models = probed.models ?? []
+      if (probed.models) delete this.state.error
+      else this.state.error = 'Codex models could not be listed. Check Codex and reconnect.'
+      if (!current()) throw new Error('Codex disconnected while connecting.')
       await this.readAccount()
-      if (this.child !== child) throw new Error('Codex disconnected while connecting.')
+      if (!current()) throw new Error('Codex disconnected while connecting.')
       this.state.connected = true
       this.reaper.start()
       // Connecting costs the same whatever Sotto has saved: a thread resumes, and its
@@ -333,13 +514,15 @@ export class CodexAppServerHost implements AgentHost {
       // channel and have no other opening step, so they are opened here.
       for (const [id, alias] of Object.entries(this.aliases)) if (alias.kind === 'personal') this.observed.add(id)
       await Promise.all([...this.observed].filter(id => this.aliases[id]).map(id => this.open(id).catch(error => {
+        // A thread whose own app-server would not start fails alone; its next action tries again.
+        if (error instanceof SessionUnavailable) { this.ensureThread(id).status = 'error'; return }
         if (!(error instanceof Rejected) || error.missingThreadId !== this.aliases[id]!.codexThreadId) throw error
         // An unavailable saved thread must not take the whole provider offline.
         // Its alias remains intact; never replace the native session implicitly.
       })))
       await this.watcher.poll(); this.watcher.start()
       this.emit(); return this.snapshot()
-    } catch (error) { if (this.child === child) this.disconnect(); throw error }
+    } catch (error) { if (generation === this.generation) this.disconnect(); throw error }
   }
   /**
    * Codex answers a connect whether or not it is signed in, and only a turn then fails. Its account says which, so a
@@ -404,7 +587,7 @@ export class CodexAppServerHost implements AgentHost {
     return thread
   }
   private sessionId(codexThreadId: string): string | undefined { return this.providerSessionIds.get(codexThreadId) }
-  /** The threads whose native session this connection is holding. The app-server has no close to observe. */
+  /** The threads whose native session this connection is holding, each on its own app-server. */
   resumedThreads(): readonly string[] { return [...this.live] }
   /** The public snapshot: a copy of everything, held threads' messages included. A caller that keeps history
    * from this adapter's events is handed every thread with its summary and no messages, as an activity
@@ -462,7 +645,7 @@ export class CodexAppServerHost implements AgentHost {
       throw new Error('Codex settings could not be read. No new work was sent. Reconnect and try again.')
     }
   }
-  private emit(streaming = false): void { this.publisher.publish(streaming) }
+  private emit(streaming = false): void { this.publisher.publish(streaming); this.scheduleOutdatedStop() }
   subscribe(listener: (snapshot: AgentHostSnapshot) => void): () => void { this.listeners.add(listener); return () => { this.listeners.delete(listener) } }
   subscribeActivitySnapshots(listener: (snapshot: AgentHostSnapshot) => void, options?: ActivitySubscriptionOptions): () => void {
     return this.activityListeners.add(listener, options)
@@ -542,7 +725,7 @@ export class CodexAppServerHost implements AgentHost {
       if (generation === this.generation) { this.flushLogMessages(id); this.orderMessages(id); this.emit() }
       throw error
     }
-    finally { if (this.threadReads.get(id) === work) this.threadReads.delete(id) }
+    finally { if (this.threadReads.get(id) === work) this.threadReads.delete(id); this.scheduleOutdatedStop() }
   }
   /** What a read that applied the thread does last, whether it read the whole transcript or the newest turn alone. */
   private settleRead(id: string): void {
@@ -616,7 +799,7 @@ export class CodexAppServerHost implements AgentHost {
   private open(id: string): Promise<void> {
     const pending = this.opening.get(id)
     if (pending) return pending
-    const operation = this.openThread(id).finally(() => { if (this.opening.get(id) === operation) this.opening.delete(id) })
+    const operation = this.openThread(id).finally(() => { if (this.opening.get(id) === operation) this.opening.delete(id); this.scheduleOutdatedStop() })
     this.opening.set(id, operation)
     return operation
   }
@@ -641,6 +824,7 @@ export class CodexAppServerHost implements AgentHost {
     const generation = this.generation
     const operation = (async () => {
       await this.watcher?.pollThread(alias.codexThreadId)
+      await this.runtimeServer(id)
       // Resume restores the conversation, never its transcript: turns are read when the
       // thread is opened, so resuming costs the same for a long thread and a short one.
       await this.rpc('thread/resume', { threadId: alias.codexThreadId, cwd: alias.cwd, excludeTurns: true,
@@ -653,6 +837,9 @@ export class CodexAppServerHost implements AgentHost {
       this.emit()
       })
     })().catch(error => {
+      // Codex refused the resume, so the thread's app-server holds nothing: it is let go rather than kept for a watched thread.
+      const runtime = this.runtimes.get(id)
+      if (error instanceof Rejected && runtime && !this.live.has(id)) { this.runtimes.delete(id); this.endServer(runtime.server) }
       if (error instanceof Rejected && error.missingThreadId === alias.codexThreadId) {
         const thread = this.ensureThread(id)
         thread.status = 'error'; thread.historyStatus = 'error'; thread.historyError = error.message
@@ -661,7 +848,7 @@ export class CodexAppServerHost implements AgentHost {
       if (generation === this.generation) { this.flushLogMessages(id); this.orderMessages(id); this.emit() }
       throw error
     }).finally(() => {
-      this.resuming.delete(id)
+      this.resuming.delete(id); this.scheduleOutdatedStop()
     })
     this.resuming.set(id, operation); return operation
   }
@@ -903,7 +1090,7 @@ export class CodexAppServerHost implements AgentHost {
       if (sent && !(error instanceof Rejected)) return { accepted: false, uncertain: true }
       if (!sent) { delete alias.pendingRollback; await this.persist() }
       throw error
-    } finally { this.dispatching.delete(id) }
+    } finally { this.dispatching.delete(id); this.scheduleOutdatedStop() }
   }
   private async executeNative(command: AgentHostCommand | PersonalCreateCommand): Promise<AgentHostResult> {
     if (!this.state.connected) throw new Error('Connect to Codex before sending a command.')
@@ -926,6 +1113,11 @@ export class CodexAppServerHost implements AgentHost {
         let developerInstructions: string
         try { developerInstructions = command.type === 'create-personal' ? command.developerInstructions : await this.projectInstructions(cwd) }
         catch (error) { this.creating.delete(command.threadId); throw error }
+        // The thread starts on its own app-server, which then holds its session.
+        let server: CodexProcess
+        try { server = await this.runtimeServer(command.threadId) }
+        catch (error) { this.creating.delete(command.threadId); throw error }
+        this.reaper.touch(command.threadId)
         await this.rpc('thread/start', { cwd, model: command.modelId, modelProvider: 'openai', allowProviderModelFallback: false,
           developerInstructions,
           ...runtimePolicy(command.runtimeMode), ...await threadConfig(command.type === 'create-personal' ? undefined : this.browserTools, command.threadId, command.reasoningEffort, command.type === 'create-personal' ? undefined : this.hostSetupTools), ephemeral: false, historyMode: 'legacy' }, async value => {
@@ -942,7 +1134,7 @@ export class CodexAppServerHost implements AgentHost {
           await this.persist(); this.creating.delete(command.threadId); this.ensureThread(command.threadId); this.live.add(command.threadId); this.histories.add(command.threadId); delete this.ensureThread(command.threadId).historyStatus
           this.reaper.touch(command.threadId)
           this.watcher?.observe(response.thread.id); this.applyThread(command.threadId, response.thread); this.emit()
-        }, () => { this.creating.delete(command.threadId) })
+        }, () => { this.creating.delete(command.threadId); this.stopSession(command.threadId) }, server)
       } else {
         const id = command.threadId; const alias = this.aliases[id]
         if (!alias) throw new Error('This Codex provider session is unknown.')
@@ -1127,18 +1319,10 @@ export class CodexAppServerHost implements AgentHost {
       }
       return { accepted: true }
     } catch (error) { if (error instanceof Uncertain) return { accepted: false, uncertain: true }; throw error }
+    finally { this.scheduleOutdatedStop() }
   }
-  private async frame(frame: z.infer<typeof rpcSchema>): Promise<void> {
-    if (!frame.method && frame.id !== undefined) {
-      const key = JSON.stringify(frame.id); const waiter = this.waiters.get(key)
-      if (!waiter) return
-      clearTimeout(waiter.timer); this.waiters.delete(key)
-      try {
-        if (frame.error !== undefined) { await waiter.onRejected?.(); waiter.reject(new Rejected(frame.error)) }
-        else { await waiter.apply(frame.result); waiter.resolve() }
-      } catch { waiter.reject(new Uncertain('Codex response could not be applied.')); this.lostChild() }
-      return
-    }
+  /** A notification or request from `server`; its responses to Sotto's own requests were settled by the process. */
+  private async frame(server: CodexProcess, frame: RpcFrame): Promise<void> {
     if (frame.method === 'skills/changed' || frame.method === 'account/updated') {
       this.skillsRevision++; this.loadedSkillCwds.clear(); return
     }
@@ -1162,7 +1346,7 @@ export class CodexAppServerHost implements AgentHost {
       const parsed = id ? pendingRequest(frame.id, frame.method, frame.params, id,
         this.fileSummaries.get(z.object({ itemId: z.string().optional() }).parse(frame.params).itemId ?? '')) : undefined
       if (!parsed) {
-        this.write({ id: frame.id, error: { code: -32601, message: 'Sotto does not handle this request.' } })
+        try { server.write({ id: frame.id, error: { code: -32601, message: 'Sotto does not handle this request.' } }) } catch { /* A closed process asks nothing more. */ }
         // Codex treats the refusal as the answer, so a renamed or reshaped approval would otherwise read
         // as the user declining. Requests Sotto never answers, and foreign threads, stay quiet.
         if (id && needsPerson(frame.method) && this.state.error !== unreadableRequest('Codex')) {
@@ -1171,7 +1355,9 @@ export class CodexAppServerHost implements AgentHost {
         }
         return
       }
-      this.touch(id!); this.requests.set(parsed.request.id, parsed); this.ensureThread(id!).requests.push(parsed.request); this.emit(); return
+      // Each app-server numbers its own requests, so the key names the process that asked, which alone can take the answer.
+      const held: HeldRequest = { ...parsed, request: { ...parsed.request, id: heldKey(server, frame.id) }, server }
+      this.touch(id!); this.requests.set(held.request.id, held); this.ensureThread(id!).requests.push(held.request); this.emit(); return
     }
     if (frame.method === 'thread/tokenUsage/updated') {
       const params = frame.params as { threadId?: string } | undefined
@@ -1237,41 +1423,39 @@ export class CodexAppServerHost implements AgentHost {
         }
       }
     }
-    if (frame.method === 'serverRequest/resolved' && params.requestId !== undefined) this.removeRequest(requestKey(params.requestId))
+    if (frame.method === 'serverRequest/resolved' && params.requestId !== undefined) this.removeRequest(heldKey(server, params.requestId))
     if (params.turn || params.item?.type === 'userMessage' || params.item?.type === 'agentMessage') await this.persist()
     this.emit(frame.method !== 'turn/started' && frame.method !== 'turn/completed'
       && frame.method !== 'error' && frame.method !== 'serverRequest/resolved')
   }
-  private write(value: unknown): void {
-    if (!this.child || this.child.stdin.destroyed) throw new Uncertain('Codex connection closed before acknowledgement.')
-    this.child.stdin.write(JSON.stringify(value) + '\n')
-  }
-  private rpc(method: string, params: unknown, apply: Waiter['apply'] = () => undefined, onRejected?: Waiter['onRejected']): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const id = ++this.nextId
-      // Keep the callback after timeout: late thread/start responses still establish durable aliases.
-      const timer = setTimeout(() => reject(new Uncertain('Codex did not acknowledge the operation in time.')), this.options.requestTimeoutMs ?? 15000)
-      this.waiters.set(JSON.stringify(id), { resolve, reject, apply, onRejected, timer })
-      try { this.write({ id, method, params }) } catch (error) { clearTimeout(timer); this.waiters.delete(JSON.stringify(id)); reject(error) }
-    })
+  /**
+   * Send a request to the app-server it belongs to: `target` when given, else the thread's own for a request
+   * that names a thread, else the provider's. A request for a thread with no app-server has nowhere to go.
+   */
+  private rpc(method: string, params: unknown, apply: RpcApply = () => undefined, onRejected?: RpcRejected, target?: CodexProcess): Promise<void> {
+    if (target) return target.rpc(method, params, apply, onRejected)
+    const threadId = params !== null && typeof params === 'object' ? (params as { threadId?: unknown }).threadId : undefined
+    if (typeof threadId === 'string') {
+      const id = this.sessionId(threadId)
+      const server = id ? this.runtimes.get(id)?.server : undefined
+      return server ? server.rpc(method, params, apply, onRejected) : Promise.reject(new Uncertain('Codex connection closed before acknowledgement.'))
+    }
+    if (this.provider?.alive) return this.provider.rpc(method, params, apply, onRejected)
+    if (!this.state.connected || !this.executable) return Promise.reject(new Uncertain('Codex connection closed before acknowledgement.'))
+    return this.providerServer().then(server => server.rpc(method, params, apply, onRejected))
   }
   private removeRequest(id: string): void {
     const pending = this.requests.get(id)
     if (!pending) return
     this.requests.delete(id); this.ensureThread(pending.sessionId).requests = this.ensureThread(pending.sessionId).requests.filter(r => r.id !== id)
   }
-  private async respond(pending: CodexPendingRequest, result: unknown): Promise<void> {
-    const child = this.child
-    if (!child) throw new Uncertain('Codex disconnected before receiving the answer.')
+  /** Answer a request on the app-server that asked it. */
+  private async respond(pending: HeldRequest, result: unknown): Promise<void> {
+    if (!pending.server.alive) throw new Uncertain('Codex disconnected before receiving the answer.')
     this.inFlightRequestIds.add(pending.request.id)
     this.removeRequest(pending.request.id); this.emit()
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Uncertain('Codex answer delivery is uncertain.')), this.options.requestTimeoutMs ?? 15000)
-      child.stdin.write(JSON.stringify({ id: pending.id, result }) + '\n', error => {
-        clearTimeout(timer); this.inFlightRequestIds.delete(pending.request.id)
-        if (error) reject(new Uncertain('Codex answer delivery is uncertain.')); else resolve()
-      })
-    })
+    try { await pending.server.answer(pending.id, result) }
+    finally { this.inFlightRequestIds.delete(pending.request.id) }
   }
   private async decline(sessionId: string): Promise<void> {
     for (const pending of [...this.requests.values()]) {
@@ -1282,32 +1466,23 @@ export class CodexAppServerHost implements AgentHost {
     this.publisher.cancel()
     this.reaper.dispose()
     this.skillsRevision++; this.loadedSkillCwds.clear()
-    this.child = undefined; this.state.connected = false; this.live.clear(); this.histories.clear(); this.resuming.clear(); this.opening.clear(); this.pendingLogMessages.clear()
+    this.provider = undefined; this.runtimes.clear(); this.launching.clear(); this.outdated.clear()
+    if (this.outdatedTimer) { clearImmediate(this.outdatedTimer); this.outdatedTimer = undefined }
+    this.state.connected = false; this.live.clear(); this.histories.clear(); this.resuming.clear(); this.opening.clear(); this.pendingLogMessages.clear()
     for (const confirmation of this.settingsConfirmations.values()) confirmation.settle(false)
     this.settingsConfirmations.clear()
-    for (const waiter of this.waiters.values()) { clearTimeout(waiter.timer); waiter.reject(new Uncertain('Codex disconnected before acknowledgement.')) }
-    this.waiters.clear(); this.requests.clear(); this.inFlightRequestIds.clear()
+    this.requests.clear(); this.inFlightRequestIds.clear()
     for (const thread of this.threads.values()) thread.requests = []
-  }
-  private lostChild(): void {
-    const child = this.child; this.reset(); child?.kill('SIGKILL')
-    void this.watcher?.stop()
-    this.emit()
   }
   disconnect(): void { this.shutdown(true) }
   private shutdown(publish: boolean): void {
     this.generation++
-    const child = this.child
-    if (child) {
-      for (const pending of this.requests.values()) {
-        if (this.inFlightRequestIds.has(pending.request.id)) continue
-        try { this.write({ id: pending.id, result: declineRequest(pending.method) }) } catch { /* Closed pipes cannot grant permission. */ }
-      }
-      // Flush denials before ending stdin; force termination if the server keeps running.
-      child.stdin.end()
-      const timer = setTimeout(() => child.kill('SIGKILL'), 100)
-      timer.unref(); child.once('close', () => clearTimeout(timer))
+    for (const pending of this.requests.values()) {
+      if (this.inFlightRequestIds.has(pending.request.id)) continue
+      try { pending.server.write({ id: pending.id, result: declineRequest(pending.method) }) } catch { /* Closed pipes cannot grant permission. */ }
     }
+    // Denials are flushed before each app-server's input ends; one that keeps running is forced.
+    for (const server of this.processes) this.endServer(server)
     this.reset()
     const watcher = this.watcher; this.watcher = undefined
     this.stopping = Promise.all([this.stopping, watcher?.stop()]).then(() => undefined)

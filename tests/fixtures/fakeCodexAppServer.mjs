@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
-import { appendFileSync, existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { appendFileSync, closeSync, existsSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 // Hand-written shapes from Codex 0.154.0's generated response schemas.
@@ -62,25 +62,66 @@ if (process.argv.includes('exec')) {
   line({ type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } })
   process.exit(0)
 }
-const state = read('state.json', { threads: {} })
+// Sotto runs one app-server for the provider and one for each thread's session, and Codex's processes share one
+// history on disk. So state.json is that shared disk: each process takes state.lock, reads the file again when
+// another process changed it, and writes it back before letting go. `loadedThreads` is this process's own: a
+// thread is loaded in the process that started or resumed it, and only that process streams its turns.
+let state = { threads: {} }
+let stamp
 const loadedThreads = new Set()
+const pause = new Int32Array(new SharedArrayBuffer(4))
+const stateStamp = () => { try { const stats = statSync(file('state.json'), { bigint: true }); return `${stats.ino}:${stats.mtimeNs}:${stats.size}` } catch { return 'none' } }
+const load = () => {
+  const current = stateStamp()
+  if (current === stamp) return
+  state = read('state.json', { threads: {} }); state.threads ??= {}; stamp = current
+}
+/** Whether a process is still running. One that cannot be signalled but exists counts as running. */
+const running = pid => { try { process.kill(pid, 0); return true } catch (error) { return error.code === 'EPERM' } }
+/**
+ * Run `change` holding the shared state, read fresh. The lock names its holder, and a holder killed mid-change
+ * leaves it behind: it is taken over once that process is gone, never after a length of time, since a holder a
+ * busy machine has paused is still holding it.
+ */
+function withState(change) {
+  let lock
+  for (;;) {
+    try { lock = openSync(file('state.lock'), 'wx'); break } catch (error) {
+      if (!['EEXIST', 'EPERM', 'EACCES', 'EBUSY'].includes(error.code)) throw error
+      try {
+        const before = statSync(file('state.lock'), { bigint: true }).ino
+        const holder = Number(readFileSync(file('state.lock'), 'utf8'))
+        // An empty file is a holder between creating it and writing its name; the same file is checked before removing.
+        if (holder && !running(holder) && statSync(file('state.lock'), { bigint: true }).ino === before) rmSync(file('state.lock'), { force: true })
+      } catch { /* Released meanwhile. */ }
+      Atomics.wait(pause, 0, 0, 1)
+    }
+  }
+  try { writeSync(lock, String(process.pid)); load(); return change() } finally { closeSync(lock); rmSync(file('state.lock'), { force: true }) }
+}
 // Windows refuses to rename over a file another process has open, and a test may be reading state.json right then.
 // Wait for the reader, as graceful-fs does, rather than let the refusal end this process. A test that only needs to
 // know an action has landed waits for its line in actions.jsonl instead of reading this file.
-const pause = new Int32Array(new SharedArrayBuffer(4))
 const save = () => {
   writeFileSync(file('state.tmp'), JSON.stringify(state))
   for (let attempt = 0; ; attempt++) {
-    try { renameSync(file('state.tmp'), file('state.json')); return } catch (error) {
+    try { renameSync(file('state.tmp'), file('state.json')); stamp = stateStamp(); return } catch (error) {
       if (attempt >= 100 || !['EPERM', 'EACCES', 'EBUSY'].includes(error.code)) throw error
       Atomics.wait(pause, 0, 0, 10)
     }
   }
 }
+/** Whether the process with this id is still running. */
+const alive = pid => { try { process.kill(pid, 0); return true } catch (error) { return error.code === 'EPERM' } }
+/** Record that this process has the thread loaded, in the shared state. */
+const owns = threadId => { state.owners = { ...state.owners, [threadId]: process.pid } }
+/** Which process Sotto started for what: an introduction, and each thread's start or resume. Never a body. */
+const served = (method, threadId) => appendFileSync(file('servers.jsonl'), JSON.stringify({ pid: process.pid, method, ...(threadId ? { threadId } : {}) }) + '\n')
 const emit = message => process.stdout.write(JSON.stringify(message) + '\n')
 const notify = (method, params) => emit({ method, params })
 const record = message => appendFileSync(file('requests.jsonl'), JSON.stringify(message) + '\n')
-let requestId = 10000
+// Each process numbers its own requests, as Codex's do; starting from its own base keeps them apart in requests.jsonl.
+let requestId = process.pid * 1000
 const pending = new Map()
 const heldReplies = new Map()
 function complete(thread, text, status = 'completed') {
@@ -118,7 +159,7 @@ function raise(thread, kind, text, method, overrides = {}) {
   pending.set(id, { threadId: thread.id, method })
   emit({ id, method, params: { ...params, ...overrides } })
 }
-createInterface({ input: process.stdin }).on('line', line => {
+createInterface({ input: process.stdin }).on('line', line => withState(() => {
   const message = JSON.parse(line)
   record(message)
   if (!message.method) {
@@ -157,7 +198,9 @@ createInterface({ input: process.stdin }).on('line', line => {
   }
   // Its account, only when a test scripts one (ADR-0037); otherwise the method is unknown, as from an older Codex.
   if (method === 'account/read' && 'account' in script) { reply({ account: script.account, requiresOpenaiAuth: true }); return }
-  if (method === 'initialize') reply({ userAgent: 'codex/0.154.0', codexHome: process.env.CODEX_HOME, platformFamily: 'windows', platformOs: 'windows' })
+  if (method === 'initialize') served(method)
+  // A test that stands in for an update scripts the version the installed client answers with.
+  if (method === 'initialize') reply({ userAgent: script.version ?? 'codex/0.154.0', codexHome: process.env.CODEX_HOME, platformFamily: 'windows', platformOs: 'windows' })
   else if (method === 'model/list') reply(script.modelPages?.[params.cursor ?? 'first'] ?? { data: script.models ?? [{ id: 'model', model: 'fixture-model', displayName: 'Fixture Codex', isDefault: true,
     defaultReasoningEffort: 'low', supportedReasoningEfforts: [{ reasoningEffort: 'low' }, { reasoningEffort: 'high' }] }], nextCursor: null })
   else if (method === 'thread/start') {
@@ -165,8 +208,9 @@ createInterface({ input: process.stdin }).on('line', line => {
       defaultModeRequestUserInput: params.config?.['features.default_mode_request_user_input'] === true,
       approvalPolicy: params.approvalPolicy, approvalsReviewer: params.approvalsReviewer, sandbox: params.sandbox, reasoningEffort: params.config?.model_reasoning_effort ?? 'low' }
     state.threads[thread.id] = thread
-    loadedThreads.add(thread.id)
+    loadedThreads.add(thread.id); owns(thread.id)
     save()
+    served(method, thread.id)
     notify('thread/started', { thread })
     reply({ thread, model: params.model, cwd: params.cwd, approvalPolicy: thread.approvalPolicy, approvalsReviewer: thread.approvalsReviewer,
       reasoningEffort: thread.reasoningEffort, sandbox: { type: thread.sandbox === 'read-only' ? 'readOnly' : thread.sandbox === 'danger-full-access' ? 'dangerFullAccess' : 'workspaceWrite' } })
@@ -179,12 +223,19 @@ createInterface({ input: process.stdin }).on('line', line => {
         setTimeout(() => emit({ id, error: { code: -32600, message: `thread ${thread.id} is not materialized yet; includeTurns is unavailable before first user message` } }), delay)
         return
       }
+      if (method === 'thread/resume') served(method, thread.id)
       // Native resume returns an already loaded session without applying overrides.
       if (method === 'thread/resume' && !loadedThreads.has(thread.id)) {
         for (const key of ['model', 'approvalPolicy', 'approvalsReviewer', 'sandbox']) if (params[key] !== undefined) thread[key] = params[key]
         if (params.config && 'model_reasoning_effort' in params.config) thread.reasoningEffort = params.config.model_reasoning_effort ?? 'low'
         if (params.config && 'features.default_mode_request_user_input' in params.config) thread.defaultModeRequestUserInput = params.config['features.default_mode_request_user_input'] === true
-        loadedThreads.add(thread.id)
+        // A turn whose app-server crashed never finished, and a new app-server reads it back idle, the turn interrupted.
+        // A clean restart keeps what this fixture has always done there, a running thread, which tests of recovery pin.
+        const owner = state.owners?.[thread.id]
+        if (owner !== undefined && state.crashed?.includes(owner) && !alive(owner) && thread.turns.at(-1)?.status === 'inProgress') {
+          thread.turns.at(-1).status = 'interrupted'; thread.status = { type: 'idle' }
+        }
+        loadedThreads.add(thread.id); owns(thread.id)
         save()
       }
       const history = { ...JSON.parse(JSON.stringify(thread)), turns: method === 'thread/resume' && params.excludeTurns ? [] : historyTurns(thread, script) }
@@ -273,17 +324,33 @@ createInterface({ input: process.stdin }).on('line', line => {
     if (turn) { turn.status = 'interrupted'; thread.status = { type: 'idle' }; save(); notify('turn/completed', { threadId: thread.id, turn }) }
     reply({})
   } else emit({ id, error: { code: -32601, message: 'Unknown method' } })
-})
+// Sotto lets an app-server go by closing its input, once every line it wrote has been read.
+})).on('close', () => process.exit(0))
+// Actions that change only the shared history, the way another Codex process on the same session would.
+const historyActions = new Set(['native-turn', 'native-rewind', 'native-message'])
+let lastSeen
 setInterval(() => {
   if (!existsSync(file('control.json'))) return
   const action = read('control.json', null)
-  if (!action || action.id === state.lastControl) return
-  state.lastControl = action.id
-  save()
-  if (action.type === 'exit') process.exit(0)
-  try { control(action) }
-  // Each action is acknowledged once it has been carried out, so a test can wait for it without reading state.json.
-  finally { appendFileSync(file('actions.jsonl'), JSON.stringify({ id: action.id }) + '\n') }
+  if (!action || action.id === lastSeen) return
+  // An action on a thread's stream is carried out by the process that has the thread loaded, a held reply by the
+  // process holding it, and a change to the shared history by whichever process claims it first.
+  const mine = action.type === 'release-reply' ? heldReplies.has(action.method) : historyActions.has(action.type) || loadedThreads.has(action.threadId)
+  if (!mine) return
+  lastSeen = action.id
+  const exit = withState(() => {
+    if (action.id === state.lastControl) return false
+    state.lastControl = action.id
+    if (action.type === 'exit') state.crashed = [...state.crashed ?? [], process.pid]
+    save()
+    // This thread's process stops the way a crashed one would, once it has let go of the shared state.
+    if (action.type === 'exit') return true
+    try { control(action) }
+    // Each action is acknowledged once it has been carried out, so a test can wait for it without reading state.json.
+    finally { appendFileSync(file('actions.jsonl'), JSON.stringify({ id: action.id }) + '\n') }
+    return false
+  })
+  if (exit) process.exit(0)
 }, 10)
 function control(action) {
   const thread = state.threads[action.threadId]
