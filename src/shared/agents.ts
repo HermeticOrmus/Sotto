@@ -425,7 +425,9 @@ export type ProviderClientUpdate = z.infer<typeof providerClientUpdateSchema>
  * The client updates a machine is running one at a time: how many were asked for since its line was last empty, and
  * how many of those have finished. Absent while the line is empty.
  */
-export const clientUpdateRunSchema = z.object({ total: z.number().int().min(1).max(64), done: z.number().int().min(0).max(64) })
+export const clientUpdateRunSchema = z.object({ total: z.number().int().min(1).max(64), done: z.number().int().min(0).max(64),
+  /** The clients still waiting, in the order they will run, after the one running. */
+  line: z.array(providerIdSchema).max(8).optional() })
 export type ClientUpdateRun = z.infer<typeof clientUpdateRunSchema>
 /** One connected host's catalog, as the desktop keeps it apart from the others when it combines threads. */
 export const agentClientHostSchema = z.object({ hostId: z.uuid(), connected: z.boolean(), models: z.array(agentModelSchema),

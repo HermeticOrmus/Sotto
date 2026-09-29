@@ -86,10 +86,10 @@ describe('the client update line', () => {
       expect(answered.error).toBeNull()
       await vi.waitFor(() => { expect(installer.started).toEqual(['claude']) })
       expect(states(control)).toEqual({ claude: 'updating', codex: 'queued', grok: 'queued' })
-      expect(control.get().clientUpdateRun).toEqual({ total: 3, done: 0 })
+      expect(control.get().clientUpdateRun).toEqual({ total: 3, done: 0, line: ['codex', 'grok'] })
       await installer.finish()
       await vi.waitFor(() => { expect(installer.started).toEqual(['claude', 'codex']) })
-      expect(control.get().clientUpdateRun).toEqual({ total: 3, done: 1 })
+      expect(control.get().clientUpdateRun).toEqual({ total: 3, done: 1, line: ['grok'] })
       expect(states(control)).toMatchObject({ claude: 'updated', codex: 'updating', grok: 'queued' })
       await installer.finish()
       await installer.finish()
@@ -128,7 +128,7 @@ describe('the client update line', () => {
       await vi.waitFor(() => { expect(installer.started).toEqual(['claude']) })
       await control.command({ type: 'queue-client-updates', providers: ['grok'] })
       expect(states(control)).toMatchObject({ claude: 'updating', grok: 'queued' })
-      expect(control.get().clientUpdateRun).toEqual({ total: 2, done: 0 })
+      expect(control.get().clientUpdateRun).toEqual({ total: 2, done: 0, line: ['grok'] })
       // A client already in the line is not put in it twice.
       expect((await control.command({ type: 'queue-client-updates', providers: ['grok'] })).error).toBe('Grok Build is already updating. Wait for it to finish.')
       await installer.finish()
@@ -154,6 +154,57 @@ describe('the client update line', () => {
       expect(installer.started).toEqual(['claude'])
       expect(states(control)).toMatchObject({ claude: 'updated', codex: 'idle' })
     } finally { control.dispose() }
+  })
+
+  it('says the order the line runs in, which is the order the clients joined it, not the tiles’', async () => {
+    const host = new ThreeClients()
+    const installer = heldInstaller(host)
+    const control = await coordinator(host, installer.run)
+    try {
+      await control.command({ type: 'queue-client-updates', providers: ['claude'] })
+      await control.command({ type: 'queue-client-updates', providers: ['grok'] })
+      await control.command({ type: 'queue-client-updates', providers: ['codex'] })
+      expect(control.get().clientUpdateRun).toEqual({ total: 3, done: 0, line: ['grok', 'codex'] })
+    } finally { control.dispose() }
+  })
+
+  it('puts a cancelled client back as it was, with the failure it had', async () => {
+    const host = new ThreeClients()
+    const installer = heldInstaller(host, new Set(['codex']))
+    const control = await coordinator(host, installer.run)
+    try {
+      await control.command({ type: 'queue-client-updates', providers: ['codex'] })
+      await installer.finish()
+      await vi.waitFor(() => { expect(states(control)).toMatchObject({ codex: 'failed' }) })
+      await control.command({ type: 'queue-client-updates', providers: ['claude', 'codex'] })
+      expect(states(control)).toMatchObject({ claude: 'updating', codex: 'queued' })
+      await control.command({ type: 'cancel-client-updates', providers: ['codex'] })
+      expect(control.get().clientUpdates?.find(update => update.id === 'codex')).toMatchObject({ state: 'failed', failure: 'download', error: 'npm ERR! network socket hang up' })
+      await installer.finish()
+    } finally { control.dispose() }
+  })
+
+  it('keeps what the line said while a check was waiting on the registry', async () => {
+    const host = new ThreeClients()
+    const installer = heldInstaller(host, new Set(['codex']))
+    let holdCheck: Promise<void> | undefined
+    let releaseCheck!: () => void
+    const control = await coordinator(host, installer.run)
+    // From here on, a check waits on the registry until the test lets it go.
+    const clients = (control as unknown as { clients: ProviderClients }).clients
+    const check = clients.check.bind(clients)
+    clients.check = async (...args) => { if (holdCheck) await holdCheck; return check(...args) }
+    try {
+      await control.command({ type: 'queue-client-updates', providers: ['codex'] })
+      holdCheck = new Promise<void>(resolve => { releaseCheck = resolve })
+      const checking = control.command({ type: 'check-client-updates' })
+      await installer.finish()
+      await vi.waitFor(() => { expect(control.get().clientUpdateRun).toBeUndefined() })
+      expect(states(control)).toMatchObject({ codex: 'failed' })
+      releaseCheck()
+      await checking
+      expect(control.get().clientUpdates?.find(update => update.id === 'codex')).toMatchObject({ state: 'failed', failure: 'download' })
+    } finally { releaseCheck?.(); control.dispose() }
   })
 
   it('keeps a client’s place in the line through a fresh check', async () => {

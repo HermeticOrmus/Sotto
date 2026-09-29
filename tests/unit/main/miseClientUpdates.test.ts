@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir, userInfo } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { installerOutput } from '../../../src/main/agents/installerDetail'
@@ -56,7 +56,8 @@ describe('which clients mise installed', () => {
       .toEqual({ channel: 'mise', miseTool: 'npm:@openai/codex' })
     await mkdir(join(installs, 'odd', '1.0.0'), { recursive: true })
     await writeFile(join(installs, 'odd', '.mise.backend.toml'), 'short = "--yes"\n')
-    expect(await detectClientInstall('codex', join(installs, 'odd', '1.0.0', 'codex'), { MISE_DATA_DIR: data })).toEqual({ channel: 'mise', miseTool: 'odd' })
+    // A folder mise left no usable record in, and that Sotto does not know, is named by nobody: the client is by hand.
+    expect(await detectClientInstall('codex', join(installs, 'odd', '1.0.0', 'codex'), { MISE_DATA_DIR: data })).toEqual({ channel: 'unknown' })
   })
 
   it('reads Grok Build in ~/.grok/bin as mise’s when mise holds its package and npm does not', async () => {
@@ -80,7 +81,8 @@ describe('which clients mise installed', () => {
 describe('what an update of a mise install runs', () => {
   it('upgrades the one tool through mise itself, and gives the same command to run by hand', async () => {
     const action = await updateActionFor('codex', { channel: 'mise', miseTool: 'codex' }, '/x/codex', async () => undefined, async () => '/usr/bin/mise')
-    expect(action).toEqual({ command: 'mise upgrade codex', byHand: ['mise upgrade codex'], executable: '/usr/bin/mise', args: ['upgrade', 'codex'] })
+    // Run from the home folder, so mise reads the global config and not a project's own.
+    expect(action).toEqual({ command: 'mise upgrade codex', byHand: ['mise upgrade codex'], executable: '/usr/bin/mise', args: ['upgrade', 'codex'], cwd: homedir() })
   })
 
   it('adds Grok Build’s install step after the upgrade, and names both, with the package folder, to run by hand', async () => {
@@ -135,8 +137,8 @@ describe('running an update of a mise install', () => {
     expect(steps).toEqual([1, 2])
     const folder = join(installs, 'npm-xai-official-grok', '1.0.41', 'node_modules', '@xai-official', 'grok')
     expect(ran).toEqual([
-      { executable: '/usr/bin/mise', args: ['upgrade', 'npm:@xai-official/grok'] },
-      { executable: '/usr/bin/mise', args: ['where', 'npm:@xai-official/grok'] },
+      { executable: '/usr/bin/mise', args: ['upgrade', 'npm:@xai-official/grok'], cwd: homedir() },
+      { executable: '/usr/bin/mise', args: ['where', 'npm:@xai-official/grok'], cwd: homedir() },
       { executable: '/usr/bin/node', args: [join(folder, 'bin', 'postinstall.js')], asNode: true, cwd: folder },
     ])
   })
@@ -149,7 +151,7 @@ describe('running an update of a mise install', () => {
       .install('codex', join(installs, 'codex', 'latest', 'bin', 'codex'), { MISE_DATA_DIR: data }, step => steps.push(step))
     expect(result.ok).toBe(true)
     expect(steps).toEqual([1])
-    expect(ran).toEqual([{ executable: '/usr/bin/mise', args: ['upgrade', 'codex'] }])
+    expect(ran).toEqual([{ executable: '/usr/bin/mise', args: ['upgrade', 'codex'], cwd: homedir() }])
   })
 
   it('reports a dropped download as the first step, and runs nothing after it', async () => {
@@ -211,5 +213,12 @@ describe('what mise printed', () => {
     expect(installerOutput(output)).toBe('mise ERROR Failed to install aqua:openai/codex@0.158.0\nmise ERROR writing …\nmise ERROR connection reset by peer')
     expect(installerOutput(Array.from({ length: 12 }, (_, index) => `line ${index}`).join('\n'))?.split('\n')).toHaveLength(8)
     expect(installerOutput(' \n ')).toBeUndefined()
+  })
+
+  it('takes out this machine’s own home folder and account name wherever the home folder is', () => {
+    const home = homedir(), user = userInfo().username
+    const said = installerOutput(`mise ERROR writing ${join(home, '.cache', 'mise')}\nmise ERROR in /data/${user}/tools`)
+    expect(said).not.toContain(home)
+    expect(said?.split(/[\\/]/u)).not.toContain(user)
   })
 })

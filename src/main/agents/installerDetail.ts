@@ -1,3 +1,5 @@
+import { homedir, userInfo } from 'node:os'
+
 /** A home folder in a line the installer printed: `C:\Users\<name>\…`, `/home/<name>/…`, `/Users/<name>/…`, `/root/…`. */
 const HOME_PATH = /[A-Za-z]:\\[^\s"']+|\/(?:home|Users|root)\/[^\s"']+/gu
 
@@ -6,7 +8,23 @@ function shownLines(output: string): string[] {
   return output.split(/\r?\n/u).map(line => line.trim()).filter(Boolean)
     .filter(line => !/complete log of this run/iu.test(line))
 }
-const redact = (line: string): string => line.replace(HOME_PATH, '…').trim()
+/**
+ * This machine's own home folder and account name, wherever they sit: a host whose home is not under `/home` or
+ * `/Users` (`/data/zach`, `/private/var/…`) would otherwise keep its user name in what the installer printed.
+ */
+function ownNames(): RegExp[] {
+  const names: RegExp[] = []
+  try { const home = homedir(); if (home.length > 1) names.push(new RegExp(escaped(home), 'giu')) } catch { /* No home to take out. */ }
+  // The account name only as a folder in a path, so a word that happens to match it stays.
+  try { const user = userInfo().username; if (user) names.push(new RegExp(`(?<=[\\\\/])${escaped(user)}(?=[\\\\/\\s"']|$)`, 'giu')) } catch { /* No account name. */ }
+  return names
+}
+const escaped = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
+const redact = (line: string): string => {
+  let shown = line.replace(HOME_PATH, '…')
+  for (const name of ownNames()) shown = shown.replace(name, '…')
+  return shown.trim()
+}
 
 /**
  * What the installer said, bounded and without the machine in it. npm's last line is usually where

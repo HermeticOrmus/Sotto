@@ -77,6 +77,7 @@ async function npmOwns(packageName: string, executable: string, environment: Nod
  * are the names Sotto knows for a folder without one, checked against forge's installs on September 29, 2026.
  */
 const MISE_FOLDER_TOOLS: Readonly<Record<string, string>> = {
+  claude: 'claude', codex: 'codex',
   'npm-xai-official-grok': 'npm:@xai-official/grok',
   'npm-openai-codex': 'npm:@openai/codex',
   'npm-anthropic-ai-claude-code': 'npm:@anthropic-ai/claude-code',
@@ -91,9 +92,7 @@ async function miseToolNamed(installs: string, folder: string): Promise<string |
     const short = /^\s*short\s*=\s*"([^"]+)"\s*$/mu.exec(record)?.[1]
     if (short && MISE_TOOL.test(short)) return short
   } catch { /* An older mise wrote no record; the folder's name decides. */ }
-  const known = MISE_FOLDER_TOOLS[folder]
-  if (known) return known
-  return /^[a-z0-9][a-z0-9-]*$/u.test(folder) ? folder : undefined
+  return MISE_FOLDER_TOOLS[folder]
 }
 
 /**
@@ -195,6 +194,8 @@ export interface UpdateAction {
   readonly command: string; readonly executable: string; readonly args: readonly string[]; readonly asNode?: boolean
   /** The same update as lines to run by hand, for when it fails. */
   readonly byHand: readonly string[]
+  /** Where to run it: mise from the home folder, so the global config applies and no project's own mise.toml does. */
+  readonly cwd?: string
   /** Grok Build under mise: after the upgrade, its package's install step, in the folder `mise where` names. */
   readonly installStep?: { readonly mise: string; readonly tool: string; readonly packageName: string }
 }
@@ -227,7 +228,7 @@ export async function updateActionFor(provider: ProviderId, install: ClientChann
     const mise = await misePath()
     if (!mise) return undefined
     const packageName = CLIENT_PACKAGES[provider]
-    return { command: byHand[0]!, byHand, executable: mise, args: ['upgrade', found.miseTool],
+    return { command: byHand[0]!, byHand, executable: mise, args: ['upgrade', found.miseTool], cwd: homedir(),
       ...(needsInstallStep(provider, found.miseTool) && packageName ? { installStep: { mise, tool: found.miseTool, packageName } } : {}) }
   }
   return undefined
@@ -288,7 +289,7 @@ const defaultRun: RunLike = (executable, args, asNode, options) => new Promise(r
 })
 
 /** Words an installer prints when the download itself went wrong, rather than the install. */
-const DOWNLOAD_FAILED = /error sending request|connection (?:reset|refused|closed|aborted)|timed? ?out|could not resolve|failed to (?:fetch|download)|network|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|ECONNREFUSED|tls handshake|unexpected eof/iu
+const DOWNLOAD_FAILED = /error sending request|connection (?:reset|closed|aborted)|reset by peer|socket hang up|unexpected eof|ECONNRESET|operation timed out|error decoding response body/iu
 
 /**
  * How an install went: `step` is the one that did not finish, `failure` why, and `printed` what the installer said.
@@ -383,7 +384,7 @@ export class ProviderClients {
         : `Sotto does not know how ${PROVIDER_LABELS[provider]} was installed, so it will not replace it.` }
     }
     onStep?.(1)
-    const upgrade = await this.run(action.executable, action.args, action.asNode)
+    const upgrade = await this.run(action.executable, action.args, action.asNode, action.cwd ? { cwd: action.cwd } : undefined)
     if (!upgrade.ok) return { ...upgrade, step: 1, failure: DOWNLOAD_FAILED.test(upgrade.printed ?? upgrade.detail ?? '') ? 'download' : 'installer' }
     if (!action.installStep) return upgrade
     onStep?.(2)
@@ -397,7 +398,7 @@ export class ProviderClients {
    */
   private async installStep(step: NonNullable<UpdateAction['installStep']>): Promise<InstallResult> {
     const failed = (result: RunResult): InstallResult => ({ ...result, ok: false, step: 2, failure: 'install-step' })
-    const where = await this.run(step.mise, ['where', step.tool])
+    const where = await this.run(step.mise, ['where', step.tool], false, { cwd: homedir() })
     const root = where.stdout?.trim().split(/\r?\n/u).at(-1)?.trim()
     if (!where.ok || !root || !isAbsolute(root)) return failed(where.ok ? { ok: false, detail: `mise did not say where it installed ${step.tool}.` } : where)
     const folder = join(root, 'node_modules', ...step.packageName.split('/'))

@@ -205,6 +205,8 @@ export class AgentControl {
   /** Whoever waits for a client's update to end: an `update-client` command, which answers when it has run. */
   private readonly clientWaiters = new Map<ProviderId, { resolve: () => void; reject: (error: unknown) => void }[]>()
   private clientLineRunning = false
+  /** Where each waiting client stood before it joined the line, so Cancel update puts it back. */
+  private readonly clientLineBefore = new Map<ProviderId, Partial<ProviderClientUpdate>>()
   private serial: Promise<unknown> = Promise.resolve()
   private unsubscribe: (() => void) | null = null
   private reconnect: ReturnType<typeof setTimeout> | null = null
@@ -925,9 +927,16 @@ export class AgentControl {
       readings.push(before && (lined || (before.state !== 'idle' && before.installed === reading.installed)) ? { ...reading, ...outcomeOf(before) } : reading)
     }
     if (this.disposed) return
+    // The update line runs while this check waits on the registry and the disk: whatever it said about a client
+    // meanwhile (its step, how it ended) is newer than what the check started from, and wins.
+    const latest = this.state.clientUpdates ?? []
+    for (const [index, reading] of readings.entries()) {
+      const now = latest.find(item => item.id === reading.id)
+      if (now && now !== previous.find(item => item.id === reading.id)) readings[index] = { ...reading, ...outcomeOf(now) }
+    }
     // A client that updated, failed or did not change still has something to say after its provider
     // drops: losing the record here would take the sentence about it off the card with it.
-    for (const before of previous) {
+    for (const before of latest) {
       if (before.state !== 'idle' && !readings.some(item => item.id === before.id)) readings.push(before)
     }
     if (readings.length) this.state.clientUpdates = readings
@@ -974,12 +983,14 @@ export class AgentControl {
       const refusal = this.clientUpdateRefusal(provider)
       if (refusal) { refusals.push(refusal); continue }
       this.clientLine.push(provider)
+      const record = this.state.clientUpdates?.find(item => item.id === provider)
+      if (record) this.clientLineBefore.set(provider, outcomeOf(record))
       this.setClientUpdate(provider, { state: 'queued' }, false)
       added += 1
     }
     if (!added) throw new Error(refusals[0] ?? 'Nothing to update.')
     const run = this.state.clientUpdateRun
-    this.state.clientUpdateRun = { total: Math.min(64, (run?.total ?? 0) + added), done: run?.done ?? 0 }
+    this.setClientRun(Math.min(64, (run?.total ?? 0) + added), run?.done ?? 0)
     this.publish()
     if (!this.clientLineRunning) { this.clientLineRunning = true; void this.runClientLine() }
   }
@@ -990,7 +1001,9 @@ export class AgentControl {
       const at = this.clientLine.indexOf(provider)
       if (at < 0) continue
       this.clientLine.splice(at, 1)
-      this.setClientUpdate(provider, { state: 'idle' }, false)
+      // Back as it was before it joined the line: behind, or with the failure it had.
+      this.setClientUpdate(provider, this.clientLineBefore.get(provider) ?? { state: 'idle' }, false)
+      this.clientLineBefore.delete(provider)
       const waiting = this.clientWaiters.get(provider) ?? []
       this.clientWaiters.delete(provider)
       for (const waiter of waiting) waiter.reject(new Error(`The ${PROVIDER_LABELS[provider]} update was cancelled before it started. Nothing was changed.`))
@@ -1001,17 +1014,24 @@ export class AgentControl {
       throw new Error(running ? `${PROVIDER_LABELS[running]} is already updating, so it cannot be cancelled. Your threads keep working.` : 'That update is not waiting any more. Nothing was changed.')
     }
     const run = this.state.clientUpdateRun
-    if (run) this.state.clientUpdateRun = { total: Math.max(run.done + 1, run.total - removed), done: run.done }
+    if (run) this.setClientRun(Math.max(run.done + 1, run.total - removed), run.done)
+  }
+  /** The line's count, and the order its waiting clients will run in, which a waiting tile names. */
+  private setClientRun(total: number, done: number): void {
+    this.state.clientUpdateRun = { total, done: Math.min(total, done), ...(this.clientLine.length ? { line: [...this.clientLine] } : {}) }
   }
   /** The update line, one client at a time, until it is empty. Each ends by telling whoever waits for it. */
   private async runClientLine(): Promise<void> {
     while (!this.disposed) {
       const provider = this.clientLine.shift()
       if (!provider) break
+      this.clientLineBefore.delete(provider)
+      const started = this.state.clientUpdateRun
+      if (started) this.setClientRun(started.total, started.done)
       let failure: unknown
       try { await this.updateOneClient(provider) } catch (error) { failure = error }
       const run = this.state.clientUpdateRun
-      if (run) this.state.clientUpdateRun = { ...run, done: Math.min(run.total, run.done + 1) }
+      if (run) this.setClientRun(run.total, run.done + 1)
       const waiting = this.clientWaiters.get(provider) ?? []
       this.clientWaiters.delete(provider)
       for (const waiter of waiting) { if (failure === undefined) waiter.resolve(); else waiter.reject(failure) }
@@ -3056,7 +3076,10 @@ export class AgentControl {
     this.unsubscribeSottoRequests?.()
     // Updates still waiting in the line never start; whoever waits for one is told rather than left waiting.
     this.clientLine.length = 0
-    for (const waiting of this.clientWaiters.values()) for (const waiter of waiting) waiter.reject(new Error('Sotto is stopping. The update did not start.'))
+    for (const [provider, waiting] of this.clientWaiters) {
+      const said = provider === this.updatingClient ? 'Sotto stopped while the update ran. Check the client\'s version when Sotto is back.' : 'Sotto is stopping. The update did not start.'
+      for (const waiter of waiting) waiter.reject(new Error(said))
+    }
     this.clientWaiters.clear()
     this.disconnect()
     this.listeners.clear()
