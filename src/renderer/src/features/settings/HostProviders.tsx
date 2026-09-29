@@ -133,7 +133,7 @@ function ProviderTile({ host, provider, status, bridge, job, onSignIn, onAgent }
     finally { setStopping(false) }
   }
   const shownNote = note && note.kind === tile.kind ? note.text : jobNote(job, tile.kind)
-  const jobCase = hostProviderJobCase(status?.connection === 'error' ? status.problem : undefined)
+  const jobCase = hostProviderJobCase(status)
   const action = (): ReactNode => {
     // Keys keep a pressed control from turning into another one in place: Stop must not become Check again under focus.
     if (working) return <div className="host-provider__actions">

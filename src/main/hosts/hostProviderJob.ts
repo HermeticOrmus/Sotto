@@ -110,7 +110,7 @@ export class HostProviderJobs implements HostProviderJobSource {
     const host = this.options.hosts.host(command.hostId)
     if (!host?.connected) throw new Error(`${host?.name ?? 'This host'} is not connected. Nothing was started. Switch it on, then try again.`)
     const status = this.options.hosts.provider(command.hostId, command.provider)
-    const jobCase = status?.connection === 'error' ? hostProviderJobCase(status.problem) : undefined
+    const jobCase = hostProviderJobCase(status)
     if (!jobCase) throw new Error(`${host.name}'s host can already use ${name}, so there is nothing for an agent to install, update or fix. Nothing was started.`)
     const job: Job = { id: command.id, hostId: command.hostId, host: host.name, provider: command.provider, case: jobCase, modelName: model.name,
       threadTitle: hostProviderJobTitle(jobCase, command.provider, host.name), phase: 'starting', checking: false }

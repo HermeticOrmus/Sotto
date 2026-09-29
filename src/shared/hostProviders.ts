@@ -94,8 +94,14 @@ export type HostSignInRequest = z.infer<typeof hostSignInRequestSchema>
  */
 export const hostProviderJobCaseSchema = z.enum(['install', 'update', 'fix'])
 export type HostProviderJobCase = z.infer<typeof hostProviderJobCaseSchema>
-/** The job a tile offers for why its provider is not connected, or undefined when no job fits. */
-export function hostProviderJobCase(problem: ProviderProblem | undefined): HostProviderJobCase | undefined {
+/**
+ * The job a provider's status calls for, or undefined when none fits: connected, connecting, turned off and not signed in
+ * need no agent. An error without a problem code reads as can't be started (an adapter that threw a plain error), so it
+ * is a fix, the same as the tile's "Can't be started". The tile and the job's start both decide with this.
+ */
+export function hostProviderJobCase(status: AgentProviderStatus | undefined): HostProviderJobCase | undefined {
+  if (status?.connection !== 'error') return undefined
+  const problem: ProviderProblem = status.problem ?? 'cannot-start'
   return problem === 'not-installed' ? 'install' : problem === 'too-old' ? 'update' : problem === 'cannot-start' ? 'fix' : undefined
 }
 /**

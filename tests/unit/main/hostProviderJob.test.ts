@@ -153,6 +153,20 @@ describe('a provider job', () => {
     expect(k.revoked).toEqual(['thread-1'])
   })
 
+  it('fixes a provider in an error the adapter could not name, as its tile reads it: can\'t be started', async () => {
+    const f = fixture()
+    f.providers.set(`${FORGE}:codex`, status('codex', { version: '0.155.1', error: 'Codex did not confirm the connection.' }))
+    await f.jobs.command(start({ provider: 'codex' }))
+    expect(f.jobs.state()).toMatchObject({ case: 'fix', threadTitle: 'Fix Codex on forge', phase: 'running' })
+    expect(f.threads.start).toHaveBeenCalledWith(expect.objectContaining({ brief: expect.stringContaining('Codex is installed on forge (0.155.1), but the host could not find it or start it.') }))
+    // Turned off and not signed in stay refused, as connected does.
+    for (const patch of [{ connection: 'disconnected' as const }, { problem: 'signed-out' as const }]) {
+      const g = fixture()
+      g.providers.set(`${FORGE}:codex`, status('codex', patch))
+      await expect(g.jobs.command(start({ provider: 'codex' }))).rejects.toThrow("forge's host can already use Codex")
+    }
+  })
+
   it('gives back the tile when no thread was made, and keeps a thread that did not take its brief to look at', async () => {
     const f = fixture()
     f.threads.start.mockImplementationOnce(async () => { throw new Error('Connect Claude Code before creating a project.') })
