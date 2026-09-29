@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import type { AgentHost, AgentHostResult, ThreadHostEvent } from '../../src/main/agents/host'
 import { WorkspaceHost } from '../../src/main/agents/workspace'
 import type { AgentActivity } from '../../src/shared/agentActivity'
-import type { AgentHostSnapshot, AgentRuntimeMode, AgentThread } from '../../src/shared/agents'
+import type { AgentHostSnapshot, AgentRuntimeMode, AgentThread, ProviderId } from '../../src/shared/agents'
 import type { ThreadEventKind } from '../../src/shared/threadEvents'
 import type { RecordedRpc } from '../fixtures/codexFixture'
 import { handleOf, PIXEL_PNG } from '../fixtures/stagedImages'
@@ -74,6 +74,12 @@ export interface AdapterFixture {
    * thread instead. `loseConfirmation`: script the next settings change's confirmation away, where the fixture can.
    */
   settings?: { snapshot: boolean; loseConfirmation?(): Promise<void> }
+  /**
+   * Where the adapter is told its client was replaced on disk (ADR-0021, ADR-0038): which provider it is, and
+   * `install`, which puts a newer client where the adapter will find it and answers the version it reports.
+   * Absent where the client updates with another app, as Devin's does.
+   */
+  clientUpdate?: { provider: ProviderId; install(): Promise<string> }
 }
 
 /** New provider adapters must pass these behavioural checks with observable fake effects. */
@@ -578,6 +584,62 @@ export function describeAdapterContract(name: string, factory: (session?: Adapte
       await f.settings.loseConfirmation()
       const result = await f.host.execute({ type: 'configure-thread', commandId: randomUUID(), threadId: sessionId, ...requested })
       expect(result).toEqual({ accepted: false, uncertain: true })
+    })
+  })
+
+  // A client update (ADR-0021, ADR-0038). The installer replaces the client on disk while Sotto stays connected;
+  // the adapter reads the new version and moves each thread to the new client as it goes idle. Runs where the
+  // adapter takes the news and the fixture can install a newer client.
+  describe(`${name} client update`, () => {
+    let f: AdapterFixture
+    let sessionId: string
+    const thread = async () => (await f.host.snapshot()).threads.find(t => t.id === sessionId)!
+    const send = (messageId: string, text: string) => f.host.execute({ type: 'send', threadId: sessionId, commandId: randomUUID(), messageId, text })
+    afterEach(async () => { await f?.cleanup() })
+
+    it('lets a working turn finish across the update, stays connected, and reads the new version from the client', async context => {
+      f = await factory(); await f.host.connect()
+      const update = f.clientUpdate
+      if (!update || !f.host.clientUpdated) { context.skip(); return }
+      await f.host.execute({ type: 'create-project', commandId: randomUUID(), projectId: f.projectId, title: 'Project', path: f.root })
+      sessionId = randomUUID()
+      await f.host.execute({ type: 'create-thread', commandId: randomUUID(), threadId: sessionId, projectId: f.projectId, modelId: f.modelId, title: 'Update thread' })
+      f.host.observeThreads?.([sessionId])
+      expect(await send('before-update', 'Synthetic prompt')).toEqual({ accepted: true })
+      await expect.poll(async () => (await thread()).status).toBe('running')
+      const before = (await f.host.snapshot()).version
+      const starts = await f.sessions?.starts(sessionId)
+
+      const installed = await update.install()
+      await f.host.clientUpdated(update.provider)
+      const updated = await f.host.snapshot()
+      expect(updated.connected).toBe(true)
+      expect(updated.error).toBeUndefined()
+      expect(updated.version).not.toBe(before)
+      expect(updated.version).toContain(installed)
+      // The working turn was not cut short, and nothing was asked or answered for it.
+      expect((await thread()).status).toBe('running')
+      expect((await thread()).requests).toEqual([])
+      if (f.sessions) expect(await f.sessions.stopped(sessionId)).toBe(false)
+
+      await f.driver.completeTurn(sessionId, 'Finished across the update')
+      await expect.poll(async () => (await thread()).status).toBe('idle')
+      expect((await thread()).messages.some(message => message.role === 'assistant' && message.text.includes('Finished across the update'))).toBe(true)
+      expect((await thread()).lastTurn?.status ?? 'completed').toBe('completed')
+      // Once idle the thread moves to the new client: being watched, its session starts again straight away.
+      if (f.sessions && starts !== undefined) await expect.poll(async () => f.sessions!.starts(sessionId)).toBeGreaterThan(starts)
+      const settled = await f.host.snapshot()
+      expect(settled.connected).toBe(true)
+      expect(settled.version).toContain(installed)
+      expect(await send('after-update', 'Second prompt')).toEqual({ accepted: true })
+    })
+
+    it('does nothing while the provider is not connected', async context => {
+      f = await factory()
+      const update = f.clientUpdate
+      if (!update || !f.host.clientUpdated) { context.skip(); return }
+      await expect(f.host.clientUpdated(update.provider)).resolves.toBeUndefined()
+      expect((await f.host.snapshot()).connected).toBe(false)
     })
   })
 }
