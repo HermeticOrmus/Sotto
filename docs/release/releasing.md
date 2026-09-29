@@ -63,16 +63,25 @@ The packaging command verifies the staged directory, extracts the resulting arch
 
 After reviewing the green Linux job and its matching provenance, attach the Linux archive beside the desktop installers on `millZach/Sotto-releases`. Add its sidecar line to the combined `SHA256SUMS.txt` before uploading that file last. Do not publish a Windows smoke archive as Linux. Publishing is still a separate manual release action.
 
-On Forge, verify the release checksum, extract into a versioned installation directory, and start from there:
+A host that runs an older release is updated from the desktop's Threads page (ADR-0040): the host downloads `Sotto-host-X.Y.Z-<platform>-<arch>.tar.gz` and its `.sha256` sidecar from `https://github.com/millZach/Sotto-releases/releases/download/vX.Y.Z/`, so both must be attached to the release under exactly those names, and a platform without an archive is told there is none. The update unpacks the archive into the installation folder's `versions/X.Y.Z/` and writes the version into the folder's `current` file, which is what the launch script starts.
+
+To do the same by hand on Forge, verify the release checksum, extract into a version folder, point `current` at it, and restart the host (Stop host in Settings > Hosts, then switch it on):
 
 ```sh
+cd "$HOME/.local/share/sotto-host"
 sha256sum -c Sotto-host-X.Y.Z-linux-x64.tar.gz.sha256
-mkdir -p "$HOME/.local/share/sotto-host/X.Y.Z"
-tar -xzf Sotto-host-X.Y.Z-linux-x64.tar.gz -C "$HOME/.local/share/sotto-host/X.Y.Z"
-cd "$HOME/.local/share/sotto-host/X.Y.Z"
+mkdir -p versions/X.Y.Z
+tar -xzf Sotto-host-X.Y.Z-linux-x64.tar.gz -C versions/X.Y.Z
+printf 'X.Y.Z\n' > current
+```
+
+A folder without `current` holds one flat install, extracted into the folder itself, and the launch script starts its `host/index.js` as before. To run a version by hand instead, start it from its folder:
+
+```sh
+cd "$HOME/.local/share/sotto-host/versions/X.Y.Z"
 node host/index.js --data "$HOME/.sotto"
 ```
 
-No `npm install` is needed in the extracted archive. Keep the data directory outside the versioned installation. A new empty host can start without a credential key; saving hosted-provider credentials requires a separately stored key file passed with `--key-file` or `SOTTO_HOST_KEY_FILE`. Never copy the desktop credential store to Forge. The listener binds loopback only. Point the desktop's SSH host settings at the extracted installation directory, then pair explicitly. Installing an archive grants no permission authority.
+No `npm install` is needed in the extracted archive. Keep the data directory outside the versioned installation. A new empty host can start without a credential key; saving hosted-provider credentials requires a separately stored key file passed with `--key-file` or `SOTTO_HOST_KEY_FILE`. Never copy the desktop credential store to Forge. The listener binds loopback only. Point the desktop's SSH host settings at the installation folder (`~/.local/share/sotto-host`, not a version folder inside it), then pair explicitly. Installing an archive grants no permission authority.
 
 The scripts and CI job do not establish that an archive has been published or that Forge has been tested. Record the release URL, Linux CI run, and actual Forge SSH connection evidence when those acceptance checks are completed.
