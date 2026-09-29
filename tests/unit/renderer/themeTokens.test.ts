@@ -181,6 +181,7 @@ describe('main-window theme tokens', () => {
       'src/renderer/src/agents/providerRecovery.css',
       'src/renderer/src/agents/providers.css',
       'src/renderer/src/agents/clientUpdates.css',
+      'src/renderer/src/agents/hostUpdates.css',
       'src/renderer/src/agents/room.css',
       'src/renderer/src/agents/screenshots.css',
       'src/renderer/src/agents/reviewComments.css',

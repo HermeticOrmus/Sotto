@@ -116,6 +116,15 @@ describe('a row that needs you says what it needs', () => {
     expect(status('Visual gate flake')).toHaveTextContent('Needs your answer')
     expect(status('Visual gate flake')).toHaveAttribute('data-waiting', 'question')
   })
+
+  it('reads Reconnecting, not Disconnected, while the thread\'s host restarts for an update (ADR-0040)', () => {
+    const state = threadsStateFixture()
+    state.host.threads = state.host.threads.map(thread => thread.id === 'visual-gate' ? { ...thread, clientConnected: false, clientReconnecting: true } : thread)
+    mount(state, NOW)
+    expect(status('Visual gate flake')).toHaveTextContent('Needs your approval · Reconnecting')
+    expect(status('Visual gate flake')).not.toHaveTextContent('Disconnected')
+    expect(rowFor(state, 'visual-gate')).toMatchObject({ connected: false, reconnecting: true })
+  })
 })
 
 describe('a working row counts up', () => {

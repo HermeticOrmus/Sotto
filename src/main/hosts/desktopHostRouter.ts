@@ -41,6 +41,8 @@ export class DesktopHostRouter {
   private selectedThreadId: string | null | undefined
   private selectedProjectId: string | null = null
   private notice: string | undefined
+  /** Hosts whose threads read Reconnecting: kept on the page while their host restarts for an update (ADR-0040). */
+  private readonly reconnecting = new Set<string>()
   /** Counts the window's own selections, so a command that ends after one does not undo it. */
   private selections = 0
 
@@ -57,9 +59,33 @@ export class DesktopHostRouter {
     this.selectedHostId ??= connection.hostId
     this.emit()
   }
+  /**
+   * The same host on a new connection, in place of the one it had: its threads, the selection and the panes showing them
+   * stay where they are, as they would not through a remove and an add. Only a host with the same ID can take its place.
+   */
+  replace(connection: DesktopHostConnection): void {
+    const entry = this.hosts.get(connection.hostId)
+    if (!entry) { this.add(connection); return }
+    entry.off.forEach(off => off())
+    const off = [connection.service.subscribe(() => this.emit())]
+    if (connection.subscribeDetail) off.push(connection.subscribeDetail(detail => {
+      const scoped = mapHostReferences(detail, id => hostEntityKey(connection.hostId, id))
+      for (const listener of this.detailListeners) listener(scoped)
+    }))
+    this.hosts.set(connection.hostId, { connection, off })
+    this.reconnecting.delete(connection.hostId)
+    this.emit()
+  }
+  /** Marks a connected host's threads as reconnecting, or no longer: while it is set they read Reconnecting, not Disconnected. */
+  setReconnecting(hostId: string, value: boolean): void {
+    if (value === this.reconnecting.has(hostId) || !this.hosts.has(hostId)) return
+    if (value) this.reconnecting.add(hostId); else this.reconnecting.delete(hostId)
+    this.emit()
+  }
   remove(hostId: string): void {
     this.hosts.get(hostId)?.off.forEach(off => off())
     this.hosts.delete(hostId)
+    this.reconnecting.delete(hostId)
     if (this.selectedHostId === hostId) this.selectedHostId = this.hosts.keys().next().value
     if (this.selectedThreadId && parseHostEntityKey(this.selectedThreadId)?.hostId === hostId) this.selectedThreadId = null
     this.emit()
@@ -86,10 +112,14 @@ export class DesktopHostRouter {
     const selected = entries.find(item => item.connection.hostId === this.selectedHostId)
     const base = selected ? this.named(selected.connection, selected.state) : this.empty()
     const multiple = entries.length > 1
-    const threads = entries.flatMap(({ connection, original, state }) => state.host.threads.map((thread, index) => ({
-      ...thread, hostId: connection.hostId, hostLabel: multiple ? connection.name : undefined, remoteHost: connection.kind === 'remote',
-      clientConnected: connection.available?.() !== false && isThreadProviderConnected(original.host, original.host.threads[index]!),
-    })))
+    const threads = entries.flatMap(({ connection, original, state }) => state.host.threads.map((thread, index) => {
+      const available = connection.available?.() !== false
+      return {
+        ...thread, hostId: connection.hostId, hostLabel: multiple ? connection.name : undefined, remoteHost: connection.kind === 'remote',
+        clientConnected: available && isThreadProviderConnected(original.host, original.host.threads[index]!),
+        ...(!available && this.reconnecting.has(connection.hostId) ? { clientReconnecting: true } : {}),
+      }
+    }))
     return {
       ...base, clientScoped: true,
       connections: entries.map(({ connection }) => ({ hostId: connection.hostId, name: connection.name, kind: connection.kind, connected: connection.available?.() !== false })),

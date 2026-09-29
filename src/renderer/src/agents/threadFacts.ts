@@ -35,6 +35,8 @@ export interface ThreadRow {
   readonly providerId: ProviderId | undefined
   /** Whether the thread's own provider is connected; history stays readable either way. */
   readonly connected: boolean
+  /** Set while the thread's host restarts for an update and this computer connects to it again (ADR-0040). */
+  readonly reconnecting: boolean
   /** Why the row sits in Settled: its project, its own choice, or the provider closed it. Null when open. */
   readonly settledBy: 'project' | 'thread' | 'provider' | null
   readonly state: ThreadRowState
@@ -265,7 +267,7 @@ function describe(state: AgentState, thread: AgentThread, now: number): ThreadRo
   return {
     thread, project, model, assignment, provider, providerKey: key, state: state_, stateLabel, waitingFor, request: decision, attention,
     providerId: thread.providerId ?? model?.providerId ?? (key === 'other' ? undefined : key),
-    connected: isThreadProviderConnected(state.host, thread), settledBy,
+    connected: isThreadProviderConnected(state.host, thread), reconnecting: thread.clientReconnecting === true, settledBy,
     sentence, activityAt,
     when: state_ === 'working' ? workingLabel(workingSince, now) : clockLabel(activityAt), workingSince,
     facts: factsLine(assignment, model, provider, management, state.configuration.followupLimit, now),

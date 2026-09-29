@@ -13,6 +13,7 @@ import { NewThreadDialog } from './NewThreadDialog'
 import { beginNewThread, unusedNewThread, type ThreadCreationStart } from './newThread'
 import { newThreadChord, newThreadChordLabel, newThreadChordPressed } from './newThreadShortcut'
 import { ProviderUpgradeNotice } from './ProviderUpgradeNotice'
+import { HostUpdateControl } from './HostUpdates'
 import { THREAD_PROMPT_ID } from './ThreadComposer'
 import { hasDraftContent } from './threadDraftStore'
 import { ThreadPane } from './ThreadPane'
@@ -271,6 +272,8 @@ export function ThreadsView({ onOpenAgents, now: fixedNow, updateControl, tools,
       currentThreadId={focusedId} openThreadIds={paneIds} onOpenBeside={openBeside} onDragThread={setDragging}
       newThreadError={newThreadError} onDismissNewThreadError={dismissNewThreadError} newThreadShortcut={newThreadShortcutLabel} />
     <section className="thread-workspace" aria-label="Thread workspace">
+      {/* Before the panes, so it comes first in keyboard order; it sits in the top strip beside the window controls. */}
+      <HostUpdateControl />
       {recoveredDraft ? <ProviderUpgradeNotice state={state} command={recoverCommand} threadId={focusedId ?? undefined} localDraftPresent={localDraftPresent} /> : null}
       <div className="thread-workspace__body">
         {paneIds.length || dragging !== null

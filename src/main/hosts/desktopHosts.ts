@@ -5,10 +5,12 @@ import { AtomicJsonStore } from '../storage/atomicJsonStore'
 import type { AgentCredentials } from '../agents/credentials'
 import { HostConnectionError, SocketHostService } from '../agents/socketHostService'
 import { validateSshHost } from './sshConfiguration'
-import { SshFailure, SshHostLauncher, type SshCallbacks, type SshFailureCode, type SshHostConnection } from './sshLauncher'
+import { SshFailure, SshHostLauncher, type SshCallbacks, type SshFailureCode, type SshHostConnection, type SshHostUpdateOperation, type SshHostUpdateOptions, type SshHostUpdateResult } from './sshLauncher'
 import { failureStep } from './sshFailure'
 import { isTailscaleApprovalUrl } from './tailscaleApproval'
-import type { DesktopHostRouter } from './desktopHostRouter'
+import type { DesktopHostConnection, DesktopHostRouter } from './desktopHostRouter'
+import type { HostUpdateCandidate } from './hostUpdate'
+import type { HostUpdateAction, HostUpdateState } from '../../shared/hostUpdates'
 import { nameHostInRefusal, type AgentProviderStatus, type ProviderId } from '../../shared/agents'
 import type { HostProviderJobSource, ProviderJobHost } from './hostProviderJob'
 import { isProviderSignInPage, type HostProviderAction, type HostProviderActionResult, type HostSignIn, type HostSignInRequest, type ProviderSignInView } from '../../shared/hostProviders'
@@ -24,6 +26,18 @@ export interface HostSetupSource {
   command(command: Extract<HostsCommand, { type: 'start-setup' | 'stop-setup' | 'dismiss-setup' }>): Promise<void>
   subscribe(listener: () => void): () => void
 }
+/** What the Threads page's host update panel asks of the host updates (ADR-0040), which follow the saved hosts. */
+export interface HostUpdateSource {
+  state(): HostUpdateState[]
+  command(id: string, action: HostUpdateAction): Promise<void>
+  /** Why another command on this saved host must wait for its update, or nothing when none is under way. */
+  busy(id: string): string | undefined
+  subscribe(listener: () => void): () => void
+}
+/** The launch script's answers to a restart that it gave before stopping anything, so the host runs as it did. */
+const UNTOUCHED_RESTARTS: ReadonlySet<string> = new Set(['update-not-owned', 'update-stop-failed', 'update-busy', 'update-missing', 'update-invalid'])
+/** The commands that act on one saved host's connection, which wait while that host is being updated. */
+const CONNECTION_COMMANDS: ReadonlySet<HostsCommand['type']> = new Set<HostsCommand['type']>(['save', 'set-enabled', 'connect', 'disconnect', 'stop-host', 'forget'])
 /**
  * `closing` is set while Stop host or Forget runs. Both drop the socket on purpose before the SSH reply
  * arrives (the host closes its listener to stop, and a revoke closes the revoked peer), and a drop then
@@ -95,6 +109,15 @@ export class DesktopHosts {
   /** The provider job, once main has one (ADR-0035): the tiles show it and send it their Start and Stop. */
   private providerJob: HostProviderJobSource | undefined
   private unsubscribeProviderJob: (() => void) | undefined
+  /** The host updates, once main has them (ADR-0040): the Threads page shows them and sends them its presses. */
+  private updates: HostUpdateSource | undefined
+  private unsubscribeUpdates: (() => void) | undefined
+  /**
+   * A host restarting for an update keeps its place on the Threads page, by saved host, under the host's own ID: its
+   * threads read Reconnecting and their drafts stay, until this computer connects to it again and the new connection
+   * takes its place, or a failure only the user can fix takes it away.
+   */
+  private readonly held = new Map<string, string>()
   /** Set by close(): Sotto is quitting, so no retry may start an SSH session the quit drain would leave behind. */
   private closed = false
   private writing: Promise<void> = Promise.resolve()
@@ -126,6 +149,7 @@ export class DesktopHosts {
       hosts: this.saved.map(host => ({ ...this.status.get(host.id)!, ...this.fields(host) })),
       ...(adding ? { adding: { ...adding, ...this.fields(this.adding!) } } : {}),
       ...(setup ? { setup } : {}), ...(setupChoice ? { setupChoice } : {}), ...(providerJob ? { providerJob } : {}),
+      ...(this.updates ? { updates: this.updates.state() } : {}),
       localHostRunning: this.options.localHostRunning, localHostEnabled: this.options.localHostEnabled() }
   }
   /** Gives Settings > Hosts the host setup: its state joins every published state, and its commands go to it. */
@@ -141,6 +165,66 @@ export class DesktopHosts {
     this.providerJob = job
     this.unsubscribeProviderJob = job.subscribe(() => this.emit())
     this.emit()
+  }
+  /** Gives the Threads page the host updates: their state joins every published state, and the panel's presses go to them. */
+  useUpdates(updates: HostUpdateSource): void {
+    this.unsubscribeUpdates?.()
+    this.updates = updates
+    this.unsubscribeUpdates = updates.subscribe(() => this.emit())
+    this.emit()
+  }
+  /** Saved hosts an update can reach now, with the Sotto version each said it runs (ADR-0040). */
+  updateCandidates(): HostUpdateCandidate[] {
+    return this.saved.flatMap(host => {
+      const status = this.status.get(host.id), tunnel = this.live.get(host.id)?.tunnel
+      if (!status?.version || !status.hostId || !tunnel || !this.reachable(host.id)) return []
+      return [{ id: host.id, name: host.name, hostId: status.hostId, version: status.version, owned: tunnel.owned, installPath: host.installPath, dataDirectory: host.dataDirectory }]
+    })
+  }
+  /** One operation of a host update, over that host's SSH connection. */
+  async runUpdate(id: string, operation: SshHostUpdateOperation, options?: SshHostUpdateOptions): Promise<SshHostUpdateResult> {
+    const host = this.saved.find(item => item.id === id), tunnel = this.live.get(id)?.tunnel
+    if (!host || !tunnel || !this.reachable(id)) throw new Error(`${host?.name ?? 'This host'} is not connected. Nothing was changed.`)
+    return tunnel.updateHost(operation, options)
+  }
+  /**
+   * An update's restart: the launch script starts `version` in place of the running host, or the old one again, and this
+   * computer then connects again. The host stops on purpose, so its drop is not a lost connection, and its threads stay on
+   * the Threads page, reading Reconnecting with their drafts kept, until the new connection takes their place. The promise
+   * waits for the first connect.
+   */
+  async restartForUpdate(id: string, version: string, options?: SshHostUpdateOptions): Promise<SshHostUpdateResult> {
+    const host = this.saved.find(item => item.id === id)
+    if (!host) throw new Error('This host is no longer saved. Nothing was changed.')
+    const active = this.live.get(id)
+    this.requireOwnedConnection(host, active)
+    active!.closing = true
+    this.clearRetry(id)
+    const registered = active!.registeredHostId
+    if (registered) { this.held.set(id, registered); delete active!.registeredHostId; this.options.router.setReconnecting(registered, true) }
+    let result: SshHostUpdateResult | undefined, unsent = false
+    try { result = await active!.tunnel!.updateHost({ op: 'update-restart', version }, options); return result }
+    catch (error) { unsent = error instanceof SshFailure && (error.code === 'request-busy' || error.code === 'not-connected'); throw error }
+    finally {
+      // Nothing was stopped: the restart was never sent, or the host refused it before stopping anything. The same
+      // connection carries on, and the threads read as they did.
+      const untouched = unsent || (result?.type === 'error' && UNTOUCHED_RESTARTS.has(result.reason))
+      if (untouched && this.live.get(id) === active && this.status.get(id)?.phase === 'connected') {
+        active!.closing = false
+        if (registered) { this.held.delete(id); active!.registeredHostId = registered; this.options.router.setReconnecting(registered, false) }
+      } else if (!this.closed && this.saved.includes(host) && host.enabled !== false) {
+        // A reconnect, with the backoff behind it: the row reads Reconnecting…, as it does after a drop.
+        this.retries.set(id, { timer: undefined, attempt: 0, active: undefined })
+        await this.open(host).catch(() => undefined)
+      } else this.releaseHeld(id)
+    }
+  }
+  /** Takes a host held through its update's restart off the Threads page, once no connection will take its place. */
+  private releaseHeld(id: string): void {
+    const held = this.held.get(id)
+    if (!held) return
+    this.held.delete(id)
+    this.options.router.remove(held)
   }
   /** A saved host as a provider job needs it. */
   jobHost(id: string): ProviderJobHost | undefined {
@@ -220,10 +304,19 @@ export class DesktopHosts {
       await this.providerJob.command(command)
       return this.get()
     }
+    if (command.type === 'host-update') {
+      if (!this.updates) throw new Error('Hosts cannot be updated from this window. Nothing was changed.')
+      await this.updates.command(command.id, command.action)
+      return this.get()
+    }
     if (this.attemptHost('id' in command ? command.id : command.host.id)) {
       // Add host's own questions, and the setup's, are answered where the attempt shows, and Cancel ends it.
       if (command.type === 'ssh-answer') { this.live.get(command.id)?.launcher.answerPrompt(command.promptId, command.answer); return this.get() }
       if (command.type === 'disconnect') { await this.cancelAdd(command.id); return this.get() }
+    }
+    if (CONNECTION_COMMANDS.has(command.type)) {
+      const busy = this.updates?.busy('id' in command ? command.id : command.host.id)
+      if (busy) throw new Error(busy)
     }
     if (command.type === 'save') return this.edit(command.host)
     const host = this.saved.find(item => item.id === command.id)
@@ -446,7 +539,7 @@ export class DesktopHosts {
     const active: LiveHost = { launcher: this.options.launcher?.() ?? new SshHostLauncher(), generation: ++this.generation }
     this.live.set(host.id, active)
     this.status.set(host.id, { ...this.status.get(host.id), ...this.fields(host), phase: 'connecting', reconnecting: this.retries.has(host.id) && !this.retries.get(host.id)!.first, error: undefined,
-      step: 'reach', tailscale: undefined, fix: undefined, reason: undefined, checked: undefined }); this.emit()
+      step: 'reach', tailscale: undefined, fix: undefined, reason: undefined, checked: undefined, version: undefined }); this.emit()
     try {
       active.tunnel = await active.launcher.connect(this.route(host), {
         ...this.progress(host, active),
@@ -472,6 +565,7 @@ export class DesktopHosts {
       if (otherVersion && this.isAttempt(host)) await this.commitAdd(host)
       if (otherVersion && active.tunnel) {
         const newer = active.socket?.hostIsNewer() ?? false
+        const version = active.socket?.sottoVersion()
         await active.socket?.close().catch(() => undefined)
         delete active.socket
         // An older host Sotto started keeps its SSH session, so Stop host can reach the host the sentence
@@ -479,7 +573,9 @@ export class DesktopHosts {
         // computer, has nothing to keep it for: the sentence already says what to do instead.
         if (active.tunnel.owned && !newer) {
           this.clearRetry(host.id)
-          this.update(host.id, { phase: 'error', reconnecting: false, owned: true, error: failure.message })
+          this.releaseHeld(host.id)
+          // Its version, when it said one, is what lets the Threads page offer to update it (ADR-0040).
+          this.update(host.id, { phase: 'error', reconnecting: false, owned: true, error: failure.message, version })
           return
         }
       }
@@ -524,6 +620,7 @@ export class DesktopHosts {
         this.scheduleReconnect(host, undefined)
       } else {
         this.clearRetry(host.id)
+        this.releaseHeld(host.id)
         this.update(host.id, { phase: 'error', reconnecting: false, error: failure.message, step, fix, reason, tailscale: waited })
       }
     }
@@ -616,7 +713,10 @@ export class DesktopHosts {
       if (entry.active && (this.live.get(host.id) !== entry.active || entry.active.closing)) return
       // A host switched off is not reconnected, whatever scheduled this.
       if (host.enabled === false) { this.retries.delete(host.id); return }
-      void this.command({ type: 'connect', id: host.id })
+      // Sotto's own retry, not the user's Connect, so an update under way on this host does not hold it back: a connection
+      // dropped partway through an update is one the update needs back.
+      if (this.closed || !this.saved.includes(host)) return
+      void this.open(host).catch(() => undefined)
     }, (this.options.retryDelayMs ?? reconnectDelayMs)(entry.attempt))
     entry.attempt += 1
     this.retries.set(host.id, entry)
@@ -646,16 +746,22 @@ export class DesktopHosts {
     active.socket = socket
     const hello = await socket.connect()
     if (this.live.get(host.id) !== active) { await socket.close(); return }
+    this.update(host.id, { version: hello.sottoVersion })
     host.hostId = hello.hostId; host.clientId = hello.clientId
     if (this.saved.includes(host)) await this.save()
     if (this.live.get(host.id) !== active) { await socket.close(); return }
-    this.options.router.add({ hostId: hello.hostId, name: host.name, kind: 'remote', service: socket,
+    const connection: DesktopHostConnection = { hostId: hello.hostId, name: host.name, kind: 'remote', service: socket,
       detail: id => socket.readThreadDetail(id), preview: request => socket.attachmentPreview(request), observe: ids => socket.observe(ids),
       stage: image => socket.stageAttachment(image), content: digest => socket.attachmentContent(digest),
       gitRefs: request => socket.gitRefs(request), gitChangedFiles: request => socket.gitChangedFiles(request), gitPullRequest: request => socket.gitPullRequest(request),
       hostFolders: request => socket.hostFolders(request),
       subscribeDetail: listener => socket.subscribeThreadDetail(listener), available: () => connected,
-    })
+    }
+    // Back from an update's restart: the new connection takes the place its threads kept on the page.
+    const held = this.held.get(host.id)
+    this.held.delete(host.id)
+    if (held === hello.hostId) this.options.router.replace(connection)
+    else { if (held) this.options.router.remove(held); this.options.router.add(connection) }
     active.registeredHostId = hello.hostId
     this.clearRetry(host.id)
     this.update(host.id, { phase: 'connected', reconnecting: false, hostId: hello.hostId, clientId: hello.clientId, owned: active.tunnel!.owned })
@@ -677,14 +783,14 @@ export class DesktopHosts {
   }
   private notStopped(host: SavedHost): string { return `The host on ${host.name} could not be stopped and may still be running. Check it on that machine, then connect and try again.` }
   private async disconnect(id: string, keepRetry = false): Promise<void> {
-    if (!keepRetry) this.clearRetry(id)
+    if (!keepRetry) { this.clearRetry(id); this.releaseHeld(id) }
     const active = this.live.get(id)
     this.live.delete(id)
     if (active?.registeredHostId) { this.options.router.remove(active.registeredHostId); delete active.registeredHostId }
     await active?.socket?.close()
     await active?.launcher.disconnect()
     const status = this.status.get(id)
-    if (status) { delete status.prompt; delete status.error; delete status.reconnecting; delete status.owned; delete status.step; delete status.tailscale; delete status.fix; delete status.reason; delete status.checked; status.phase = 'disconnected'; this.emit() }
+    if (status) { delete status.prompt; delete status.error; delete status.reconnecting; delete status.owned; delete status.step; delete status.tailscale; delete status.fix; delete status.reason; delete status.checked; delete status.version; status.phase = 'disconnected'; this.emit() }
   }
   /**
    * Clears every pending retry first, including those for hosts whose connect failed and so are no longer
@@ -692,7 +798,7 @@ export class DesktopHosts {
    */
   async close(): Promise<void> {
     this.closed = true
-    this.unsubscribeSetup?.(); this.unsubscribeProviderJob?.()
+    this.unsubscribeSetup?.(); this.unsubscribeProviderJob?.(); this.unsubscribeUpdates?.()
     for (const id of [...this.retries.keys()]) this.clearRetry(id)
     // A host still being added is cancelled as its dialog's Cancel would, and its connect is waited for, so
     // the quit drain does not end before its credential is cleared and its pairing revoked.

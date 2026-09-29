@@ -207,6 +207,8 @@ export class SocketHostService implements HostService {
   private mismatch(): string { return hostVersionMismatch(clientVersion, this.hostVersion, this.options.owned ?? false) }
   /** Whether the host last advertised a later Sotto than this client: stopping it would not help. */
   hostIsNewer(): boolean { return hostIsNewer(this.hostVersion, clientVersion) }
+  /** The Sotto version the host last advertised on this connection, if it said one. */
+  sottoVersion(): string | undefined { return this.hostVersion }
   /** Reads what the host answered; from a host of another version, an answer this client cannot read is named as skew. */
   private read<T>(schema: z.ZodType<T>, value: unknown): T {
     const parsed = schema.safeParse(value)

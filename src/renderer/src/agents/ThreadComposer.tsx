@@ -100,7 +100,7 @@ function blockedReason(row: ThreadRow, state: AgentState, answering: boolean, in
   // Choices shown in the transcript are answered there; only a plain question takes its answer from the composer.
   const inline = row.thread.requests.find(request => requestMode(request) !== 'legacy-text')
   if (inline && !answering) return inline.kind === 'permission' ? 'Answer the request above to continue.' : 'Answer the question above to continue.'
-  if (!row.connected) return 'Reconnect to send. Your draft stays here.'
+  if (!row.connected) return row.reconnecting ? 'Its host is restarting after an update. Your draft stays here.' : 'Reconnect to send. Your draft stays here.'
   if (!capabilitiesForThread(state.host, row.thread).submit) return `${row.provider} cannot take prompts from Sotto.`
   // The notice above the composer says why setup stopped and offers the one recovery; this only says when sending returns.
   // A pending checkout runs in the background after the thread opens; a prompt sent meanwhile waits for it.

@@ -6,6 +6,8 @@ import { DesktopHosts } from './hosts/desktopHosts'
 import { HostSetup, hostSetupRequests } from './hosts/hostSetup'
 import { agentJobTools, HostSetupToolServer } from './hosts/hostSetupTools'
 import { HostProviderJobs } from './hosts/hostProviderJob'
+import { HostUpdates } from './hosts/hostUpdate'
+import { threadKeepsHostBusy } from '../shared/hostUpdates'
 import { coordinatorSetupThreads } from './hosts/hostSetupThreads'
 import { inactiveLocalHost, emptyDesktopState, requireLocalHistoryCleanup } from './hosts/inactiveLocalHost'
 import { registerHostsIpc } from './hosts/ipc'
@@ -163,6 +165,7 @@ import { ClaudeSubscriptionClient } from './agents/subscriptionClaude'
 import { GrokSubscriptionClient } from './agents/subscriptionGrok'
 import { CodexSubscriptionClient } from './agents/subscriptionCodex'
 import { registerAgentIpc } from './agents/ipc'
+import { desktopWindowClient } from './agents/hostService'
 import { createAgentRuntime } from './agents/runtime'
 import { registerFilesIpc } from './files/ipc'
 import { FilesService } from './files/service'
@@ -696,6 +699,18 @@ async function createRuntime(): Promise<NativeRuntimeController> {
   agentControl.useSottoRequests(hostSetupRequests(hostSetup))
   desktopHosts.useSetup(hostSetup)
   desktopHosts.useProviderJob(providerJobs)
+  // Hosts that run an older Sotto than this computer, and their updates from the Threads page (ADR-0040). Stop N threads
+  // and update stops a turn the way the composer's Stop does. A development end-to-end run serves its own releases.
+  const releasesStandIn = e2eConfiguration !== null && !app.isPackaged ? process.env['SOTTO_E2E_HOST_RELEASES_URL'] : undefined
+  const hostUpdates = new HostUpdates({ version: appVersion, ...(releasesStandIn ? { releasesUrl: releasesStandIn } : {}),
+    hosts: { candidates: () => desktopHosts.updateCandidates(), run: (id, operation, options) => desktopHosts.runUpdate(id, operation, options),
+      restart: (id, version, options) => desktopHosts.restartForUpdate(id, version, options), subscribe: listener => desktopHosts.subscribe(() => listener()) },
+    threads: {
+      working: hostId => hostRouter.shell().host.threads.filter(thread => thread.hostId === hostId && threadKeepsHostBusy(thread)).map(thread => thread.id),
+      interrupt: async threadId => { await hostRouter.command({ type: 'interrupt', threadId }, desktopWindowClient()) },
+      subscribe: listener => hostRouter.subscribe(() => listener()),
+    } })
+  desktopHosts.useUpdates(hostUpdates)
   // Phone access serves the local host's own threads to paired phones over the tailnet (ADR-0033). Its
   // Tailscale checks can take seconds, so they run beside startup rather than in front of the window.
   const phoneAccess = new PhoneAccess({ directory: userDataPath,
@@ -776,6 +791,7 @@ async function createRuntime(): Promise<NativeRuntimeController> {
     // A setup running now ends as Stop setup would, before the hosts it checks and adds close.
     await hostSetup.close().catch(() => undefined)
     providerJobs.close()
+    hostUpdates.dispose()
     const results = await Promise.allSettled([desktopHosts.close(), localRuntime.close(), personalChats.close(), hostSetupTools.close()])
     hostRouter.dispose()
     const failure = results.find(result => result.status === 'rejected')

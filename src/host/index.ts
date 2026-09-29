@@ -33,6 +33,8 @@ export interface HeadlessHostOptions {
   startedBy?: 'launch-script'
   /** Tests stand fake clients in for the providers' own sign-ins; the host finds the real ones as its adapters do. */
   signInCommand?: ProviderSignInOptions['command']
+  /** Tests stand in for a host of another Sotto version; the host advertises its own. */
+  sottoVersion?: string
 }
 
 export { HostLockError } from './lock'
@@ -106,7 +108,7 @@ async function startHostRuntime(options: HeadlessHostOptions) {
       await pairing.load()
       if (options.port !== undefined) {
         listener = await startSocketServer({ service: runtime.hostService, pairing, port: options.port, signIns,
-          ...(options.origins ? { origins: options.origins } : {}),
+          ...(options.origins ? { origins: options.origins } : {}), ...(options.sottoVersion ? { sottoVersion: options.sottoVersion } : {}),
           mayAnswer: client => policy?.mayGrant(client).allowed ?? false,
           setAnswers: (clientId, allowed) => {
             if (!policy) throw new Error('Permission policies are unavailable on this host.')
