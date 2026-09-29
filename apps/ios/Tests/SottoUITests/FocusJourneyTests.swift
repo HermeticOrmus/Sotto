@@ -11,21 +11,97 @@ import XCTest
         app.launchArguments = ["--ui-fixture", "--reset-ui-preferences"]
         app.launch()
         XCTAssertTrue(app.textFields["thread-search"].waitForExistence(timeout: 15))
+        waitForRenderedOrientation(landscape: false)
     }
 
     private func row(_ id: String) -> XCUIElement { app.buttons["thread-\(laptop)/\(id)"] }
     private func capture(_ name: String) {
-        let attachment = XCTAttachment(screenshot: app.screenshot())
+        // Capture the screen rather than the app's rotating/clipped window crop.
+        let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
     }
     private func reveal(_ element: XCUIElement, swipingDown: Bool = false) {
-        for _ in 0..<8 {
+        var down = swipingDown
+        var steps: [String] = []
+        for attempt in 0..<40 {
             if element.exists && element.isHittable { return }
-            if swipingDown { app.swipeDown() } else { app.swipeUp() }
+            // A full-window fling can skip a whole card. Keep each drag inside the foreground
+            // scroll view, clear of the pinned search/header and the floating system tab bar.
+            guard let scroll = app.scrollViews.allElementsBoundByIndex.last(where: { $0.isHittable }) else {
+                steps.append("No hittable scroll view on attempt \(attempt)")
+                break
+            }
+            let window = app.windows.firstMatch
+            var visible = scroll.frame.intersection(window.frame)
+            let tab = app.tabBars.firstMatch
+            if tab.exists && tab.isHittable && tab.frame.minY > visible.minY {
+                visible.size.height = min(visible.maxY, tab.frame.minY) - visible.minY
+            }
+            guard !visible.isNull, visible.width > 20, visible.height > 40 else {
+                steps.append("No usable scroll viewport: \(visible)")
+                break
+            }
+            if element.exists {
+                let target = element.frame
+                if !target.isEmpty {
+                    if target.maxY <= visible.minY + 12 { down = true }
+                    else if target.minY >= visible.maxY - 12 { down = false }
+                }
+                steps.append("\(attempt): target \(target), viewport \(visible), down \(down)")
+            } else {
+                steps.append("\(attempt): target not materialized, viewport \(visible), down \(down)")
+            }
+            let distance = min(120, visible.height * 0.3)
+            let direction: CGFloat = down ? 1 : -1
+            let origin = window.coordinate(withNormalizedOffset: .zero)
+            let x = visible.midX - window.frame.minX
+            let y = visible.midY - window.frame.minY
+            let start = origin.withOffset(CGVector(dx: x, dy: y - direction * distance / 2))
+            let end = origin.withOffset(CGVector(dx: x, dy: y + direction * distance / 2))
+            start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.15)
         }
+        if element.exists && element.isHittable { return }
+        capture("unreachable-control")
+        let diagnostic = XCTAttachment(string: steps.joined(separator: "\n") + "\n\n" + app.debugDescription)
+        diagnostic.name = "Scroll reachability and accessibility hierarchy"
+        diagnostic.lifetime = .keepAlways
+        add(diagnostic)
         XCTAssertTrue(element.isHittable, "The control must remain reachable by scrolling")
+    }
+    private func waitForRenderedOrientation(landscape: Bool) {
+        var consecutiveMatches = 0
+        var samples: [String] = []
+        let rendered = NSPredicate { _, _ in
+            let frame = self.app.windows.firstMatch.frame
+            let image = XCUIScreen.main.screenshot().image
+            var imageSize = image.cgImage.map { CGSize(width: CGFloat($0.width), height: CGFloat($0.height)) } ?? image.size
+            // A screenshot may store portrait pixels with a quarter-turn orientation. Read the
+            // displayed dimensions, rather than interpreting raw PNG dimensions as orientation.
+            switch image.imageOrientation {
+            case .left, .right, .leftMirrored, .rightMirrored:
+                imageSize = CGSize(width: imageSize.height, height: imageSize.width)
+            default: break
+            }
+            samples.append("window \(frame), displayed screen \(imageSize), orientation \(image.imageOrientation.rawValue)")
+            let matches = (frame.width > frame.height) == landscape
+                && (imageSize.width > imageSize.height) == landscape
+            consecutiveMatches = matches ? consecutiveMatches + 1 : 0
+            return consecutiveMatches >= 2
+        }
+        // Window geometry and screenshot orientation can settle separately during rotation.
+        let ready = XCTNSPredicateExpectation(predicate: rendered, object: app)
+        let result = XCTWaiter.wait(for: [ready], timeout: 10)
+        if result != .completed {
+            capture("rotation-not-ready")
+            let diagnostic = XCTAttachment(string: samples.joined(separator: "\n"))
+            diagnostic.name = "Window and screen orientation samples"
+            diagnostic.lifetime = .keepAlways
+            add(diagnostic)
+        }
+        XCTAssertEqual(result, .completed,
+                       "The rendered screenshot must finish rotating with the window")
     }
     private func back() { app.navigationBars.buttons.element(boundBy: 0).tap() }
 
@@ -35,12 +111,12 @@ import XCTest
         XCTAssertTrue(app.tabBars.buttons["Computers"].exists)
         XCTAssertTrue(app.tabBars.buttons["Settings"].exists)
         XCTAssertTrue(row("release").exists)
+        capture("focus-dark")
         reveal(row("iphone"))
         reveal(row("wiring"))
         XCTAssertTrue(app.textFields["thread-search"].isHittable, "Search stays above the scrolling thread list")
         XCTAssertTrue(row("wiring").label.contains("Working"), "Background work must not read Done")
         reveal(app.textFields["thread-search"], swipingDown: true)
-        capture("focus-dark")
 
         let search = app.textFields["thread-search"]
         search.tap()
@@ -71,7 +147,7 @@ import XCTest
         XCTAssertTrue(app.staticTexts["Read project notes"].waitForExistence(timeout: 5))
         capture("thread-activity")
         back()
-        reveal(settled)
+        reveal(settled, swipingDown: true)
         settled.tap()
         XCTAssertFalse(row("settings").exists)
 
@@ -169,14 +245,10 @@ import XCTest
         search.typeText("\n")
 
         XCUIDevice.shared.orientation = .landscapeLeft
-        let landscape = NSPredicate { _, _ in
-            let frame = self.app.windows.firstMatch.frame
-            return frame.width > frame.height
-        }
-        expectation(for: landscape, evaluatedWith: app.windows.firstMatch)
-        waitForExpectations(timeout: 5)
+        waitForRenderedOrientation(landscape: true)
         capture("focus-landscape")
         XCTAssertTrue(app.tabBars.buttons["Settings"].isHittable)
         XCUIDevice.shared.orientation = .portrait
+        waitForRenderedOrientation(landscape: false)
     }
 }

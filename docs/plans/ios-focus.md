@@ -20,6 +20,8 @@ Threads is the default tab. Questions and permissions lead, followed by working 
 
 ## Current state and unresolved checks
 
-The native implementation is in [PR #474](https://github.com/millZach/Sotto/pull/474). Local typecheck, lint and notices checks passed. The full local suite, current native CI and simulator inspection remain in progress. The initial Mac run compiled the app and passed the Swift package tests before it was superseded by review fixes. Both GPT standards/spec passes identified the same two request-access findings, fixed in `26860622` and confirmed resolved by follow-up review; the Grok cross-check is pending. No live-device or release result is claimed here.
+The native implementation is in [PR #474](https://github.com/millZach/Sotto/pull/474). Local typecheck, lint and notices checks passed; the full suite passed 6,247 tests with 151 skipped. The Mac package suite executed 66 tests with one skipped and no failures, and generic simulator compilation passed. Device-specific UI linking exposed an architecture mismatch between the app and SottoCore; `27fabf23` builds the test invocation for the selected simulator architecture. Its runtime result and screenshot inspection remain pending.
+
+Standards and spec reviews each completed with built-in GPT-6-astra high and Grok 4.7 high against `4aeb6257`. Request access and read-only dismissal findings were fixed in `26860622` and confirmed by follow-up review. Pinned search, bundled font weights, and documentation findings were fixed in `d913ffa0`. No live-device or release result is claimed here.
 
 The highest-risk regressions are a waiting request hidden under Settled, a working background agent shown as Done, a cached offline snapshot shown as live work, a search that omits settled matches, or Settings shrinking system accessibility text. The actual connected journey must still establish correct authority handling and no automatic resend after an ambiguous delivery.
