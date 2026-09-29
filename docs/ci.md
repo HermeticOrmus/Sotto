@@ -48,6 +48,8 @@ The job cancels a superseded run on the same ref (`concurrency` with `cancel-in-
 
 ## Devin native verification
 
+The scripted adapter tests exercise each advertised permission mode in its own fixture. Combining all six sends in one test accumulated six provider processes against one test deadline and intermittently timed out on Windows, including on `main`. Each case still checks the complete advertised mode list, its selected mode and the accepted send; the separate simultaneous-thread test covers concurrency. The normal deadlines remain unchanged.
+
 `tests/integration/devinAdapter.test.ts` runs the complete shared adapter contract and boundary cases against a scripted ACP subprocess in CI. It does not establish live CLI compatibility.
 
 The opt-in `tests/integration/devinLive.test.ts` uses the installed, natively signed-in Devin CLI 3000.10.31 and account-advertised `swe-1-6-fast`. It creates a disposable Git project and incurs native account usage. It checks denial, exact-target one-time approval, a structured question, same-session restart, and cancellation. Two additional Windows-only cases kill a uniquely identified test ACP owner while permission is pending and verify safe model-change refusal or same-session recovery, according to whether the native model had been saved by a clean shutdown. It never reads credentials or logs protocol bodies. Run on native Windows and Apple silicon macOS before claiming both platforms verified. The initial PR is verified on Windows only; Zach deferred Mac verification because no Mac is available:
