@@ -55,8 +55,9 @@ export const printedHeading = (update: ProviderClientUpdate): string => `What ${
 export function byHandReason(update: ProviderClientUpdate, host: string): string {
   if (update.channel === 'mise') return `Sotto could not find mise on ${host}, so it will not run the update itself.`
   if (update.channel === 'devin-app') return 'Devin updates with the Devin app.'
-  if (update.byHand?.length || update.command) return 'Sotto did not install it this way, so it will not replace it.'
-  return 'Sotto does not know how it was installed, so it will not replace it.'
+  const name = PROVIDER_LABELS[update.id]
+  if (update.byHand?.length || update.command) return `Sotto did not install ${name} this way, so it will not replace it.`
+  return `Sotto does not know how ${name} was installed, so it will not replace it.`
 }
 /** The lines to run by hand, or none when Sotto cannot name them. */
 export const byHandLines = (update: ProviderClientUpdate): readonly string[] => update.byHand ?? (update.command ? [update.command] : [])

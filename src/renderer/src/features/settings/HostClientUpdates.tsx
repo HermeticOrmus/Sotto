@@ -3,7 +3,7 @@ import { Check, Copy } from 'lucide-react'
 import { PROVIDER_LABELS, type ClientUpdateRun, type ProviderClientUpdate, type ProviderId } from '../../../../shared/agents'
 import { Button } from '../../components/Button'
 import {
-  byHandLines, byHandReason, chipText, failedLong, failedShort, hostClientUpdatesView, popoverStatus, printedHeading, rowState,
+  byHandLines, byHandReason, chipText, namesOf, failedLong, failedShort, hostClientUpdatesView, popoverStatus, printedHeading, rowState,
   targetVersion, tileLine, type ClientUpdatePhase, type HostClientUpdatesView,
 } from './hostClientUpdateWords'
 
@@ -71,9 +71,9 @@ export function tileUpdateParts({ update, phase, host, waitingFor, busy, send }:
     {phase === 'updating' ? <HostSpinner /> : null}{tileLine(update, phase, waitingFor)}</p>
   switch (phase) {
     case 'behind': return { phase, line: line(),
-      action: <Button key="update" variant="secondary" disabled={busy} aria-label={`Update ${name} on ${host} to ${to}`} onClick={() => void send('update', [update.id])}>Update</Button> }
+      action: <Button key="update" data-update-action="" variant="secondary" disabled={busy} aria-label={`Update ${name} on ${host} to ${to}`} onClick={() => void send('update', [update.id])}>Update</Button> }
     case 'queued': return { phase, line: line('quiet'),
-      action: <Button key="cancel" variant="secondary" disabled={busy} aria-label={`Cancel the ${name} update on ${host}`} onClick={() => void send('cancel', [update.id])}>Cancel update</Button> }
+      action: <Button key="cancel" data-update-action="" variant="secondary" disabled={busy} aria-label={`Cancel the ${name} update on ${host}`} onClick={() => void send('cancel', [update.id])}>Cancel update</Button> }
     case 'updating': return { phase, line: line(), note: `Your threads on ${host} keep working.` }
     case 'updated': return { phase, note: `${name} is now ${update.installed}.` }
     case 'by-hand': {
@@ -98,18 +98,18 @@ export function tileUpdateParts({ update, phase, host, waitingFor, busy, send }:
             </div>
           </details>
         </>,
-        action: update.canInstall ? <Button key="again" variant="secondary" disabled={busy} aria-label={`Try updating ${name} on ${host} again`} onClick={() => void send('update', [update.id])}>Try again</Button> : undefined }
+        action: update.canInstall ? <Button key="again" data-update-action="" variant="secondary" disabled={busy} aria-label={`Try updating ${name} on ${host} again`} onClick={() => void send('update', [update.id])}>Try again</Button> : undefined }
     }
     default: return { phase }
   }
 }
 
 /** Which client a waiting one waits for: the one running, or the one before it in the line. */
-export function waitingForOf(view: HostClientUpdatesView, provider: ProviderId, order: readonly ProviderId[]): ProviderId | undefined {
+export function waitingForOf(view: HostClientUpdatesView, provider: ProviderId, run: ClientUpdateRun | undefined, order: readonly ProviderId[]): ProviderId | undefined {
   if (view.phases.get(provider) !== 'queued') return undefined
-  // The host runs its line in the order the clients joined it; the window knows only which are waiting, so it names the
-  // one running for the first, and the waiting client before it in tile order for the rest.
-  const waiting = order.filter(id => view.queued.includes(id))
+  // The host runs its line in the order the clients joined it, and says that order; tile order stands in for a host
+  // that does not.
+  const waiting = run?.line ?? order.filter(id => view.queued.includes(id))
   const at = waiting.indexOf(provider)
   return at <= 0 ? view.running?.id : waiting[at - 1]
 }
@@ -216,7 +216,7 @@ export function HostClientUpdatesChip({ host, hostId, view, run, busy, refusal, 
           : <Button variant="ghost" onClick={() => close(true)}>{busyNow ? 'Close' : 'Not now'}</Button>}
         {/* Update all joins the host's line, behind an update a tile started, as long as something is behind. */}
         {view.updateAll.length ? <Button variant="primary" data-main="" disabled={busy}
-          aria-label={`Update ${view.updateAll.map(id => PROVIDER_LABELS[id]).join(', ')} on ${host}, one after another`}
+          aria-label={`Update ${namesOf(view.updateAll)} on ${host}, one after another`}
           onClick={() => void send('update', view.updateAll)}>Update all</Button> : null}
       </div>
     </div> : null}

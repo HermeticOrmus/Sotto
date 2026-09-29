@@ -117,7 +117,7 @@ test('a host’s client updates show on its tiles and run there, one at a time, 
       await expect(panel).toBeVisible()
       await expect.poll(() => inside(panel)).toBe(true)
     }
-    const all = panel.getByRole('button', { name: 'Update Codex, Grok Build on forge, one after another' })
+    const all = panel.getByRole('button', { name: 'Update Codex and Grok Build on forge, one after another' })
     await expect(all).toBeFocused()
     await capture(launched, 'popover', async () => {
       await openPanel()

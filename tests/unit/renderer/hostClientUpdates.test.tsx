@@ -92,6 +92,26 @@ describe('a host’s tiles and chip', () => {
     expect(updateClients).toHaveBeenCalledWith({ id: HOST, action: 'cancel', providers: ['codex'] })
   })
 
+  it('names what a waiting tile waits for in the order the host runs its line, not the tiles’', async () => {
+    const user = userEvent.setup()
+    show([reading('claude', { state: 'updating' }), reading('codex', { state: 'queued' }), reading('grok', { state: 'queued' })], hosts().bridge, { total: 3, done: 0, line: ['grok', 'codex'] })
+    await user.click(screen.getByRole('button', { name: 'Show providers on forge' }))
+    expect(within(tile('Grok Build')).getByText('Updates to 1.0.43 after Claude Code')).toBeInTheDocument()
+    expect(within(tile('Codex')).getByText('Updates to 0.158.0 after Grok Build')).toBeInTheDocument()
+  })
+
+  it('moves focus to the chip once Update has gone, never to Disconnect', async () => {
+    const user = userEvent.setup()
+    const { bridge } = hosts()
+    const { rerender } = show(BEHIND, bridge)
+    await user.click(screen.getByRole('button', { name: 'Show providers on forge' }))
+    within(tile('Codex')).getByRole('button', { name: 'Update Codex on forge to 0.158.0' }).focus()
+    await user.keyboard('{Enter}')
+    act(() => { rerender(<div className="hosts-settings"><HostProviders host={forge} providers={PROVIDERS} bridge={bridge} updates={[reading('claude'), reading('codex', { state: 'updating' }), reading('grok')]} run={{ total: 1, done: 0 }} /></div>) })
+    await vi.waitFor(() => { expect(screen.getByRole('button', { name: /^Show the client updates on forge/u })).toHaveFocus() })
+    expect(within(tile('Codex')).getByRole('button', { name: 'Disconnect Codex on forge' })).not.toHaveFocus()
+  })
+
   it('keeps a failed tile short, with Try again, and the rest behind Details', async () => {
     const user = userEvent.setup()
     const { bridge, updateClients } = hosts()
@@ -136,13 +156,13 @@ describe('a host’s tiles and chip', () => {
     const panel = screen.getByRole('dialog', { name: 'Client updates on forge' })
     expect(within(panel).getByRole('status')).toHaveTextContent('3 clients are behind on forge.')
     expect(within(panel).getAllByRole('listitem').map(item => item.textContent)).toEqual(['Claude Code 2.1.281 →  to 2.1.284', 'Codex 0.155.1 →  to 0.158.0', 'Grok Build 1.0.41 →  to 1.0.43'])
-    const all = within(panel).getByRole('button', { name: 'Update Claude Code, Codex, Grok Build on forge, one after another' })
+    const all = within(panel).getByRole('button', { name: 'Update Claude Code, Codex and Grok Build on forge, one after another' })
     expect(all).toHaveFocus()
     await user.keyboard('{Escape}')
     expect(screen.queryByRole('dialog')).toBeNull()
     await vi.waitFor(() => { expect(chip).toHaveFocus() })
     await user.keyboard('{Enter}')
-    await user.click(screen.getByRole('button', { name: /^Update Claude Code, Codex, Grok Build/u }))
+    await user.click(screen.getByRole('button', { name: /^Update Claude Code, Codex and Grok Build/u }))
     expect(updateClients).toHaveBeenCalledWith({ id: HOST, action: 'update', providers: ['claude', 'codex', 'grok'] })
   })
 

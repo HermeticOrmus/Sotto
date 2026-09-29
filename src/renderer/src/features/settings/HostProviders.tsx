@@ -86,7 +86,7 @@ function jobNote(job: HostProviderJobState | undefined, kind: HostProviderTileKi
 
 /** What a tile needs of its host's client updates (#480). */
 interface TileUpdates {
-  readonly view: HostClientUpdatesView; readonly send: SendClientUpdate; readonly busy: boolean
+  readonly view: HostClientUpdatesView; readonly run: ClientUpdateRun | undefined; readonly send: SendClientUpdate; readonly busy: boolean
   readonly refusal: { readonly providers: readonly ProviderId[]; readonly text: string } | undefined
 }
 
@@ -112,7 +112,7 @@ function ProviderTile({ host, provider, status, bridge, job, onSignIn, onAgent, 
   // A connected client that is behind, waiting, updating or did not update says so under its version (#480).
   const update = tile.kind === 'connected' && updates ? updates.view.shown.find(item => item.id === provider) : undefined
   const parts = tileUpdateParts({ update, phase: update ? updates!.view.phases.get(provider)! : 'current', host: host.name,
-    waitingFor: updates ? waitingForOf(updates.view, provider, HOST_PROVIDER_ORDER) : undefined, busy: updates?.busy ?? false,
+    waitingFor: updates ? waitingForOf(updates.view, provider, updates.run, HOST_PROVIDER_ORDER) : undefined, busy: updates?.busy ?? false,
     send: updates?.send ?? (async () => undefined) })
   const refused = updates?.refusal?.providers.includes(provider) ? updates.refusal.text : undefined
   // A new settled state from the host says more than the last press's note; passing through Connecting does not.
@@ -129,8 +129,22 @@ function ProviderTile({ host, provider, status, bridge, job, onSignIn, onAgent, 
     held.current = null
     const focused = document.activeElement
     if ((focused === null || focused === document.body || !focused.isConnected) && !document.querySelector('[role="dialog"]')) actions.current?.querySelector<HTMLElement>('button:not(:disabled)')?.focus()
-  }, [tile.kind, parts.phase])
-  const focusIn = (event: React.FocusEvent<HTMLDivElement>): void => { if (event.target instanceof HTMLElement) held.current = event.target }
+  }, [tile.kind])
+  // Update, Try again and Cancel update go as the host takes them. Focus moves to the host's chip, which follows the
+  // update, and never to Disconnect, where a second Enter would disconnect the client being updated (#480).
+  useEffect(() => {
+    const gone = held.current
+    if (!gone || gone.isConnected) return
+    const focused = document.activeElement
+    if (focused !== null && focused !== document.body && focused.isConnected) return
+    const chip = document.querySelector<HTMLElement>(`[data-host-providers="${CSS.escape(host.id)}"] .host-client-updates__chip`)
+    const target = actions.current?.querySelector<HTMLElement>('[data-update-action]:not(:disabled)') ?? chip
+    // Nothing of the update to go to: the control that went is left for the effect above, as before.
+    if (!target) return
+    held.current = null
+    target.focus()
+  }, [parts.phase, host.id])
+  const focusIn =(event: React.FocusEvent<HTMLDivElement>): void => { if (event.target instanceof HTMLElement) held.current = event.target }
   // Focus leaving for somewhere else lets go. A control removed or disabled while focused (Stop turning into Stopping…)
   // lost focus to the app rather than to the user, so it stays held for the effect above to replace.
   const focusOut = (event: React.FocusEvent<HTMLDivElement>): void => {
@@ -244,7 +258,7 @@ export function HostProviders({ host, providers, bridge, job, choice, updates, r
       return text
     } finally { setSending(false) }
   }, [bridge, host.id, host.name])
-  const tileUpdates: TileUpdates | undefined = updates ? { view, send, busy: sending, refusal } : undefined
+  const tileUpdates: TileUpdates | undefined = updates ? { view, run, send, busy: sending, refusal } : undefined
   /**
    * The dialog closes onto its tile. Escape gives focus back to the button that opened it; Start removes that button, so
    * focus goes to the working tile's first action instead of being dropped.
