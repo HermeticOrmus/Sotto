@@ -53,6 +53,8 @@ export async function claudeFixture(root?: string, requestTimeoutMs = 2000, envi
     // A settings change comes back with the snapshot it produced, whether the running CLI took it or a restart
     // did (#317, #318); a CLI that never answers the settings request leaves it uncertain.
     settings: { snapshot: true, loseConfirmation: liveSettings.silence },
+    // The fake answers `--version` from version.txt, and a CLI names the version it started as.
+    clientUpdate: { provider: 'claude', install: async () => { await writeFile(join(root, 'version.txt'), '2.1.2'); return '2.1.2' } },
     sessions: {
       // One CLI per thread: count launches, but inspect the current child's ownership marker for liveness.
       starts: async id => {
