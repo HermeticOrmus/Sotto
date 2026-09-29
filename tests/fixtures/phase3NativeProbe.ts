@@ -77,7 +77,7 @@ async function main() {
   const selected = catalog.skills.find(skill => skill.name === name)
   console.log(JSON.stringify({ stage: 'catalog', root, syntheticSkill: selected }))
   let sessionId = ''; let answer = ''; const updates: unknown[] = []; let modelCalls = 0
-  const rpc = new GrokRpc(executable, ['--permission-mode', 'default', 'agent', '--leader', 'stdio'], root, env, 15000, frame => {
+  const rpc = new GrokRpc(executable, ['--permission-mode', 'default', 'agent', '--no-leader', 'stdio'], root, env, 15000, frame => {
     if (frame.id !== undefined && frame.method) rpc.write({ jsonrpc: '2.0', id: frame.id, result: { outcome: { outcome: 'cancelled' } } })
     const params = frame.params as { update?: { sessionUpdate?: string; content?: { text?: string } } }
     if (params?.update) { updates.push(frame); if (params.update.sessionUpdate === 'agent_message_chunk') answer += params.update.content?.text ?? '' }

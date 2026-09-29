@@ -1,5 +1,7 @@
 # Issue 23: native Grok thread adapter verification
 
+*Note, September 28, 2026.* The shared leader described here is gone. Each Grok thread now runs its own `agent --no-leader stdio` process, because a newer client asks a running leader to relaunch and ends every attached turn five seconds later. A turn no longer continues after its process closes. See [ADR-0038](../adr/0038-one-client-process-per-thread.md).
+
 Implemented `GrokAcpHost(userDataDirectory, options?)`, exported from `src/main/agents/grok.ts`. This is an `AgentHost` provider adapter for wrapping with `SottoThreadHost('grok', adapter, registry)`. The wrapper remains the owner of Sotto thread IDs. `grok-threads.json` stores the adapter alias, native Grok UUID, project metadata, model confirmation, and dispatched-message SHA-256 digests/command identities. `grok-projects.json` stores project directories. Neither file stores transcript text or credentials.
 
 ## Native protocol evidence

@@ -43,7 +43,7 @@ it.skipIf(process.env.SOTTO_PHASE3_GROK_LIVE !== '1')('Grok native selected/manu
     const before = (await host.snapshot()).threads[0]!
     const aliases = JSON.parse(await readFile(join(root, 'sotto', 'grok-threads.json'), 'utf8')); const nativeId = aliases[threadId].grokSessionId
     let history: unknown
-    await host['rpc']!.request('_x.ai/session/updates', { sessionId: nativeId, cwd: root, offset: 0, limit: 1000 }, value => { history = value })
+    await host['processes'].get(threadId)!.rpc.request('_x.ai/session/updates', { sessionId: nativeId, cwd: root, offset: 0, limit: 1000 }, value => { history = value })
     host.disconnect(); await host.closed(); host = new GrokAcpHost(join(root, 'sotto')); await host.connect()
     const after = (await host.snapshot()).threads[0]!
     await writeFile(join(root, 'native-evidence.json'), JSON.stringify({ model: 'grok-4.6', submittedTurns: 2, before, after, history }, null, 2))

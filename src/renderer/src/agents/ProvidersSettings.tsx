@@ -12,21 +12,20 @@ import './providers.css'
 const CLIENT_NAMES: Record<ProviderId, string> = { codex: 'Codex', claude: 'Claude Code', grok: 'Grok Build', devin: 'Devin CLI' }
 
 /** What Sotto knows about the installed client, in one sentence, whichever way the check went. */
-function clientLine(update: ProviderClientUpdate | undefined, verified: string | undefined, checking: boolean, working = 0, connected = false): string {
+function clientLine(update: ProviderClientUpdate | undefined, verified: string | undefined, checking: boolean, connected = false): string {
   const past = verified ? ` It is newer than the ${verified} Sotto has checked.` : ''
-  const stops = working > 0 && update?.behind && update.canInstall
-    ? ` ${working === 1 ? 'A thread is' : `${working} threads are`} working now; updating stops ${working === 1 ? 'it' : 'them'}.` : ''
   if (!checking) return `Client update checks are off, so Sotto does not know what is published.${past}`
   if (!update) return connected ? `Sotto has not read this client's version yet. Check again to read it.${past}`
     : `Connect this provider to read its installed version.${past}`
   if (update.state === 'updating') return `Updating to ${update.published ?? 'the published version'}…`
   if (update.state === 'failed') return `${update.installed} is installed. The last update did not run${update.error ? `: ${update.error}` : '.'}${past}`
-  if (update.state === 'unchanged') return `The update ran, but this client still reports ${update.installed}. Another app may still have it open; close it, then try again.${past}`
+  if (update.state === 'unchanged') return update.error ? `${update.error}${past}` : `The update ran, but this client still reports ${update.installed}. Try again${update.command ? `, or run ${update.command} yourself to see what it says` : ''}.${past}`
   if (update.channel === 'devin-app') return `${update.installed} is installed. Devin updates with the Devin app.${past}`
   if (!update.published) return `${update.installed} is installed. Sotto could not reach the registry to see what is published.${past}`
   if (!update.behind) return `${update.installed} is installed, and that is what is published.${past}`
   if (!update.canInstall) return `${update.installed} is installed; ${update.published} is published. Sotto does not know how it was installed, so update it with ${update.command ?? 'the installer you used'}.${past}`
-  return `${update.installed} is installed; ${update.published} is published.${past}${stops}`
+  // Updating never stops a working thread, so there is nothing to warn about here (ADR-0021).
+  return `${update.installed} is installed; ${update.published} is published. Your threads keep working while it installs.${past}`
 }
 
 export function ProvidersSettings(): ReactNode {
@@ -56,12 +55,9 @@ export function ProvidersSettings(): ReactNode {
     const result = await command({ type: 'check-client-updates' })
     if (result?.error) setErrors(previous => ({ ...previous, [selected]: result.error }))
   }
-  const workingThreads = (provider: ProviderId): number =>
-    state.host.threads.filter(thread => thread.providerId === provider && thread.status === 'running').length
-  /** Forcing is the press the user reads as "anyway", never one Sotto decides for them. */
-  const runUpdate = async (provider: ProviderId, force: boolean): Promise<void> => {
+  const runUpdate = async (provider: ProviderId): Promise<void> => {
     setErrors(previous => ({ ...previous, [provider]: undefined }))
-    const result = await command({ type: 'update-client', provider, ...(force ? { force: true } : {}) })
+    const result = await command({ type: 'update-client', provider })
     if (result?.error) setErrors(previous => ({ ...previous, [provider]: result.error }))
   }
   const perform = async (provider: ProviderId, type: 'connect' | 'disconnect' | 'refresh'): Promise<void> => {
@@ -107,12 +103,12 @@ export function ProvidersSettings(): ReactNode {
             <div className="provider-client">
               <div>
                 <h4>Installed client</h4>
-                <p>{clientLine(update, status.verifiedVersion, state.configuration.checkClientUpdates, workingThreads(selected), connected)}</p>
+                <p>{clientLine(update, status.verifiedVersion, state.configuration.checkClientUpdates, connected)}</p>
               </div>
               <div className="provider-client__actions">
                 {update?.canInstall && update.state !== 'updating'
-                  ? <Button variant="primary" disabled={Boolean(working) || updating} onClick={() => void runUpdate(selected, workingThreads(selected) > 0)}>
-                    {update.state === 'failed' ? 'Try again' : workingThreads(selected) > 0 ? 'Update anyway' : 'Update'}</Button>
+                  ? <Button variant="primary" disabled={Boolean(working) || updating} onClick={() => void runUpdate(selected)}>
+                    {update.state === 'failed' ? 'Try again' : 'Update'}</Button>
                   : null}
                 <Button variant="secondary" disabled={updating || !state.configuration.checkClientUpdates} onClick={() => void check()}>Check again</Button>
               </div>

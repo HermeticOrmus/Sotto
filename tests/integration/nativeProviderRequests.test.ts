@@ -18,8 +18,9 @@ for (const provider of ['claude', 'grok'] as const) it(`${provider} does not rep
     const request = (await f.host.snapshot()).threads[0]!.requests[0]!
     expect(await f.host.execute({ type: 'answer', commandId: 'answer', threadId, requestId: request.id, answer: '', approved: true })).toEqual({ accepted: true })
     f = await f.driver.restart(); await f.host.connect()
+    // Each thread runs its own process, so a pending request can only come from one whose session is loaded.
+    f.host.observeThreads?.([threadId])
     if (provider === 'claude') {
-      f.host.observeThreads?.([threadId])
       await (f as Awaited<ReturnType<typeof claudeFixture>>).action(threadId, { type: 'permission', requestId: 'persistent-request', text: 'Build?' })
     } else await f.driver.raisePermission(threadId, 'Build?')
     await expect.poll(async () => (await f.host.snapshot()).threads[0]?.requests[0]?.delivery).toBe('uncertain')

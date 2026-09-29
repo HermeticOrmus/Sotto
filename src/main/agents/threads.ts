@@ -3,7 +3,7 @@ import type { ScopedThreadTools } from './threadToolServer'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { z } from 'zod'
-import type { AgentHostSnapshot } from '../../shared/agents'
+import type { AgentHostSnapshot, ProviderId } from '../../shared/agents'
 import { AtomicJsonStore } from '../storage/atomicJsonStore'
 import type { ActivitySubscriptionOptions, AgentHost, AgentHostCommand, AgentHostResult, AgentSkillScope, RestoredThreadHistory, ShortTextPrompt, ThreadHistorySource, ThreadHostEvent, ThreadReadPurpose } from './host'
 import { subscribeActivitySnapshots } from './activitySnapshots'
@@ -274,4 +274,6 @@ export class SottoThreadHost implements AgentHost {
   }
 
   disconnect(): void { this.inner.disconnect() }
+
+  async clientUpdated(): Promise<void> { await this.inner.clientUpdated?.(this.provider as ProviderId) }
 }

@@ -5,7 +5,8 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { AgentControl } from '../../../src/main/agents/control'
 import { AgentCredentials } from '../../../src/main/agents/credentials'
-import { codexFixture, rolloutLine } from '../../fixtures/codexFixture'
+import { codexFixture, nativeRequestId, rolloutLine } from '../../fixtures/codexFixture'
+import type { CodexProcess } from '../../../src/main/agents/codexProcess'
 import { immediatePublishScheduler } from '../../fixtures/publishScheduler'
 import { promptImageOf } from '../../fixtures/stagedImages'
 
@@ -25,6 +26,10 @@ async function fixture(wrapped = false) {
 async function create(f: Awaited<ReturnType<typeof fixture>>, threadId = randomUUID()) {
   const result = await f.host.execute({ type: 'create-thread', threadId, commandId: randomUUID(), projectId: f.projectId, modelId: f.modelId, title: 'Implementation' })
   return { threadId, result }
+}
+/** The thread's own app-server process, for a test that holds its pipes. */
+function threadChild(f: Awaited<ReturnType<typeof codexFixture>>, threadId: string) {
+  return (f.adapter as unknown as { runtimes: Map<string, { server: CodexProcess }> }).runtimes.get(threadId)!.server['child']
 }
 async function startControl(f: Awaited<ReturnType<typeof fixture>>) {
   const credentials = new AgentCredentials(join(f.root, 'vault'), { isEncryptionAvailable: () => true, encryptString: v => Buffer.from(v), decryptString: v => v.toString() }); await credentials.load()
@@ -232,9 +237,9 @@ describe('Codex App Server provider adapter', () => {
     await f.driver.raisePermission(threadId, 'Synthetic permission')
     await expect.poll(async () => (await f.host.snapshot()).threads[0]!.requests.length).toBe(1)
     const requestId = (await f.host.snapshot()).threads[0]!.requests[0]!.id
-    const rpcId = JSON.parse(requestId.slice(4))
+    const rpcId = nativeRequestId(requestId)
     const command = { type: 'answer' as const, commandId: 'answer', threadId, requestId, answer: '', approved: true }
-    const child = f.adapter['child']!
+    const child = threadChild(f, threadId)
     const originalWrite = child.stdin.write.bind(child.stdin)
     const callbacks: (() => void)[] = []
     // Keep the provider's resolved notification from hiding the write-timeout race.
@@ -265,11 +270,11 @@ describe('Codex App Server provider adapter', () => {
     await f.driver.raisePermission(threadId, 'Second permission')
     await expect.poll(async () => (await f.host.snapshot()).threads[0]!.requests.length).toBe(2)
     const [first, second] = (await f.host.snapshot()).threads[0]!.requests
-    const child = f.adapter['child']!
+    const child = threadChild(f, threadId)
     const originalWrite = child.stdin.write.bind(child.stdin)
     let release: (() => void) | undefined
     child.stdin.write = ((chunk: string, callback?: (error?: Error | null) => void) => originalWrite(chunk, error => {
-      if (JSON.parse(chunk).id === JSON.parse(first!.id.slice(4))) release = () => callback?.(error)
+      if (JSON.parse(chunk).id === nativeRequestId(first!.id)) release = () => callback?.(error)
       else callback?.(error)
     })) as typeof child.stdin.write
     const interrupt = f.host.execute({ type: 'interrupt', commandId: 'stop', threadId })
@@ -278,10 +283,10 @@ describe('Codex App Server provider adapter', () => {
       await f.host.execute({ type: 'answer', commandId: 'answer', threadId, requestId: second!.id, answer: '', approved: true })
       release!(); await interrupt
       // The write callback confirms the pipe accepted bytes, not that the child has recorded them.
-      await expect.poll(async () => (await f.driver.requests()).some(r => r.id === JSON.parse(second!.id.slice(4)) && r.result)).toBe(true)
+      await expect.poll(async () => (await f.driver.requests()).some(r => r.id === nativeRequestId(second!.id) && r.result)).toBe(true)
       f.host.disconnect(); await f.adapter.closed()
-      expect((await f.driver.requests()).filter(r => r.id === JSON.parse(second!.id.slice(4)) && r.result)).toEqual([
-        { id: JSON.parse(second!.id.slice(4)), result: { decision: 'accept' } },
+      expect((await f.driver.requests()).filter(r => r.id === nativeRequestId(second!.id) && r.result)).toEqual([
+        { id: nativeRequestId(second!.id), result: { decision: 'accept' } },
       ])
     } finally { release?.(); child.stdin.write = originalWrite; await interrupt }
   })
@@ -313,7 +318,7 @@ describe('Codex App Server provider adapter', () => {
     await f.action(threadId, { type: 'question', text: 'Synthetic question', method })
     await expect.poll(async () => (await f.host.snapshot()).threads[0]!.requests.length).toBe(1)
     const pending = (await f.host.snapshot()).threads[0]!.requests[0]!
-    f.adapter['child']!.stdin.write(JSON.stringify({ id: JSON.parse(pending.id.slice(4)), result }) + '\n')
+    threadChild(f, threadId).stdin.write(JSON.stringify({ id: nativeRequestId(pending.id), result }) + '\n')
     await expect.poll(async () => (await f.host.snapshot()).threads[0]!.requests.length).toBe(0)
     try {
       await expect(f.driver.requests()).rejects.toThrow(`Invalid Codex reply for ${method}:`)
@@ -419,7 +424,7 @@ describe('Codex App Server provider adapter', () => {
     await f.driver.raiseQuestion(threadId, 'Resolved in Codex')
     await expect.poll(async () => (await f.host.snapshot()).threads[0]!.requests.length).toBe(1)
     const pending = (await f.host.snapshot()).threads[0]!.requests[0]!
-    await f.action(threadId, { type: 'notify', method: 'serverRequest/resolved', params: { requestId: JSON.parse(pending.id.slice(4)) } })
+    await f.action(threadId, { type: 'notify', method: 'serverRequest/resolved', params: { requestId: nativeRequestId(pending.id) } })
     await expect.poll(async () => (await f.host.snapshot()).threads[0]!.requests.length).toBe(0)
     await expect(f.host.execute({ ...command, requestId: pending.id })).rejects.toThrow('no longer pending')
   })
@@ -463,13 +468,15 @@ describe('Codex App Server provider adapter', () => {
       ? r.result?.action === 'accept' && JSON.stringify(r.result.content) === '{"choice":"Blue"}'
       : JSON.stringify(r.result?.answers) === '{"choice":{"answers":["Blue"]}}')).toBe(true)
   })
-  it('reports failed turns and unexpected child exit to subscribers', async () => {
+  it('reports failed turns, and a thread app-server exit as that thread’s alone', async () => {
     const f = await fixture(); const { threadId } = await create(f)
     await f.script({ fail: true }); await f.host.execute({ type: 'send', threadId, commandId: 'send', messageId: 'message', text: 'Synthetic prompt' })
     await expect.poll(async () => (await f.host.snapshot()).threads[0]!.status).toBe('error')
     const connected: boolean[] = []; f.host.subscribe(s => connected.push(s.connected))
     await f.action(threadId, { type: 'exit' })
-    await expect.poll(() => connected.includes(false)).toBe(true)
+    await expect.poll(() => f.adapter.resumedThreads().includes(threadId)).toBe(false)
+    expect(connected.includes(false)).toBe(false)
+    expect((await f.host.snapshot()).connected).toBe(true)
   })
   it('routes attention requests and detects CLI takeover through AgentControl without mistaking its own prompt', async () => {
     const f = await fixture(true); const { threadId } = await create(f)

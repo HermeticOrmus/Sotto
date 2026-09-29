@@ -22,8 +22,6 @@ type Saved = z.infer<typeof savedSchema>
 const RECONNECT_DELAYS_MS = [5_000, 15_000, 45_000, 120_000, 300_000]
 /** A connection that holds this long starts the waits again from the first when it next drops. */
 const STEADY_CONNECTION_MS = 60_000
-/** How long a client being replaced gets to exit before the installer runs anyway. */
-const RELEASE_WAIT_MS = 5_000
 const storageWarning = 'Personal chat storage is read-only because chats.json could not be fully read. The original file is unchanged; no backup was created. Restore or repair that file and restart before editing or connecting.'
 const recoveryWarning = 'Some saved observations could not be read. This is partial cached history; the original chats.json is unchanged.'
 const recoveryCoreSchema = personalChatSchema.omit({ messages: true, activities: true, requests: true, title: true, status: true, historyStatus: true, historyError: true, lastTurn: true })
@@ -81,6 +79,8 @@ function definedFields<T extends object>(value: T): { [K in keyof T]: Exclude<T[
   return Object.fromEntries(Object.entries(value).filter(([, field]) => field !== undefined)) as { [K in keyof T]: Exclude<T[K], undefined> }
 }
 export type PersonalConversationHost = Pick<CodexAppServerHost, 'closed' | 'connect' | 'createPersonalConversation' | 'disconnect' | 'execute' | 'listThreadSkills' | 'personalSnapshot' | 'refreshThread' | 'sendPersonalConversation' | 'subscribe'>
+  /** Told that a new client is on disk, so each process moves to it as it goes idle (ADR-0021). */
+  & { clientUpdated?(): Promise<void> }
 export interface PersonalChatOptions {
   userDataPath: string
   configuration: () => { reasoning: string; reasoningModel: string; reasoningEffort: string }
@@ -113,9 +113,6 @@ export class PersonalChatService {
   private readonly reconnectTimers = new Map<PersonalChat['providerId'], ReturnType<typeof setTimeout>>()
   private readonly reconnectAttempts = new Map<PersonalChat['providerId'], number>()
   private readonly connectedSince = new Map<PersonalChat['providerId'], number>()
-  /** Providers whose client is being replaced. Nothing connects them until the update hands them back. */
-  private readonly replacing = new Set<PersonalChat['providerId']>()
-  private readonly connectAfterRelease = new Set<PersonalChat['providerId']>()
   private provider(): PersonalChat['providerId'] {
     return this.saved.chats.find(chat => chat.id === this.saved.selectedChatId)?.providerId ?? this.supportedProvider(this.options.configuration().reasoning) ?? 'codex'
   }
@@ -207,7 +204,7 @@ export class PersonalChatService {
    * a scheduled reconnect) join the same in-flight attempt instead of racing it.
    * An attempt that ends unconnected schedules the next automatic one. */
   private connectProvider(provider: PersonalChat['providerId']): Promise<void> {
-    if (this.storageError || this.replacing.has(provider) || this.connections.has(provider)) return Promise.resolve()
+    if (this.storageError || this.connections.has(provider)) return Promise.resolve()
     const inFlight = this.connectingPromises.get(provider)
     if (inFlight) return inFlight
     const generation = this.generation, host = this.hosts[provider]
@@ -236,7 +233,7 @@ export class PersonalChatService {
   /** The next automatic attempt, after the next wait in RECONNECT_DELAYS_MS. A lasting failure (no account, no
    * installed client) runs out of waits and stays shown with Connect, rather than retrying forever. */
   private scheduleReconnect(provider: PersonalChat['providerId']): void {
-    if (!this.autoConnectArmed || this.storageError || this.replacing.has(provider) || this.reconnectTimers.has(provider)) return
+    if (!this.autoConnectArmed || this.storageError || this.reconnectTimers.has(provider)) return
     const attempt = this.reconnectAttempts.get(provider) ?? 0
     const delay = RECONNECT_DELAYS_MS[attempt]
     if (delay === undefined) return
@@ -344,7 +341,6 @@ export class PersonalChatService {
     // A press starts afresh: the automatic waits from the first, and no earlier message left standing.
     this.autoConnectArmed = true; this.reconnectAttempts.clear(); this.error = undefined
     const providers = new Set(this.providersWithChats()); providers.add(this.provider())
-    for (const provider of providers) if (this.replacing.has(provider)) this.connectAfterRelease.add(provider)
     await Promise.all([...providers].map(provider => this.connectProvider(provider)))
     return this.get()
   }
@@ -358,39 +354,15 @@ export class PersonalChatService {
     return this.get()
   }
   /**
-   * Let go of one provider's client while it is replaced (ADR-0021), and hand back what takes it
-   * again. Without this the chats keep the old binary running, and it answers with the old version
-   * until Sotto restarts. A chat mid-answer is left the way Disconnect leaves one: uncertain, never
-   * retried. Only a provider that was connected or connecting is connected again.
+   * A new client is on disk for one provider (ADR-0021). The chats keep their connection: the client's
+   * host moves each of its processes to the new one as it goes idle, and a chat mid-answer finishes on
+   * the old one first. Nothing here disconnects, and a provider the chats do not use is left alone. A host that
+   * cannot move to the new client says why, and the update reports it.
    */
-  async releaseClient(provider: ProviderId): Promise<() => Promise<void>> {
+  async clientUpdated(provider: ProviderId): Promise<void> {
     const id = this.supportedProvider(provider)
-    if (!id || this.replacing.has(id)) return async () => undefined
-    this.replacing.add(id)
-    let held = false
-    const restore = async (): Promise<void> => {
-      if (!this.replacing.delete(id)) return
-      this.reconnectAttempts.delete(id)
-      // Connect pressed while the client was away is honoured now rather than lost.
-      const pressed = this.connectAfterRelease.delete(id)
-      if ((held || pressed) && this.autoConnectArmed) await this.connectProvider(id)
-    }
-    try {
-      clearTimeout(this.reconnectTimers.get(id)); this.reconnectTimers.delete(id)
-      const connecting = this.connectingPromises.get(id)
-      await connecting
-      held = connecting !== undefined || this.connections.has(id)
-      this.connections.delete(id)
-      this.hosts[id].disconnect()
-      // The process has to be gone before the installer replaces what it is running; a close that
-      // never settles must not hold the update, which reports for itself if the file is still busy.
-      let bound: ReturnType<typeof setTimeout> | undefined
-      await Promise.race([this.hosts[id].closed().catch(() => undefined), new Promise<void>(resolve => { bound = setTimeout(resolve, RELEASE_WAIT_MS) })])
-      clearTimeout(bound)
-      if (!this.storageError) await this.mutate(saved => { for (const chat of saved.chats) if (chat.providerId === id) settleDropped(chat) }).catch(() => undefined)
-      this.emit()
-    } catch (error) { await restore(); throw error }
-    return restore
+    if (!id) return
+    await this.hosts[id].clientUpdated?.()
   }
   async create(): Promise<PersonalChatState> {
     const config = { ...this.options.configuration() }

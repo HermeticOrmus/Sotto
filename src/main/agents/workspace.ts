@@ -2030,6 +2030,7 @@ export class WorkspaceHost implements AgentHost {
     }
     if (changed) this.publish()
   }
+  async clientUpdated(provider: ProviderId): Promise<void> { await this.inner.clientUpdated?.(provider) }
   disconnect(provider?: ProviderId): void {
     this.inner.disconnect(provider)
     if (!this.ready) return

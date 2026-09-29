@@ -14,6 +14,10 @@ const models = existsSync(join(root, 'models.json')) ? JSON.parse(readFileSync(j
 if (args.includes('--help')) {
   console.log('--safe-mode --tools --permission-prompts --no-session-persistence --input-format --output-format --system-prompt --model --effort --verbose'); process.exit(0)
 }
+// version.txt: the client installed now. `--version` reads it as the real CLI reads its own build, and a session
+// names the one it was started from in its init frame. Without the file the fake keeps no version, as before.
+const installed = existsSync(join(root, 'version.txt')) ? readFileSync(join(root, 'version.txt'), 'utf8').trim() : undefined
+if (args.includes('--version') && installed !== undefined) { console.log(`${installed} (Claude Code)`); process.exit(0) }
 if (args.includes('auth')) { console.log(JSON.stringify({ loggedIn: true, authMethod: 'claude.ai', subscriptionType: 'max' })); process.exit(0) }
 // Sotto's side writing (ADR-0026): one print run with no tools and no session file. It records what it was
 // given in oneshot.jsonl, never in requests.jsonl or a session log, and answers from oneshot.json.
@@ -36,7 +40,7 @@ if (!metadata && (args.includes('--tools') || args.includes('--safe-mode') || va
 if (!metadata && value('--permission-prompt-tool') !== 'stdio') throw new Error('Coding threads must name this process as the permission prompt surface')
 // The native CLI refuses bypassPermissions unless bypassing was explicitly allowed at launch; never allow it for other modes.
 if (!metadata && (value('--permission-mode') === 'bypassPermissions') !== args.includes('--allow-dangerously-skip-permissions')) throw new Error('bypassPermissions requires --allow-dangerously-skip-permissions, and only that mode may carry it')
-record(args.includes('--resume') ? 'resume' : 'launch', { source: 'child-process-argv', args, cwd: process.cwd(), compactionEnvironment: Object.fromEntries(['DISABLE_AUTO_COMPACT', 'DISABLE_COMPACT', 'CLAUDE_AUTOCOMPACT_PCT_OVERRIDE', 'CLAUDE_CODE_AUTO_COMPACT_WINDOW'].filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]])) })
+record(args.includes('--resume') ? 'resume' : 'launch', { source: 'child-process-argv', args, executable: process.execPath, cwd: process.cwd(), compactionEnvironment: Object.fromEntries(['DISABLE_AUTO_COMPACT', 'DISABLE_COMPACT', 'CLAUDE_AUTOCOMPACT_PCT_OVERRIDE', 'CLAUDE_CODE_AUTO_COMPACT_WINDOW'].filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]])) })
 // The isolated Electron journey uses the adapter's normal ~/.claude discovery path.
 const folder = join(process.env.SOTTO_FAKE_CLAUDE_HOME ?? join(root, 'home'), 'projects', process.cwd().replace(/[^a-zA-Z0-9]/gu, '-'))
 const log = join(folder, session + '.jsonl')
@@ -146,7 +150,7 @@ lines.on('line', line => {
           : { subtype: 'success', request_id: frame.request_id, response: { models, commands: existsSync(join(root, 'skills.json')) ? JSON.parse(readFileSync(join(root, 'skills.json'), 'utf8')) : [], session_state: 'idle' } } })
         // A started session announces its tools, and AskUserQuestion is in that list only where someone
         // can answer it. `approvalSurface: false` is the CLI that took the flag and offered no surface.
-        if (!script.fail && !metadata) output({ type: 'system', subtype: 'init', session_id: session,
+        if (!script.fail && !metadata) output({ type: 'system', subtype: 'init', session_id: session, ...(installed !== undefined ? { claude_code_version: installed } : {}),
           tools: ['Task', 'Bash', 'Edit', 'Glob', 'Grep', 'Read', 'Write', ...(script.approvalSurface === false ? [] : ['AskUserQuestion'])] })
       }
       if (script.gate) {

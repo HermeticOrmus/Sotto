@@ -103,10 +103,14 @@ export async function updateActionFor(provider: ProviderId, channel: ClientChann
   if (channel === 'npm') {
     const packageName = CLIENT_PACKAGES[provider]
     if (!packageName) return undefined
-    const command = `npm install -g ${packageName}@latest`
+    // npm 12 runs no install scripts unless a package is named, and still exits 0 without them. Grok
+    // Build finishes its install in one, so this one package's scripts are allowed, the way T3 Code does
+    // it. An older npm warns about a config it does not know and installs all the same.
+    const allowScripts = `--allow-scripts=${packageName}`
+    const command = `npm install -g ${allowScripts} ${packageName}@latest`
     const cli = await npmPath()
     if (!cli) return undefined
-    return { command, executable: process.execPath, args: [cli, 'install', '-g', `${packageName}@latest`], asNode: true }
+    return { command, executable: process.execPath, args: [cli, 'install', '-g', allowScripts, `${packageName}@latest`], asNode: true }
   }
   if (channel === 'self-update' && executable) {
     const name = provider === 'claude' ? 'claude' : 'grok'
@@ -152,7 +156,8 @@ export interface ProviderClientsOptions {
 
 /**
  * What each installed client publishes, and the one press that installs it. Nothing here connects,
- * disconnects or decides: the coordinator owns that order, because only it knows which threads are working.
+ * disconnects or decides: the install runs beside whatever is running the old client, and the
+ * coordinator tells the adapters afterwards (ADR-0021).
  */
 export class ProviderClients {
   private readonly cache = new Map<string, { version: string; expiresAt: number }>()

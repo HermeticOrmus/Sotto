@@ -145,14 +145,26 @@ it('preserves Sotto identity across native session restart through the registry 
  expect(JSON.stringify(resumed)).not.toContain(nativeId)
  wrapper.disconnect();await f.adapter.closed();await registry.flush()
 })
-it('publishes a lost connection for malformed native frames',async()=>{
- const id=await setup();await f!.action(id,{type:'malformed'})
- await expect.poll(async()=>(await f!.host.snapshot()).connected).toBe(false)
+// Each thread session is its own Grok process, so a process that ends fails its own thread and nothing else.
+const processes=()=>(f!.adapter as unknown as {processes:Map<string,unknown>}).processes
+it('ends only the thread whose process sent a malformed frame, and keeps Grok connected',async()=>{
+ const id=await setup();await send(id)
+ await expect.poll(async()=>(await f!.host.snapshot()).threads[0]!.status).toBe('running')
+ await f!.action(id,{type:'malformed'})
+ await expect.poll(async()=>(await f!.host.snapshot()).threads[0]!.status).toBe('error')
+ const thread=(await f!.host.snapshot()).threads[0]!
+ expect(thread.lastTurn).toEqual({id:'own',status:'failed'})
+ expect(thread.activities?.find(activity=>activity.kind==='turn')).toMatchObject({status:'failed',error:'Grok Build stopped before this reply finished, so it may be cut short. Send a message to carry on.'})
+ expect((await f!.host.snapshot()).connected).toBe(true)
+ // The next send starts a new process, and the failed turn does not read as still running.
+ expect(await send(id,'again','Try again')).toEqual({accepted:true})
+ await expect.poll(async()=>(await f!.host.snapshot()).threads[0]!.status).toBe('running')
 })
-it('closes the proxy barrier when a surviving leader inherits output handles',async()=>{
+it('closes the barrier of a thread process whose child inherited its output handles',async()=>{
  const id=await setup();await f!.action(id,{type:'inherited-exit'})
- await expect.poll(async()=>(await f!.host.snapshot()).connected).toBe(false)
- await f!.adapter.closed()
+ await expect.poll(()=>processes().has(id)).toBe(false)
+ expect((await f!.host.snapshot()).connected).toBe(true)
+ f!.adapter.disconnect();await f!.adapter.closed()
 })
 it('reads a page of history larger than a megabyte instead of losing the connection',async()=>{
  // `_x.ai/session/updates` answers with a whole page of durable history on one line, carrying whatever

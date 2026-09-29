@@ -383,6 +383,10 @@ export class ConfiguredProviderHost implements AgentHost {
     }
     this.publish()
   }
+  /** Handed to the provider's own host whatever its slot holds: an adapter that is not connected does nothing. */
+  async clientUpdated(provider: ProviderId): Promise<void> {
+    await this.options.hosts[provider].clientUpdated?.(provider)
+  }
   subscribe(listener: (snapshot: AgentHostSnapshot) => void): () => void {
     this.listeners.add(listener); this.reconsider()
     return () => { this.listeners.delete(listener); this.reconsider() }

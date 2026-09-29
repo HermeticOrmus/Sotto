@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
-import { codexFixture } from '../fixtures/codexFixture'
+import { codexFixture, nativeRequestId } from '../fixtures/codexFixture'
 
 const fixtures: Awaited<ReturnType<typeof codexFixture>>[] = []
 afterEach(async () => {
@@ -23,7 +23,7 @@ async function projectFixture(script?: Record<string, unknown>) {
 }
 
 async function requestResult(fixture: Awaited<ReturnType<typeof codexFixture>>, requestId: string) {
-  const nativeId = JSON.parse(requestId.slice(4)) as string | number
+  const nativeId = nativeRequestId(requestId)
   return (await fixture.driver.requests()).find(record => record.id === nativeId && record.result !== undefined)?.result
 }
 

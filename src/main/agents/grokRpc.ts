@@ -21,6 +21,8 @@ export class GrokUncertain extends Error {}
 export class GrokUnreadable extends GrokUncertain {}
 /** A client Sotto will not drive: an older CLI, another protocol version, or no subscription sign-in. */
 export class GrokUnsupported extends Error {}
+/** A client older than the version Sotto checked (ADR-0021), carrying the version it reported. */
+export class GrokTooOld extends GrokUnsupported { constructor(message: string, readonly version: string) { super(message) } }
 export class GrokRejected extends Error {}
 const safeEnvironment = new Set(['path', 'pathext', 'systemroot', 'windir', 'temp', 'tmp', 'home', 'userprofile', 'homedrive', 'homepath', 'appdata', 'localappdata', 'programdata', 'allusersprofile', 'lang', 'lc_all', 'lc_ctype', 'tz', 'https_proxy', 'http_proxy', 'no_proxy', 'ssl_cert_file', 'ssl_cert_dir'])
 export function grokEnvironment(environment: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
@@ -99,6 +101,8 @@ export class GrokRpc {
     })
     this.child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.length; if (stderr > MAX_STDERR_BYTES) this.fail() })
   }
+  /** The client process's ID, for telling one thread's process from another's. */
+  get pid(): number | undefined { return this.child.pid }
   request(method: string, params: unknown, apply: Waiter['apply'] = () => undefined, completionOnly = false): Promise<void> {
     return new Promise((resolve, reject) => {
       if (this.stopped) { reject(new GrokUncertain('Grok disconnected.')); return }

@@ -7,7 +7,7 @@ import { AgentControl } from '../../../src/main/agents/control'
 import { AgentCredentials } from '../../../src/main/agents/credentials'
 import { clientVersionOf, compareClientVersions } from '../../../src/main/agents/clientVersions'
 import { installerDetail } from '../../../src/main/agents/installerDetail'
-import { detectClientChannel, ProviderClients, type RunLike } from '../../../src/main/agents/providerClients'
+import { detectClientChannel, ProviderClients, updateActionFor, type RunLike } from '../../../src/main/agents/providerClients'
 import { E2EAgentHost } from '../../../src/main/e2e/agentEffects'
 import type { AgentHostSnapshot, ProviderId } from '../../../src/shared/agents'
 import { immediatePublishScheduler } from '../../fixtures/publishScheduler'
@@ -158,7 +158,13 @@ describe('which channel owns an install', () => {
     expect(await detectClientChannel('grok', join(home, 'bin', 'grok.exe'), environment)).toBe('npm')
     const clients = new ProviderClients({ fetchImpl: async () => answer('1.0.40'), npmPath: async () => join(prefix, 'npm.cmd') })
     expect(await clients.check('grok', '1.0.5', join(home, 'bin', 'grok.exe'), environment))
-      .toMatchObject({ behind: true, channel: 'npm', canInstall: true, command: 'npm install -g @xai-official/grok@latest' })
+      .toMatchObject({ behind: true, channel: 'npm', canInstall: true, command: 'npm install -g --allow-scripts=@xai-official/grok @xai-official/grok@latest' })
+  })
+
+  it('lets npm run the install scripts of the one package it installs, which npm 12 skips while still exiting 0', async () => {
+    const action = await updateActionFor('grok', 'npm', undefined, async () => 'npm-cli.js')
+    expect(action).toMatchObject({ asNode: true,
+      args: ['npm-cli.js', 'install', '-g', '--allow-scripts=@xai-official/grok', '@xai-official/grok@latest'] })
   })
 
   it('leaves a client it cannot place without a command to press', async () => {
@@ -170,10 +176,14 @@ describe('which channel owns an install', () => {
   })
 })
 
+/**
+ * A provider host whose client sits on disk: the installer changes `onDisk`, and the host reports it only once it is
+ * told a new client is there, the way an adapter reads its version from the binary when `clientUpdated` runs.
+ */
 class VersionedHost extends E2EAgentHost {
   installed = '1.0.5'
+  onDisk = '1.0.5'
   working = false
-  refuseConnect: string | null = null
   readonly log: string[] = []
   private decorate(snapshot: AgentHostSnapshot): AgentHostSnapshot {
     return { ...snapshot, providers: [{ id: 'grok', name: 'Grok Build', connection: snapshot.connected ? 'connected' : 'disconnected',
@@ -183,25 +193,11 @@ class VersionedHost extends E2EAgentHost {
   }
   override async connect(): Promise<AgentHostSnapshot> {
     this.log.push('connect')
-    if (this.refuseConnect) throw new Error(this.refuseConnect)
     return this.decorate(await super.connect())
   }
   override async snapshot(): Promise<AgentHostSnapshot> { return this.decorate(await super.snapshot()) }
   override disconnect(): void { this.log.push('disconnect'); super.disconnect() }
-}
-
-/** Publishes its disconnect the way a real provider host does, so the coordinator's retry sees it. */
-class PublishingHost extends VersionedHost {
-  private readonly watchers = new Set<(snapshot: AgentHostSnapshot) => void>()
-  override subscribe(listener: (snapshot: AgentHostSnapshot) => void): () => void {
-    this.watchers.add(listener)
-    const unsubscribe = super.subscribe(listener)
-    return () => { this.watchers.delete(listener); unsubscribe() }
-  }
-  override disconnect(): void {
-    super.disconnect()
-    void this.snapshot().then(snapshot => { for (const listener of this.watchers) listener(snapshot) })
-  }
+  async clientUpdated(provider: ProviderId): Promise<void> { this.log.push(`clientUpdated ${provider}`); this.installed = this.onDisk }
 }
 
 async function coordinator(host: VersionedHost, run: RunLike, published = '1.0.40',
@@ -228,155 +224,189 @@ async function coordinator(host: VersionedHost, run: RunLike, published = '1.0.4
 }
 
 describe('updating a client from the app', () => {
-  it('refuses while a thread of that provider is working, until it is told to anyway', async () => {
+  it('installs while a thread of that provider is working, and never stops it', async () => {
     const host = new VersionedHost()
-    const { control } = await coordinator(host, async () => { host.installed = '1.0.40'; return { ok: true } })
+    const { control } = await coordinator(host, async () => { host.onDisk = '1.0.40'; return { ok: true } })
     try {
       await control.command({ type: 'connect' })
       await control.command({ type: 'check-client-updates' })
       expect(control.get().clientUpdates).toEqual([expect.objectContaining({ id: 'grok', installed: '1.0.5', published: '1.0.40', behind: true, canInstall: true })])
       host.working = true
       await control.command({ type: 'refresh' })
-      expect(control.get().host.threads.some(thread => thread.providerId === 'grok' && thread.status === 'running')).toBe(true)
-      const refused = await control.command({ type: 'update-client', provider: 'grok' })
-      expect(refused.error).toMatch(/working now. Updating stops/u)
-      expect(host.log).not.toContain('disconnect')
-      const forced = await control.command({ type: 'update-client', provider: 'grok', force: true })
-      expect(forced.error).toBeNull()
+      host.log.length = 0
+      const result = await control.command({ type: 'update-client', provider: 'grok' })
+      expect(result.error).toBeNull()
+      expect(host.log).toEqual(['clientUpdated grok'])
+      expect(control.get().host.threads.some(thread => thread.providerId === 'grok' && thread.status === 'running'), 'the working thread keeps working').toBe(true)
+      expect(control.get().host.providers).toEqual([expect.objectContaining({ id: 'grok', connection: 'connected' })])
     } finally { control.dispose() }
   })
 
-  it('disconnects, installs, reconnects, and then reports the version it is running', async () => {
+  it('still accepts force, which changes nothing now that an update stops no thread', async () => {
     const host = new VersionedHost()
-    const order: string[] = []
-    const { control } = await coordinator(host, async () => { order.push('install'); host.installed = '1.0.40'; return { ok: true } })
+    const { control } = await coordinator(host, async () => { host.onDisk = '1.0.40'; return { ok: true } })
     try {
       await control.command({ type: 'connect' })
       await control.command({ type: 'check-client-updates' })
       host.log.length = 0
       const result = await control.command({ type: 'update-client', provider: 'grok', force: true })
       expect(result.error).toBeNull()
-      expect([...host.log.slice(0, 1), ...order, ...host.log.slice(1, 2)]).toEqual(['disconnect', 'install', 'connect'])
-      expect(control.get().clientUpdates).toEqual([expect.objectContaining({ installed: '1.0.40', behind: false, state: 'updated' })])
+      expect(host.log).toEqual(['clientUpdated grok'])
     } finally { control.dispose() }
   })
 
-  it('says what failed, leaves the installed version alone and puts the connection back', async () => {
+  it('installs, tells the host once, and then reports the version the host reads from disk', async () => {
     const host = new VersionedHost()
-    const { control } = await coordinator(host, async () => ({ ok: false, detail: 'npm ERR! code EACCES' }))
+    const order: string[] = []
+    const { control } = await coordinator(host, async () => { order.push('install'); host.onDisk = '1.0.40'; return { ok: true } })
     try {
       await control.command({ type: 'connect' })
       await control.command({ type: 'check-client-updates' })
       host.log.length = 0
-      const result = await control.command({ type: 'update-client', provider: 'grok', force: true })
-      expect(result.error).toMatch(/did not update.*EACCES.*unchanged/u)
-      expect(host.log).toEqual(['disconnect', 'connect'])
+      const told = host.clientUpdated.bind(host)
+      host.clientUpdated = async provider => { order.push('clientUpdated'); await told(provider) }
+      const result = await control.command({ type: 'update-client', provider: 'grok' })
+      expect(result.error).toBeNull()
+      expect(order).toEqual(['install', 'clientUpdated'])
+      expect(host.log).not.toContain('disconnect')
+      expect(host.log).not.toContain('connect')
+      expect(control.get().clientUpdates).toEqual([expect.objectContaining({ installed: '1.0.40', behind: false, state: 'updated' })])
+      expect(control.get().notice).toMatch(/^Grok Build updated\.$/u)
+    } finally { control.dispose() }
+  })
+
+  it('says what failed, leaves the installed version alone and tells no host anything', async () => {
+    const host = new VersionedHost()
+    const personal: string[] = []
+    const { control } = await coordinator(host, async () => ({ ok: false, detail: 'npm ERR! code EACCES' }), '1.0.40',
+      { clientUpdated: async provider => { personal.push(provider) } })
+    try {
+      await control.command({ type: 'connect' })
+      await control.command({ type: 'check-client-updates' })
+      host.log.length = 0
+      const result = await control.command({ type: 'update-client', provider: 'grok' })
+      expect(result.error).toMatch(/did not update.*EACCES.*unchanged, and your threads kept working/u)
+      expect(host.log, 'a failed install changes nothing, so nothing is put back').toEqual([])
+      expect(personal).toEqual([])
       expect(control.get().clientUpdates).toEqual([expect.objectContaining({ installed: '1.0.5', state: 'failed', error: 'npm ERR! code EACCES' })])
     } finally { control.dispose() }
   })
 
-  it('says a client did not change when the installer runs but the version does not move', async () => {
+  it('says a client did not change when the installer runs but the version on disk does not move', async () => {
     const host = new VersionedHost()
     const { control } = await coordinator(host, async () => ({ ok: true }))
     try {
       await control.command({ type: 'connect' })
       await control.command({ type: 'check-client-updates' })
-      const result = await control.command({ type: 'update-client', provider: 'grok', force: true })
-      expect(result.error).toMatch(/still reports 1\.0\.5 when Sotto connects.*Close it, then try again/u)
+      host.log.length = 0
+      const result = await control.command({ type: 'update-client', provider: 'grok' })
+      expect(result.error).toMatch(/still reports 1\.0\.5\. Nothing was lost and your threads kept working\. Run npm install -g/u)
+      expect(host.log).toEqual(['clientUpdated grok'])
       expect(control.get().clientUpdates).toEqual([expect.objectContaining({ installed: '1.0.5', state: 'unchanged' })])
     } finally { control.dispose() }
   })
 
-  it('still reports the install when the updated client will not connect again', async () => {
+  it('tells personal chats after the install, and only after', async () => {
     const host = new VersionedHost()
-    const { control } = await coordinator(host, async () => { host.installed = '1.0.40'; host.refuseConnect = 'Grok CLI 1.0.40 sent an invalid response.'; return { ok: true } })
+    const order: string[] = []
+    const { control } = await coordinator(host, async () => { order.push('install'); host.onDisk = '1.0.40'; return { ok: true } },
+      '1.0.40', { clientUpdated: async provider => { order.push(`personal ${provider}`) } })
     try {
       await control.command({ type: 'connect' })
       await control.command({ type: 'check-client-updates' })
-      const result = await control.command({ type: 'update-client', provider: 'grok', force: true })
-      expect(result.error).toMatch(/updated, but did not reconnect/u)
-      // The reading has to outlive the connection, or the sentence about it has nowhere to appear.
-      expect(control.get().clientUpdates).toEqual([expect.objectContaining({ id: 'grok', state: 'unchanged',
-        error: 'Grok CLI 1.0.40 sent an invalid response.' })])
+      const result = await control.command({ type: 'update-client', provider: 'grok' })
+      expect(result.error).toBeNull()
+      expect(order).toEqual(['install', 'personal grok'])
     } finally { control.dispose() }
   })
 
-  it('does not start the old client again while npm is still replacing it', async () => {
-    // The live failure: the disconnect is published, the 5 s provider retry fires during a longer
-    // install and starts the old binary, and the update's own reconnect finds that one connected.
-    const host = new PublishingHost()
-    let release!: () => void
-    const running = new Promise<void>(resolve => { release = resolve })
-    const { control } = await coordinator(host, async () => { await running; host.installed = '1.0.40'; return { ok: true } })
+  it('reports the install when a host cannot take the news, and logs it by name alone', async () => {
+    const host = new VersionedHost()
+    const failures: string[] = []
+    const { control } = await coordinator(host, async () => { host.onDisk = '1.0.40'; return { ok: true } }, '1.0.40',
+      { clientUpdated: async () => { throw new Error('personal chats are stuck') }, logFailure: (code, detail) => { failures.push(`${code} ${detail}`) } })
     try {
-      await control.command({ type: 'connect', provider: 'grok' })
+      await control.command({ type: 'connect' })
       await control.command({ type: 'check-client-updates' })
-      host.log.length = 0
-      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
-      const update = control.command({ type: 'update-client', provider: 'grok', force: true })
-      await vi.advanceTimersByTimeAsync(6_000)
-      expect(host.log, 'nothing may reconnect the client npm is replacing').toEqual(['disconnect'])
-      const pressed = await control.command({ type: 'connect', provider: 'grok' })
-      expect(pressed.error).toMatch(/is updating\. It connects again when the update finishes/u)
-      expect(host.log).toEqual(['disconnect'])
-      vi.useRealTimers()
-      release()
-      const result = await update
-      expect(result.error).toBeNull()
-      expect(host.log).toEqual(['disconnect', 'connect'])
-      expect(control.get().clientUpdates).toEqual([expect.objectContaining({ installed: '1.0.40', state: 'updated' })])
-    } finally { vi.useRealTimers(); release(); control.dispose() }
+      const result = await control.command({ type: 'update-client', provider: 'grok' })
+      // The host's own sentence is what the update reports; the log carries only the event and the provider.
+      expect(result.error).toBe('personal chats are stuck')
+      expect(failures).toEqual(['client-update-handoff-failed grok'])
+      expect(control.get().clientUpdates).toEqual([expect.objectContaining({ installed: '1.0.40', state: 'updated', error: 'personal chats are stuck' })])
+    } finally { control.dispose() }
   })
 
-  it('leaves the client being replaced alone when every provider is asked to connect', async () => {
-    const host = new PublishingHost()
+  it('says why when the host will not move to the new client, rather than blaming the installer', async () => {
+    const host = new VersionedHost()
+    const refusal = 'Grok Build was updated, but Sotto cannot run the new version. Threads that are working carry on and nothing was lost.'
+    host.clientUpdated = async () => { throw new Error(refusal) }
+    const { control } = await coordinator(host, async () => { host.onDisk = '1.0.40'; return { ok: true } })
+    try {
+      await control.command({ type: 'connect' })
+      await control.command({ type: 'check-client-updates' })
+      const result = await control.command({ type: 'update-client', provider: 'grok' })
+      expect(result.error).toBe(refusal)
+      expect(result.error).not.toMatch(/in a terminal/u)
+      expect(host.log).not.toContain('disconnect')
+      expect(control.get().clientUpdates).toEqual([expect.objectContaining({ installed: '1.0.5', state: 'unchanged', error: refusal })])
+    } finally { control.dispose() }
+  })
+
+  it('never runs two updates at once', async () => {
+    const host = new VersionedHost()
     let release!: () => void
     const running = new Promise<void>(resolve => { release = resolve })
-    const { control } = await coordinator(host, async () => { await running; host.installed = '1.0.40'; return { ok: true } })
+    let installs = 0
+    const { control } = await coordinator(host, async () => { installs += 1; await running; host.onDisk = '1.0.40'; return { ok: true } })
     try {
-      await control.command({ type: 'connect', provider: 'grok' })
+      await control.command({ type: 'connect' })
       await control.command({ type: 'check-client-updates' })
-      host.log.length = 0
-      const update = control.command({ type: 'update-client', provider: 'grok', force: true })
-      await new Promise(resolve => setTimeout(resolve, 20))
-      // "Connect providers" on the Threads page names no provider.
-      const pressed = await control.command({ type: 'connect' })
-      expect(pressed.error).toMatch(/is updating\. It connects again when the update finishes/u)
-      expect(host.log).toEqual(['disconnect'])
+      const update = control.command({ type: 'update-client', provider: 'grok' })
+      await vi.waitFor(() => { expect(installs).toBe(1) })
+      const second = await control.command({ type: 'update-client', provider: 'grok' })
+      expect(second.error).toBe('Another client is updating. Wait for it to finish.')
       release()
       expect((await update).error).toBeNull()
-      expect(control.get().error, 'the refusal is answered once the update finishes').toBeNull()
+      expect(installs).toBe(1)
     } finally { release(); control.dispose() }
   })
 
-  it('has personal chats let go of the client before npm runs, and take it back after', async () => {
+  it('connects a provider pressed while an install runs, rather than refusing it', async () => {
     const host = new VersionedHost()
-    const order: string[] = []
-    const { control } = await coordinator(host, async () => { order.push('install'); host.installed = '1.0.40'; return { ok: true } },
-      '1.0.40', { releaseClient: async provider => { order.push(`release ${provider}`); return async () => { order.push(`restore ${provider}`) } } })
+    let release!: () => void
+    const running = new Promise<void>(resolve => { release = resolve })
+    let installs = 0
+    const { control } = await coordinator(host, async () => { installs += 1; await running; host.onDisk = '1.0.40'; return { ok: true } })
     try {
       await control.command({ type: 'connect' })
       await control.command({ type: 'check-client-updates' })
-      const result = await control.command({ type: 'update-client', provider: 'grok', force: true })
-      expect(result.error).toBeNull()
-      expect(order).toEqual(['release grok', 'install', 'restore grok'])
-    } finally { control.dispose() }
+      const update = control.command({ type: 'update-client', provider: 'grok' })
+      await vi.waitFor(() => { expect(installs).toBe(1) })
+      host.log.length = 0
+      const pressed = await control.command({ type: 'connect' })
+      expect(pressed.error).toBeNull()
+      expect(host.log).toEqual(['connect'])
+      release()
+      expect((await update).error).toBeNull()
+      expect(control.get().clientUpdates).toEqual([expect.objectContaining({ installed: '1.0.40', state: 'updated' })])
+    } finally { release(); control.dispose() }
   })
 
   it('leaves every other surface working while npm runs', async () => {
     const host = new VersionedHost()
     let release!: () => void
     const running = new Promise<void>(resolve => { release = resolve })
-    const { control } = await coordinator(host, async () => { await running; return { ok: true } })
+    let installs = 0
+    const { control } = await coordinator(host, async () => { installs += 1; await running; return { ok: true } })
     try {
       await control.command({ type: 'connect' })
       await control.command({ type: 'check-client-updates' })
-      const update = control.command({ type: 'update-client', provider: 'grok', force: true })
-      await new Promise(resolve => setTimeout(resolve, 20))
+      const update = control.command({ type: 'update-client', provider: 'grok' })
+      await vi.waitFor(() => { expect(installs).toBe(1) })
       expect(control.get().globalLaneBusy, 'an install must not hold the one global lane').toBe(false)
-      const other = await Promise.race([control.command({ type: 'compose', text: 'still usable' }),
-        new Promise<'blocked'>(resolve => setTimeout(() => resolve('blocked'), 300))])
-      expect(other, 'other commands must not wait on an install').not.toBe('blocked')
+      // The install is still held here, so an answer at all shows the command did not wait on it.
+      await control.command({ type: 'compose', text: 'still usable' })
+      expect(installs).toBe(1)
       release()
       await update
     } finally { release(); control.dispose() }

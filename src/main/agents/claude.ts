@@ -146,7 +146,8 @@ export interface ClaudeStreamJsonHostOptions {
   /** Stable event names only; never a model, a level, a mode or anything a thread said. */
   logEvent?: (event: ClaudeSettingsEvent) => void
 }
-type Runtime = { protocol: ClaudeProtocol; requests: Map<string, ClaudePending>; answered: Set<string> }
+/** `client` is the client generation the CLI was launched from: see `clientUpdated`. */
+type Runtime = { protocol: ClaudeProtocol; requests: Map<string, ClaudePending>; answered: Set<string>; clientRevision: number }
 
 /** One native coding CLI per thread. Credentials and transcript persistence remain native. */
 export class ClaudeStreamJsonHost implements AgentHost {
@@ -211,6 +212,11 @@ export class ClaudeStreamJsonHost implements AgentHost {
   private cursorTimer: ReturnType<typeof setTimeout> | undefined
   private executable = ''
   private generation = 0
+  /** Which client new CLIs start from, moved on by each client update; a thread's CLI keeps the one it started with. */
+  private clientRevision = 0
+  /** Threads whose CLI is an outdated process (CONTEXT.md): each stops as soon as its thread is not busy. */
+  private readonly outdated = new Set<string>()
+  private outdatedTimer: ReturnType<typeof setImmediate> | undefined
   private pollTimer: ReturnType<typeof setInterval> | undefined
   private closures: Promise<void>[] = []
   private state: AgentHostSnapshot = { connected: false, name: 'Claude Code', version: '', models: [], projects: [], threads: [],
@@ -331,6 +337,58 @@ export class ClaudeStreamJsonHost implements AgentHost {
     }
     this.pollTimer = setInterval(() => { void this.pollSessionLogs().catch(() => { this.state.error = 'Claude history is unavailable. Check the native client before continuing.'; this.emit() }) }, this.options.pollIntervalMs ?? 1000)
     this.pollTimer.unref(); this.emit(); return this.view()
+  }
+  /**
+   * The client on disk was replaced while Sotto stayed connected (ADR-0021). Every thread runs its own CLI, so
+   * nothing is disconnected: the client is found again (an update may have moved it), its version is read from
+   * the binary, and each CLI moves to it as its thread goes idle. An idle CLI stops now the way the reaper stops
+   * one, and the thread's next action starts the new client; a busy one finishes on the old client first. No turn
+   * is cancelled and no request is answered. A new client Sotto cannot find or that does not answer is refused
+   * with the sentence the update reports, and nothing moves to it.
+   */
+  async clientUpdated(): Promise<void> {
+    if (!this.state.connected) return
+    const generation = this.generation
+    const executable = await this.client.findExecutable()
+    if (generation !== this.generation || !this.state.connected) return
+    if (!executable) throw new Error('Claude Code was updated, but Sotto cannot find it now. Threads that are working carry on and nothing was lost. Check the Claude Code install, then connect Claude Code again.')
+    const version = await this.client.version(executable)
+    if (generation !== this.generation || !this.state.connected) return
+    if (!version) throw new Error('Claude Code was updated, but the new version did not answer. Threads that are working carry on and nothing was lost. Connect Claude Code again to try the new version.')
+    // Set together, so a CLI is launched either from the old client and counted old, or from the new one.
+    this.executable = executable; this.clientRevision++
+    this.state.version = version
+    for (const id of this.runtimes.keys()) this.outdated.add(id)
+    this.emit()
+    await Promise.all(this.stopOutdated())
+  }
+  /**
+   * Stop each CLI still running a replaced client whose thread is not busy, as the reaper would. A watched thread
+   * keeps a CLI, so it is started again on the new client straight away.
+   */
+  private stopOutdated(): Promise<void>[] {
+    const stops: Promise<void>[] = []
+    for (const id of [...this.outdated]) {
+      const runtime = this.runtimes.get(id)
+      if (!runtime || runtime.clientRevision === this.clientRevision) { this.outdated.delete(id); continue }
+      if (this.busy(id)) continue
+      this.outdated.delete(id)
+      const generation = this.generation
+      stops.push(this.stopSession(id).catch(() => undefined).then(() => {
+        if (generation !== this.generation || !this.state.connected || !this.observed.has(id) || !this.aliases[id] || this.aliases[id].rollbackPending) return
+        void this.start(id).catch(() => {
+          if (generation !== this.generation) return
+          const thread = this.threads.get(id); if (thread) thread.status = 'error'
+          this.state.error = 'A Claude thread could not resume. Check the native client.'; this.emit()
+        })
+      }))
+    }
+    return stops
+  }
+  /** Look again once the current work has settled: a turn, request or dispatch that just ended may free an outdated CLI to stop. */
+  private scheduleOutdatedStop(): void {
+    if (!this.outdated.size || this.outdatedTimer) return
+    this.outdatedTimer = setImmediate(() => { this.outdatedTimer = undefined; void Promise.all(this.stopOutdated()) })
   }
   async snapshot(): Promise<AgentHostSnapshot> { await this.pollSessionLogs(); return this.view() }
   async listThreadSkills(threadId: string, _forceReload = false, scope?: AgentSkillScope): Promise<AgentSkillCatalog> {
@@ -488,6 +546,10 @@ export class ClaudeStreamJsonHost implements AgentHost {
   }
   async execute(command: AgentHostCommand): Promise<AgentHostResult> { return this.executeNative(command) }
   private async executeNative(command: AgentHostCommand | (PersonalCreateCommand & { type: 'create-personal' })): Promise<AgentHostResult> {
+    // A command that ends (an answer, a stop, a dispatch let go) may leave an outdated CLI free to stop.
+    try { return await this.dispatchNative(command) } finally { this.scheduleOutdatedStop() }
+  }
+  private async dispatchNative(command: AgentHostCommand | (PersonalCreateCommand & { type: 'create-personal' })): Promise<AgentHostResult> {
     if (command.type === 'steer') throw new Error('This provider does not support native steering. Queue a follow-up instead.')
     if (!this.state.connected) throw new Error('Connect Claude Code before continuing.')
     if (command.type === 'create-project') {
@@ -761,7 +823,7 @@ export class ClaudeStreamJsonHost implements AgentHost {
       const closure = this.denyPending(id, runtime).catch(() => undefined).then(() => { runtime.protocol.stop(); return runtime.protocol.closed })
       this.closures.push(closure)
     }
-    this.runtimes.clear(); this.starting.clear(); this.emit()
+    this.runtimes.clear(); this.starting.clear(); this.outdated.clear(); this.emit()
   }
   async closed(): Promise<void> { await Promise.all(this.closures); this.closures = []; await this.usage.flushed() }
   private async start(id: string): Promise<Runtime> {
@@ -769,7 +831,7 @@ export class ClaudeStreamJsonHost implements AgentHost {
     const pending = this.starting.get(id); if (pending) return pending
     const runtime = this.runtimes.get(id); if (runtime) return runtime
     const work = this.launch(id); this.starting.set(id, work)
-    try { const started = await work; this.messageLog.pin(id); return started } finally { this.starting.delete(id) }
+    try { const started = await work; this.messageLog.pin(id); return started } finally { this.starting.delete(id); this.scheduleOutdatedStop() }
   }
   private async launch(id: string): Promise<Runtime> {
     const generation = this.generation
@@ -793,7 +855,7 @@ export class ClaudeStreamJsonHost implements AgentHost {
       '--include-partial-messages', '--replay-user-messages', ...permissionArguments(alias.runtimeMode),
       ...(alias.kind === 'personal' ? ['--append-system-prompt', this.personalContexts.get(id) ?? personalContext()] : []),
       resume ? '--resume' : '--session-id', alias.sessionId, '--model', alias.modelId, ...(alias.reasoningEffort ? ['--effort', alias.reasoningEffort] : [])]
-    const runtime: Runtime = { requests: new Map(), answered: new Set(), protocol: new ClaudeProtocol(this.executable, args, alias.cwd, { ...this.client.environment(), ...(setup ? { MCP_TOOL_TIMEOUT: '600000' } : browser ? { MCP_TOOL_TIMEOUT: '360000' } : {}) }, this.options.requestTimeoutMs ?? 15000,
+    const runtime: Runtime = { requests: new Map(), answered: new Set(), clientRevision: this.clientRevision, protocol: new ClaudeProtocol(this.executable, args, alias.cwd, { ...this.client.environment(), ...(setup ? { MCP_TOOL_TIMEOUT: '600000' } : browser ? { MCP_TOOL_TIMEOUT: '360000' } : {}) }, this.options.requestTimeoutMs ?? 15000,
       frame => { if (this.runtimes.get(id) === runtime) this.frame(id, frame) }, () => {
         if (this.runtimes.get(id) !== runtime) return
         // Each thread has its own CLI, so one ending is this thread's failure, not the provider's: the others
@@ -840,7 +902,8 @@ export class ClaudeStreamJsonHost implements AgentHost {
     const working = monitoring.working
     if (working.length) thread.backgroundWork = working; else delete thread.backgroundWork
     if (frame.type === 'system' && frame.subtype === 'init') {
-      if (typeof frame.claude_code_version === 'string') this.state.version = frame.claude_code_version
+      // A CLI still running a replaced client names the old version; the provider's is the one on disk.
+      if (typeof frame.claude_code_version === 'string' && runtime.clientRevision === this.clientRevision) this.state.version = frame.claude_code_version
       this.checkApprovalSurface(frame)
       this.queries.add(id)
     }
@@ -1146,6 +1209,6 @@ export class ClaudeStreamJsonHost implements AgentHost {
     this.state.error = message
     this.emit()
   }
-  private emit(streaming = false): void { this.publisher.publish(streaming) }
+  private emit(streaming = false): void { this.publisher.publish(streaming); this.scheduleOutdatedStop() }
 }
 
