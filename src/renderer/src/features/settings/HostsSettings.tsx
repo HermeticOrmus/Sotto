@@ -9,7 +9,7 @@ import { HostDialog, HostsModal, type HostDialogMode } from './HostDialog'
 import { TailscaleRow, useTailscale } from './TailscaleConnect'
 import { HostProviders, connectedProvidersLabel } from './HostProviders'
 import { useOptionalAgents } from '../../agents/AgentContext'
-import type { AgentProviderStatus } from '../../../../shared/agents'
+import type { AgentClientHost, AgentProviderStatus } from '../../../../shared/agents'
 import './hosts.css'
 
 /** What a saved host's row says about it, after "SSH forge ·". */
@@ -70,11 +70,13 @@ function HostMenu({ host, onAction }: { readonly host: HostStatus; readonly onAc
  * A saved host: its name, where it is and how it is, the switch that keeps it connected, and its menu. A connected host
  * also says how many of its providers are connected, and Show providers opens its tiles (ADR-0037).
  */
-function HostRow({ host, onCommand, onAction, providers, bridge, job, choice }: {
+function HostRow({ host, onCommand, onAction, providers, client, bridge, job, choice }: {
   readonly host: HostStatus
   readonly onCommand: (command: HostsCommand) => Promise<boolean>
   readonly onAction: (host: HostStatus, action: MenuAction) => void
   readonly providers?: readonly AgentProviderStatus[] | undefined
+  /** The host as the window has it: its client updates, only from a host that offers them (#480). */
+  readonly client?: Pick<AgentClientHost, 'clientUpdates' | 'clientUpdateRun'> | undefined
   readonly bridge?: HostsBridge | undefined
   readonly job?: HostProviderJobState | undefined
   readonly choice?: HostSetupChoice | undefined
@@ -104,7 +106,7 @@ function HostRow({ host, onCommand, onAction, providers, bridge, job, choice }: 
       </span>
       <HostMenu host={host} onAction={action => onAction(host, action)} />
     </div>
-    {shown && bridge ? <HostProviders host={host} providers={shown} bridge={bridge} job={job} choice={choice} /> : null}
+    {shown && bridge ? <HostProviders host={host} providers={shown} bridge={bridge} job={job} choice={choice} updates={client?.clientUpdates} run={client?.clientUpdateRun} /> : null}
   </section>
 }
 
@@ -206,7 +208,8 @@ export function HostsSettings({ localHostEnabled, onLocalHostChange, bridge = wi
     {state?.setup && !dialog ? <HostSetupLine setup={state.setup} onShow={() => setDialog({ kind: 'setup' })} onDismiss={() => void run({ type: 'dismiss-setup', id: state.setup!.id })} /> : null}
     <div className="hosts-list">
       {state?.hosts.map(host => <HostRow key={host.id} host={host} onCommand={run} onAction={act} bridge={bridge} job={state.providerJob} choice={state.setupChoice}
-        providers={host.hostId ? clientHosts?.find(item => item.hostId === host.hostId)?.providers : undefined} />)}
+        providers={host.hostId ? clientHosts?.find(item => item.hostId === host.hostId)?.providers : undefined}
+        client={host.hostId ? clientHosts?.find(item => item.hostId === host.hostId) : undefined} />)}
       {state && !state.hosts.length ? <p className="hosts-empty">No remote hosts yet.</p> : null}
     </div>
     {error && <p className="hosts-error" role="alert">{error}</p>}

@@ -1,6 +1,6 @@
 import { HOSTS_GET, HOSTS_COMMAND, HOSTS_CHANGED, hostsCommandSchema, type HostsState } from '../shared/hosts'
 import { HOSTS_DEVICES, HOSTS_TAILSCALE, HOSTS_TAILSCALE_CONNECT, HOSTS_TAILSCALE_DOWNLOAD, type HostDeviceList, type TailscaleConnectOutcome, type TailscaleSummary } from '../shared/hostDevices'
-import { HOSTS_PROVIDER_ACTION, HOSTS_SIGN_IN, hostProviderActionSchema, hostSignInRequestSchema, type HostProviderActionResult, type ProviderSignInView } from '../shared/hostProviders'
+import { HOSTS_PROVIDER_ACTION, HOSTS_SIGN_IN, HOSTS_UPDATE_CLIENTS, hostClientUpdateRequestSchema, hostProviderActionSchema, hostSignInRequestSchema, type HostProviderActionResult, type ProviderSignInView } from '../shared/hostProviders'
 import { PHONES_GET, PHONES_COMMAND, PHONES_CHANGED, phonesCommandSchema, type PhonesState } from '../shared/phones'
 import { mapHostReferences, parseHostEntityKey } from '../shared/clientIdentity'
 
@@ -326,6 +326,7 @@ export function createSottoBridge(
       devices: () => renderer.invoke(HOSTS_DEVICES) as Promise<HostDeviceList>, tailscale: () => renderer.invoke(HOSTS_TAILSCALE) as Promise<TailscaleSummary>,
       connectTailscale: () => renderer.invoke(HOSTS_TAILSCALE_CONNECT) as Promise<TailscaleConnectOutcome>, openTailscaleDownload: () => renderer.invoke(HOSTS_TAILSCALE_DOWNLOAD) as Promise<void>,
       providerAction: action => renderer.invoke(HOSTS_PROVIDER_ACTION, hostProviderActionSchema.parse(action)) as Promise<HostProviderActionResult>,
+      updateClients: request => renderer.invoke(HOSTS_UPDATE_CLIENTS, hostClientUpdateRequestSchema.parse(request)) as Promise<HostProviderActionResult>,
       signIn: request => renderer.invoke(HOSTS_SIGN_IN, hostSignInRequestSchema.parse(request)) as Promise<ProviderSignInView | null> }),
     phones: Object.freeze<import('../shared/phones').PhonesBridge>({ get: () => renderer.invoke(PHONES_GET) as Promise<PhonesState>, command: command => renderer.invoke(PHONES_COMMAND, phonesCommandSchema.parse(command)) as Promise<PhonesState>, onChanged: listener => subscribe(renderer, PHONES_CHANGED, trustedState<PhonesState>('phones'), listener) }),
     ...createToolsBridges(renderer),
