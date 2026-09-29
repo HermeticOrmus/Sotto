@@ -29,7 +29,7 @@ import { needsPerson, unreadableRequest } from './nativeRequests'
 import { object } from './claudeProtocol'
 import { mergeAgentActivities, type AgentActivity } from '../../shared/agentActivity'
 import { compareClientVersions } from './clientVersions'
-import { findGrokExecutable, grokEnvironment, GROK_ACP_VERSION, GROK_CLI_VERSION, GrokRpc, GrokRejected, GrokTooOld, GrokUncertain, GrokUnsupported, type GrokFrame } from './grokRpc'
+import { findGrokExecutable, grokEnvironment, GROK_ACP_VERSION, GROK_CLI_VERSION, GrokRpc, GrokRejected, GrokSignedOut, GrokTooOld, GrokUncertain, GrokUnsupported, type GrokFrame } from './grokRpc'
 import { SessionReaper } from './sessionReaper'
 
 // Only strip our suffix after durable origin/digest matching; foreign native
@@ -87,7 +87,9 @@ function clientRefusal(client: GrokClient): GrokUnsupported | undefined {
   // client on 1.0.5 while 1.0.40 was published. Older than the checked version is still refused.
   if (client.protocolVersion !== GROK_ACP_VERSION) return new GrokUnsupported(`Sotto speaks ACP ${GROK_ACP_VERSION}, and this client answered ACP ${client.protocolVersion}.`)
   if (compareClientVersions(client._meta.agentVersion, GROK_CLI_VERSION) < 0) return new GrokTooOld(`Grok CLI ${GROK_CLI_VERSION} or newer is required, and this client is ${client._meta.agentVersion}.`, client._meta.agentVersion)
-  if (!client.authMethods.some(auth => auth.id === 'cached_token') || client.authMethods.some(auth => /api.?key/iu.test(auth.id))) return new GrokUnsupported('Grok must be signed in to its own subscription; Sotto never connects it with an API key.')
+  if (client.authMethods.some(auth => /api.?key/iu.test(auth.id))) return new GrokUnsupported('Grok must be signed in to its own subscription; Sotto never connects it with an API key.')
+  // Signed in, Grok Build offers its cached sign-in beside grok.com; signed out, only grok.com.
+  if (!client.authMethods.some(auth => auth.id === 'cached_token')) return new GrokSignedOut('Grok Build is not signed in on this machine.')
   return undefined
 }
 const updateSchema = z.object({ sessionId: z.string(), _meta: z.object({ eventId: z.string().optional(), agentTimestampMs: z.number().optional(), promptId: z.string().optional(), streamStartMs: z.number().optional() }).optional(), update: z.object({ sessionUpdate: z.string(), content: z.unknown().optional(), stop_reason: z.string().optional(), stopReason: z.string().optional(), tool_call_id: z.string().optional() }).passthrough() })
@@ -494,6 +496,7 @@ export class GrokAcpHost implements AgentHost {
         const client = await this.identify(probe)
         const refusal = clientRefusal(client)
         if (refusal instanceof GrokTooOld) tooOld = refusal.version
+        if (refusal instanceof GrokSignedOut) throw new ProviderUnavailable('signed-out', 'Sign in to Grok Build on this machine, then connect it again.', client._meta.agentVersion)
         if (refusal) throw refusal
         this.applyClient(client)
         // Grok refuses its cached sign-in when there is none: that is the one refusal a host's tile offers Sign in for (ADR-0037).

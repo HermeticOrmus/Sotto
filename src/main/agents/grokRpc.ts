@@ -23,6 +23,8 @@ export class GrokUnreadable extends GrokUncertain {}
 export class GrokUnsupported extends Error {}
 /** A client older than the version Sotto checked (ADR-0021), carrying the version it reported. */
 export class GrokTooOld extends GrokUnsupported { constructor(message: string, readonly version: string) { super(message) } }
+/** A client that offers no cached sign-in: Grok Build is not signed in on this machine. */
+export class GrokSignedOut extends GrokUnsupported {}
 export class GrokRejected extends Error {}
 const safeEnvironment = new Set(['path', 'pathext', 'systemroot', 'windir', 'temp', 'tmp', 'home', 'userprofile', 'homedrive', 'homepath', 'appdata', 'localappdata', 'programdata', 'allusersprofile', 'lang', 'lc_all', 'lc_ctype', 'tz', 'https_proxy', 'http_proxy', 'no_proxy', 'ssl_cert_file', 'ssl_cert_dir'])
 export function grokEnvironment(environment: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
