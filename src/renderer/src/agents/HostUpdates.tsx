@@ -92,11 +92,12 @@ function HostUpdateSection({ update, showCommands, refusal, onAction, onToggleCo
   const threads = plural(working, 'thread', 'threads')
   const copy = (): void => { void writeClipboard(update.commands).then(() => showCopied('Copied'), () => showCopied('Could not copy')) }
   const key = (action: string): string => `${action}:${update.id}`
-  const button = (action: HostUpdateAction, label: string, variant: 'primary' | 'secondary' | 'ghost', ariaLabel: string, focus?: string): ReactNode =>
+  // Each name starts with the button's own words, which is what someone speaking to the app says, and adds what they leave out.
+  const button = (action: HostUpdateAction, label: string, variant: 'primary' | 'secondary' | 'ghost', ariaLabel?: string, focus?: string): ReactNode =>
     <Button variant={variant} data-focus-key={key(action)} aria-label={ariaLabel} onClick={() => onAction(action, focus)}>{label}</Button>
-  const notNow = button('not-now', 'Not now', 'ghost', 'Hide this until Sotto next starts')
+  const notNow = button('not-now', 'Not now', 'ghost', 'Not now: hide this until Sotto next starts')
   const commandsButtons = <>
-    <Button variant="secondary" aria-label={`Copy the commands that update ${name} by hand`} onClick={copy}><Copy size={14} aria-hidden="true" />{copied ?? 'Copy commands'}</Button>
+    <Button variant="secondary" aria-label={`Copy commands that update ${name} by hand`} onClick={copy}><Copy size={14} aria-hidden="true" />{copied ?? 'Copy commands'}</Button>
     <Button variant="ghost" data-focus-key={key('commands')} aria-expanded={showCommands} aria-controls={`${id}-commands`} onClick={onToggleCommands}>{showCommands ? 'Hide commands' : 'Show commands'}</Button>
   </>
   let label = `${from} → ${to}`
@@ -111,18 +112,18 @@ function HostUpdateSection({ update, showCommands, refusal, onAction, onToggleCo
   } else if (update.phase === 'confirm') {
     body = <><p>{threads} on {name} {working === 1 ? 'is' : 'are'} working. Updating restarts {name}’s host, which stops {working === 1 ? 'it' : 'them'}.</p>
       <p className="host-update__muted">Only the work in progress on {working === 1 ? 'that turn' : 'those turns'} is lost. Drafts and history stay.</p></>
-    actions = <>{button('when-idle', 'Update when they finish', 'primary', `Update ${name} when its ${plural(working, 'working thread finishes', 'working threads finish')}`)}
-      {button('stop-threads', `Stop ${threads} and update`, 'secondary', `Stop ${name}’s ${plural(working, 'working thread', 'working threads')} and update now`)}
+    actions = <>{button('when-idle', 'Update when they finish', 'primary')}
+      {button('stop-threads', `Stop ${threads} and update`, 'secondary', `Stop ${threads} and update ${name} now`)}
       {button('cancel', 'Cancel', 'ghost', `Cancel, and leave ${name} on ${from}`, key('update'))}</>
   } else if (update.phase === 'waiting') {
     label = `${working} working`
     body = <p>{name} updates when its threads finish. {working} still working.</p>
-    actions = <>{button('stop-threads', `Stop ${threads} and update now`, 'secondary', `Stop ${name}’s ${plural(working, 'working thread', 'working threads')} and update now`)}
-      {button('cancel', 'Cancel update', 'ghost', `Cancel the update and leave ${name} on ${from}`, key('update'))}</>
+    actions = <>{button('stop-threads', `Stop ${threads} and update now`, 'secondary')}
+      {button('cancel', 'Cancel update', 'ghost', `Cancel update, and leave ${name} on ${from}`, key('update'))}</>
   } else if (update.phase === 'updating') {
     label = `Step ${HOST_UPDATE_STEPS.indexOf(update.step ?? 'download') + 1} of 4`
     body = <Steps update={update} />
-    actions = update.step === 'download' || update.step === 'check' ? button('cancel', 'Cancel update', 'ghost', `Cancel the update and leave ${name} on ${from}`, key('update')) : null
+    actions = update.step === 'download' || update.step === 'check' ? button('cancel', 'Cancel update', 'ghost', `Cancel update, and leave ${name} on ${from}`, key('update')) : null
   } else if (update.phase === 'done') {
     label = to
     body = <p>{name} runs Sotto {to}.</p>
@@ -130,7 +131,7 @@ function HostUpdateSection({ update, showCommands, refusal, onAction, onToggleCo
   } else {
     label = `Still ${from}`
     body = <>{update.failure ? <><p><strong>{name} was not updated.</strong> {update.failure.message}</p><p>{update.failure.kept}</p><p className="host-update__muted">{update.failure.next}</p></> : <p><strong>{name} was not updated.</strong></p>}</>
-    actions = <>{button('update', 'Try again', 'primary', `Try updating ${name} again`, key('when-idle'))}{commandsButtons}{notNow}</>
+    actions = <>{button('update', 'Try again', 'primary', `Try again to update ${name}`, key('when-idle'))}{commandsButtons}{notNow}</>
   }
   const offersCommands = update.phase === 'failed' || (update.phase === 'needs' && !update.owned)
   return <section className="host-update__host" data-phase={update.phase} data-host={update.id} aria-labelledby={`${id}-name`}>

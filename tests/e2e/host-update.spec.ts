@@ -199,7 +199,7 @@ test('an older host shows a pill on the Threads page, fails an update with its o
     const steps = panel.getByRole('list', { name: 'Steps to update forge' })
     await expect(steps).toBeVisible()
     await expect(page.getByRole('button', { name: 'Updating forge · 1 of 4. Hide host updates' })).toBeVisible()
-    await expect(panel.getByRole('button', { name: `Cancel the update and leave forge on ${OLD}` })).toBeVisible()
+    await expect(panel.getByRole('button', { name: `Cancel update, and leave forge on ${OLD}` })).toBeVisible()
     await page.screenshot({ path: test.info().outputPath('panel-updating-1280x800-dark.png'), animations: 'disabled' })
     await expect(panel.getByText("The download on forge did not match the release's checksum, so Sotto deleted it and installed nothing.")).toBeVisible({ timeout: 60_000 })
     await expect(panel.getByText(`forge still runs ${OLD}. Nothing was lost.`)).toBeVisible()
@@ -212,7 +212,7 @@ test('an older host shows a pill on the Threads page, fails an update with its o
 
     // The release is put right; Try again installs it beside the old version, restarts forge's host and reconnects.
     published.set(`/v${desktopVersion}/${file}.sha256`, sidecar(archive, file))
-    await panel.getByRole('button', { name: 'Try updating forge again' }).click()
+    await panel.getByRole('button', { name: 'Try again to update forge' }).click()
     await expect(panel.getByText(`forge runs Sotto ${desktopVersion}.`)).toBeVisible({ timeout: 90_000 })
     await expect(page.getByRole('button', { name: 'forge updated. Hide host updates' })).toBeVisible()
     await page.screenshot({ path: test.info().outputPath('panel-done-1280x800-dark.png'), animations: 'disabled' })

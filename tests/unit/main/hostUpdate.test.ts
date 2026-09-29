@@ -126,6 +126,25 @@ describe('an update', () => {
     expect(one().phase).toBe('done')
     expect(threads.interrupted).toEqual([])
   })
+  it('starts the update when the threads finish while it asks, since Update was pressed', async () => {
+    const { threads, updates, one, settled } = setup()
+    threads.set(['thread-a'])
+    await updates.command(ID, 'update')
+    expect(one()).toMatchObject({ phase: 'confirm', working: 1 })
+    threads.set([])
+    await settled()
+    expect(one().phase).toBe('done')
+  })
+  it('shows the install step before the host is asked to unpack, so Cancel update is never offered for it', async () => {
+    const { hosts, updates, one } = setup()
+    let unpack!: () => void
+    hosts.steps['update-install'] = () => new Promise(resolve => { unpack = () => resolve({ type: 'update-installed', version: DESKTOP }) })
+    await updates.command(ID, 'update')
+    await vi.waitFor(() => expect(hosts.operations.map(operation => operation.op)).toContain('update-install'))
+    expect(one()).toMatchObject({ phase: 'updating', step: 'install' })
+    unpack()
+    await vi.waitFor(() => expect(one().phase).toBe('done'))
+  })
   it('stops the working threads and updates at once on Stop N threads and update', async () => {
     const { threads, updates, one, settled } = setup()
     threads.set(['thread-a', 'thread-b'])
@@ -175,7 +194,9 @@ describe('an update', () => {
     expect(hosts.operations.map(operation => operation.op)).toEqual(['update-fetch', 'update-receive', 'update-install', 'update-restart'])
     expect(hosts.operations[1]).toMatchObject({ op: 'update-receive', file: FILE, size: archive.byteLength })
     expect(hosts.operations[2]).toEqual({ op: 'update-install', version: DESKTOP, file: FILE, sha256: sum })
-    expect(seen.some(state => state[0]?.phase === 'updating' && state[0].route === 'desktop' && state[0].step === 'download')).toBe(true)
+    // Downloaded and copied, then checked, then installed.
+    const steps = seen.map(state => state[0]?.phase === 'updating' && state[0].route === 'desktop' ? state[0].step : undefined).filter(Boolean)
+    expect([...new Set(steps)]).toEqual(['download', 'check', 'install', 'restart'])
   })
   it('says so when neither the host nor this computer can download it, and nothing was changed on the host', async () => {
     const { hosts, updates, one, settled } = setup({ download: async () => { throw new TypeError('fetch failed') } })

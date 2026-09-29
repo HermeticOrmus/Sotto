@@ -182,9 +182,10 @@ export class HostUpdates {
     try {
       const { file, sha256 } = await this.fetch(entry, signal, onStep)
       if (!current()) return
-      // Past this point the update cannot be cancelled: the host unpacks, then restarts.
-      step('check')
+      // Past this point the update cannot be cancelled: the host unpacks, then restarts. The panel moves on first, so
+      // it never offers Cancel update for a step that would refuse it.
       entry.installing = true
+      step('install')
       const installed = await this.options.hosts.run(entry.id, { op: 'update-install', version: to, file, sha256 }, { onStep })
       if (installed.type === 'error') throw new UpdateStopped(installed.reason, installed.reason === 'checksum-mismatch' ? 'check' : 'install', installed)
       if (installed.type !== 'update-installed') throw new UpdateStopped('update-failed', 'install')
@@ -222,8 +223,8 @@ export class HostUpdates {
     if ((fetched.reason !== 'download-unreachable' && fetched.reason !== 'download-failed') || !fetched.file) {
       throw new UpdateStopped(fetched.reason, fetched.reason === 'checksum-mismatch' ? 'check' : 'download', fetched)
     }
-    // The host could not reach the releases page: this computer downloads the same archive for it, checks it against the
-    // release's checksum and copies it over, all within the download step. The host checks it again before unpacking it.
+    // The host could not reach the releases page: this computer downloads the same archive for it and copies it over,
+    // which is the download step, then checks it against the release's checksum. The host checks it again before unpacking.
     entry.route = 'desktop'
     this.sync(true)
     const file = fetched.file
@@ -238,13 +239,14 @@ export class HostUpdates {
       if (signal.aborted) throw error
       throw error instanceof UpdateStopped ? error : new UpdateStopped('desktop-unreachable', 'download', { file })
     }
-    const sha256 = createHash('sha256').update(archive).digest('hex')
-    const published = /^([0-9a-fA-F]{64})\s+\*?(\S+)/u.exec(Buffer.from(sidecar).toString('utf8').trim())
-    if (!published || published[2] !== file || published[1]!.toLowerCase() !== sha256) throw new UpdateStopped('desktop-checksum-mismatch', 'check')
     let received: SshHostUpdateResult
     try { received = await this.options.hosts.run(entry.id, { op: 'update-receive', file, size: archive.byteLength, archive }, { signal }) }
     catch (error) { if (signal.aborted) throw error; throw new UpdateStopped('copy-incomplete', 'download') }
     if (received.type !== 'update-received') throw new UpdateStopped(received.type === 'error' ? received.reason : 'copy-incomplete', 'download')
+    onStep('check')
+    const sha256 = createHash('sha256').update(archive).digest('hex')
+    const published = /^([0-9a-fA-F]{64})\s+\*?(\S+)/u.exec(Buffer.from(sidecar).toString('utf8').trim())
+    if (!published || published[2] !== file || published[1]!.toLowerCase() !== sha256) throw new UpdateStopped('desktop-checksum-mismatch', 'check')
     return { file, sha256 }
   }
   /** What happened, what runs now, and what to do: the three sentences a failure shows. */
@@ -260,7 +262,7 @@ export class HostUpdates {
       case 'download-unreachable': case 'download-failed': return say(`${name} could not download ${to} from GitHub.`, `Check that ${name} is online, then try again, or update it by hand on ${name}.`)
       case 'archive-unavailable': return say(`The releases page has no Sotto ${to} host for ${name}${platform ? `'s system (${platform})` : ''}.`, `Keep using ${from}, or update it by hand on ${name} once one is published.`)
       case 'checksum-mismatch': return say(`The download on ${name} did not match the release's checksum, so Sotto deleted it and installed nothing.`, `Try again to download it fresh, or update it by hand on ${name}.`)
-      case 'desktop-checksum-mismatch': return say(`The download on this computer did not match the release's checksum, so Sotto copied nothing to ${name}.`, `Try again to download it fresh, or update it by hand on ${name}.`)
+      case 'desktop-checksum-mismatch': return say(`The download on this computer did not match the release's checksum, so Sotto installed nothing on ${name}.`, `Try again to download it fresh, or update it by hand on ${name}.`)
       case 'unpack-failed': return say(`Sotto ${to} could not be unpacked on ${name}, so nothing was installed.`)
       case 'archive-invalid': return say(`The archive on the releases page is not the Sotto ${to} host, so nothing was installed on ${name}.`, `Keep using ${from}, and tell whoever publishes Sotto's releases.`)
       case 'node-unsupported': return say(`Sotto ${to}'s host needs Node ${stopped.detail.range ?? 'another version'}, and ${name} runs Node ${stopped.detail.node ?? 'another version'}, so nothing was installed.`, `Install that Node for the SSH account on ${name}, then try again.`)
@@ -288,7 +290,7 @@ export class HostUpdates {
     }
     const file = entry.file ?? hostArchiveName(to)
     const url = `${this.releasesUrl.replace(/\/+$/u, '')}/v${to}/${file}`
-    return [`# On ${entry.name}:`, `cd ${install}`, `curl -fLO ${url}`, `curl -fLO ${url}.sha256`, `sha256sum -c ${file}.sha256`,
+    return [`# On ${entry.name}:`, `cd ${install}`, `curl -fLO ${url}`, `curl -fLO ${url}.sha256`, `${file.includes('-darwin-') ? 'shasum -a 256 -c' : 'sha256sum -c'} ${file}.sha256`,
       `mkdir -p versions/${to} && tar -xzf ${file} -C versions/${to}`, `printf '${to}\\n' > current`,
       entry.owned ? `# Then press Stop host for ${entry.name} in Settings > Hosts, and switch ${entry.name} on again.`
         : `# Then stop the host on ${entry.name}, and connect to it again from Settings > Hosts.`].join('\n')
@@ -323,7 +325,8 @@ export class HostUpdates {
       if (entry.phase === 'updating' || entry.phase === 'done') continue
       if (!older) { this.entries.delete(candidate.id); this.notNow.delete(candidate.id); continue }
       this.refresh(entry, candidate)
-      if (entry.phase === 'waiting' && this.working(entry).length === 0) { this.begin(entry); return }
+      // Waiting, or asking, for threads that have all finished: the user has already pressed Update.
+      if ((entry.phase === 'waiting' || entry.phase === 'confirm') && this.working(entry).length === 0) { this.begin(entry); return }
     }
     for (const [id, entry] of this.entries) {
       if (!seen.has(id) && (entry.phase === 'needs' || entry.phase === 'confirm' || entry.phase === 'waiting')) this.entries.delete(id)
