@@ -188,6 +188,23 @@ describe('a provider job', () => {
     expect(await f.jobs.run('thread-1', 'provider_status')).toMatchObject({ isError: true })
   })
 
+  it('tells a thread whose job was stopped during a check that it was stopped, even when the host then finds the provider', async () => {
+    const f = fixture()
+    await f.jobs.command(start())
+    let answer: () => void = () => undefined
+    f.hosts.refresh.mockImplementationOnce(async (id: string, provider: ProviderId) => {
+      await new Promise<void>(resolve => { answer = resolve })
+      return { status: f.providers.get(`${id}:${provider}`) }
+    })
+    const checking = f.jobs.run('thread-1', 'provider_check')
+    await vi.waitFor(() => expect(f.hosts.refresh).toHaveBeenCalled())
+    await f.jobs.command({ type: 'stop-provider-job', id: JOB })
+    f.providers.set(`${FORGE}:devin`, status('devin', { problem: 'signed-out', version: '2026.9.1' }))
+    answer()
+    expect(await checking).toMatchObject({ isError: true, result: { found: false, message: 'This job was stopped. Nothing more was checked.' } })
+    expect(f.jobs.state()?.phase).toBe('stopped')
+  })
+
   it('gives back the tile when no thread was made, and keeps a thread that did not take its brief to look at', async () => {
     const f = fixture()
     f.threads.start.mockImplementationOnce(async () => { throw new Error('Connect Claude Code before creating a project.') })

@@ -170,11 +170,14 @@ export class HostProviderJobs implements HostProviderJobSource {
     finally { job.checking = false }
     const status = answer.status ?? this.options.hosts.provider(job.hostId, job.provider)
     const name = PROVIDER_LABELS[job.provider]
+    // Stopped while the host was looking: whatever it found, this thread's job is over and gets no "found" to act on.
+    // A job the host's own update already ended as found (the refresh publishes as it answers) still hears found.
+    if (this.current !== job || job.phase === 'stopped' || job.phase === 'failed') return { isError: true, result: { found: false, message: 'This job was stopped. Nothing more was checked.' } }
     if (hostProviderFound(status)) {
       this.found(job)
       return { result: { found: true, message: `${job.host}'s host found ${name} and started it${status?.connection === 'connected' ? ', and it is connected' : '; it is not signed in yet'}. The job is over: stop here and tell the user they can sign in from Settings > Hosts. Do not sign in yourself.` } }
     }
-    if (!running(job) || this.current !== job) return { isError: true, result: { found: false, message: 'This job was stopped. Nothing more was checked.' } }
+    if (!running(job)) return { isError: true, result: { found: false, message: 'This job is over. Nothing more was checked.' } }
     return { isError: true, result: { found: false, ...this.reported(status), ...(answer.error ? { message: answer.error } : {}) } }
   }
   /** What the host last reported about the provider, as the tools and the brief name it. */
