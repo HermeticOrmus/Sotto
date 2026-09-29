@@ -6,3 +6,4 @@ DerivedData/
 *.xcuserstate
 xcuserdata/
 ExportOptions.local.plist
+.build-ui/

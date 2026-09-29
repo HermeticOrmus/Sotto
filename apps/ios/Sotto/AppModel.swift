@@ -43,7 +43,7 @@ struct Live {
     @Published private(set) var found: FoundHost?
     /// Whether the Add computer sheet is over the tabs.
     @Published var adding = false
-    /// The strip on Needs you and Threads.
+    /// The computer menu on Threads.
     @Published var show = ComputerFilter.all
     @Published private var openDetail: ThreadDetail?
     @Published private(set) var detailProblem: String?
@@ -60,6 +60,65 @@ struct Live {
     private var detailReloadID: UUID?
     private var detailWantedRevision = 0
     private var shellSequences: [String: Int] = [:]
+    #if DEBUG && os(iOS)
+    /// Simulator journeys use in-memory display data; this code is absent from Release.
+    private var isUIFixture = false
+    private var fixtureDetails: [String: ThreadDetail] = [:]
+    private func loadUIFixture() {
+        isUIFixture = true
+        if ProcessInfo.processInfo.arguments.contains("--reset-ui-preferences"), let bundle = Bundle.main.bundleIdentifier {
+            UserDefaults.standard.removePersistentDomain(forName: bundle)
+        }
+        func decode<T: Decodable>(_ type: T.Type, _ object: Any) -> T {
+            // Invalid fixed test data should fail loudly in the simulator, never become an empty list.
+            try! JSONDecoder().decode(type, from: JSONSerialization.data(withJSONObject: object))
+        }
+        let laptop = "11111111-1111-4111-8111-111111111111"
+        let studio = "22222222-2222-4222-8222-222222222222"
+        let caps: [String: Bool] = ["submit": false, "interrupt": false, "questions": false, "permissions": false]
+        let rows: [(String, String, String, String, Int)] = [
+            ("release", "Choose the release target", "sotto", "idle", 2),
+            ("iphone", "Refine the iPhone thread view", "sotto", "running", 6),
+            ("wiring", "Clean up the wiring schedule", "panel", "idle", 12),
+            ("shortcuts", "Add keyboard shortcuts", "sotto", "idle", 18),
+            ("drives", "Compare motor drive options", "panel", "idle", 60),
+            ("lighting", "Update the lighting plan", "house", "idle", 1440),
+            ("settings", "Simplify the settings screen", "sotto", "idle", 2880),
+            ("notes", "Organize the panel notes", "panel", "idle", 4320)
+        ]
+        let stamp = ISO8601DateFormatter()
+        var threads: [String: [[String: Any]]] = [:]
+        for (id, title, project, status, minutes) in rows {
+            let host = id == "lighting" ? studio : laptop
+            let date = stamp.string(from: Date().addingTimeInterval(-Double(minutes * 60)))
+            var row: [String: Any] = ["id": id, "hostId": host, "projectId": project, "title": title,
+                "providerId": id == "release" || id == "wiring" ? "claude" : "codex", "status": status,
+                "requests": [], "summary": ["lastMessageAt": date]]
+            if id == "release" {
+                row["requests"] = [["id": "release-target", "kind": "question",
+                    "text": "Which release should I prepare?", "options": [
+                        ["id": "testflight", "label": "TestFlight"], ["id": "desktop", "label": "Desktop"]]],
+                    ["id": "release-permission", "kind": "permission", "text": "Allow reading the release checklist?", "options": []]]
+            }
+            if id == "wiring" { row["backgroundWork"] = [["type": "agent"]] }
+            if id == "settings" || id == "notes" { row["settledAt"] = date }
+            threads[host, default: []].append(row)
+            fixtureDetails[host + "/" + id] = decode(ThreadDetail.self, ["threadId": id, "revision": 1,
+                "messages": [["id": "prompt", "role": "user", "text": title + ". Keep the changes focused."],
+                    ["id": "reply", "role": "assistant", "text": "I have the context and am checking the details. The next update will summarize the changes and anything that needs your attention."]],
+                "activities": [["id": "read", "sequence": 1, "kind": "command", "status": "completed", "title": "Read project notes"]]])
+        }
+        for (host, name) in [(laptop, "Laptop"), (studio, "Studio Mac")] {
+            let pairing = decode(Pairing.self, ["v": 1, "hostId": host, "clientId": "ui-fixture", "token": "not-a-credential"])
+            computers.append(SavedComputer(address: "https://fixture.invalid.ts.net", pairing: pairing, reportedName: name))
+            let shell = decode(Shell.self, ["hostId": host, "host": ["hostId": host, "name": name,
+                "threads": threads[host] ?? [], "projects": [["id": "sotto", "title": "Sotto"],
+                    ["id": "panel", "title": "Panel tools"], ["id": "house", "title": "House"]], "capabilities": caps]])
+            live[host] = Live(status: host == laptop ? .online : .unreachable, shell: shell, mayAnswer: false)
+        }
+        storageReady = true
+    }
+    #endif
 
     // MARK: Reading
 
@@ -111,6 +170,12 @@ struct Live {
     // MARK: Starting and stopping
 
     init() {
+        #if DEBUG && os(iOS)
+        if ProcessInfo.processInfo.arguments.contains("--ui-fixture") {
+            loadUIFixture()
+            return
+        }
+        #endif
         do {
             let index = try keychain.read([String].self, account: ComputerStore.indexAccount)
             let legacy = try readComputer(ComputerStore.legacyAccount)
@@ -145,6 +210,9 @@ struct Live {
         catch { return nil }
     }
     func phase(_ phase: ScenePhase) {
+        #if DEBUG && os(iOS)
+        if isUIFixture { return }
+        #endif
         if phase == .active {
             guard !active else { return }; active = true
             Task { await reconnectAll() }
@@ -165,6 +233,9 @@ struct Live {
     /// Pull to refresh: reconnects every computer, but returns once the ones that were reachable are
     /// back, rather than waiting out one that can't be reached. With none reachable, it waits for all.
     func refresh() async {
+        #if DEBUG && os(iOS)
+        if isUIFixture { return }
+        #endif
         let started = computers.map { computer in
             (reachable: online(computer.hostID), task: Task { await connect(computer.hostID) })
         }
@@ -173,6 +244,9 @@ struct Live {
     }
     /// A fresh session, shell and open-thread detail from one computer. Only that computer's state changes.
     func connect(_ hostID: String) async {
+        #if DEBUG && os(iOS)
+        if isUIFixture { return }
+        #endif
         guard storageReady, active, !connecting.contains(hostID), let saved = computer(hostID) else { return }
         let current = UUID(); generations[hostID] = current; connecting.insert(hostID)
         shellSequences[hostID] = 0
@@ -222,6 +296,9 @@ struct Live {
     /// Step 1: find the computer from its machine name (or full address) and confirm Sotto answers there:
     /// on 8443, where the desktop serves it, then on 443.
     func find(_ typed: String) async {
+        #if DEBUG && os(iOS)
+        if isUIFixture { return }
+        #endif
         guard !working, storageReady else { return }; working = true; pairFeedback = nil
         let current = pairGeneration
         defer { if current == pairGeneration { working = false } }
@@ -240,6 +317,9 @@ struct Live {
     func changeComputer() { found = nil; pairFeedback = nil }
     /// Step 2: spend the code on the computer step 1 found.
     func pair(code typed: String) async {
+        #if DEBUG && os(iOS)
+        if isUIFixture { return }
+        #endif
         guard !working, storageReady, let found else { return }; working = true; pairFeedback = nil
         let current = pairGeneration
         do {
@@ -266,6 +346,9 @@ struct Live {
     // MARK: Looking after a computer
 
     func rename(_ hostID: String, to typed: String) {
+        #if DEBUG && os(iOS)
+        if isUIFixture { return }
+        #endif
         guard var computer = self.computer(hostID) else { return }
         computer.localName = ComputerName.cleaned(typed)
         do {
@@ -275,6 +358,9 @@ struct Live {
     }
     /// Revokes this iPhone on the computer where it can be reached, then forgets the computer here either way.
     func remove(_ hostID: String) async {
+        #if DEBUG && os(iOS)
+        if isUIFixture { return }
+        #endif
         guard storageReady, removing == nil, let saved = computer(hostID) else { return }
         removing = hostID
         defer { removing = nil }
@@ -324,6 +410,12 @@ struct Live {
         cancelDetailReload()
         let previous = selected
         selected = ref; openDetail = nil; detailProblem = nil; detailVersion += 1
+        #if DEBUG && os(iOS)
+        if isUIFixture {
+            openDetail = ref.flatMap { fixtureDetails[$0.id] }
+            return
+        }
+        #endif
         if let previous, previous.hostID != ref?.hostID, online(previous.hostID), let before = connections[previous.hostID] {
             _ = try? await before.call(["op": .string("observe"), "threadIds": .array([])])
         }
@@ -412,7 +504,7 @@ struct Live {
             await dispatch(command, operation: operation)
         } catch { feedback = error.localizedDescription }
     }
-    /// Answers a request in any thread: from its card on Needs you, or from the open thread's sheet.
+    /// Answers a request from the open thread's sheet, after rechecking the computer's authority.
     func answer(_ request: AgentRequest, in ref: ThreadRef, choice: String? = nil, text: String = "", answers: [String: QuestionAnswer] = [:]) async {
         guard let thread = self.thread(ref), canAnswer(request, in: ref), let computer = self.computer(ref.hostID) else { return }
         do {
