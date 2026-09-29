@@ -1,5 +1,12 @@
 import Foundation
 
+/// Local receive order, scoped to one socket connection. It is never a host revision or wire field.
+public struct Received<Value: Sendable>: Sendable {
+    public let value: Value
+    public let sequence: Int
+    public init(_ value: Value, sequence: Int) { self.value = value; self.sequence = sequence }
+}
+
 /// Decode pushes directly into the fields the phone displays. In particular, shell event pages
 /// and unused activity bodies never become recursive JSONValue trees on the UI actor.
 public enum IncomingFrame: Decodable, Sendable {

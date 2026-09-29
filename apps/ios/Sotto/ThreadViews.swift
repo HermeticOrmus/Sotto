@@ -20,6 +20,12 @@ struct ThreadView: View {
             Picker("Show", selection: $pane) { ForEach(Pane.allCases) { Text($0.rawValue).tag($0) } }
                 .pickerStyle(.segmented).padding(.horizontal, 16).padding(.vertical, 8)
             ComputerBanner(hostID: ref.hostID).padding(.horizontal, 16)
+            if let problem = model.detailProblem, model.online(ref.hostID) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(problem).foregroundStyle(Palette.muted)
+                    Button("Try again") { Task { await model.select(ref) } }.buttonStyle(PlainStyle(compact: true))
+                }.frame(maxWidth: .infinity, alignment: .leading).padding(16)
+            }
             switch pane {
             case .messages: MessagesPane(ref: ref, detail: detail)
             case .activity: ActivityPane(detail: detail, online: model.online(ref.hostID))
@@ -60,12 +66,6 @@ private struct MessagesPane: View {
                     if detail?.earlierAvailable == true || thread?.earlierAvailable == true {
                         Button("Show earlier messages") { Task { await model.earlier(ref) } }
                             .buttonStyle(PlainStyle(compact: true)).frame(maxWidth: .infinity).disabled(!online)
-                    }
-                    if let problem = model.detailProblem, online {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(problem).foregroundStyle(Palette.muted)
-                            Button("Try again") { Task { await model.select(ref) } }.buttonStyle(PlainStyle(compact: true))
-                        }.padding(.vertical, 24)
                     }
                     if let detail {
                         ForEach(detail.messages) { message in MessageBubble(message: message, provider: Words.provider(thread?.providerId)).equatable() }

@@ -58,6 +58,8 @@ struct Live {
     private var detailVersion = 0
     private var detailReload: Task<Void, Never>?
     private var detailReloadID: UUID?
+    private var detailWantedRevision = 0
+    private var shellSequences: [String: Int] = [:]
 
     // MARK: Reading
 
@@ -173,14 +175,16 @@ struct Live {
     func connect(_ hostID: String) async {
         guard storageReady, active, !connecting.contains(hostID), let saved = computer(hostID) else { return }
         let current = UUID(); generations[hostID] = current; connecting.insert(hostID)
+        shellSequences[hostID] = 0
         defer { if generations[hostID] == current { connecting.remove(hostID) } }
         update(hostID) { $0.status = .connecting; $0.mayAnswer = false; $0.problem = nil }
         if selected?.hostID == hostID { cancelDetailReload(); openDetail = nil; detailProblem = nil }
         do {
             guard let endpoint = saved.endpoint else { throw ClientError.invalidHost }
-            let hello = try await connection(hostID).connect(endpoint: endpoint, pairing: saved.pairing)
+            let greeting = try await connection(hostID).connect(endpoint: endpoint, pairing: saved.pairing)
             guard generations[hostID] == current else { return }
-            update(hostID) { $0.shell = hello.shell; $0.mayAnswer = hello.capabilities.mayAnswer; $0.status = .online }
+            try applyShell(greeting.value.shell, from: hostID, sequence: greeting.sequence)
+            update(hostID) { $0.mayAnswer = greeting.value.capabilities.mayAnswer; $0.status = .online }
             if let selected, selected.hostID == hostID, thread(selected) == nil { self.selected = nil }
         } catch {
             guard generations[hostID] == current else { return }
@@ -196,8 +200,10 @@ struct Live {
     private func connection(_ hostID: String) -> HostConnection {
         if let existing = connections[hostID] { return existing }
         let made = HostConnection()
-        made.onPush = { [weak self] frame in self?.push(frame, from: hostID) }
+        made.onPush = { [weak self] frame, sequence in self?.push(frame, from: hostID, sequence: sequence) }
         made.onDisconnect = { [weak self] in
+            self?.generations[hostID] = UUID(); self?.connecting.remove(hostID)
+            if self?.selected?.hostID == hostID { self?.cancelDetailReload() }
             self?.update(hostID) { $0.status = .unreachable; $0.mayAnswer = false; $0.problem = ClientError.disconnected.localizedDescription }
         }
         connections[hostID] = made
@@ -341,7 +347,7 @@ struct Live {
         try applyDetail(next, ref: ref, epoch: current, versionAtRead: version)
     }
     private func cancelDetailReload() {
-        detailReload?.cancel(); detailReload = nil; detailReloadID = nil
+        detailReload?.cancel(); detailReload = nil; detailReloadID = nil; detailWantedRevision = 0
     }
     /// Several deltas can arrive after a gap. One full read repairs the base for all of them.
     private func reloadDetail(_ ref: ThreadRef) {
@@ -350,12 +356,22 @@ struct Live {
         let version = detailVersion
         detailReload = Task { [weak self] in
             guard let self else { return }
-            defer { if detailReloadID == id { detailReload = nil; detailReloadID = nil } }
+            var repeatRead = false
+            defer {
+                if detailReloadID == id {
+                    detailReload = nil; detailReloadID = nil
+                    if repeatRead { reloadDetail(ref) }
+                }
+            }
             do {
                 let result = try await connection.call(["op": .string("detail"), "threadId": .string(ref.threadID)])
                 let next = try await Wire.readValue(result, as: Optional<ThreadDetail>.self)
                 guard !Task.isCancelled else { return }
                 try applyDetail(next, ref: ref, epoch: epoch, versionAtRead: version)
+                // A newer delta may have arrived during the read/decode. Do not lose the final
+                // update just because a repair was already in flight when it arrived.
+                repeatRead = next != nil && selected == ref && generations[ref.hostID] == epoch
+                    && (openDetail?.revision ?? 0) < detailWantedRevision
             } catch {
                 if !Task.isCancelled, selected == ref, generations[ref.hostID] == epoch {
                     detailProblem = "This thread could not be refreshed. Nothing was lost. Try again."
@@ -425,11 +441,11 @@ struct Live {
         let hostID = operation.hostID, current = generations[hostID]
         guard let connection = connections[hostID] else { feedback = ClientError.uncertain.localizedDescription; return }
         do {
-            let result = try await connection.call(["op": .string("command"), "command": command], id: operation.id)
+            let result = try await connection.callReceived(["op": .string("command"), "command": command], id: operation.id)
             guard generations[hostID] == current else { return }
-            let next = try await Wire.readValue(result, as: Shell.self)
+            let next = try await Wire.readValue(result.value, as: Shell.self)
             guard generations[hostID] == current else { return }
-            try applyShell(next, from: hostID)
+            try applyShell(next, from: hostID, sequence: result.sequence)
             await checkDelivery(hostID)
         } catch let error as HostRefusal {
             guard generations[hostID] == current else { return }
@@ -447,11 +463,11 @@ struct Live {
         guard online(hostID), !scoped(hostID).isEmpty, let connection = connections[hostID] else { return }
         let current = generations[hostID]
         do {
-            let fresh = try await connection.call(["op": .string("shell")])
+            let fresh = try await connection.callReceived(["op": .string("shell")])
             guard generations[hostID] == current else { return }
-            let next = try await Wire.readValue(fresh, as: Shell.self)
+            let next = try await Wire.readValue(fresh.value, as: Shell.self)
             guard generations[hostID] == current else { return }
-            try applyShell(next, from: hostID)
+            try applyShell(next, from: hostID, sequence: fresh.sequence)
             for item in scoped(hostID) {
                 let receipt = try await connection.call(["op": .string("receipt"), "commandId": .string(item.id)]).decode(Receipt.self)
                 guard generations[hostID] == current else { return }
@@ -493,18 +509,20 @@ struct Live {
 
     // MARK: Updates from a computer
 
-    private func applyShell(_ next: Shell, from hostID: String) throws {
+    private func applyShell(_ next: Shell, from hostID: String, sequence: Int) throws {
         guard computer(hostID) != nil else { throw ClientError.invalidIdentity }
         try next.validate(hostID: hostID)
+        guard sequence > (shellSequences[hostID] ?? 0) else { return }
+        shellSequences[hostID] = sequence
         update(hostID) { $0.shell = next }
         if let selected, selected.hostID == hostID, !next.host.threads.contains(where: { $0.id == selected.threadID }) {
             cancelDetailReload(); self.selected = nil; openDetail = nil; detailProblem = nil
         }
     }
-    private func push(_ frame: IncomingFrame, from hostID: String) {
+    private func push(_ frame: IncomingFrame, from hostID: String, sequence: Int) {
         do {
             switch frame {
-            case .shell(let shell): try applyShell(shell, from: hostID)
+            case .shell(let shell): try applyShell(shell, from: hostID, sequence: sequence)
             case .detail(let id, let detail):
                 if let epoch = generations[hostID] { try applyDetail(detail, ref: ThreadRef(hostID: hostID, threadID: id), epoch: epoch) }
             case .delta(let id, let delta):
@@ -514,7 +532,7 @@ struct Live {
                 if let openDetail, delta.revision <= openDetail.revision { return }
                 if let next = openDetail?.applying(delta), let epoch = generations[hostID] {
                     try applyDetail(next, ref: ref, epoch: epoch)
-                } else { reloadDetail(ref) }
+                } else { detailWantedRevision = max(detailWantedRevision, delta.revision); reloadDetail(ref) }
             case .failure(let failure):
                 // The host sends this in place of an update too large for one frame; the connection stays open.
                 feedback = failure.message

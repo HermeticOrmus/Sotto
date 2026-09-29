@@ -20,23 +20,36 @@ struct HostRefusal: Error { let failure: WireFailure }
     static var holdDetail = false
     static var shell: JSONValue = .null
     static var detail: JSONValue = .null
-    var onPush: ((IncomingFrame) -> Void)?
+    static var afterGreeting: ((HostConnection) -> Void)?
+    var onPush: ((IncomingFrame, Int) -> Void)?
     var onDisconnect: (() -> Void)?
     var operations: [String] = []
     var disconnects = 0
     var detailStarted: (() -> Void)?
     var heldDetail: CheckedContinuation<JSONValue, Error>?
+    var afterReply: ((String) -> Void)?
+    var received = 0
     init() { Self.instances.append(self) }
-    func connect(endpoint: HostEndpoint, pairing: Pairing) async throws -> Hello {
-        try JSONValue.object(["hostId": .string(pairing.hostId), "clientId": .string(pairing.clientId),
+    func connect(endpoint: HostEndpoint, pairing: Pairing) async throws -> Received<Hello> {
+        let hello = try JSONValue.object(["hostId": .string(pairing.hostId), "clientId": .string(pairing.clientId),
             "shell": Self.shell, "capabilities": .object(["mayAnswer": .bool(false)])]).decode(Hello.self)
+        received += 1; let sequence = received
+        Self.afterGreeting?(self)
+        return Received(hello, sequence: sequence)
+    }
+    func push(_ frame: IncomingFrame) { received += 1; onPush?(frame, received) }
+    func callReceived(_ operation: [String: JSONValue], id: String = UUID().uuidString) async throws -> Received<JSONValue> {
+        let value = try await call(operation, id: id)
+        received += 1; let sequence = received
+        afterReply?(operation["op"]?.string ?? "")
+        return Received(value, sequence: sequence)
     }
     func call(_ operation: [String: JSONValue], id: String = UUID().uuidString) async throws -> JSONValue {
         let op = operation["op"]?.string ?? ""
         operations.append(op)
         if op == "observe", case .array(let ids) = operation["threadIds"], let id = ids.first?.string {
             if Self.failDetail { throw ClientError.rejected("Thread read refused") }
-            onPush?(.detail(threadID: id, value: try Self.detail.decode(ThreadDetail.self)))
+            push(.detail(threadID: id, value: try Self.detail.decode(ThreadDetail.self)))
         }
         if op == "detail" {
             if Self.holdDetail {
@@ -46,7 +59,8 @@ struct HostRefusal: Error { let failure: WireFailure }
             }
             return Self.detail
         }
-        if op == "shell" { return Self.shell }
+        if op == "shell" || op == "command" { return Self.shell }
+        if op == "receipt" { return .object(["status": .string("unknown")]) }
         return .null
     }
     func disconnect() { disconnects += 1 }
