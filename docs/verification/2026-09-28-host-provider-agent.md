@@ -20,6 +20,15 @@ September 28, 2026. Branch `feat/host-provider-agent` from `feat/host-provider-t
 - `tests/unit/renderer/hostProviderAgent.test.tsx`: the three buttons and their tiles' words, the dialog's words, model and Start, Escape starting nothing, a refusal kept in the dialog, the dialog when no model can run it, and the working, stopped and found tiles, including a job on another host leaving the tile alone and focus after Stop.
 - `tests/unit/main/hostSetup.test.ts` and `tests/integration/hostSetupTools.test.ts` still pass: the host setup thread lists its three tools, and the clients are given one server for both jobs.
 
+## After review
+
+The two-axis review made five findings, two of them the same mistake in the tile and in main. Each was fixed in its own commit with a test:
+
+- A provider in error with no problem code (an adapter that threw a plain error, such as Codex not confirming the connection) read as "Can't be started" but its tile had no action, and main refused its job as "the host can already use" it. One shared helper now makes it a fix, in the tile and in main; its tile offers Have my agent fix it and Check again.
+- Stop pressed while a job or a host setup was starting, before its brief was sent, left the thread working through the brief. The start now interrupts the thread once it has taken the brief.
+- `provider_check` answered found to a thread whose job was stopped while the host was looking. It now says the job was stopped.
+- A tile moved focus to its first button on any change of state while focus sat on the page. It now moves focus only when its own pressed control was taken away.
+
 ## Too old
 
 Sotto already had floors, so the too-old case is built rather than left waiting: Grok Build 1.0.5 and Devin 3000.10.31, the versions their adapters were checked against (ADR-0021), and Claude Code's set of flags. Each is now written next to its adapter with its reason, and a client refused as too old carries its floor to the tile and the brief (`requiredVersion`): "0.9.12 on forge. Sotto needs 1.0.5 or later." Claude Code's floor has no version number, so its tile says "Sotto needs a newer version." Codex has no floor, and none was added.
