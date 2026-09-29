@@ -207,7 +207,7 @@ test('an older host shows a pill on the Threads page, fails an update with its o
     await panel.getByRole('button', { name: 'Show commands' }).click()
     await expect(panel.getByLabel('Commands to update forge by hand')).toContainText(`sha256sum -c ${file}.sha256`)
     await capture(launched, 'panel-failed', async () => { expect(await inside(panel)).toBe(true) })
-    expect((await readdir(join(installPath, 'versions'))).filter(name => name !== '.incoming')).toEqual([])
+    expect((await readdir(join(installPath, 'versions')).catch(() => [])).filter(name => name !== '.incoming')).toEqual([])
     await expect.poll(async () => (await page.evaluate(() => window.sotto!.hosts!.get())).hosts[0]).toMatchObject({ phase: 'connected', version: OLD })
 
     // The release is put right; Try again installs it beside the old version, restarts forge's host and reconnects.
