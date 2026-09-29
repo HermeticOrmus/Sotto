@@ -12,6 +12,9 @@ import { hostRelease, localArchiveName, releasesPage, sha256, sidecar, tarGz } f
  * The launch script's host update (ADR-0040), run as the desktop runs it, against a flat install of the fake host and a
  * stand-in releases page: download and check, install beside the running version, and restart into it, or back.
  */
+// These run the launch script with its own budgets: a stop may drain for HOST_STOP_DRAIN_MS and a start may take up to
+// readyTimeoutMs, and one test restarts three times. The deadline covers them; a run that is not stuck never reaches it.
+vi.setConfig({ testTimeout: 3 * (HOST_STOP_DRAIN_MS + 30_000) + 30_000 })
 const directories: string[] = [], children: ChildProcess[] = [], hosts: number[] = [], pages: { close(): Promise<void> }[] = []
 afterEach(async () => {
   for (const child of children.splice(0)) if (child.exitCode === null) child.kill()
