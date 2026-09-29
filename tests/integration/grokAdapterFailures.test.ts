@@ -28,6 +28,17 @@ it.each([
  expect(error?.message).not.toContain('Connect again to retry.')
  expect((await f.driver.requests()).some(request=>request.method==='authenticate')).toBe(false)
 })
+it('reads a client that offers no cached sign-in as signed out, and still refuses one that offers an API key (#476)',async()=>{
+ f=await grokFixture();await f.script({cliVersion:'1.0.41',authMethods:[{id:'grok.com'}]})
+ const signedOut=await f.host.connect().then(()=>undefined,(reason:Error&{problem?:string;version?:string})=>reason)
+ expect(signedOut).toMatchObject({problem:'signed-out',version:'1.0.41',message:'Could not connect Grok. Sign in to Grok Build on this machine, then connect it again.'})
+ expect((await f.driver.requests()).some(request=>request.method==='authenticate')).toBe(false)
+ await f.cleanup()
+ f=await grokFixture();await f.script({authMethods:[{id:'cached_token'},{id:'xai-api-key'}]})
+ const apiKey=await f.host.connect().then(()=>undefined,(reason:Error&{problem?:string})=>reason)
+ expect(apiKey?.message).toBe('Could not connect Grok. Grok must be signed in to its own subscription; Sotto never connects it with an API key.')
+ expect(apiKey?.problem).toBeUndefined()
+})
 it('connects to a client newer than the verified version and says which version is running (ADR-0021)',async()=>{
  f=await grokFixture();await f.script({cliVersion:'1.0.40'})
  const snapshot=await f.host.connect()

@@ -149,7 +149,7 @@ createInterface({input:process.stdin}).on('line', line => {
   pending.delete(frame.id); return
  }
  const p = frame.params ?? {}; const script = read('script.json', {})
- if (frame.method === 'initialize') send({id:frame.id,result:{protocolVersion:script.protocolVersion ?? 1,agentCapabilities:{loadSession:true,mcpCapabilities:{http:script.browserHttp ?? true},promptCapabilities:{image:false,audio:false,embeddedContext:true}},authMethods:[{id:'cached_token'}],_meta:{agentVersion:startup.cliVersion ?? '1.0.5',modelState:catalogOf(script)}}})
+ if (frame.method === 'initialize') send({id:frame.id,result:{protocolVersion:script.protocolVersion ?? 1,agentCapabilities:{loadSession:true,mcpCapabilities:{http:script.browserHttp ?? true},promptCapabilities:{image:false,audio:false,embeddedContext:true}},authMethods:script.authMethods ?? [{id:'cached_token'}],_meta:{agentVersion:startup.cliVersion ?? '1.0.5',modelState:catalogOf(script)}}})
  else if (frame.method === 'authenticate') { if (!script.ignoreAuthenticate) send({id:frame.id,result:{}}) }
  else if (frame.method === 'session/new') {
   checkPolicy(p._meta)
