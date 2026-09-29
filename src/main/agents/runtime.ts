@@ -48,7 +48,7 @@ export interface AgentRuntimeOptions {
   logFailure?: ControlDependencies['logFailure']
   /** How a Claude settings change reached its CLI, as stable event names; never a model, a level or a mode. */
   claudeSettingsLog?: (event: ClaudeSettingsEvent) => void
-  releaseClient?: ControlDependencies['releaseClient']
+  clientUpdated?: ControlDependencies['clientUpdated']
   missingAttachment?: ControlDependencies['missingAttachment']
   /** The headless host says so: it connects every signed-in provider at start and names itself in refusals (ADR-0036). */
   runsAs?: ControlDependencies['runsAs']
@@ -137,7 +137,7 @@ export async function createAgentRuntime(options: AgentRuntimeOptions) {
     ...(options.openThreadFolder ? { openThreadFolder: options.openThreadFolder } : {}),
     ...(options.bindRequestDraftDecision ? { bindRequestDraftDecision: options.bindRequestDraftDecision } : {}),
     ...(options.logFailure ? { logFailure: options.logFailure } : {}),
-    ...(options.releaseClient ? { releaseClient: options.releaseClient } : {}),
+    ...(options.clientUpdated ? { clientUpdated: options.clientUpdated } : {}),
     ...(options.missingAttachment ? { missingAttachment: options.missingAttachment } : {}),
     ...(options.runsAs ? { runsAs: options.runsAs } : {}),
     writeThreadTitle: threadTitleWriter(shortTextWriter, options.writingSettings),

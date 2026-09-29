@@ -607,11 +607,11 @@ async function createRuntime(): Promise<NativeRuntimeController> {
   app.on('browser-window-blur', () => { windowBlurredAt = Date.now() })
   const windowInFront = (): boolean => BrowserWindow.getAllWindows().some(window => window.getTitle() === APP_NAME && window.isVisible() && !window.isMinimized()
     && (window.isFocused() || (windowBlurredAt !== 0 && Date.now() - windowBlurredAt < 45_000)))
-  // Personal chats start after the runtime; until they do, a client update has nothing of theirs to release.
-  const personalClients: { release?: (provider: ProviderId) => Promise<() => Promise<void>> } = {}
+  // Personal chats start after the runtime; until they do, a client update has nothing of theirs to tell.
+  const personalClients: { updated?: (provider: ProviderId) => Promise<void> } = {}
   const localRuntime = startupSettings.localHostEnabled ? await createAgentRuntime({
     directory: userDataPath, credentials,
-    releaseClient: async provider => await personalClients.release?.(provider) ?? (async () => undefined),
+    clientUpdated: async provider => { await personalClients.updated?.(provider) },
     ...(app.isPackaged ? { claudeHistoryModulePath: join(process.resourcesPath, 'claude-sdk', 'sdk.mjs') } : {}),
     settings: () => workingCopySettings, writingSettings: () => settings.get(),
     historyEnabled: () => agentHistoryEnabled, coordinatorEnabled: () => agentVoiceCoordinatorEnabled,
@@ -703,7 +703,7 @@ async function createRuntime(): Promise<NativeRuntimeController> {
     ...(memoryProfile && agentMemoryEnabled ? { preferences: memoryProfile } : {}), historyEnabled: () => agentHistoryEnabled,
     ...(testPersonalChatHosts ? { hosts: testPersonalChatHosts } : {}) })
   await personalChats.start()
-  personalClients.release = provider => personalChats.releaseClient(provider)
+  personalClients.updated = provider => personalChats.clientUpdated(provider)
   const promptSubscriptions = {
     claude: new ClaudeSubscriptionClient(join(userDataPath, 'reasoning', 'claude-prompts')),
     codex: new CodexSubscriptionClient(join(userDataPath, 'reasoning', 'codex-prompts')),

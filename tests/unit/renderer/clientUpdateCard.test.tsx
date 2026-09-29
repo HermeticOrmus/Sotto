@@ -46,12 +46,13 @@ describe('the client update card', () => {
     await waitFor(() => expect(command).toHaveBeenCalledWith({ type: 'update-client', provider: 'grok' }))
   })
 
-  it('says a working thread will stop, and sends that press as the word for it', async () => {
+  it('updates a client with a thread working the same way, because the update never stops it', async () => {
     const command = provide(fixture([behind()], true))
     render(<ClientUpdateCard />)
-    expect(screen.getByText(/a thread is working now; updating stops it/u)).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Update anyway' }))
-    await waitFor(() => expect(command).toHaveBeenCalledWith({ type: 'update-client', provider: 'grok', force: true }))
+    expect(screen.queryByText(/stops/u)).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Update anyway' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Update' }))
+    await waitFor(() => expect(command).toHaveBeenCalledWith({ type: 'update-client', provider: 'grok' }))
   })
 
   it('offers the command instead of a button for an install it will not drive', () => {
@@ -77,19 +78,29 @@ describe('the client update card', () => {
     render(<ClientUpdateCard />)
     expect(screen.getByText('Grok Build is still on 1.0.5.')).toBeTruthy()
     expect(screen.getByText('1.0.40 is published.')).toBeTruthy()
-    expect(screen.getAllByText(/still reports 1\.0\.5 when Sotto connects/u)).toHaveLength(1)
+    expect(screen.getAllByText(/still reports 1\.0\.5\. Try again, or run npm install -g @xai-official\/grok@latest yourself/u)).toHaveLength(1)
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
     await waitFor(() => expect(command).toHaveBeenCalledWith({ type: 'update-client', provider: 'grok' }))
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
     await waitFor(() => expect(command).toHaveBeenCalledWith({ type: 'dismiss-client-updates' }))
   })
 
-  it('says a working thread will stop before trying again, and sends that press as the word for it', async () => {
-    const command = provide(fixture([behind({ state: 'unchanged' })], true))
+  it('gives the host’s own reason under Details when the new version would not start', () => {
+    const reason = 'Grok Build was updated, but the new version did not answer. Threads that are working carry on and nothing was lost. Connect Grok Build again to try the new version.'
+    provide(fixture([behind({ state: 'unchanged', error: reason })]))
     render(<ClientUpdateCard />)
-    expect(screen.getByText(/A thread is working now; updating stops it/u)).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Update anyway' }))
-    await waitFor(() => expect(command).toHaveBeenCalledWith({ type: 'update-client', provider: 'grok', force: true }))
+    expect(screen.getByText('Grok Build is still on 1.0.5.')).toBeTruthy()
+    expect(screen.getAllByText(reason)).toHaveLength(1)
+    expect(screen.queryByText(/could not read the version/u)).toBeNull()
+  })
+
+  it('says a client updated in one line and nothing about threads still finishing on the old version', () => {
+    provide(fixture([behind({ state: 'updated', installed: '1.0.40', behind: false })], true))
+    render(<ClientUpdateCard />)
+    expect(screen.getByText('Grok Build is now 1.0.40.')).toBeTruthy()
+    expect(screen.queryByText('Details')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Dismiss' })).toBeTruthy()
   })
 
   it('says a refused press out loud rather than under Details', async () => {
@@ -104,18 +115,19 @@ describe('the client update card', () => {
   it('does not repeat an outcome the card already shows', async () => {
     const state = fixture([behind({ state: 'unchanged', ranAt: '2026-09-25T09:40:00.000Z' })])
     const command = provide(state)
-    command.mockResolvedValueOnce({ ...state, clientUpdates: [behind({ state: 'unchanged', ranAt: '2026-09-25T09:45:00.000Z' })], error: 'The installer finished, but Grok Build still reports 1.0.5 when Sotto connects. Another app may still have the old Grok Build open. Close it, then try again.' })
+    command.mockResolvedValueOnce({ ...state, clientUpdates: [behind({ state: 'unchanged', ranAt: '2026-09-25T09:45:00.000Z' })], error: 'The installer finished, but Grok Build still reports 1.0.5. Try again.' })
     render(<ClientUpdateCard />)
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
     await waitFor(() => expect(command).toHaveBeenCalled())
     await new Promise(resolve => setTimeout(resolve, 10))
-    expect(screen.getAllByText(/still reports 1\.0\.5 when Sotto connects/u)).toHaveLength(1)
+    expect(screen.getAllByText(/still reports 1\.0\.5/u)).toHaveLength(1)
   })
 
   it('offers no press while an update is running', () => {
     provide(fixture([behind({ state: 'updating' })]))
     render(<ClientUpdateCard />)
     expect(screen.getByText('Updating Grok Build to 1.0.40…')).toBeTruthy()
+    expect(screen.getByText('Your threads keep working.')).toBeTruthy()
     expect(screen.queryByRole('button')).toBeNull()
   })
 
@@ -145,7 +157,7 @@ describe('the client update card', () => {
     expect(container).toBeEmptyDOMElement()
   })
 
-  it('updates every behind client without answering the working-thread question for any of them', async () => {
+  it('updates every behind client, with threads working, and asks nothing about them', async () => {
     const command = provide(fixture([behind(), behind({ id: 'codex', installed: '0.155.1', published: '0.156.0' })], true))
     render(<ClientUpdateCard />)
     fireEvent.click(screen.getByRole('button', { name: 'Update all 2' }))

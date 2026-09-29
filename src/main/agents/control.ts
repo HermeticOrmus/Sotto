@@ -110,13 +110,6 @@ function firstExchange(thread: AgentThread, trigger: 'automatic' | 'requested', 
   return { prompt: messages[prompt]!.text, reply: reply.text }
 }
 
-/** What a snapshot says about a connection that was refused, or undefined if it
- * connected. An adapter may report a refusal in the snapshot rather than by
- * throwing, so accepting one is not on its own evidence that it connected. */
-/** What a Connect press meets while that provider's client is being replaced. */
-function updatingRefusal(provider: ProviderId): string {
-  return `${PROVIDER_LABELS[provider]} is updating. It connects again when the update finishes.`
-}
 /**
  * The providers the user has turned off once `off` are turned off and `on` turned on, in the stable provider order.
  * What a headless host leaves alone when it starts (ADR-0036).
@@ -133,6 +126,9 @@ function withTurnedOff(configuration: AgentConfiguration, off: readonly Provider
   else delete next.disconnectedProviders
   return next
 }
+/** What a snapshot says about a connection that was refused, or undefined if it
+ * connected. An adapter may report a refusal in the snapshot rather than by
+ * throwing, so accepting one is not on its own evidence that it connected. */
 function connectionRefusal(snapshot: AgentHostSnapshot, provider: ProviderId | undefined, fallback: string): string | undefined {
   const requested = provider && snapshot.providers?.find(entry => entry.id === provider)
   if (requested && requested.connection !== 'connected') return requested.error || `${requested.name} did not confirm the connection.`
@@ -281,10 +277,10 @@ export class AgentControl {
     /** Where a client is installed. Injected so a test never reads the machine's real PATH. */
     locateClient?: (provider: ProviderId) => Promise<string | undefined>
     /**
-     * Anything else in this process running a client, told to let go of it before an install and
-     * handed back the way to take it again after. Personal chats hold their own copy of each client.
+     * Anything else in this process running a client, told once an install has put a new one on disk so it
+     * moves its processes to it as they go idle (ADR-0021). Personal chats hold their own copy of each client.
      */
-    releaseClient?: (provider: ProviderId) => Promise<() => Promise<void>>
+    clientUpdated?: (provider: ProviderId) => Promise<void>
     /** The sentence a send is refused with when an image it names is no longer kept; a headless host names itself. */
     missingAttachment?: string
     /**
@@ -935,70 +931,65 @@ export class AgentControl {
     this.state.clientUpdates = (this.state.clientUpdates ?? []).map(item => item.id === provider ? { ...item, ...patch } : item)
   }
   /**
-   * Replace one client, with nothing of Sotto's using it. The provider disconnects first because
-   * Windows will not overwrite a running executable and a turn in flight would be lost either way,
-   * and reconnects after so the new version is the one on screen. A thread still working refuses
-   * until the user says so; the disconnect that follows is the reason the sentence names it.
+   * Replace one client while everything keeps running, the way T3 Code does (ADR-0021). The installer puts the
+   * new client beside the one in use: Windows lets a running executable's folder be renamed, and every channel
+   * Sotto drives does that or replaces the file for itself. Nothing disconnects and no turn is stopped. After a
+   * good install each host is told, and moves each thread to the new client as it goes idle; a failed install
+   * changes nothing, so there is nothing to put back.
    */
-  private async updateClient(provider: ProviderId, force: boolean): Promise<void> {
+  private async updateClient(provider: ProviderId): Promise<void> {
     if (this.updatingClient) throw new Error('Another client is updating. Wait for it to finish.')
+    const label = PROVIDER_LABELS[provider]
     const record = this.state.clientUpdates?.find(item => item.id === provider)
-    if (!record) throw new Error(`Sotto has not checked ${PROVIDER_LABELS[provider]} yet. Check again, then update it.`)
+    if (!record) throw new Error(`Sotto has not checked ${label} yet. Check again, then update it.`)
     if (!record.canInstall) {
       throw new Error(record.channel === 'devin-app' ? 'Devin updates with the Devin app.'
-        : !record.behind ? `${PROVIDER_LABELS[provider]} is already at the published version.`
-        : record.command ? `Sotto did not install ${PROVIDER_LABELS[provider]}, so it will not replace it. Run ${record.command} yourself.`
-        : `Sotto does not know how ${PROVIDER_LABELS[provider]} was installed, so it will not replace it.`)
-    }
-    const working = this.state.host.threads.filter(thread => thread.providerId === provider && thread.status === 'running').length
-    if (working > 0 && !force) {
-      throw new Error(`${PROVIDER_LABELS[provider]} has ${working === 1 ? 'a thread' : `${working} threads`} working now. Updating stops ${working === 1 ? 'it' : 'them'}.`)
+        : !record.behind ? `${label} is already at the published version.`
+        : record.command ? `Sotto did not install ${label}, so it will not replace it. Run ${record.command} yourself.`
+        : `Sotto does not know how ${label} was installed, so it will not replace it.`)
     }
     this.updatingClient = provider
     this.setClientUpdate(provider, { state: 'updating' })
     this.state.clientUpdates?.forEach(item => { if (item.id === provider) delete item.error })
     this.publish()
     try {
-      const executable = await this.clientPath(provider)
-      this.dependencies.host.disconnect(provider)
-      const restore = await this.dependencies.releaseClient?.(provider).catch(() => undefined)
-      let result: Awaited<ReturnType<ProviderClients['install']>>
-      // Handed back whatever the install did, without holding up the threads' own reconnect.
-      try { result = await this.clients.install(provider, executable) }
-      finally { void restore?.().catch(() => undefined) }
+      const result = await this.clients.install(provider, await this.clientPath(provider))
       if (!result.ok) {
         this.setClientUpdate(provider, { state: 'failed', ranAt: new Date().toISOString(), ...(result.detail ? { error: result.detail } : {}) })
-        // The client was not replaced, so put the connection back the way it was.
-        await this.dependencies.host.connect(provider).then(snapshot => this.acceptSnapshot(snapshot)).catch(() => undefined)
-        throw new Error(`${PROVIDER_LABELS[provider]} did not update${result.detail ? `. ${result.detail}` : '.'} Your installed version is unchanged.`)
+        throw new Error(`${label} did not update${result.detail ? `. ${result.detail}` : '.'} Your installed version is unchanged, and your threads kept working.`)
       }
-      // The install happened whatever the connection does next, so the reading says so either way
-      // rather than leaving the card spinning on a client that is already replaced.
-      let reconnectFailure: string | undefined
-      try {
-        const snapshot = await this.dependencies.host.connect(provider)
-        this.acceptSnapshot(snapshot)
-        reconnectFailure = connectionRefusal(snapshot, provider, 'It did not reconnect.')
+      // Each host finds the new client and reads its version. One that cannot says why, stays on the client it
+      // has, and keeps its threads running; its sentence is the one the update reports.
+      const told = await Promise.allSettled([this.dependencies.host.clientUpdated?.(provider), this.dependencies.clientUpdated?.(provider)])
+      const refused = told.find((outcome): outcome is PromiseRejectedResult => outcome.status === 'rejected')
+      if (refused) this.dependencies.logFailure?.('client-update-handoff-failed', provider)
+      const handoff = refused ? refused.reason instanceof Error && refused.reason.message ? refused.reason.message
+        : `${label} was updated, but Sotto could not move to the new version. Threads that are working carry on and nothing was lost. Connect ${label} again to try the new version.` : undefined
+      // The version the host now reads from disk, taken in before the check compares it.
+      const snapshot = await this.dependencies.host.snapshot(provider).catch(() => undefined)
+      if (snapshot && !this.disposed) this.acceptSnapshot(snapshot)
+      const connected = this.state.host.providers?.some(item => item.id === provider && item.connection === 'connected') ?? false
+      if (!connected) {
+        // Nothing of this provider is running to read the version from; the next connection reads it.
+        this.setClientUpdate(provider, { state: 'idle', ranAt: new Date().toISOString() })
+        this.say(`The installer finished. Connect ${label} to see the version it runs now.`)
+        return
       }
-      catch (error) { reconnectFailure = error instanceof Error ? error.message : 'It did not reconnect.' }
       await this.checkClientUpdates()
-      // The installer can finish and the client still answer with the version it did before: another
-      // window holding the old client open is enough. Saying "updated" then would be a lie the user
-      // can check, so the reading says what the client actually reports.
+      // The installer can finish and the client on disk still answer with the version it did before: a second
+      // copy found first, or an install script npm did not run. Saying "updated" then would be a lie the user can
+      // check, so the reading says what the client actually reports.
       const running = this.state.clientUpdates?.find(item => item.id === provider)?.installed
       const moved = running !== undefined && running !== record.installed
-      this.setClientUpdate(provider, { state: moved ? 'updated' : 'unchanged', ranAt: new Date().toISOString(),
-        ...(reconnectFailure ? { error: reconnectFailure } : {}) })
-      if (reconnectFailure) throw new Error(`${PROVIDER_LABELS[provider]} updated, but did not reconnect. ${reconnectFailure}`)
-      if (running === record.installed) {
-        throw new Error(`The installer finished, but ${PROVIDER_LABELS[provider]} still reports ${record.installed} when Sotto connects. Another app may still have the old ${PROVIDER_LABELS[provider]} open. Close it, then try again.`)
+      this.setClientUpdate(provider, { state: moved ? 'updated' : 'unchanged', ranAt: new Date().toISOString(), ...(handoff ? { error: handoff } : {}) })
+      if (handoff) throw new Error(handoff)
+      if (!moved) {
+        throw new Error(`The installer finished, but ${label} still reports ${record.installed}. Nothing was lost and your threads kept working. ${record.command ? `Run ${record.command} in a terminal to see what the installer says.` : `Check how ${label} was installed, then try again.`}`)
       }
-      this.say(`${PROVIDER_LABELS[provider]} updated.`)
-    } finally {
-      this.updatingClient = null; this.scheduleProviderReconnects()
-      // A Connect refused while this ran is answered now, one way or the other.
-      if (this.state.error === updatingRefusal(provider)) this.state.error = null
-    }
+      // Threads still working finish on the client they have and move over when idle; that is true without
+      // being said, so the notice says only what changed (the user's pick, ADR-0021).
+      this.say(`${label} updated.`)
+    } finally { this.updatingClient = null }
   }
   private observe(...threadIds: string[]): void {
     this.dependencies.host.observeThreads?.([...new Set([...this.state.assignments.map(a => a.threadId),
@@ -1822,12 +1813,6 @@ export class AgentControl {
         if (!['active', 'beta'].includes(this.state.membership.status)) this.state.assignments.forEach(a => { a.paused = true })
         return
       case 'connect': {
-        if (command.provider && this.updatingClient === command.provider) throw new Error(updatingRefusal(command.provider))
-        // Connecting every provider must still leave the one being replaced alone.
-        // A host with one provider at a time has nothing else to connect.
-        const others = !command.provider && this.updatingClient ? this.dependencies.host.concurrentProviders
-          ? enabledThreadProviders(this.state.configuration).filter(provider => provider !== this.updatingClient) : [] : undefined
-        if (others && !others.length) throw new Error(updatingRefusal(this.updatingClient!))
         if (command.provider) {
           this.state.configuration.enabledProviders = [...new Set([...enabledThreadProviders(this.state.configuration), command.provider])]
           this.state.configuration = withTurnedOff(this.state.configuration, turnedOff(this.state.configuration, [], [command.provider]))
@@ -1838,15 +1823,14 @@ export class AgentControl {
         this.publish(); this.observe()
         try {
           if (this.disposed) throw new Error('Sotto is stopping. Reconnect after restarting it.')
-          const snapshot = command.provider ? await this.dependencies.host.connect(command.provider)
-            : others ? (await Promise.all(others.map(provider => this.dependencies.host.connect(provider))), await this.dependencies.host.snapshot())
-            : await this.dependencies.host.connect()
+          const snapshot = command.provider ? await this.dependencies.host.connect(command.provider) : await this.dependencies.host.connect()
           this.acceptSnapshot(snapshot)
           const refusal = connectionRefusal(snapshot, command.provider, `${PROVIDER_LABELS[this.state.configuration.provider]} did not confirm the connection.`)
           if (refusal) throw new Error(refusal)
           if (!this.dependencies.host.concurrentProviders) this.state.configuration.enabled = true
           this.say(command.provider ? `${PROVIDER_LABELS[command.provider]} connected` : snapshot.providers ? 'Thread providers connected' : `${PROVIDER_LABELS[this.state.configuration.provider]} connected`)
-          // Asking the registry must not hold up the connection the user is waiting on.
+          // Asking the registry must not hold up the connection the user is waiting on, and a check
+          // during an install would race the reading the install is about to take.
           if (!this.updatingClient) void this.checkClientUpdates().then(() => this.publish()).catch(() => undefined)
         } catch (error) {
           if (!this.state.host.providers) this.disconnect()
@@ -1879,7 +1863,8 @@ export class AgentControl {
         this.acceptSnapshot(await this.dependencies.host.snapshot(command.provider)); return
       case 'check-reasoning': await this.checkReasoning(command.provider); return
       case 'check-client-updates': await this.checkClientUpdates(true); return
-      case 'update-client': await this.updateClient(command.provider, command.force === true); return
+      // `force` is still accepted and means nothing: an update no longer stops a working thread (ADR-0021).
+      case 'update-client': await this.updateClient(command.provider); return
       case 'dismiss-client-updates': this.state.clientUpdatesDismissedAt = new Date().toISOString(); return
       case 'utterance': await this.utterance(command.text.trim(), turn, selectionRevision); return
       case 'compose': {
@@ -2933,9 +2918,7 @@ export class AgentControl {
     this.state.connection = 'disconnected'; this.state.host.connected = false
   }
   private scheduleProviderReconnects(): void {
-    // A client being replaced is disconnected on purpose. Retrying it while npm runs starts the old
-    // binary again, and the update's own reconnect then finds that one connected and reads its version.
-    const retryable = (provider: ProviderId): boolean => !this.disposed && this.updatingClient !== provider
+    const retryable = (provider: ProviderId): boolean => !this.disposed
       && enabledThreadProviders(this.state.configuration).includes(provider)
       && this.state.host.providers?.find(status => status.id === provider)?.connection === 'disconnected'
     for (const provider of providerIdSchema.options) {
