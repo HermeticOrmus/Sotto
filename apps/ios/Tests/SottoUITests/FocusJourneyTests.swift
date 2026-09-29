@@ -116,6 +116,7 @@ import XCTest
         reveal(row("wiring"))
         XCTAssertTrue(app.textFields["thread-search"].isHittable, "Search stays above the scrolling thread list")
         XCTAssertTrue(row("wiring").label.contains("Working"), "Background work must not read Done")
+        capture("working-threads")
         reveal(app.textFields["thread-search"], swipingDown: true)
 
         let search = app.textFields["thread-search"]
@@ -222,6 +223,7 @@ import XCTest
         XCTAssertEqual(filter.value as? String, "Laptop")
         XCTAssertTrue(row("release").exists)
         XCTAssertFalse(lighting.exists)
+        capture("focus-connected")
 
         filter.tap()
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Studio Mac")).firstMatch.tap()

@@ -20,7 +20,9 @@ Threads is the default tab. Questions and permissions lead, followed by working 
 
 ## Current state and unresolved checks
 
-The native implementation is in [PR #474](https://github.com/millZach/Sotto/pull/474). Local typecheck, lint and notices checks passed; the full suite passed 6,247 tests with 151 skipped. The Mac package suite executed 66 tests with one skipped and no failures, and generic simulator compilation passed. Device-specific UI linking exposed an architecture mismatch between the app and SottoCore; `27fabf23` builds the test invocation for the selected simulator architecture. Its runtime result and screenshot inspection remain pending.
+The native implementation is in [PR #474](https://github.com/millZach/Sotto/pull/474). All CI jobs passed at `c6a3d549`: Windows passed 6,251 tests with 148 skipped; the native package suite executed 66 tests with one skipped and no failures; three UI journeys passed on each of the small and large iPhone simulators. Local gates also passed (6,247 tests, 151 skipped). The architecture mismatch and overshooting verification gestures are resolved.
+
+Native screenshot inspection found two final fixes: readable search-placeholder contrast and full computer names at accessibility text sizes. Source fixes are complete; native recapture and delivery remain pending. Evidence and the limits of fixture-based verification are in [the verification note](../verification/ios-focus.md).
 
 Standards and spec reviews each completed with built-in GPT-6-astra high and Grok 4.7 high against `4aeb6257`. Request access and read-only dismissal findings were fixed in `26860622` and confirmed by follow-up review. Pinned search, bundled font weights, and documentation findings were fixed in `d913ffa0`. No live-device or release result is claimed here.
 
