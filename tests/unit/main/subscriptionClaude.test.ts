@@ -20,12 +20,14 @@ const catalogName = (model: { displayName: string; description?: string }): stri
   return described && first(described) === first(model.displayName) ? described : model.displayName
 }
 interface Scenario {
-  auth?: { loggedIn: boolean; authMethod?: string; subscriptionType?: string; email?: string }
+  auth?: { loggedIn: boolean; authMethod?: string | null; subscriptionType?: string; email?: string }
   help?: string
   result?: unknown
   models?: unknown
   discovery?: 'mismatch' | 'error'
   mode?: 'exit' | 'invalid' | 'timeout' | 'large-out' | 'large-err'
+  /** How `auth status` fails: printing nothing it can read, or printing a signed-in status and exiting 1 anyway. */
+  status?: 'exit-invalid' | 'exit-signed-in' | 'signed-out-exit-0'
 }
 interface Invocation { args: string[]; input: string; pid: number; overrides: string[] }
 
@@ -50,7 +52,12 @@ function record(input) {
     overrides: Object.keys(process.env).filter(k => /^(ANTHROPIC_|CLAUDE_CODE_USE_|CLAUDE_CONFIG_DIR$|XAI_API_KEY$)/i.test(k))}) + '\\n');
 }
 if (args.includes('--help')) { record(''); process.stdout.write(scenario.help); }
-else if (args.includes('status')) { record(''); process.stdout.write(JSON.stringify(scenario.auth)); }
+else if (args.includes('status')) {
+  record('');
+  // Like the real client: signed out, it prints its status and exits 1.
+  if (scenario.status === 'exit-invalid') { process.stdout.write('fixture-secret-invalid-json'); process.exitCode = 1; }
+  else { process.stdout.write(JSON.stringify(scenario.auth)); if ((!scenario.auth.loggedIn && scenario.status !== 'signed-out-exit-0') || scenario.status === 'exit-signed-in') process.exitCode = 1; }
+}
 else {
   let input = ''; process.stdin.setEncoding('utf8'); process.stdin.on('data', chunk => input += chunk);
   process.stdin.on('end', () => {
@@ -289,5 +296,17 @@ describe('Claude thread environment', () => {
     // API billing is not a sign-in Sotto uses, so it reads as signed out of the subscription.
     expect(await (await fixture({ auth: { loggedIn: true, authMethod: 'api_key' } })).client.status()).toMatchObject({ ready: false, problem: 'signed-out' })
     expect(await (await fixture({ help: '--print --output-format --tools' })).client.status()).toMatchObject({ ready: false, problem: 'too-old' })
+  })
+
+  it('reads a signed-out status that exits 1 as Not signed in, and any other failed check as cannot start (#472)', async () => {
+    // The fields forge's signed-out Claude Code 2.1.281 printed before it exited 1.
+    expect(await (await fixture({ auth: { loggedIn: false, authMethod: 'none' } })).client.status()).toMatchObject({ installed: true, ready: false, problem: 'signed-out' })
+    expect(await (await fixture({ auth: { loggedIn: false, authMethod: null } })).client.status()).toMatchObject({ problem: 'signed-out' })
+    expect(await (await fixture({ auth: { loggedIn: false }, status: 'signed-out-exit-0' })).client.status()).toMatchObject({ problem: 'signed-out' })
+    const unreadable = await (await fixture({ status: 'exit-invalid' })).client.status()
+    expect(unreadable).toMatchObject({ installed: true, ready: false, problem: 'cannot-start' })
+    expect(unreadable.detail).not.toContain('fixture-secret')
+    // A failed exit is trusted only as signed out: a signed-in status that exits 1 is not a working client.
+    expect(await (await fixture({ status: 'exit-signed-in' })).client.status()).toMatchObject({ installed: true, ready: false, problem: 'cannot-start' })
   })
 })
