@@ -482,7 +482,7 @@ export class CodexAppServerHost implements AgentHost {
           pending.push(message); this.pendingLogMessages.set(sessionId, pending)
           return
         }
-        this.addMessage(sessionId, message); this.orderMessages(sessionId); this.emit()
+        this.addRolloutMessage(sessionId, message); this.orderMessages(sessionId); this.emit()
       }
     } })
     // A resumed thread is read back from Codex in full, so what the store already holds is recognised
@@ -861,8 +861,18 @@ export class CodexAppServerHost implements AgentHost {
     this.log.add(id, known ? { ...message, createdAt: known.createdAt } : message)
   }
   private flushLogMessages(id: string): void {
-    for (const message of this.pendingLogMessages.get(id) ?? []) this.addMessage(id, message)
+    for (const message of this.pendingLogMessages.get(id) ?? []) this.addRolloutMessage(id, message)
     this.pendingLogMessages.delete(id)
+  }
+  private addRolloutMessage(id: string, message: AgentMessage): void {
+    const digest = promptDigest(message.text)
+    const matches = this.aliases[id]!.messageIdentities.flatMap(turn => turn.messages)
+      .filter(record => record.nativeIds.includes(message.id) && record.role === message.role && record.digest === digest)
+    if (matches.length === 1 && this.log.has(id, matches[0]!.id)) {
+      this.log.alias(id, message.id, matches[0]!.id)
+      return
+    }
+    this.addMessage(id, message)
   }
   private identityItem(item: z.infer<typeof itemSchema>): IdentityItem | undefined {
     if (item.type !== 'userMessage' && item.type !== 'agentMessage') return
@@ -882,6 +892,16 @@ export class CodexAppServerHost implements AgentHost {
     const rewound = new Set(this.aliases[id]!.rewoundMessageIds)
     const records = this.aliases[id]!.messageIdentities.flatMap(turn => turn.messages)
     const order = new Map(records.map((m, index) => [m.id, index]))
+    // Repair receipts saved by older versions as well as this connection's
+    // pending replay. Never collapse an ID that names another canonical message.
+    const aliases = new Map<string, typeof records>()
+    for (const record of records) for (const nativeId of record.nativeIds) {
+      const candidates = aliases.get(nativeId) ?? []
+      candidates.push(record); aliases.set(nativeId, candidates)
+    }
+    for (const [nativeId, candidates] of aliases) if (!order.has(nativeId) && candidates.length === 1 && candidates[0]!.complete) {
+      this.log.alias(id, nativeId, candidates[0]!.id)
+    }
     this.log.arrange(id, message => {
       if (rewound.has(message.id)) return false
       if (order.has(message.id)) return true

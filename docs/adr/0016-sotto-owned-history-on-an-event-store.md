@@ -36,6 +36,14 @@ The next step is not a bigger cache. Sotto is heading for threads that run on a 
 
 **The host owns; the client reads.** The host is the process that owns the providers, the worktrees and the store. The client speaks only the event stream and commands, and holds no provider identity of its own — threads are addressed by Sotto thread ID either way (ADR-0002). Locally both live in this app: the host is Electron main, the client is the window, and the transport between them is the IPC the preload bridge already carries. Remotely, IPC first and a socket second. Beyond loopback the shape is the one T3 uses: a pairing flow that issues a client token, signed sessions over it, TLS through Tailscale Serve rather than a certificate Sotto manages, and an origin check on the local socket too. An SSH device host — a helper started on the remote machine over the user's existing SSH, inheriting its authentication and exposing no port — is the cheapest first remote step. **Which of those ships first, and what pairing looks like to the user, are open and are the owner's to decide.** Nothing here adds a listening socket; the first change that does is a README "Privacy and cost" change before it is a patch.
 
+## Amendment: corroborated duplicate receipts (September 29, 2026)
+
+Codex can report one authored message under its live client identity and a native rollout identity. Removing the duplicate only from the adapter's held messages leaves it in the event-store projection. After restart, enough replayed user receipts fill the opening window and hide earlier replies even though their text is intact.
+
+Record `message-aliased` with the duplicate and canonical message IDs when the adapter has exact, unambiguous native identity evidence. The projection removes the duplicate only when both saved receipts agree on role and text, and the duplicate carries no differing command or attachments. Original events remain; replaying them with the alias event reproduces the repaired view. This is identity repair, not a rewind, so it changes no history epoch or permission. Equal words alone never establish an alias. Codex applies the same proof before publishing rollout receipts and on opening an already affected thread.
+
+This extends the event kinds above. `messages-reset` remains reserved for replacing a history epoch; using it for repair would overwrite unrelated or newer stored messages.
+
 ## Considered options
 
 - **Keep `workspace.json` and split it per thread.** Smaller files, and the same two problems: a thread still rewrites its whole file on every chunk, and history is still a cache the providers are expected to be able to rebuild.

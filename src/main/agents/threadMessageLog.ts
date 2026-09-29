@@ -304,6 +304,27 @@ export class ThreadMessageLog {
     track.messages = track.messages.filter(keep).sort((first, second) => rank(first) - rank(second))
   }
 
+  /** An exact native alias, already corroborated by the adapter. The store also
+   * checks the two receipts' content before removing a duplicate from its view. */
+  alias(threadId: string, messageId: string, canonicalId: string): void {
+    const track = this.tracks.get(threadId)
+    if (!track || messageId === canonicalId || !track.ids.has(messageId) || !track.ids.has(canonicalId)) return
+    const duplicate = track.messages?.find(message => message.id === messageId)
+    const canonical = track.messages?.find(message => message.id === canonicalId)
+    if (duplicate && canonical && (duplicate.role !== canonical.role || duplicate.text !== canonical.text
+      || duplicate.commandId && duplicate.commandId !== canonical.commandId
+      || duplicate.attachments && JSON.stringify(duplicate.attachments) !== JSON.stringify(canonical.attachments))) return
+    track.ids.delete(messageId)
+    track.order = track.order.filter(id => id !== messageId)
+    track.userIds = track.userIds.filter(id => id !== messageId)
+    if (track.messages) track.messages = track.messages.filter(message => message.id !== messageId)
+    if (track.last?.id === messageId) track.last = canonical ? { ...canonical } : undefined
+    if (track.lastUser?.id === messageId) track.lastUser = canonical ? { ...canonical } : undefined
+    if (track.lastAssistant?.id === messageId) track.lastAssistant = canonical ? { ...canonical } : undefined
+    if (track.lastTextId === messageId) track.lastTextId = canonicalId
+    this.emit(threadId, { kind: 'message-aliased', at: new Date().toISOString(), messageId, canonicalId })
+  }
+
   /** Drop the places kept for messages that never said anything; nothing was recorded for them. */
   dropEmpty(threadId: string): void {
     const track = this.tracks.get(threadId)

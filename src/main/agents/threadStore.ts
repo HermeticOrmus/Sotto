@@ -551,6 +551,16 @@ function applyEvent(db: DatabaseSync, threadId: string, event: ThreadEvent,
           message.attachments === undefined ? null : JSON.stringify(message.attachments), threadId, message.id)
       return
     }
+    case 'message-aliased':
+      // Identity comes from the adapter; equality is checked against the durable
+      // words too. A mistaken/stale alias can never take distinct content away.
+      prepare(`DELETE FROM messages AS duplicate WHERE thread_id = ? AND message_id = ? AND message_id <> ?
+        AND EXISTS (SELECT 1 FROM messages AS canonical WHERE canonical.thread_id = duplicate.thread_id
+          AND canonical.message_id = ? AND canonical.role = duplicate.role AND canonical.text = duplicate.text
+          AND (duplicate.command_id IS NULL OR duplicate.command_id = canonical.command_id)
+          AND (duplicate.attachments IS NULL OR duplicate.attachments = canonical.attachments))`)
+        .run(threadId, event.messageId, event.canonicalId, event.canonicalId)
+      return
     case 'messages-reset':
       prepare('DELETE FROM messages WHERE thread_id = ?').run(threadId)
       return

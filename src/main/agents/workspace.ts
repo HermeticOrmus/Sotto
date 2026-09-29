@@ -1149,7 +1149,7 @@ export class WorkspaceHost implements AgentHost {
   private noteWritten(threadId: string, events: readonly ThreadEvent[]): void {
     const entry = this.storedAnchors.get(threadId)
     if (!entry) return
-    if (events.some(event => event.kind === 'messages-reset')) { this.storedAnchors.delete(threadId); return }
+    if (events.some(event => event.kind === 'messages-reset' || event.kind === 'message-aliased')) { this.storedAnchors.delete(threadId); return }
     let changed = false
     for (const event of events) {
       if (event.kind === 'message-added' && entry.answers.get(event.message.id) === false) { entry.answers.set(event.message.id, true); changed = true }

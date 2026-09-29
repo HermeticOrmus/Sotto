@@ -34,6 +34,8 @@ New threads open in Unsettled with the defaults saved in Settings → Agents. An
 
 In Settings, **Test microphone** checks the same input selected for dictation. Changing the input clears the previous test.
 
+Saved Codex conversations keep both sides after a restart. Opening a thread also repairs repeated prompts saved by earlier versions.
+
 Terminal mode keeps closed terminals on its Closed shelf until you quit. Reopen starts the same command with fresh output; Stop keeps the output readable.
 
 ## Install
