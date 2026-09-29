@@ -9,6 +9,36 @@ import type { AgentActivity } from '../../../src/shared/agentActivity'
 const message = (id: string, role: AgentMessage['role'], text: string): AgentMessage => ({ id, role, text, createdAt: '2026-09-19T10:00:00.000Z' })
 
 describe('the append path a provider rail is handed to', () => {
+  it('keeps seeded aliases until their saved content is known and agrees', () => {
+    const log = new ThreadMessageLog()
+    const canonical = { ...message('own', 'user', 'Ask'), commandId: 'sent' }
+    const duplicate = message('native', 'user', 'Ask')
+    log.seed('t', [canonical, duplicate].map(({ id, role }) => ({ id, role })))
+    const events: ThreadHostEvent[] = []
+    log.subscribeEvents(event => events.push(event))
+    log.alias('t', 'native', 'own')
+    expect(log.userMessageIds('t')).toEqual(['own', 'native'])
+    const saved = new Map([['own', canonical], ['native', { ...duplicate, text: 'Different' }]])
+    log.alias('t', 'native', 'own', id => saved.get(id))
+    expect(log.count('t')).toBe(2)
+    expect(events).toEqual([])
+    saved.set('native', duplicate)
+    log.alias('t', 'native', 'own', id => saved.get(id))
+    expect(log.userMessageIds('t')).toEqual(['own'])
+    expect(events.map(item => item.event.kind)).toEqual(['message-aliased'])
+  })
+  it('keeps the newest message summary when an unwatched duplicate is repaired', () => {
+    const log = new ThreadMessageLog()
+    const canonical = message('own', 'user', 'Ask'), duplicate = message('native', 'user', 'Ask')
+    const reply = message('reply', 'assistant', 'Answer'), next = message('next', 'user', 'Another prompt')
+    log.add('t', canonical); log.add('t', reply); log.add('t', next); log.add('t', duplicate)
+    log.observe([])
+    const saved = new Map([['own', canonical], ['reply', reply], ['next', next], ['native', duplicate]])
+    log.alias('t', 'native', 'own', id => saved.get(id))
+    expect(log.summary('t')).toMatchObject({ messageCount: 3, lastUser: { text: 'Another prompt' }, lastAssistant: { text: 'Answer' } })
+    expect(log.lastMessageId('t')).toBe('next')
+    expect(log.lastTextMessageId('t')).toBe('next')
+  })
   it('reuses immutable activity facts without retaining stale messages or mutable activity facts', () => {
     const log = new ThreadMessageLog()
     const source: AgentActivity[] = [{ id: 'turn', turnId: 'turn', sequence: 0, kind: 'turn', status: 'running', title: 'Work', startedAt: '2026-09-23T10:00:00Z' }]

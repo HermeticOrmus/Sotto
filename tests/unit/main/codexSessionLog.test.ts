@@ -52,6 +52,23 @@ describe('Codex session log', () => {
     expect(new Set(messages.map(m => m.id)).size).toBe(3)
     expect(messages.every(m => m.commandId === undefined)).toBe(true)
   })
+  it('recognizes nested native client receipts without hiding conflicting or foreign input', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sotto-codex-log-')); roots.push(root)
+    const directory = join(root, 'sessions'); await mkdir(directory)
+    const messages: AgentMessage[] = []
+    const watcher = new CodexSessionLogWatcher({ codexHome: root, onMessage: (_id, message) => messages.push(message) })
+    watchers.push(watcher); watcher.sent('thread', 'own-client', 'same')
+    const receipt = (id: string, clientId: string, text = 'same', envelope?: string) => rolloutLine(1, {
+      type: 'item_completed', ...(envelope ? { client_id: envelope } : {}),
+      item: { type: 'UserMessage', id, client_id: clientId, content: [{ type: 'text', text }] },
+    })
+    await writeFile(join(directory, 'rollout-thread.jsonl'), receipt('own', 'own-client') + receipt('foreign', 'foreign-client')
+      + receipt('changed', 'own-client', 'different') + receipt('conflict', 'own-client', 'same', 'foreign-client'))
+    await watcher.pollThread('thread')
+    expect(messages.map(message => message.id)).toEqual(['foreign', 'changed', 'conflict'])
+    expect(messages.every(message => message.commandId === undefined)).toBe(true)
+  })
+
   it.each([false, true])('keeps legacy no-client spellings unowned until authoritative history corroborates identity, repeat=%s', async repeat => {
     const root = await mkdtemp(join(tmpdir(), 'sotto-codex-log-')); roots.push(root)
     const directory = join(root, 'sessions', '2026', '09', '10'); await mkdir(directory, { recursive: true })
