@@ -5,6 +5,7 @@ export default tseslint.config(
   {
     ignores: [
       'artifacts/workspace-picker/**',
+      'artifacts/ios-focus/**',
       'artifacts/review-*/**',
       'artifacts/phase-three-themes/**',
       'artifacts/thread-browser-player/**',

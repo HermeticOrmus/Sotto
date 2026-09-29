@@ -14,15 +14,15 @@ Threads is the default tab. Questions and permissions lead, followed by working 
 - [x] Count foreground work, confirmed background agents, background commands and running compaction correctly; unreachable snapshots do not claim live activity.
 - [x] Replace the Needs you tab with Settings; preserve question, permission, reply, interrupt and recovery paths through thread detail. Every pending request is reachable through the request menu.
 - [x] Persist phone-only appearance and Larger text; preserve system accessibility text sizes. Runtime verification remains below.
-- [ ] Run relevant native tests and simulator compilation, root CI gates and the required standards/spec review; record actual results separately.
-- [ ] Inspect native Threads, Settings, computer selection, search, Settled and request detail in light/dark, smaller/larger phone layouts, larger/accessibility text, reduced motion and with the keyboard visible.
+- [x] Run relevant native tests and simulator compilation, root CI gates and the required standards/spec review; record actual results separately. Final-head CI remains a merge gate.
+- [x] Inspect native Threads, Settings, computer selection, search, Settled and request detail in light/dark, smaller/larger phone layouts, larger/accessibility text, with Reduce Motion enabled and with the keyboard visible. Still captures do not verify animation behavior.
 - [ ] Verify a live paired-phone journey and report delivery state separately from source and simulator completion.
 
 ## Current state and unresolved checks
 
 The native implementation is in [PR #474](https://github.com/millZach/Sotto/pull/474). All CI jobs passed at `c6a3d549`: Windows passed 6,251 tests with 148 skipped; the native package suite executed 66 tests with one skipped and no failures; three UI journeys passed on each of the small and large iPhone simulators. Local gates also passed (6,247 tests, 151 skipped). The architecture mismatch and overshooting verification gestures are resolved.
 
-Native screenshot inspection found two final fixes: readable search-placeholder contrast and full computer names at accessibility text sizes. Source fixes are complete; native recapture and delivery remain pending. Evidence and the limits of fixture-based verification are in [the verification note](../verification/ios-focus.md).
+Native screenshot inspection found two final fixes: readable search-placeholder contrast and full computer names at accessibility text sizes. Recapture at `c4e6d57e` confirmed both fixes. Windows passed 6,253 tests with 148 skipped; Linux, native package tests and compilation passed. Five of six UI journeys passed; Xcode timed out launching the sixth in setup, before the app journey began. Final-head CI must pass before merge. Evidence, selected screenshots and the limits of fixture-based verification are in [the verification note](../verification/ios-focus.md); final delivery is recorded on the PR.
 
 Standards and spec reviews each completed with built-in GPT-6-astra high and Grok 4.7 high against `4aeb6257`. Request access and read-only dismissal findings were fixed in `26860622` and confirmed by follow-up review. Pinned search, bundled font weights, and documentation findings were fixed in `d913ffa0`. No live-device or release result is claimed here.
 

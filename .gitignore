@@ -98,3 +98,6 @@ artifacts/review-*/
 
 # Workspace menu layout verification
 artifacts/workspace-picker/
+
+# Native iPhone Focus verification captures; force-add only images cited by the note.
+artifacts/ios-focus/
