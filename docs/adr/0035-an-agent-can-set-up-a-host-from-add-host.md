@@ -42,6 +42,28 @@ Claude Code, Codex and Grok Build get the server the way they get `sotto_browser
 
 **What does not survive a restart.** The setup lives in memory. Quitting Sotto ends it the way Stop setup does: the tool's token goes, a check or add in flight is cancelled, and the thread stays as an ordinary thread without the tool. Starting a setup again starts a new thread.
 
+## Amendment: an agent for a host's provider
+
+*Amended September 28, 2026, for issue #461, part of map #134. The design is layout B, Tiles, round 2 of `prototype/host-providers` (commit 90361e37), picked by the owner on September 28.*
+
+A provider that is missing from a host, too old, or installed where the host cannot find or start it needed someone at that machine's terminal. The provider tiles (ADR-0037) now offer the same machinery as host setup for it, rather than a second mechanism.
+
+**Three cases, one button each.** A tile whose provider is not installed offers **Have my agent install it**, one too old **Have my agent update it**, and one that cannot be found or started **Have my agent fix it**, each beside **Check again**. The case is decided by the provider's problem code (`not-installed`, `too-old`, `cannot-start`), never by its sentence. The button opens a dialog titled "Install Devin on forge" (Update, Fix) with the setup's **Model** picker and **Start install** (Start update, Start fix).
+
+**A provider job, run as a setup is.** Start creates a normal thread named "Install Devin on forge" on this computer, in the same **Host setup** project, in the permission mode that asks before everything, and sends it a fixed brief (`src/main/hosts/hostProviderBrief.ts`). The brief names the host and its SSH address, the provider and its command, the case and what the host reported (the version found and the version needed, and the host's own sentence), where #459's lookup searches (ADR-0036), and the provider's official install method as its maker documents it. It never includes a key, a token, a password or a sign-in code, and tells the agent never to read one and never to sign the provider in. `HostProviderJobs` (`src/main/hosts/hostProviderJob.ts`) holds the job in memory beside the host setup; quitting, archiving its thread or forgetting its host ends it as Stop does.
+
+**The same server, two more tools.** `sotto_host_setup` now serves two kinds of job. A provider job's thread is given `provider_status` (what Sotto knows about that provider on that host, where the host looks, and the official install) and `provider_check` (the host's own `refresh` for that provider, which is Check again on its tile). Neither takes an argument: the host and the provider are fixed when the job starts, so the thread cannot act on another host or provider. Each thread's `tools/list` shows only its own job's tools, and a call to the other job's tools is refused; the clients' allow-lists name all five, because the answer that matters is Sotto's. The token is revoked when the job ends.
+
+**Every command is still a request the user answers.** The agent reaches the host only through `ssh` on this computer, and ADR-0004 is unchanged: the tool installs nothing and answers nothing.
+
+**One agent job at a time.** A host setup and a provider job each refuse to start while the other runs, with a sentence naming the one running, so there is never more than one thread holding one of these tools.
+
+**It stops at found.** The job ends when the host finds the provider and can start it: it connected, or it started and said it is not signed in. That is noticed whenever the host publishes its providers, whoever made it look again, and the tool's own check says so. The tile then offers Sign in (ADR-0037). While the job runs, the tile reads "Agent is installing it" (updating, fixing), names the thread, and offers **Show thread** and **Stop**; Stop interrupts the thread and leaves whatever it installed.
+
+**Too old needs a floor, and the floors are the adapters' own.** Sotto already refused clients older than the versions its adapters were checked against (ADR-0021): Grok Build 1.0.5 and Devin 3000.10.31. Each floor and its reason is now written next to the adapter (`GROK_CLI_VERSION`, `DEVIN_CLI_VERSION`), and a provider refused as too old carries the floor as `requiredVersion`, which the tile and the brief name. Claude Code's floor is the set of flags Sotto runs it with (`REQUIRED_FLAGS`, beside it), with no version number to name, so its tile says "Sotto needs a newer version". Codex has no floor, and none was added: nothing Sotto uses has been found missing from a Codex client that starts.
+
+**Privacy.** The job thread's provider receives the brief and what the agent's commands print on the host, as a setup thread's does; the README's "Privacy and cost" says so. Sotto contacts no new host itself; the host may download the provider from its maker, which is what the user asked for.
+
 ## Consequences
 
 - A thread can now add a host, but only the one device its setup names, and only after the user answers its card. A second tool surface for threads is a second place Sotto must keep scoped; `ThreadToolServer` is the one transport both use.
@@ -50,3 +72,4 @@ Claude Code, Codex and Grok Build get the server the way they get `sotto_browser
 - When #207 lands, the brief's install steps shrink to what automation cannot fix, and a check may report an archive the desktop could copy itself.
 - When #430 lands, the two choices sit under its device list instead of the host field; nothing else moves.
 - When #208 lets a paired client answer, the add card follows the same rule as every other request, with no change here.
+- Since #461, a thread can also make a connected host look for one provider again, but only the host and provider its job names. `sotto_host_setup` is still the one extra tool surface, now with two kinds of job, which keeps the scoping in one place.

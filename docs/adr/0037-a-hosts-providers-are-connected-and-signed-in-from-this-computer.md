@@ -19,7 +19,7 @@ Each client's sign-in was checked on September 28 against the versions on this c
 - Connected: "Connected", then what it is signed in with and its version ("ChatGPT · 0.155.1"), with **Disconnect**.
 - Turned off: "Turned off", with **Connect**. The issue's copy said "Switched off", which the glossary keeps for a saved host; a host's provider that the user disconnected is **turned off** (ADR-0036).
 - Not signed in: "Not signed in", then its version, with **Sign in**; Devin shows `devin auth login --force-manual-token-flow` to run on the host, with Copy.
-- Not installed, too old, or can't be started: "Not installed" ("Not on forge yet."), "Too old to use" or "Can't be started", with **Check again**. #461's agent buttons go beside Check again.
+- Not installed, too old, or can't be started: "Not installed" ("Not on forge yet."), "Too old to use" or "Can't be started", with **Check again**. Beside it, **Have my agent install it** (update it, fix it) starts an agent's provider job (ADR-0035, amended for #461).
 
 Under the grid: "forge connects each provider that is signed in when its host starts. A provider you disconnect stays off."
 

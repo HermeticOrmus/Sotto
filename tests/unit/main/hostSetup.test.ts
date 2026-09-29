@@ -14,7 +14,7 @@ const CHOICE: HostSetupChoice = { models: [{ id: 'claude:opus', name: 'Claude Op
 const host: Omit<RemoteHost, 'enabled'> = { id: HOST_ID, name: 'forge', target: 'zach@forge', identityFile: 'C:/Users/zache/.ssh/id_forge', installPath: '~/.local/share/sotto-host', dataDirectory: '~/.sotto' }
 const start = (patch: Partial<Extract<HostsCommand, { type: 'start-setup' }>> = {}): Extract<HostsCommand, { type: 'start-setup' }> => ({ type: 'start-setup', id: SETUP_ID, host, modelId: 'claude:opus', ...patch })
 
-function fixture() {
+function fixture(busy?: () => string | undefined) {
   const statuses = new Map<string, HostStatus>()
   const saved: string[] = []
   const checks: ((status: Partial<HostStatus>) => void)[] = []
@@ -43,7 +43,7 @@ function fixture() {
     windowId: (threadId: string) => `host:local:${threadId}`,
     subscribe: (next: () => void) => { listener = next; return () => undefined },
   } satisfies HostSetupThreads
-  const setup = new HostSetup({ hosts, threads, version: '0.1.21' })
+  const setup = new HostSetup({ hosts, threads, version: '0.1.21', ...(busy ? { busy } : {}) })
   const revoked: string[] = []
   setup.useTools(threadId => { revoked.push(threadId); events.push('revoke') })
   const onRequests = vi.fn()
@@ -262,6 +262,33 @@ describe('HostSetup', () => {
     f.threads.thread.mockReturnValue({ requestIds: [], archived: true })
     f.threadsChanged()
     await vi.waitFor(() => expect(f.setup.state()?.phase).toBe('stopped'))
+  })
+
+  it('interrupts the thread when Stop setup lands before the brief was sent', async () => {
+    const f = fixture()
+    let release: () => void = () => undefined
+    // Stop lands after the thread exists but before its brief is sent: the stop has no turn to interrupt yet.
+    f.threads.start.mockImplementationOnce(async request => {
+      f.events.push('create'); request.created('thread-1')
+      await new Promise<void>(resolve => { release = resolve })
+      f.events.push('send')
+    })
+    const starting = f.setup.command(start())
+    await vi.waitFor(() => expect(f.events).toContain('create'))
+    await f.setup.command({ type: 'stop-setup', id: SETUP_ID })
+    release()
+    await starting
+    // The brief went after the first interrupt; the second one stops the turn it began.
+    expect(f.events.slice(f.events.indexOf('send'))).toContain('interrupt')
+    expect(f.setup.state()?.phase).toBe('stopped')
+    expect(await f.setup.run('thread-1', 'host_check')).toMatchObject({ isError: true })
+  })
+
+  it('does not start beside a provider job: one agent job at a time', async () => {
+    const f = fixture(() => 'An agent is installing Devin on forge now. Stop it on its tile in Settings > Hosts first. Nothing was started.')
+    await expect(f.setup.command(start())).rejects.toThrow('An agent is installing Devin on forge now.')
+    expect(f.threads.start).not.toHaveBeenCalled()
+    expect(f.setup.state()).toBeUndefined()
   })
 
   it('keeps a thread that did not take its brief open to look at, and gives back the form when none was made', async () => {

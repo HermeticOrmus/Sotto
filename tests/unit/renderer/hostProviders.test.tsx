@@ -31,7 +31,10 @@ it('says what each tile shows, from the status the host publishes', () => {
   expect(hostProviderTile(FORGE[1], 'forge')).toEqual({ kind: 'connected', state: 'Connected', detail: 'ChatGPT · 0.155.1' })
   expect(hostProviderTile(FORGE[0], 'forge')).toEqual({ kind: 'signed-out', state: 'Not signed in', detail: '2.1.281' })
   expect(hostProviderTile(FORGE[3], 'forge')).toEqual({ kind: 'not-installed', state: 'Not installed', detail: 'Not on forge yet.' })
-  expect(hostProviderTile(status('grok', { connection: 'error', problem: 'too-old', version: '0.9.12' }), 'forge').detail).toBe('0.9.12 on forge is older than Sotto supports.')
+  // Too old names the floor where the adapter's is a version (Grok Build's, Devin's), and says so without one (Claude Code's flags).
+  expect(hostProviderTile(status('grok', { connection: 'error', problem: 'too-old', version: '0.9.12', requiredVersion: '1.0.5' }), 'forge').detail).toBe('0.9.12 on forge. Sotto needs 1.0.5 or later.')
+  expect(hostProviderTile(status('claude', { connection: 'error', problem: 'too-old', version: '1.0.3 (Claude Code)' }), 'forge').detail).toBe('1.0.3 on forge. Sotto needs a newer version.')
+  expect(hostProviderTile(status('codex', { connection: 'error', problem: 'cannot-start' }), 'forge').detail).toBe("Installed, but forge's host could not find or start it.")
   // An error the adapter could not name reads as not startable, never as a sign-in to offer.
   expect(hostProviderTile(status('codex', { connection: 'error', error: 'Codex did not start.' }), 'forge')).toMatchObject({ kind: 'cannot-start', state: "Can't be started" })
   // A provider the user disconnected is turned off: "switched off" is a saved host's word.

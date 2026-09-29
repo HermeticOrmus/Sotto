@@ -9,7 +9,8 @@ import { SshFailure, SshHostLauncher, type SshCallbacks, type SshFailureCode, ty
 import { failureStep } from './sshFailure'
 import { isTailscaleApprovalUrl } from './tailscaleApproval'
 import type { DesktopHostRouter } from './desktopHostRouter'
-import { nameHostInRefusal } from '../../shared/agents'
+import { nameHostInRefusal, type AgentProviderStatus, type ProviderId } from '../../shared/agents'
+import type { HostProviderJobSource, ProviderJobHost } from './hostProviderJob'
 import { isProviderSignInPage, type HostProviderAction, type HostProviderActionResult, type HostSignIn, type HostSignInRequest, type ProviderSignInView } from '../../shared/hostProviders'
 
 /** Files from before the switch have no `sshPort` or `enabled` and still read: both are optional, and no `enabled` means on. */
@@ -91,6 +92,9 @@ export class DesktopHosts {
   /** The host setup, once main has one; Settings > Hosts shows it and sends it its commands. */
   private setup: HostSetupSource | undefined
   private unsubscribeSetup: (() => void) | undefined
+  /** The provider job, once main has one (ADR-0035): the tiles show it and send it their Start and Stop. */
+  private providerJob: HostProviderJobSource | undefined
+  private unsubscribeProviderJob: (() => void) | undefined
   /** Set by close(): Sotto is quitting, so no retry may start an SSH session the quit drain would leave behind. */
   private closed = false
   private writing: Promise<void> = Promise.resolve()
@@ -117,11 +121,11 @@ export class DesktopHosts {
   get(): HostsState {
     const state = this.options.router.shell(); const local = state.connections?.find(item => item.kind === 'local')
     const adding = this.adding ? this.status.get(this.adding.id) : undefined
-    const setup = this.setup?.state(), setupChoice = this.setup?.choice()
+    const setup = this.setup?.state(), setupChoice = this.setup?.choice(), providerJob = this.providerJob?.state()
     return { ...(state.hostId ? { activeHostId: state.hostId } : {}), ...(local ? { localHostId: local.hostId } : {}),
       hosts: this.saved.map(host => ({ ...this.status.get(host.id)!, ...this.fields(host) })),
       ...(adding ? { adding: { ...adding, ...this.fields(this.adding!) } } : {}),
-      ...(setup ? { setup } : {}), ...(setupChoice ? { setupChoice } : {}),
+      ...(setup ? { setup } : {}), ...(setupChoice ? { setupChoice } : {}), ...(providerJob ? { providerJob } : {}),
       localHostRunning: this.options.localHostRunning, localHostEnabled: this.options.localHostEnabled() }
   }
   /** Gives Settings > Hosts the host setup: its state joins every published state, and its commands go to it. */
@@ -130,6 +134,31 @@ export class DesktopHosts {
     this.setup = setup
     this.unsubscribeSetup = setup.subscribe(() => this.emit())
     this.emit()
+  }
+  /** Gives the tiles the provider job: its state joins every published state, and its Start and Stop go to it. */
+  useProviderJob(job: HostProviderJobSource): void {
+    this.unsubscribeProviderJob?.()
+    this.providerJob = job
+    this.unsubscribeProviderJob = job.subscribe(() => this.emit())
+    this.emit()
+  }
+  /** A saved host as a provider job needs it. */
+  jobHost(id: string): ProviderJobHost | undefined {
+    const host = this.saved.find(item => item.id === id)
+    return host ? { name: host.name, target: host.target, ...(host.sshPort ? { sshPort: host.sshPort } : {}), connected: this.status.get(id)?.phase === 'connected' } : undefined
+  }
+  /** One of a connected saved host's providers, as that host last published it (ADR-0037). */
+  providerStatus(id: string, provider: ProviderId): AgentProviderStatus | undefined {
+    const hostId = this.status.get(id)?.phase === 'connected' ? this.status.get(id)?.hostId : undefined
+    if (!hostId) return undefined
+    return this.options.router.shell().host.clientHosts?.find(item => item.hostId === hostId)?.providers?.find(item => item.id === provider)
+  }
+  /** Check again for a provider job: the host's refresh for one provider, and the status the host answered with. */
+  async refreshProvider(id: string, provider: ProviderId): Promise<{ status?: AgentProviderStatus; error?: string }> {
+    const { host, socket } = this.connectedSocket(id)
+    const state = await socket.command({ type: 'refresh', provider })
+    const status = state.host.providers?.find(item => item.id === provider)
+    return { ...(status ? { status } : {}), ...(state.error ? { error: nameHostInRefusal(state.error, host.name) } : {}) }
   }
   /** Where a check or an add stands: Add host's attempt, or the saved host it became. */
   attempt(id: string): HostStatus | undefined {
@@ -184,6 +213,11 @@ export class DesktopHosts {
     if (command.type === 'start-setup' || command.type === 'stop-setup' || command.type === 'dismiss-setup') {
       if (!this.setup) throw new Error('An agent cannot set up a host from this window. Nothing was started.')
       await this.setup.command(command)
+      return this.get()
+    }
+    if (command.type === 'start-provider-job' || command.type === 'stop-provider-job') {
+      if (!this.providerJob) throw new Error("An agent cannot work on a host's providers from this window. Nothing was started.")
+      await this.providerJob.command(command)
       return this.get()
     }
     if (this.attemptHost('id' in command ? command.id : command.host.id)) {
@@ -658,7 +692,7 @@ export class DesktopHosts {
    */
   async close(): Promise<void> {
     this.closed = true
-    this.unsubscribeSetup?.()
+    this.unsubscribeSetup?.(); this.unsubscribeProviderJob?.()
     for (const id of [...this.retries.keys()]) this.clearRetry(id)
     // A host still being added is cancelled as its dialog's Cancel would, and its connect is waited for, so
     // the quit drain does not end before its credential is cleared and its pairing revoked.

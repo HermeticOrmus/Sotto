@@ -7,15 +7,15 @@ import { HostSetupChecklist, hostSetupSummary, type HostSetupOutcome } from './H
 export type HostAddChoice = 'agent' | 'self'
 
 /** The setup thread's model: this computer's ready models, by provider, starting on the one used most. */
-export function SetupModelSelect({ choice, value, onChange, label = 'Model', disabled }: {
+export function SetupModelSelect({ choice, value, onChange, label = 'Model', disabled, describedBy }: {
   readonly choice: HostSetupChoice; readonly value: string; readonly onChange: (id: string) => void
-  readonly label?: string; readonly disabled?: boolean
+  readonly label?: string; readonly disabled?: boolean; readonly describedBy?: string
 }): ReactNode {
   const id = useId()
   const providers = [...new Set(choice.models.map(model => model.provider))]
   return <span className="host-setup__model">
     <label htmlFor={id}>{label}</label>
-    <select id={id} className="tt-select tt-focusable" value={value} disabled={disabled} onChange={event => onChange(event.target.value)}>
+    <select id={id} className="tt-select tt-focusable" value={value} disabled={disabled} aria-describedby={describedBy} onChange={event => onChange(event.target.value)}>
       {providers.length > 1
         ? providers.map(provider => <optgroup key={provider} label={provider}>{choice.models.filter(model => model.provider === provider).map(model => <option key={model.id} value={model.id}>{model.name}</option>)}</optgroup>)
         : choice.models.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}

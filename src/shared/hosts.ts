@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import type { HostDeviceList, TailscaleConnectOutcome, TailscaleSummary } from './hostDevices'
-import type { HostProviderAction, HostProviderActionResult, HostSignInRequest, ProviderSignInView } from './hostProviders'
+import { providerIdSchema } from './agents'
+import type { HostProviderAction, HostProviderActionResult, HostProviderJobState, HostSignInRequest, ProviderSignInView } from './hostProviders'
 
 export const HOSTS_GET = 'hosts:get'
 export const HOSTS_COMMAND = 'hosts:command'
@@ -103,8 +104,10 @@ export interface HostsState {
   adding?: HostStatus
   /** The host setup running or last ended, until Done dismisses it (ADR-0035). */
   setup?: HostSetupState
-  /** What Have my agent set this up offers; absent where no setup can be offered at all. */
+  /** What Have my agent set this up offers; absent where no setup can be offered at all. A provider job offers the same. */
   setupChoice?: HostSetupChoice
+  /** The provider job running or last ended (ADR-0035): an agent installing, updating or fixing a host's provider. */
+  providerJob?: HostProviderJobState
 }
 export const hostsCommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('add'), host: remoteHostSchema.omit({ enabled: true }) }).strict(),
@@ -128,6 +131,13 @@ export const hostsCommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('stop-setup'), id: z.uuid() }).strict(),
   /** Done, or closing a setup that has ended: the dialog stops showing it. */
   z.object({ type: z.literal('dismiss-setup'), id: z.uuid() }).strict(),
+  /**
+   * Have my agent install it (update it, fix it) on a provider's tile (ADR-0035): a provider job on `modelId` for this
+   * one saved host (`hostId`) and this one provider. What the job does follows from why the host cannot use it.
+   */
+  z.object({ type: z.literal('start-provider-job'), id: z.uuid(), hostId: z.uuid(), provider: providerIdSchema, modelId: z.string().min(1).max(6_144) }).strict(),
+  /** Stop on the working tile: stops the job's thread and its tool, and leaves whatever it installed. */
+  z.object({ type: z.literal('stop-provider-job'), id: z.uuid() }).strict(),
   z.object({ type: z.literal('restart') }).strict(),
   z.object({ type: z.literal('select'), hostId: z.uuid() }).strict(),
 ])

@@ -360,6 +360,8 @@ export const agentProviderStatusSchema = z.object({
   verifiedVersion: z.string().max(64).optional(),
   /** Why it is not connected, when its last connect failed for a reason the adapter could name (ADR-0037). */
   problem: providerProblemSchema.optional(),
+  /** With `too-old`: the oldest version Sotto accepts, when the adapter's floor is a version (ADR-0035). */
+  requiredVersion: z.string().max(64).optional(),
   /** What it is signed in with, while connected, when its client says. */
   account: providerAccountSchema.optional(),
 })
@@ -394,6 +396,7 @@ export const agentHostSnapshotSchema = z.object({
   error: z.string().optional(),
   /** One adapter's own snapshot: why it is not connected, and what it is signed in with (ADR-0037). */
   problem: providerProblemSchema.optional(),
+  requiredVersion: z.string().max(64).optional(),
   account: providerAccountSchema.optional(),
   capabilities: agentCapabilitiesSchema,
   models: z.array(agentModelSchema), projects: z.array(agentProjectSchema),

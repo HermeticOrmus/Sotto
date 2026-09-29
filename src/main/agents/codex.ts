@@ -294,6 +294,8 @@ export class CodexAppServerHost implements AgentHost {
     })
     child.stderr.on('data', (chunk: Buffer) => { stderrBytes += chunk.length; if (stderrBytes > MAX_OUTPUT_BYTES && this.child === child) this.lostChild() })
     try {
+      // Codex has no version floor (ADR-0035): App Server says what it supports as it answers, and nothing Sotto uses
+      // has been found missing from a client that starts, so a host's tile never calls Codex too old.
       await this.rpc('initialize', { clientInfo: { name: 'sotto', title: 'Sotto threads', version: '1.0' }, capabilities: { experimentalApi: true } }, value => {
         const result = z.object({ userAgent: z.string().optional(), version: z.string().optional() }).parse(value)
         this.state.version = result.version ?? result.userAgent ?? ''
