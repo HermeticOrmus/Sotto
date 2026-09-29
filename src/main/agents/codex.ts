@@ -499,6 +499,8 @@ export class CodexAppServerHost implements AgentHost {
     this.provider = provider
     const current = (): boolean => generation === this.generation && this.provider === provider
     try {
+      // Codex has no version floor (ADR-0035): App Server says what it supports as it answers, and nothing Sotto uses
+      // has been found missing from a client that starts, so a host's tile never calls Codex too old.
       const probed = await this.probe(provider)
       this.state.version = probed.version
       this.state.models = probed.models ?? []

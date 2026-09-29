@@ -105,4 +105,27 @@ final class AppModelTests: XCTestCase {
         model.phase(.active); await model.reconnectAll()
         XCTAssertEqual(model.status(ref.hostID), .unreachable)
     }
+    @MainActor func testLiveShellTracksForegroundBackgroundAndCompletedWork() async throws {
+        let (model, ref) = try fixture()
+        model.phase(.active); await model.reconnectAll()
+        let connection = try XCTUnwrap(HostConnection.instances.last)
+        let original = String(decoding: try JSONEncoder().encode(HostConnection.shell), as: UTF8.self)
+        func push(status: String, extra: String = "") async throws {
+            let shell = original.replacingOccurrences(of: #""status":"idle""#, with: #""status":"\#(status)"\#(extra)"#)
+            let frame = try await Wire.readFrame(Data(#"{"v":1,"event":"shell","state":\#(shell)}"#.utf8))
+            connection.push(frame)
+        }
+        try await push(status: "running")
+        XCTAssertEqual(ThreadState(try XCTUnwrap(model.thread(ref))), .working)
+        XCTAssertEqual(ThreadGroups.working(model.lists).map(\.id), [ref.id])
+        try await push(status: "idle", extra: #", "backgroundWork":[{"type":"subagent","id":"00000000-0000-4000-8000-000000000002","label":"Checking"}]"#)
+        XCTAssertEqual(ThreadState(try XCTUnwrap(model.thread(ref))), .working)
+        XCTAssertEqual(ThreadGroups.working(model.lists).map(\.id), [ref.id])
+        XCTAssertTrue(ThreadGroups.merged(model.lists, filter: .done).isEmpty)
+        try await push(status: "idle", extra: #", "backgroundWork":[]"#)
+        XCTAssertEqual(ThreadState(try XCTUnwrap(model.thread(ref))), .done)
+        XCTAssertTrue(ThreadGroups.working(model.lists).isEmpty)
+        XCTAssertEqual(connection.disconnects, 0)
+    }
+
 }

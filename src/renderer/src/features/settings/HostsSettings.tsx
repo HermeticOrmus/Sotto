@@ -1,6 +1,7 @@
 import React, { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { Laptop, MoreHorizontal, Plus, Server } from 'lucide-react'
-import { type HostSetupState, type HostsBridge, type HostsCommand, type HostsState, type HostStatus } from '../../../../shared/hosts'
+import { type HostSetupChoice, type HostSetupState, type HostsBridge, type HostsCommand, type HostsState, type HostStatus } from '../../../../shared/hosts'
+import type { HostProviderJobState } from '../../../../shared/hostProviders'
 import { Button } from '../../components/Button'
 import { Toggle } from '../../components/Toggle'
 import { ConfirmationDialog } from '../../components/ConfirmationDialog'
@@ -69,12 +70,14 @@ function HostMenu({ host, onAction }: { readonly host: HostStatus; readonly onAc
  * A saved host: its name, where it is and how it is, the switch that keeps it connected, and its menu. A connected host
  * also says how many of its providers are connected, and Show providers opens its tiles (ADR-0037).
  */
-function HostRow({ host, onCommand, onAction, providers, bridge }: {
+function HostRow({ host, onCommand, onAction, providers, bridge, job, choice }: {
   readonly host: HostStatus
   readonly onCommand: (command: HostsCommand) => Promise<boolean>
   readonly onAction: (host: HostStatus, action: MenuAction) => void
   readonly providers?: readonly AgentProviderStatus[] | undefined
   readonly bridge?: HostsBridge | undefined
+  readonly job?: HostProviderJobState | undefined
+  readonly choice?: HostSetupChoice | undefined
 }): ReactNode {
   const route = `SSH ${host.target}${host.sshPort ? `, port ${host.sshPort}` : ''}`
   const shown = host.phase === 'connected' && providers?.length ? providers : undefined
@@ -101,7 +104,7 @@ function HostRow({ host, onCommand, onAction, providers, bridge }: {
       </span>
       <HostMenu host={host} onAction={action => onAction(host, action)} />
     </div>
-    {shown && bridge ? <HostProviders host={host} providers={shown} bridge={bridge} /> : null}
+    {shown && bridge ? <HostProviders host={host} providers={shown} bridge={bridge} job={job} choice={choice} /> : null}
   </section>
 }
 
@@ -202,7 +205,7 @@ export function HostsSettings({ localHostEnabled, onLocalHostChange, bridge = wi
     {/* A setup the dialog was closed on carries on in its thread, and one that ended stays until put away: this is the way back to it. */}
     {state?.setup && !dialog ? <HostSetupLine setup={state.setup} onShow={() => setDialog({ kind: 'setup' })} onDismiss={() => void run({ type: 'dismiss-setup', id: state.setup!.id })} /> : null}
     <div className="hosts-list">
-      {state?.hosts.map(host => <HostRow key={host.id} host={host} onCommand={run} onAction={act} bridge={bridge}
+      {state?.hosts.map(host => <HostRow key={host.id} host={host} onCommand={run} onAction={act} bridge={bridge} job={state.providerJob} choice={state.setupChoice}
         providers={host.hostId ? clientHosts?.find(item => item.hostId === host.hostId)?.providers : undefined} />)}
       {state && !state.hosts.length ? <p className="hosts-empty">No remote hosts yet.</p> : null}
     </div>

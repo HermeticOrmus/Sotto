@@ -4,7 +4,8 @@ import { parseHostEntityKey } from '../shared/clientIdentity'
 import { DesktopHostRouter } from './hosts/desktopHostRouter'
 import { DesktopHosts } from './hosts/desktopHosts'
 import { HostSetup, hostSetupRequests } from './hosts/hostSetup'
-import { HostSetupToolServer } from './hosts/hostSetupTools'
+import { agentJobTools, HostSetupToolServer } from './hosts/hostSetupTools'
+import { HostProviderJobs } from './hosts/hostProviderJob'
 import { coordinatorSetupThreads } from './hosts/hostSetupThreads'
 import { inactiveLocalHost, emptyDesktopState, requireLocalHistoryCleanup } from './hosts/inactiveLocalHost'
 import { registerHostsIpc } from './hosts/ipc'
@@ -676,15 +677,25 @@ async function createRuntime(): Promise<NativeRuntimeController> {
   await desktopHosts.start()
   // Have my agent set this up (ADR-0035): a host setup thread on this computer, with the host setup tools while it
   // runs. The thread reaches the device through this computer's SSH setup, so it needs the local host.
-  const hostSetup = new HostSetup({ version: appVersion,
+  // Have my agent install it, update it or fix it on a host's provider tile runs the same way, in the same project, and
+  // one agent job runs at a time: a host setup or a provider job.
+  const agentJobThreads = coordinatorSetupThreads({ coordinator: agentControl, folder: join(userDataPath, 'host-setup'), localHostRunning: startupSettings.localHostEnabled })
+  const providerJobs: HostProviderJobs = new HostProviderJobs({ threads: agentJobThreads,
+    hosts: { host: id => desktopHosts.jobHost(id), provider: (id, provider) => desktopHosts.providerStatus(id, provider),
+      refresh: (id, provider) => desktopHosts.refreshProvider(id, provider),
+      subscribe: listener => { const off = [hostRouter.subscribe(() => listener()), desktopHosts.subscribe(() => listener())]; return () => { for (const item of off) item() } } },
+    busy: (): string | undefined => { const setup = hostSetup.state(); return setup && (setup.phase === 'starting' || setup.phase === 'running') ? `An agent is setting up ${setup.name} now. Stop that setup first. Nothing was started.` : undefined } })
+  const hostSetup: HostSetup = new HostSetup({ version: appVersion,
     hosts: { check: connection => desktopHosts.check(connection), add: connection => desktopHosts.setupAdd(connection), forget: id => desktopHosts.forgetSaved(id),
       attempt: id => desktopHosts.attempt(id), cancelAttempt: id => desktopHosts.cancelAttempt(id), savedAs: (target, port) => desktopHosts.savedAs(target, port) },
-    threads: coordinatorSetupThreads({ coordinator: agentControl, folder: join(userDataPath, 'host-setup'), localHostRunning: startupSettings.localHostEnabled }) })
-  const hostSetupTools = new HostSetupToolServer(hostSetup)
+    threads: agentJobThreads, busy: (): string | undefined => providerJobs.busySentence() })
+  const hostSetupTools = new HostSetupToolServer(agentJobTools(hostSetup, providerJobs))
   hostSetup.useTools(threadId => hostSetupTools.revoke(threadId))
+  providerJobs.useTools(threadId => hostSetupTools.revoke(threadId))
   agentHost.useHostSetupTools(hostSetupTools)
   agentControl.useSottoRequests(hostSetupRequests(hostSetup))
   desktopHosts.useSetup(hostSetup)
+  desktopHosts.useProviderJob(providerJobs)
   // Phone access serves the local host's own threads to paired phones over the tailnet (ADR-0033). Its
   // Tailscale checks can take seconds, so they run beside startup rather than in front of the window.
   const phoneAccess = new PhoneAccess({ directory: userDataPath,
@@ -764,6 +775,7 @@ async function createRuntime(): Promise<NativeRuntimeController> {
     await phoneAccess.close().catch(() => logOperational('phone-access-close-failed'))
     // A setup running now ends as Stop setup would, before the hosts it checks and adds close.
     await hostSetup.close().catch(() => undefined)
+    providerJobs.close()
     const results = await Promise.allSettled([desktopHosts.close(), localRuntime.close(), personalChats.close(), hostSetupTools.close()])
     hostRouter.dispose()
     const failure = results.find(result => result.status === 'rejected')
@@ -1232,7 +1244,7 @@ async function createRuntime(): Promise<NativeRuntimeController> {
       ipcMain.handle(E2E_HOST_SETUP_TOOL_CHANNEL, (event, payload: unknown) => {
         if (!isAuthorizedIpcSender(event, windows.getTrustedRenderers(), ['main'])) throw new Error('E2E_SENDER_REJECTED')
         const request = e2eHostSetupToolSchema.parse(payload)
-        return hostSetupTools.call(hostSetup.threadId() ?? '', request.name, {})
+        return hostSetupTools.call(hostSetup.threadId() ?? providerJobs.threadId() ?? '', request.name, {})
       })
       ipcMain.handle(AGENT_E2E, (event, payload: unknown) => {
         if (!isTrustedMainE2ESender(event.sender, windows.getTrustedRenderers())) throw new Error('E2E_SENDER_REJECTED')

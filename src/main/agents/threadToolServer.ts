@@ -28,8 +28,10 @@ export class ThreadToolServer {
   private readonly threads = new Map<string, string>()
   private closed = false
   private running = 0
+  /** `listFor` narrows what one thread is shown, when threads get different tools from the same server; every tool otherwise. */
   constructor(protected readonly identity: ThreadToolServerIdentity, readonly definitions: readonly ThreadToolDefinition[],
-    private readonly invoke: (threadId: string, name: string, args: unknown) => Promise<ThreadToolResult>) {}
+    private readonly invoke: (threadId: string, name: string, args: unknown) => Promise<ThreadToolResult>,
+    private readonly listFor?: (threadId: string) => readonly ThreadToolDefinition[]) {}
   async call(threadId: string, name: string, args: unknown): Promise<ThreadToolResult> {
     if (this.closed || !this.definitions.some(tool => tool.name === name)) return { isError: true, content: [{ type: 'text', text: this.identity.unavailable }] }
     try { return await this.invoke(threadId, name, args) }
@@ -98,7 +100,7 @@ export class ThreadToolServer {
         reply({ protocolVersion, capabilities: { tools: { listChanged: false } }, serverInfo: { name: this.identity.serverName, version: '1.0.0' }, instructions: this.identity.instructions }); return
       }
       if (method === 'ping') { reply({}); return }
-      if (method === 'tools/list') { reply({ tools: this.definitions }); return }
+      if (method === 'tools/list') { reply({ tools: this.listFor?.(threadId) ?? this.definitions }); return }
       if (method === 'tools/call') {
         const call = toolCallSchema.safeParse(params)
         if (!call.success) { response.writeHead(400).end(); return }

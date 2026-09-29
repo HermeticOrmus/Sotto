@@ -8,12 +8,13 @@ import { PROVIDER_SIGN_IN_ARGS, type SignInCommand } from '../../src/host/provid
 /**
  * A scripted provider that is installed on the host and signed out there until its fake client's sign-in writes
  * `<provider>.signed-in` in `directory` (tests/fixtures/fakeSignInCli.mjs), as a real client's credential appears once it
- * signs in. Devin is not installed at all, as on forge.
+ * signs in. Devin is not installed, as on forge, until `devin.installed` appears there, as an agent's install would put
+ * it where the host looks (#461).
  */
 export class SignedOutUntilSignIn extends E2EAgentHost {
   constructor(private readonly provider: ProviderId, private readonly directory: string) { super() }
   override async connect(): Promise<AgentHostSnapshot> {
-    if (this.provider === 'devin') throw new ProviderUnavailable('not-installed', 'Install Devin CLI and run devin auth login, then connect again. Your threads and drafts are kept.')
+    if (this.provider === 'devin' && !existsSync(join(this.directory, 'devin.installed'))) throw new ProviderUnavailable('not-installed', 'Install Devin CLI and run devin auth login, then connect again. Your threads and drafts are kept.')
     if (!existsSync(join(this.directory, `${this.provider}.signed-in`))) throw new ProviderUnavailable('signed-out', 'Sign in to this provider on the host machine, then connect it again.', '1.0.0')
     return super.connect()
   }

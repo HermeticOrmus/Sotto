@@ -4,6 +4,13 @@ import { isAbsolute, join } from 'node:path'
 import { z } from 'zod'
 import { findCli, withCliPath, type CliLookupOptions } from './cliLookup'
 
+/**
+ * Grok Build's floor: the oldest client Sotto connects (ADR-0021), and what a host's tile says an update needs
+ * (ADR-0035). The reason: the adapter reads the ACP 1 shapes 1.0.5 was checked against (docs/research/
+ * 2026-09-11-issue-23-grok-acp-verification.md): `initialize._meta.agentVersion` and `_meta.modelState` for the
+ * model catalog, `cached_token` sign-in without an API key, and `session/load` for resuming a thread. An older
+ * client was never checked for any of them. Move it only after checking a newer one against the adapter contract.
+ */
 export const GROK_CLI_VERSION = '1.0.5'
 export const GROK_ACP_VERSION = 1
 export class GrokUncertain extends Error {}

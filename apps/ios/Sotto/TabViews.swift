@@ -293,7 +293,7 @@ struct ThreadRow: View {
         if row.status == .unreachable { return Palette.muted }
         if state.waitsOnYou { return Palette.warning }
         switch state {
-        case .working: return Palette.accent
+        case .working, .waiting, .compacting: return Palette.accent
         case .failed: return Palette.danger
         default: return Palette.muted
         }

@@ -528,8 +528,8 @@ export class GrokAcpHost implements AgentHost {
       const refused = error instanceof GrokUnsupported || error instanceof ProviderUnavailable
       const detail = refused || error instanceof GrokUncertain ? error.message : ''
       const message = ['Could not connect Grok.', detail, refused ? '' : 'Connect again to retry.'].filter(Boolean).join(' ')
-      if (error instanceof ProviderUnavailable) throw new ProviderUnavailable(error.problem, message, error.version)
-      if (tooOld) throw new ProviderUnavailable('too-old', message, tooOld)
+      if (error instanceof ProviderUnavailable) throw new ProviderUnavailable(error.problem, message, error.version, error.requiredVersion)
+      if (tooOld) throw new ProviderUnavailable('too-old', message, tooOld, GROK_CLI_VERSION)
       throw new Error(message, { cause: error })
     }
   }

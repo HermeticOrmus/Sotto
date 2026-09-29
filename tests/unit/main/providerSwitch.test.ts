@@ -404,4 +404,16 @@ describe('independent thread providers', () => {
     expect(off).toMatchObject({ connection: 'disconnected' })
     expect(off?.problem).toBeUndefined()
   })
+
+  it('carries a too-old client\'s floor into its status, and drops it once the provider is turned off (ADR-0035)', async () => {
+    const f = await fixture()
+    vi.spyOn(f.adapters.grok, 'connect').mockRejectedValueOnce(new ProviderUnavailable('too-old', 'Could not connect Grok. Grok CLI 1.0.5 or newer is required.', '0.9.12', '1.0.5'))
+    const snapshot = await f.host.connect()
+    expect(snapshot.providers?.find(provider => provider.id === 'grok')).toMatchObject({ connection: 'error', problem: 'too-old', version: '0.9.12', requiredVersion: '1.0.5' })
+    // An adapter that reports it in its snapshot, as Devin does, names it there too.
+    f.adapters.claude.state.connected = false; f.adapters.claude.state.error = 'Use Devin CLI 3000.10.31 or newer.'; f.adapters.claude.state.problem = 'too-old'; f.adapters.claude.state.requiredVersion = '3000.10.31'; f.adapters.claude.emit()
+    expect((await f.host.snapshot('codex')).providers?.find(provider => provider.id === 'claude')).toMatchObject({ problem: 'too-old', requiredVersion: '3000.10.31' })
+    f.host.disconnect('grok')
+    expect((await f.host.snapshot('codex')).providers?.find(provider => provider.id === 'grok')?.requiredVersion).toBeUndefined()
+  })
 })
