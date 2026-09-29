@@ -36,14 +36,25 @@ export type HostFeature = typeof HOST_FEATURES[number]
  * be read, such as a host from before v1 froze that advertises none, is never newer.
  */
 export function hostIsNewer(hostVersion: string | undefined, clientVersion: string): boolean {
+  return compareSottoVersions(hostVersion, clientVersion) === 1
+}
+/**
+ * Whether a host's Sotto version is earlier than this client's, by release number: the host needs an update
+ * (ADR-0040). A version that cannot be read is never older, so nothing is offered for a host that says nothing.
+ */
+export function hostIsOlder(hostVersion: string | undefined, clientVersion: string): boolean {
+  return compareSottoVersions(hostVersion, clientVersion) === -1
+}
+/** -1, 0 or 1 by release number; null when either side is not a release number. */
+function compareSottoVersions(hostVersion: string | undefined, clientVersion: string): -1 | 0 | 1 | null {
   const parts = (version: string): number[] | null => {
     const match = /^(\d+)\.(\d+)\.(\d+)/.exec(version)
     return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null
   }
   const host = hostVersion === undefined ? null : parts(hostVersion), client = parts(clientVersion)
-  if (!host || !client) return false
-  for (let index = 0; index < 3; index += 1) if (host[index] !== client[index]) return host[index]! > client[index]!
-  return false
+  if (!host || !client) return null
+  for (let index = 0; index < 3; index += 1) if (host[index] !== client[index]) return host[index]! > client[index]! ? 1 : -1
+  return 0
 }
 /**
  * What a client says when a host speaks a version of the protocol it cannot use: a host from before v1

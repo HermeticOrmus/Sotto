@@ -210,3 +210,29 @@ it('sends each host catalog across IPC once, not again in the host entry', () =>
   expect(serialize(both).length).toBeLessThan(catalogBytes * 2 * 1.2)
   expect(hostForThread(both.host, both.host.threads[1]!).models[0]!.name).toBe('Forge model 0')
 })
+
+describe('a host restarting for an update (ADR-0040)', () => {
+  it('keeps its threads, reading Reconnecting, and takes the new connection in their place without losing the selection', async () => {
+    const router = new DesktopHostRouter(emptyDesktopState), local = fixture(LOCAL, 'local'), remote = fixture(REMOTE, 'remote')
+    let available = true
+    router.add(local.connection); router.add({ ...remote.connection, available: () => available })
+    await router.command({ type: 'select-thread', threadId: hostEntityKey(REMOTE, 'thread') }, desktopWindowClient())
+    // The old connection drops while the host restarts: its thread stays, disconnected and reconnecting.
+    available = false
+    router.setReconnecting(REMOTE, true)
+    const restarting = router.shell().host.threads.find(thread => thread.hostId === REMOTE)!
+    expect(restarting).toMatchObject({ id: hostEntityKey(REMOTE, 'thread'), clientConnected: false, clientReconnecting: true })
+    expect(router.shell().activeThreadId).toBe(hostEntityKey(REMOTE, 'thread'))
+    // This computer's own thread does not read Reconnecting.
+    expect(router.shell().host.threads.find(thread => thread.hostId === LOCAL)!.clientReconnecting).toBeUndefined()
+    // The new connection takes its place: same thread, same selection, connected, and no longer reconnecting.
+    const next = fixture(REMOTE, 'remote')
+    router.replace(next.connection)
+    const back = router.shell().host.threads.find(thread => thread.hostId === REMOTE)!
+    expect(back).toMatchObject({ id: hostEntityKey(REMOTE, 'thread'), clientConnected: true })
+    expect(back.clientReconnecting).toBeUndefined()
+    expect(router.shell().activeThreadId).toBe(hostEntityKey(REMOTE, 'thread'))
+    await router.command({ type: 'manual-send', threadId: hostEntityKey(REMOTE, 'thread'), text: 'After the update' }, desktopWindowClient())
+    expect(next.command).toHaveBeenCalledWith({ type: 'manual-send', threadId: 'thread', text: 'After the update' }, desktopWindowClient())
+  })
+})
