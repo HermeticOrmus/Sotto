@@ -45,8 +45,12 @@ function versionedName(model: z.infer<typeof NATIVE_MODEL>): string {
 const INITIALIZED = z.object({ type: z.literal('control_response'), response: z.object({
   subtype: z.literal('success'), request_id: z.string(), response: z.object({ models: z.array(NATIVE_MODEL).min(1).max(300) }),
 }) })
-const AUTH = z.object({ loggedIn: z.boolean(), authMethod: z.string().optional(), subscriptionType: z.string().nullable().optional() })
+const AUTH = z.object({ loggedIn: z.boolean(), authMethod: z.string().nullable().optional(), subscriptionType: z.string().nullable().optional() })
 const RESULT = z.object({ type: z.literal('result'), is_error: z.boolean().optional(), result: z.string() })
+/** A run that exited with a non-zero code, with what it printed when the caller asked to keep it. */
+class ClaudeExitError extends Error {
+  constructor(readonly output: string) { super('Claude Code could not complete the request. Check its subscription and usage limits in the native client.') }
+}
 // Keep native OS identity and networking, not provider keys, alternate account
 // directories, Node injection flags, or cloud-provider routing overrides.
 const ENVIRONMENT_KEYS = new Set([
@@ -152,8 +156,12 @@ export class ClaudeSubscriptionClient implements SubscriptionClient {
         account.problem = 'too-old'
         return { account, executable }
       }
-      const output = await this.run(executable, ['--safe-mode', 'auth', 'status', '--json'], '', 10_000, signal)
+      // Signed out, Claude Code prints its status and exits 1. A failed exit is read only as that answer.
+      let exited = false
+      const output = await this.run(executable, ['--safe-mode', 'auth', 'status', '--json'], '', 10_000, signal, this.workingDirectory, true)
+        .catch((error: unknown) => { if (error instanceof ClaudeExitError) { exited = true; return error.output } throw error })
       const auth = AUTH.parse(JSON.parse(output))
+      if (exited && auth.loggedIn) throw new Error('Claude Code failed its sign-in check while signed in.')
       if (!auth.loggedIn || auth.authMethod !== 'claude.ai' || !auth.subscriptionType) {
         account.detail = 'Sign in to Claude Code with your Claude subscription, then check the connection in Sotto. Sotto will not switch to API billing.'
         account.problem = 'signed-out'
@@ -209,7 +217,7 @@ export class ClaudeSubscriptionClient implements SubscriptionClient {
     try { return (await this.run(executable, ['--version'], '', timeoutMs)).trim().slice(0, 200) } catch { return '' }
   }
 
-  private run(executable: string, args: string[], input: string, timeoutMs: number, signal?: AbortSignal, cwd = this.workingDirectory): Promise<string> {
+  private run(executable: string, args: string[], input: string, timeoutMs: number, signal?: AbortSignal, cwd = this.workingDirectory, keepExitOutput = false): Promise<string> {
     return new Promise((resolve, reject) => {
       signal?.throwIfAborted()
       let child: ChildProcessWithoutNullStreams
@@ -257,7 +265,7 @@ export class ClaudeSubscriptionClient implements SubscriptionClient {
       child.stdout.on('data', (chunk: Buffer) => consume(chunk, true))
       child.stderr.on('data', (chunk: Buffer) => consume(chunk, false))
       child.on('error', () => abort(new Error('Could not start Claude Code. Check its installation and try again.')))
-      child.on('close', code => finish(failure ?? (code === 0 ? null : new Error('Claude Code could not complete the request. Check its subscription and usage limits in the native client.'))))
+      child.on('close', code => finish(failure ?? (code === 0 ? null : new ClaudeExitError(keepExitOutput ? Buffer.concat(chunks).toString('utf8') : ''))))
       child.stdin.on('error', () => abort(new Error('Claude Code could not receive the reasoning request.')))
       child.stdin.end(input)
     })
