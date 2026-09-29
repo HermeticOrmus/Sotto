@@ -12,7 +12,7 @@ import { desktopWindowClient } from '../../src/main/agents/hostService'
 import { DesktopHosts, reconnectDelayMs } from '../../src/main/hosts/desktopHosts'
 import { DesktopHostRouter } from '../../src/main/hosts/desktopHostRouter'
 import { emptyDesktopState } from '../../src/main/hosts/inactiveLocalHost'
-import { SshFailure, SshHostLauncher, type SshCallbacks, type SshHostConnection, type SshHostConfiguration } from '../../src/main/hosts/sshLauncher'
+import { SshFailure, SshHostLauncher, type SshCallbacks, type SshHostConnection, type SshHostConfiguration, type SshHostUpdateOperation, type SshHostUpdateResult } from '../../src/main/hosts/sshLauncher'
 import { E2EAgentHost, e2eAgentReasoner } from '../../src/main/e2e/agentEffects'
 import { hostEntityKey } from '../../src/shared/clientIdentity'
 import type { RemoteHost } from '../../src/shared/hosts'
@@ -32,6 +32,9 @@ let owned = true, stopResult: boolean | Error = true
 let tunnelUrl: (() => string) | undefined
 /** Runs before a stop answers; the real host closes its listener, dropping every peer, before it replies. */
 let beforeStopReply: () => Promise<void> = async () => undefined
+/** What the fixture host answers to each operation of an update; by default it has none. */
+const noUpdates = async (): Promise<SshHostUpdateResult> => { throw new Error('This fixture host has no update.') }
+let updateHost: (operation: SshHostUpdateOperation) => Promise<SshHostUpdateResult> = noUpdates
 const pause = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 /** Revokes the way the launch script does, through the host's admin endpoint, which closes the revoked peer before replying. */
 async function adminRevoke(clientId: string): Promise<boolean> {
@@ -67,6 +70,7 @@ class FixtureSsh extends SshHostLauncher {
       showHostPairingCode: async () => ({ ...host.pairing.issuePairingCode(), hostId: reportedHostId }),
       revokeClient: adminRevoke,
       stopHost: async () => { stops.push(reportedHostId); await beforeStopReply(); if (stopResult instanceof Error) throw stopResult; return stopResult },
+      updateHost: async operation => updateHost(operation),
     }
   }
   override answerPrompt(id: string, answer: string): void {
@@ -81,7 +85,7 @@ beforeEach(async () => {
   reportedHostId = host.descriptor!.hostId
   credentials = new AgentCredentials(join(root, 'desktop'), new HostCredentialEncryption('synthetic-desktop-credential-key')); await credentials.load()
   router = new DesktopHostRouter(emptyDesktopState)
-  launchers.length = 0; failures.length = 0; stops.length = 0; answers.length = 0; askOnConnect = undefined; onConnect = undefined; opened.length = 0; scheduled.length = 0; retryDelay = () => 0; owned = true; stopResult = true; beforeStopReply = async () => undefined; tunnelUrl = undefined
+  launchers.length = 0; failures.length = 0; stops.length = 0; answers.length = 0; askOnConnect = undefined; onConnect = undefined; opened.length = 0; scheduled.length = 0; retryDelay = () => 0; owned = true; stopResult = true; beforeStopReply = async () => undefined; tunnelUrl = undefined; updateHost = noUpdates
   manager = newManager()
   await manager.start()
 })

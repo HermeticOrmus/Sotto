@@ -33,7 +33,8 @@ async function main() {
   const port = Number(args[args.indexOf('--port') + 1])
   const server = http.createServer((_request, response) => { response.setHeader('content-type', 'application/json'); response.end(JSON.stringify({ v: 1, status: 'ready', hostId, pid: process.pid, port: server.address().port })) })
   await new Promise(resolve => server.listen(port, '127.0.0.1', resolve))
-  const descriptor = { v: 1, hostId, pid: process.pid, port: server.address().port, adminToken: 'remote-only-secret',
+  // `entry` says which installed version is running, for the host update tests; the launch script ignores it.
+  const descriptor = { v: 1, hostId, pid: process.pid, port: server.address().port, adminToken: 'remote-only-secret', entry: process.argv[1],
     ...(process.env.SOTTO_HOST_STARTED_BY === 'launch-script' ? { startedBy: 'launch-script' } : {}) }
   await fs.writeFile(descriptorPath + '.tmp', JSON.stringify(descriptor)); await fs.rename(descriptorPath + '.tmp', descriptorPath)
   process.on('SIGTERM', () => server.close(async () => { await fs.rm(lockPath, { force: true }); process.exit(0) }))

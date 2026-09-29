@@ -39,7 +39,7 @@ class LocalSsh extends SshHostLauncher {
     callbacks.onStep?.('sign-in'); callbacks.onStep?.('install'); callbacks.onStep?.('start')
     const hostId = this.remote.descriptor!.hostId
     return { url: 'http://127.0.0.1:' + this.remote.descriptor!.port, hostId, owned: true, route: { hostname: 'forge', identityFiles: [] }, close: async () => undefined,
-      showHostPairingCode: async () => ({ ...this.remote.pairing.issuePairingCode(), hostId }), revokeClient: async () => true, stopHost: async () => true }
+      showHostPairingCode: async () => ({ ...this.remote.pairing.issuePairingCode(), hostId }), revokeClient: async () => true, stopHost: async () => true, updateHost: async () => { throw new Error('Nothing here updates a host.') } }
   }
   override async disconnect(): Promise<void> { /* nothing to close */ }
 }

@@ -10,6 +10,7 @@
 import { createServer as createHttpServer } from 'node:http'
 import { connect, createServer as createNetServer } from 'node:net'
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { Buffer } from 'node:buffer'
 import { createHash, randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { dirname, join } from 'node:path'
@@ -54,7 +55,8 @@ function words(text) {
 const quote = value => `'${value.replace(/'/gu, "'\\''")}'`
 const remote = words(command)
 const configuration = remote[3] === 'sotto-launch' ? JSON.parse(remote[4]) : undefined
-const readAll = stream => new Promise(resolve => { let text = ''; stream.setEncoding('utf8'); stream.on('data', chunk => { text += chunk }); stream.on('end', () => resolve(text)); stream.on('error', () => resolve(text)) })
+// Bytes, not text: the receive script takes an archive on stdin where every other command takes the launch script.
+const readAll = stream => new Promise(resolve => { const chunks = []; stream.on('data', chunk => { chunks.push(chunk) }); stream.on('end', () => resolve(Buffer.concat(chunks))); stream.on('error', () => resolve(Buffer.concat(chunks))) })
 const exit = code => { process.exitCode = code }
 
 /**
@@ -160,10 +162,13 @@ const say = value => process.stdout.write(JSON.stringify(value) + '\n')
 async function runRemotely(script) {
   const root = process.env.FAKE_SSH_ROOT
   const local = { ...configuration, installPath: join(root, configuration.installPath), dataDirectory: join(root, configuration.dataDirectory) }
-  // A POSIX machine runs the probe for real; Windows has no sh, so it runs the launch script directly.
+  // A POSIX machine runs the probe for real; Windows has no sh, so it runs the launch script, or the receive script the
+  // probe would run with -e, directly.
+  const inline = remote[6]
   const child = process.platform === 'win32'
-    ? spawn(process.execPath, ['--input-type=commonjs', '-', JSON.stringify(local)], { stdio: ['pipe', 'inherit', 'inherit'], windowsHide: true })
+    ? spawn(process.execPath, inline ? ['-e', inline, JSON.stringify(local)] : ['--input-type=commonjs', '-', JSON.stringify(local)], { stdio: ['pipe', 'inherit', 'inherit'], windowsHide: true })
     : spawn('sh', ['-c', remote.map((word, index) => quote(index === 4 ? JSON.stringify(local) : word)).join(' ')], { stdio: ['pipe', 'inherit', 'inherit'] })
+  child.stdin.on('error', () => undefined)
   child.stdin.end(script)
   exit(await new Promise(resolve => child.on('close', code => resolve(code ?? 255))))
 }

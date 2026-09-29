@@ -29,6 +29,7 @@ export type SshFailureCode =
   | 'pairing-failed'
   | 'revoke-failed'
   | 'stop-failed'
+  | 'update-failed'
   | 'request-busy'
   | 'not-connected'
   | 'cancelled'
@@ -62,6 +63,7 @@ const MESSAGES: Readonly<Record<SshFailureCode, string>> = {
   'pairing-failed': 'The pairing code could not be read from the host. Check that the host is running and try again.',
   'revoke-failed': 'Client access could not be revoked. Check the host connection and try Forget again.',
   'stop-failed': 'The host could not be stopped. It may still be running on the SSH host.',
+  'update-failed': 'The connection to the host closed before this step of its update finished.',
   'request-busy': 'Wait for the current host request to finish.',
   'not-connected': 'Connect to the SSH host first.',
   'cancelled': 'The SSH connection was cancelled.',
