@@ -1020,6 +1020,7 @@ export class WorkspaceHost implements AgentHost {
   message(threadId: string, messageId: string): AgentMessage | undefined {
     if (this.storeUnavailable) return undefined
     this.writeEvents()
+    if (this.pendingEvents.has(threadId)) return undefined
     try { return this.threadStore.message(threadId, messageId) }
     catch { return undefined }
   }

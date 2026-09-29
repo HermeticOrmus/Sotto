@@ -20,7 +20,7 @@ A read-only SQLite connection backed up the affected local profile into a tempor
 - Visually inspected dark and light at 1280x800, minimum 820x560, and 1600x1000 with reduced motion. Windows display scaling makes the screenshot pixel dimensions larger than the window's logical dimensions. Captures: [dark](../../artifacts/codex-restored-replies/dark.png), [light](../../artifacts/codex-restored-replies/light.png), [minimum](../../artifacts/codex-restored-replies/minimum.png), [wide with reduced motion](../../artifacts/codex-restored-replies/wide-reduced-motion.png).
 - Initial 0.1.24 `npm test -- --maxWorkers=2`: 6,250 passed, 151 skipped, one failed (472 files passed, 39 skipped, one failed). The sole failure was the Git-action fixture's initial `git push` to its temporary local bare repository: `unexpected disconnect while reading sideband packet`. It failed before exercising the assertion and passed in an isolated rerun. No Git-action code was changed. The full run is not reported as green.
 
-The full suite is rerun for the PR. A preliminary 0.1.26 run reached a timeout in the Devin mode matrix; it is not a green result. The PR records the final local and CI outcomes.
+A preliminary 0.1.26 full run finished with 6,311 passed, 152 skipped and three failures: an outdated benchmark method name, the in-progress anchor correction against a cached module, and a timeout in the Devin mode matrix. The benchmark wrapper was updated; the final anchor tests and isolated Devin test passed. A storage-failure regression also demonstrated stale identity evidence before the guard and passed afterward (19 tests across three suites). The final full run and CI results are recorded in the PR.
 
 ## Review and limits
 
