@@ -5,6 +5,8 @@ import { gitRefsRequestSchema } from './gitRefs'
 import { gitChangedFilesRequestSchema } from './gitChangedFiles'
 import { gitPullRequestRequestSchema } from './gitPullRequests'
 import { hostFoldersRequestSchema } from './hostFolders'
+import { PASTED_CODE_MAX } from './hostProviders'
+import { providerIdSchema } from './agents'
 
 /**
  * Protocol version 1 is frozen (ADR-0025; every message is listed in docs/host-protocol.md). A later host
@@ -23,8 +25,11 @@ export const HOST_PROTOCOL_VERSION = 1 as const
  * sends once and answers with its handle (`stage-attachment`), and hands a staged image back by digest
  * (`attachment-content`); drafts and commands carry the handle (ADR-0031). `host-folders`: the host answers the
  * `host-folders` request with one folder's subfolders on the host machine, for the Add project dialog's folder browser.
+ * `provider-sign-in`: the host runs one of its providers' own sign-in for the client that asks, and answers the
+ * `sign-in-start`, `sign-in-read`, `sign-in-code` and `sign-in-cancel` requests (ADR-0037). Only a headless host offers
+ * it: the desktop's phone listener does not.
  */
-export const HOST_FEATURES = ['detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders'] as const
+export const HOST_FEATURES = ['detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders', 'provider-sign-in'] as const
 export type HostFeature = typeof HOST_FEATURES[number]
 /**
  * Whether a host's Sotto version is later than this client's, by release number. A version that cannot
@@ -88,6 +93,14 @@ export const hostRequestSchema = z.discriminatedUnion('op', [
   z.object({ ...base, op: z.literal('attachment-content'), digest: attachmentDigestSchema }).strict(),
   /** One folder's subfolders on the host, for the Add project dialog's folder browser; read on request. */
   z.object({ ...base, op: z.literal('host-folders'), request: hostFoldersRequestSchema }).strict(),
+  /**
+   * A provider's sign-in on the host, for the client that asks and for no other (ADR-0037): start one, read where it
+   * stands, hand its client a code pasted from the sign-in page, or cancel it. Each answers with the sign-in, or null.
+   */
+  z.object({ ...base, op: z.literal('sign-in-start'), provider: providerIdSchema }).strict(),
+  z.object({ ...base, op: z.literal('sign-in-read'), signInId: z.uuid() }).strict(),
+  z.object({ ...base, op: z.literal('sign-in-code'), signInId: z.uuid(), code: z.string().min(1).max(PASTED_CODE_MAX) }).strict(),
+  z.object({ ...base, op: z.literal('sign-in-cancel'), signInId: z.uuid() }).strict(),
 ])
 export type HostRequest = z.infer<typeof hostRequestSchema>
 export type HostOperation = HostRequest extends infer R ? R extends HostRequest ? Omit<R, 'v' | 'id' | 'session'> : never : never

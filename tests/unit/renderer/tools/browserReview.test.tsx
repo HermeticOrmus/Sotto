@@ -35,6 +35,19 @@ function fake(initial: BrowserTask[] = [task()]) {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.useRealTimers() })
 
 describe('the browser player', () => {
+  it('asks for no remote host thread\'s tasks, and survives a bridge that refuses a thread outright', async () => {
+    const browser = fake(); const store = new ToolsPanelStore(); const playerStore = new BrowserPlayerStore()
+    const state = threadsStateFixture()
+    const [local, ...others] = state.host.threads
+    state.host.threads = [local!, ...others.map(thread => ({ ...thread, remoteHost: true }))]
+    // The preload throws, before any promise, for a thread on a host this computer does not run.
+    vi.mocked(browser.bridge.tasks!).mockImplementation(request => { if (request.threadId !== local!.id) throw new Error('This action runs on the host machine. Open it there.'); return Promise.resolve(ok([task()])) })
+    render(<BrowserPlayer state={state} focusedThreadId={local!.id} bridge={browser.bridge} store={store} playerStore={playerStore} />)
+    await waitFor(() => expect(browser.bridge.tasks).toHaveBeenCalled())
+    expect(vi.mocked(browser.bridge.tasks!).mock.calls.map(([request]) => request.threadId)).toEqual([local!.id])
+    const refusing = new ToolsPanelStore()
+    expect(() => refusing.browser.watchTasks(browser.bridge, [others[0]!.id])).not.toThrow()
+  })
   it('shows only the focused thread’s task, and never a pinned one (#331)', async () => {
     const browser = fake(); const store = new ToolsPanelStore(); const playerStore = new BrowserPlayerStore()
     const { rerender } = render(<BrowserPlayer state={threadsStateFixture()} focusedThreadId="another-thread" bridge={browser.bridge} store={store} playerStore={playerStore} />)

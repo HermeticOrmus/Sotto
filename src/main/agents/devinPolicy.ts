@@ -3,6 +3,7 @@ import { lstat, mkdir, readFile, realpath, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
+import { withCliPath } from './cliLookup'
 
 // This is Sotto's approval policy, not Devin's similarly named Ask mode. The profile is what decides:
 // the pinned compatibility experiment shows an ask standing whatever conversation mode Devin is in, with
@@ -201,7 +202,7 @@ function nativeList(executable: string, args: readonly string[], environment: No
   const configIndex = args.indexOf('--config')
   if (configIndex < 0 || !args[configIndex + 1] || !isAbsolute(args[configIndex + 1]!)) return Promise.reject(new Error('Devin integration checks require the Sotto approval profile. Your thread is kept.'))
   return new Promise((resolveOutput, reject) => {
-    execFile(executable, [...args], { cwd, env: environment, windowsHide: true, timeout: 15_000, maxBuffer: 64 * 1024, encoding: 'utf8' }, (error, stdout, stderr) => {
+    execFile(executable, [...args], { cwd, env: withCliPath(environment, executable), windowsHide: true, timeout: 15_000, maxBuffer: 64 * 1024, encoding: 'utf8' }, (error, stdout, stderr) => {
       // execFile errors retain stdout/stderr. Do not propagate them into logs.
       if (error || stderr.trim()) reject(new Error('Sotto could not check Devin integrations. Your thread is kept. Check the supported Devin installation and reconnect.'))
       else resolveOutput(stdout)

@@ -15,6 +15,7 @@ import { PairedClients } from '../main/agents/pairing'
 import { startSocketServer } from './socketServer'
 import { githubPullRequestMerged } from '../main/agents/worktreeCleanup'
 import { acquireHostLock, HostLockError, readBootId, releaseHostLock, type HostLease } from './lock'
+import { ProviderSignIns, type ProviderSignInOptions } from './providerSignIn'
 
 export interface HeadlessHostOptions {
   dataDirectory: string
@@ -30,6 +31,8 @@ export interface HeadlessHostOptions {
    * a host Sotto started, and may stop, from one the user started, however many launches raced.
    */
   startedBy?: 'launch-script'
+  /** Tests stand fake clients in for the providers' own sign-ins; the host finds the real ones as its adapters do. */
+  signInCommand?: ProviderSignInOptions['command']
 }
 
 export { HostLockError } from './lock'
@@ -83,16 +86,26 @@ async function startHostRuntime(options: HeadlessHostOptions) {
       logFailure: code => options.log?.(code),
       // A desktop shows this host's refusals, so an image this host lost is named as the host's, not "this computer".
       missingAttachment: MISSING_REMOTE_ATTACHMENT,
+      // The host connects every provider that is installed and signed in here, except the ones turned off (ADR-0036).
+      runsAs: 'headless-host',
       // The host owns its worktrees, so it reclaims them under the rules in its own settings (ADR-0019, ADR-0025).
       worktreeCleanup: { pullRequestMerged: githubPullRequestMerged, log: event => options.log?.(event) },
       claudeSettingsLog: event => options.log?.(event),
     })
     const pairing = new PairedClients(directory)
+    // A provider signed in from a paired client's browser is connected here for that client (ADR-0037).
+    const signIns = new ProviderSignIns({ ...(options.signInCommand ? { command: options.signInCommand } : {}),
+      connect: async (provider, clientId) => {
+        const client = { clientId, user: pairing.list().find(item => item.clientId === clientId)?.name ?? 'Paired client', transport: 'socket' as const }
+        const state = await runtime.hostService.command({ type: 'connect', provider }, client)
+        const status = state.host.providers?.find(item => item.id === provider)
+        return status?.connection === 'connected' ? undefined : status?.error ?? state.error ?? 'It did not confirm the connection.'
+      } })
     let listener: Awaited<ReturnType<typeof startSocketServer>> | undefined
     try {
       await pairing.load()
       if (options.port !== undefined) {
-        listener = await startSocketServer({ service: runtime.hostService, pairing, port: options.port,
+        listener = await startSocketServer({ service: runtime.hostService, pairing, port: options.port, signIns,
           ...(options.origins ? { origins: options.origins } : {}),
           mayAnswer: client => policy?.mayGrant(client).allowed ?? false,
           setAnswers: (clientId, allowed) => {
@@ -105,7 +118,7 @@ async function startHostRuntime(options: HeadlessHostOptions) {
         await writeFile(join(directory, 'host-listener.json'), JSON.stringify({ ...listener.descriptor, adminToken: listener.adminToken, ...(options.startedBy ? { startedBy: options.startedBy } : {}) }) + '\n', { encoding: 'utf8', mode: 0o600 })
         await chmod(join(directory, 'host-listener.json'), 0o600)
       }
-    } catch (error) { await listener?.close(); await runtime.close(); throw error }
+    } catch (error) { signIns.close(); await listener?.close(); await runtime.close(); throw error }
     // Started once the host is up; close drains a sweep in progress through the runtime, before its host closes.
     runtime.worktreeCleanup.start()
     let closing: Promise<void> | undefined
@@ -113,6 +126,7 @@ async function startHostRuntime(options: HeadlessHostOptions) {
       service: runtime.hostService, credentials, pairing, descriptor: listener?.descriptor,
       close: (): Promise<void> => {
         closing ??= (async () => {
+          signIns.close()
           try { await listener?.close() } finally {
             try { await runtime.close() } finally {
               memory?.close()

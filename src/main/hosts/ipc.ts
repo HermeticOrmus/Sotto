@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { HOSTS_GET, HOSTS_COMMAND, hostsCommandSchema, type HostsState } from '../../shared/hosts'
 import { HOSTS_DEVICES, HOSTS_TAILSCALE, HOSTS_TAILSCALE_CONNECT, HOSTS_TAILSCALE_DOWNLOAD } from '../../shared/hostDevices'
+import { HOSTS_PROVIDER_ACTION, HOSTS_SIGN_IN, hostProviderActionSchema, hostSignInRequestSchema } from '../../shared/hostProviders'
 import { isAuthorizedIpcSender, type IpcMainAdapter, type TrustedIpcSender } from '../ipc/registerIpc'
 import type { DesktopHosts } from './desktopHosts'
 import type { HostTailscale } from './tailscale'
@@ -20,6 +21,17 @@ export function registerHostsIpc(ipc: IpcMainAdapter, hosts: DesktopHosts, sende
     const [command] = z.tuple([hostsCommandSchema]).parse(args)
     return hosts.command(command)
   })
+  // A host's providers, from their tiles (ADR-0037): each request names the saved host it goes to.
+  ipc.handle(HOSTS_PROVIDER_ACTION, (event, ...args) => {
+    if (!isAuthorizedIpcSender(event, senders(), ['main'])) throw new Error('Open Hosts in the main Sotto window.')
+    const [action] = z.tuple([hostProviderActionSchema]).parse(args)
+    return hosts.providerAction(action)
+  })
+  ipc.handle(HOSTS_SIGN_IN, (event, ...args) => {
+    if (!isAuthorizedIpcSender(event, senders(), ['main'])) throw new Error('Open Hosts in the main Sotto window.')
+    const [request] = z.tuple([hostSignInRequestSchema]).parse(args)
+    return hosts.signIn(request)
+  })
   // Tailscale and the SSH setup are read on each request, so a device that just came online, or an alias
   // added a moment ago, is listed.
   answer(HOSTS_DEVICES, () => tailscale.devices())
@@ -27,7 +39,7 @@ export function registerHostsIpc(ipc: IpcMainAdapter, hosts: DesktopHosts, sende
   answer(HOSTS_TAILSCALE_CONNECT, () => tailscale.connect())
   answer(HOSTS_TAILSCALE_DOWNLOAD, () => tailscale.openDownload())
   const off = hosts.subscribe(publish)
-  const channels = [HOSTS_GET, HOSTS_COMMAND, HOSTS_DEVICES, HOSTS_TAILSCALE, HOSTS_TAILSCALE_CONNECT, HOSTS_TAILSCALE_DOWNLOAD]
+  const channels = [HOSTS_GET, HOSTS_COMMAND, HOSTS_PROVIDER_ACTION, HOSTS_SIGN_IN, HOSTS_DEVICES, HOSTS_TAILSCALE, HOSTS_TAILSCALE_CONNECT, HOSTS_TAILSCALE_DOWNLOAD]
   // Sotto is closing: a `tailscale up` still waiting for a sign-in is stopped rather than left running.
   return () => { off(); for (const channel of channels) ipc.removeHandler(channel); tailscale.dispose() }
 }

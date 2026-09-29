@@ -24,7 +24,7 @@ function fixture(choice: HostSetupChoice | undefined = CHOICE, answer?: (command
   // Main broadcasts every change it makes, as well as answering the command with it.
   const command = vi.fn<HostsBridge['command']>(async input => { if (answer) { state = answer(input, state); for (const listener of listeners) listener(state) } return state })
   const bridge: HostsBridge = { get: async () => state, command, onChanged: listener => { listeners.add(listener); return () => listeners.delete(listener) }, devices: async () => ({ tailscale: { state: 'missing' as const }, devices: DEVICES }), tailscale: async () => ({ state: 'missing' as const }),
-    connectTailscale: async () => 'failed' as const, openTailscaleDownload: async () => undefined }
+    connectTailscale: async () => 'failed' as const, openTailscaleDownload: async () => undefined, providerAction: async () => ({}), signIn: async () => null }
   return { bridge, command, push }
 }
 const setupState = (patch: Partial<HostSetupState> = {}): HostSetupState => ({ id: 'setup', name: 'forge', target: 'zach@forge', threadId: `host:${LOCAL}:thread`, threadTitle: 'Set up forge',

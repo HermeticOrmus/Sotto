@@ -51,6 +51,15 @@ export type AgentSpeechVoice = z.infer<typeof agentSpeechVoicesSchema>[number]
 
 export const providerIdSchema = z.enum(['codex', 'claude', 'grok', 'devin'])
 export type ProviderId = z.infer<typeof providerIdSchema>
+/**
+ * Why a provider is not connected, as a stable code the Hosts page's tiles decide on (ADR-0037): its client is not
+ * there, is older than Sotto supports, is there but not signed in, or is there and could not be started or checked.
+ * The sentence in `error` says the same in words; a window never reads meaning out of the sentence.
+ */
+export const providerProblemSchema = z.enum(['not-installed', 'too-old', 'signed-out', 'cannot-start'])
+export type ProviderProblem = z.infer<typeof providerProblemSchema>
+/** The account kind a connected provider is signed in with, such as "ChatGPT" or "Claude Max": a plan, never an address. */
+const providerAccountSchema = z.string().min(1).max(80)
 
 const id = z.string().min(1).max(512)
 // Scoped public model/project IDs include an encoded native identifier.
@@ -66,6 +75,21 @@ export const SCREENSHOT_WRONG_TYPE = 'Only PNG, JPEG, GIF, and WebP screenshots 
 export const SCREENSHOT_TOO_LARGE = 'Each screenshot must be 10 MB or smaller. Nothing was attached. Choose a smaller file.'
 export const SCREENSHOTS_TOO_LARGE_IN_TOTAL = 'Screenshots must total 20 MB or less. Nothing was attached. Remove an image or choose smaller files.'
 export const SCREENSHOT_NOT_ITS_TYPE = 'This screenshot’s content does not match its file type. Nothing was attached. Save it again as PNG, JPEG, GIF, or WebP, then attach it.'
+/**
+ * The refusal when nothing is connected to act with. Only a send has a draft to keep, so only a send says so. A
+ * headless host cannot know the name a desktop saved it under, so it says "this host" and the desktop puts that name
+ * in (`nameHostInRefusal`); the desktop's own coordinator names this computer and its own Providers page (#459).
+ */
+export const NO_PROVIDER_ON_HOST = 'No provider is connected on this host.'
+const NO_PROVIDER_HERE = 'No provider is connected on this computer.'
+const DRAFT_KEPT = ' Your draft is saved.'
+export function noProviderRefusal(where: 'host' | 'desktop', draftKept: boolean): string {
+  return (where === 'host' ? `${NO_PROVIDER_ON_HOST} Connect one in Settings > Hosts.` : `${NO_PROVIDER_HERE} Connect one in Settings > Providers.`) + (draftKept ? DRAFT_KEPT : '')
+}
+/** A host's refusal as the desktop shows it: "this host" becomes the name the user saved the host under. */
+export function nameHostInRefusal(message: string, name: string): string {
+  return message.startsWith(NO_PROVIDER_ON_HOST) && name.trim() ? `No provider is connected on ${name.trim()}.${message.slice(NO_PROVIDER_ON_HOST.length)}` : message
+}
 /** What a host from before staged images (ADR-0031) is refused with when asked to keep one. */
 export const HOST_CANNOT_STAGE_SCREENSHOTS = 'This host cannot keep screenshots. Update Sotto there, then attach them again. Nothing was attached.'
 export const agentRuntimeModeSchema = z.enum(['approval-required', 'auto-accept-edits', 'auto', 'full-access'])
@@ -334,6 +358,10 @@ export const agentProviderStatusSchema = z.object({
   name: z.string(), version: z.string(), error: z.string().optional(), capabilities: agentCapabilitiesSchema,
   /** Set when the connected client is newer than the version Sotto's adapter was checked against. */
   verifiedVersion: z.string().max(64).optional(),
+  /** Why it is not connected, when its last connect failed for a reason the adapter could name (ADR-0037). */
+  problem: providerProblemSchema.optional(),
+  /** What it is signed in with, while connected, when its client says. */
+  account: providerAccountSchema.optional(),
 })
 export type AgentProviderStatus = z.infer<typeof agentProviderStatusSchema>
 /**
@@ -364,6 +392,9 @@ export const agentHostSnapshotSchema = z.object({
   /** Set when the connected client is newer than the version this adapter was checked against. */
   verifiedVersion: z.string().max(64).optional(),
   error: z.string().optional(),
+  /** One adapter's own snapshot: why it is not connected, and what it is signed in with (ADR-0037). */
+  problem: providerProblemSchema.optional(),
+  account: providerAccountSchema.optional(),
   capabilities: agentCapabilitiesSchema,
   models: z.array(agentModelSchema), projects: z.array(agentProjectSchema),
   threads: z.array(agentThreadSchema),
@@ -384,7 +415,10 @@ export const subscriptionProviderSchema = z.enum(['codex', 'claude', 'grok'])
 export type SubscriptionProvider = z.infer<typeof subscriptionProviderSchema>
 export const subscriptionAccountSchema = z.object({
   provider: subscriptionProviderSchema, label: z.string(), installed: z.boolean(), ready: z.boolean(),
-  detail: z.string(), models: z.array(z.object({
+  detail: z.string(),
+  /** Why it is not ready, when the client could say (ADR-0037), and the plan it is signed in with when it is. */
+  problem: providerProblemSchema.optional(), account: providerAccountSchema.optional(),
+  models: z.array(z.object({
     id: z.string(), name: z.string(),
     /** Least to most thorough, the last being the highest level, as on `agentModelSchema.reasoningEfforts`. */
     reasoningEfforts: z.array(z.string()).optional(),
@@ -407,6 +441,13 @@ const speechProviderSchema = z.enum(['grok', 'kokoro', 'natural', 'system'])
 export const agentConfigurationSchema = z.object({
   provider: providerIdSchema.default('codex'),
   enabledProviders: z.array(providerIdSchema).max(4).refine(ids => new Set(ids).size === ids.length, 'Choose each provider once.').optional(),
+  /**
+   * The providers the user turned off: each one disconnected by name, or left out of a changed enabled set, and not
+   * connected again since. A headless host connects every other provider that is installed and signed in when it
+   * starts, so this is what keeps a turned-off one off across restarts; `enabledProviders` alone cannot tell
+   * "never asked" from "turned off" (ADR-0036). Absent until the user turns one off.
+   */
+  disconnectedProviders: z.array(providerIdSchema).max(4).refine(ids => new Set(ids).size === ids.length, 'Choose each provider once.').optional(),
   orbColor: orbColorSchema.default('teal'),
   enabled: z.boolean(),
   projectsDirectory: z.string().max(4_096),

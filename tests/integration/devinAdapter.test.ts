@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { randomUUID } from 'node:crypto'
-import { readFile, readdir, rm } from 'node:fs/promises'
+import { readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { isImmutableActivities, subscribeActivitySnapshots } from '../../src/main/agents/activitySnapshots'
@@ -15,10 +15,10 @@ describe('Devin dispatch and decision boundaries', () => {
   let f: Awaited<ReturnType<typeof devinFixture>>
   let threadId: string
   const thread = async (id = threadId) => (await f.host.snapshot()).threads.find(thread => thread.id === id)!
-  const create = async (): Promise<string> => {
+  const create = async (providerMode?: string): Promise<string> => {
     const id = randomUUID()
-    await f.host.execute({ type: 'create-thread', commandId: randomUUID(), threadId: id,
-      projectId: f.projectId, modelId: f.modelId, title: 'Synthetic thread' })
+    expect(await f.host.execute({ type: 'create-thread', commandId: randomUUID(), threadId: id,
+      projectId: f.projectId, modelId: f.modelId, title: 'Synthetic thread', ...(providerMode ? { providerMode } : {}) })).toEqual({ accepted: true })
     return id
   }
   const send = (id = threadId, text = 'Identical synthetic prompt') => f.host.execute({ type: 'send', commandId: randomUUID(), messageId: randomUUID(), threadId: id, text })
@@ -330,6 +330,68 @@ describe('Devin dispatch and decision boundaries', () => {
     expect(mode?.params).toMatchObject({ value: 'bypass' })
     await expect(f.host.execute({ type: 'configure-thread', commandId: randomUUID(), threadId, providerMode: 'not-a-mode' })).rejects.toThrow('does not offer')
     expect(await thread()).toMatchObject({ providerMode: 'bypass' })
+  })
+
+  it('creates and sends to a thread on every mode Devin offers', async () => {
+    // Devin announces the mode Sotto sets; that announcement is the thread's own choice, not a change.
+    const modes = (await f.host.snapshot()).models.find(model => model.id === f.modelId)!.providerModes!.map(mode => mode.id)
+    expect(modes).toEqual(['ask-first', 'accept-edits', 'smart', 'plan', 'ask', 'bypass'])
+    for (const providerMode of modes) {
+      const id = await create(providerMode)
+      expect(await thread(id)).toMatchObject({ providerMode, status: 'idle' })
+      expect(await send(id)).toMatchObject({ accepted: true })
+    }
+  })
+
+  it('reopens a thread with history whose mode changed since Devin last held it', async () => {
+    const id = await create('smart'); f.host.observeThreads([id])
+    await send(id); await f.driver.completeTurn(id, 'Smart reply')
+    await expect.poll(async () => (await thread(id)).status).toBe('idle')
+    await f.host.execute({ type: 'configure-thread', commandId: randomUUID(), threadId: id, providerMode: 'bypass' })
+    // The restored session announces Smart, where it was left, before Sotto sets Bypass back on it. A send that
+    // arrives while the session reopens waits for that, so it never prompts under the mode Devin was left on.
+    await f.script({ delayLoad: 1500 })
+    const loads = (await f.driver.requests()).filter(record => record.method === 'session/load').length
+    const reopening = f.host.refreshThread(id)
+    await expect.poll(async () => (await f.driver.requests()).filter(record => record.method === 'session/load').length).toBeGreaterThan(loads)
+    expect(await send(id, 'Second prompt')).toMatchObject({ accepted: true })
+    await reopening; await f.script({})
+    expect(await thread(id)).toMatchObject({ providerMode: 'bypass' })
+    const requests = await f.driver.requests()
+    const modeSet = requests.findLastIndex(record => record.method === 'session/set_config_option' && record.params?.configId === 'mode')
+    expect(requests[modeSet]?.params).toMatchObject({ value: 'bypass' })
+    expect(requests.findLastIndex(record => record.method === 'session/prompt')).toBeGreaterThan(modeSet)
+    // Once Bypass is set on the reopened session, Devin moving off it on its own still fails the session.
+    await f.action(id, { type: 'mode', mode: 'smart' })
+    await expect.poll(async () => (await thread(id)).status).toBe('error')
+  })
+
+  it('still fails a session whose mode Devin changes on its own', async () => {
+    await send()
+    await f.action(threadId, { type: 'mode', mode: 'bypass' })
+    await expect.poll(async () => (await thread()).status).toBe('error')
+  })
+
+  it('waits for its own history read to let go of a session before reopening it (#464)', async () => {
+    // Watched, so Sotto keeps reading the thread's history while its session changes hands.
+    await send(); await f.driver.completeTurn(threadId, 'Reply')
+    await expect.poll(async () => (await thread()).status).toBe('idle')
+    // The next read waits before it takes the session, so it is still in flight when the session stops.
+    const loads = async (): Promise<number> => (await f.driver.requests()).filter(record => record.method === 'session/load').length
+    const before = await loads()
+    await f.script({ holdLoad: true })
+    await expect.poll(loads).toBeGreaterThan(before)
+    await f.host.execute({ type: 'configure-thread', commandId: randomUUID(), threadId, providerMode: 'bypass' })
+    // Released, the read takes the session its thread just let go of, and holds it until released again.
+    const starts = await f.sessions.starts(threadId)
+    await writeFile(join(f.root, 'release-load'), '')
+    await expect.poll(() => f.sessions.starts(threadId)).toBeGreaterThan(starts)
+    const reopening = f.host.refreshThread(threadId).then(() => 'reopened', (error: unknown) => error instanceof Error ? error.message : 'failed')
+    // Long enough for a reopen that does not wait to reach Devin and be refused as open in another client.
+    await new Promise(resolve => setTimeout(resolve, 1_000))
+    await writeFile(join(f.root, 'release-reply'), '')
+    expect(await reopening).toBe('reopened')
+    expect(await thread()).toMatchObject({ status: 'idle', providerMode: 'bypass' })
   })
 
   it('refuses a permission change while a turn is running, and leaves the recorded mode alone', async () => {

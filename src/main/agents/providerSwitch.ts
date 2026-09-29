@@ -9,6 +9,7 @@ import { ActivitySubscribers, cloneActivitySnapshot, subscribeActivitySnapshots 
 import { join, resolve } from 'node:path'
 import { EMPTY_AGENT_HOST, PROVIDER_LABELS, parsePublicProviderEntityId, providerIdSchema, publicProviderEntityId, type AgentCapabilities, type AgentHostSnapshot, type AgentProviderStatus, type ProviderId } from '../../shared/agents'
 import { resolveModel } from '../../shared/modelCatalog'
+import { providerProblemOf } from './providerProblem'
 import { confirmedSettingsSnapshot, type ActivitySubscriptionOptions, type AgentHost, type AgentHostCommand, type AgentHostResult, type AgentSkillScope, type RestoredThreadHistory, type ShortTextPrompt, type ThreadHistorySource, type ThreadHostEvent, type ThreadReadPurpose } from './host'
 
 /** Public IDs are opaque to callers and reversible only at the provider boundary. */
@@ -99,11 +100,17 @@ export class ConfiguredProviderHost implements AgentHost {
       capabilities: owned.connected ? owned.capabilities : slot.status.capabilities,
       connection: snapshot.connected ? 'connected' : snapshot.error ? 'error' : slot.connecting ? 'connecting' : 'disconnected',
       ...(snapshot.verifiedVersion ? { verifiedVersion: snapshot.verifiedVersion } : {}),
-      ...(snapshot.error ? { error: snapshot.error } : {}) }
+      ...(snapshot.error ? { error: snapshot.error } : {}),
+      // What the Hosts page's tile decides on (ADR-0037): why it is not connected, or what it is signed in with.
+      ...(!snapshot.connected && snapshot.error && snapshot.problem ? { problem: snapshot.problem } : {}),
+      ...(snapshot.connected && snapshot.account ? { account: snapshot.account } : {}) }
   }
   private failed(id: ProviderId, error: unknown): void {
     const slot = this.slots.get(id)!
-    slot.status = { ...slot.status, connection: 'error', error: error instanceof Error ? error.message : 'Provider connection failed.' }
+    const named = providerProblemOf(error)
+    const status = { ...slot.status }; delete status.account; delete status.problem
+    slot.status = { ...status, connection: 'error', error: error instanceof Error ? error.message : 'Provider connection failed.',
+      ...(named ? { problem: named.problem } : {}), ...(named?.version ? { version: named.version } : {}) }
     slot.snapshot.connected = false
   }
   private aggregate(): AgentHostSnapshot {
@@ -147,7 +154,7 @@ export class ConfiguredProviderHost implements AgentHost {
     if (slot.status.connection === 'connected') return
     slot.wanted = true; const epoch = ++slot.epoch
     slot.unsubscribeSnapshot?.(); slot.unsubscribeEvents?.()
-    slot.status = { ...slot.status, connection: 'connecting' }; delete slot.status.error
+    slot.status = { ...slot.status, connection: 'connecting' }; delete slot.status.error; delete slot.status.problem
     this.watchActivity(id, slot, epoch)
     // A thread belongs to one provider. Its events keep that provider's connection epoch.
     slot.unsubscribeEvents = this.options.hosts[id].subscribeEvents?.(event => {
@@ -370,7 +377,7 @@ export class ConfiguredProviderHost implements AgentHost {
       slot.unsubscribeSnapshot?.(); slot.unsubscribeEvents?.()
       slot.unsubscribeSnapshot = undefined; slot.unsubscribeEvents = undefined
       this.options.hosts[id].disconnect(); slot.snapshot.connected = false
-      slot.status = { ...slot.status, connection: 'disconnected' }; delete slot.status.error
+      slot.status = { ...slot.status, connection: 'disconnected' }; delete slot.status.error; delete slot.status.problem; delete slot.status.account
     }
     this.publish()
   }

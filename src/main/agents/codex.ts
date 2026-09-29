@@ -24,11 +24,13 @@ import { ThreadMessageLog } from './threadMessageLog'
 import { cloneHostSnapshot } from './cloneHostSnapshot'
 import { ActivitySubscribers, cloneActivitySnapshot, immutableActivities, isImmutableActivities } from './activitySnapshots'
 import { findExecutable, nativeEnvironment, writeWithCodexExec } from './subscriptionCodex'
+import { withCliPath } from './cliLookup'
 import { CodexSessionLogWatcher, promptDigest, textOf } from './codexSessionLog'
 import { answerRequest, declineRequest, pendingRequest, requestKey, type CodexPendingRequest } from './codexRequests'
 import { needsPerson, unreadableRequest } from './nativeRequests'
 import { effortAfterChange, validatePromptAttachments, validateThreadOptions } from './threadOptions'
 import { CodexActivityProjection, codexItemSchema } from './codexActivity'
+import { ProviderUnavailable } from './providerProblem'
 import { SessionReaper } from './sessionReaper'
 import { codexTurnIdentitySchema, compatibleClient, identityTurn, messageIdentity, messageOrigin, reconcileMessageIdentities, type CodexTurnIdentity, type IdentityItem } from './codexMessageIdentity'
 
@@ -230,7 +232,7 @@ export class CodexAppServerHost implements AgentHost {
     await this.usage.load()
     const [aliases, projects, executable] = await Promise.all([this.aliasStore.read(), this.projectStore.read(), this.options.executable ?? findExecutable()])
     if (generation !== this.generation) throw new Error('Codex connection was cancelled.')
-    if (!executable) throw new Error('Install Codex and sign in before connecting this provider.')
+    if (!executable) throw new ProviderUnavailable('not-installed', 'Install Codex and sign in before connecting this provider.')
     this.aliases = aliases; this.state.projects = projects
     for (const alias of Object.values(this.aliases)) if (alias.compaction?.status === 'running') alias.compaction = { ...alias.compaction, status: 'uncertain', error: 'Native compaction was interrupted by disconnection. Reconnecting observes its result without retrying.' }
     this.providerSessionIds.clear()
@@ -260,7 +262,7 @@ export class CodexAppServerHost implements AgentHost {
       for (const origin of alias.origins) this.watcher.sentDigest(alias.codexThreadId, origin.messageId, origin.digest)
     }
     const child = spawn(executable, this.options.args ?? ['app-server', '--stdio', ...configArguments], {
-      cwd: this.options.userDataPath, env: { ...nativeEnvironment(), CODEX_HOME: codexHome }, windowsHide: true, shell: false, stdio: 'pipe',
+      cwd: this.options.userDataPath, env: withCliPath({ ...nativeEnvironment(), CODEX_HOME: codexHome }, executable), windowsHide: true, shell: false, stdio: 'pipe',
     })
     this.child = child
     let buffer: string[] = []; let bufferedBytes = 0; let stderrBytes = 0; let queuedBytes = 0
@@ -322,6 +324,8 @@ export class CodexAppServerHost implements AgentHost {
         this.state.models = models
       } catch { this.state.models = []; this.state.error = 'Codex models could not be listed. Check Codex and reconnect.' }
       if (this.child !== child) throw new Error('Codex disconnected while connecting.')
+      await this.readAccount()
+      if (this.child !== child) throw new Error('Codex disconnected while connecting.')
       this.state.connected = true
       this.reaper.start()
       // Connecting costs the same whatever Sotto has saved: a thread resumes, and its
@@ -336,6 +340,25 @@ export class CodexAppServerHost implements AgentHost {
       await this.watcher.poll(); this.watcher.start()
       this.emit(); return this.snapshot()
     } catch (error) { if (this.child === child) this.disconnect(); throw error }
+  }
+  /**
+   * Codex answers a connect whether or not it is signed in, and only a turn then fails. Its account says which, so a
+   * signed-out Codex is refused here with its own problem, and a host's tile offers Sign in (ADR-0037); a signed-in one
+   * names its kind of account for the tile. A client that cannot say leaves the connection as it was.
+   */
+  private async readAccount(): Promise<void> {
+    delete this.state.account
+    let account: { type: string } | null | undefined
+    let required = true
+    try {
+      await this.rpc('account/read', { refreshToken: false }, value => {
+        const result = z.object({ account: z.object({ type: z.string() }).passthrough().nullable(), requiresOpenaiAuth: z.boolean().optional() }).parse(value)
+        account = result.account; required = result.requiresOpenaiAuth !== false
+      })
+    } catch { return }
+    if (account === null && required) throw new ProviderUnavailable('signed-out', 'Sign in to Codex on this machine, then connect it again.', this.state.version)
+    const kind = account?.type === 'chatgpt' ? 'ChatGPT' : account?.type === 'apiKey' ? 'API key' : undefined
+    if (kind) this.state.account = kind
   }
   async listThreadSkills(threadId: string, forceReload = false, scope?: AgentSkillScope): Promise<AgentSkillCatalog> {
     if (!this.state.connected) throw new Error('Reconnect Codex before browsing skills.')

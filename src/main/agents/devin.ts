@@ -6,6 +6,7 @@ import { version as appVersion } from '../../../package.json'
 import { agentProjectSchema, type AgentHostSnapshot, type AgentMessage, type AgentProviderMode, type AgentRuntimeMode, type AgentThread } from '../../shared/agents'
 import { mergeAgentActivities } from '../../shared/agentActivity'
 import { AtomicJsonStore } from '../storage/atomicJsonStore'
+import { ProviderUnavailable } from './providerProblem'
 import type { ActivitySubscriptionOptions, AgentHost, AgentHostCommand, AgentHostResult, ThreadHistorySource, ThreadHostEvent, ThreadReadPurpose } from './host'
 import { ThreadMessageLog } from './threadMessageLog'
 import { cloneHostSnapshot } from './cloneHostSnapshot'
@@ -117,6 +118,8 @@ interface Connection {
   toolBytes: number
   transcript: Transcript
   replaying: boolean
+  /** The Devin mode confirmed on this process. Any other mode it announces after that is its own change. */
+  mode: string | undefined
   intentionalClose: boolean
 }
 interface ActiveTurn {
@@ -232,7 +235,7 @@ export class DevinAcpHost implements AgentHost {
     if (generation !== this.generation) throw new DevinUncertain('Devin connection changed.')
     const connection: Connection = {
       rpc: undefined as unknown as DevinRpc, nonce: randomUUID(), profile, fresh: false, tools: new Map(), toolBytes: 0,
-      transcript: { messages: [], bytes: 0 }, replaying: observer, intentionalClose: false,
+      transcript: { messages: [], bytes: 0 }, replaying: observer, mode: undefined, intentionalClose: false,
     }
     const rpc: DevinRpc = new DevinRpc(this.executable, [...(this.options.args ?? []), '--config', profile.path, 'acp'], cwd,
       devinEnvironment(this.options.environment), this.options.requestTimeoutMs ?? 15_000,
@@ -309,6 +312,9 @@ export class DevinAcpHost implements AgentHost {
       this.state.error = error instanceof Error && error.message
         ? error.message
         : 'Devin did not confirm the connection. Your threads and drafts are kept.'
+      // What a host's provider tile says and offers (ADR-0037); a refusal without a name reads as not startable.
+      if (error instanceof ProviderUnavailable) { this.state.problem = error.problem; if (error.version) this.state.version = error.version }
+      else delete this.state.problem
       this.emit(); return this.current()
     }
   }
@@ -321,9 +327,9 @@ export class DevinAcpHost implements AgentHost {
       throw new Error('Sotto could not prepare its own Devin folder. Your threads and drafts are kept. Check access to Sotto’s data folder and connect again.', { cause: error })
     }
     this.executable = this.options.executable ?? await findDevinExecutable(this.options.environment) ?? ''
-    if (!isAbsolute(this.executable)) throw new Error('Install Devin CLI and run devin auth login, then connect again. Your threads and drafts are kept.')
+    if (!isAbsolute(this.executable)) throw new ProviderUnavailable('not-installed', 'Install Devin CLI and run devin auth login, then connect again. Your threads and drafts are kept.')
     const version = await readDevinVersion(this.executable, this.options.args ?? [], devinEnvironment(this.options.environment))
-    if (compareClientVersions(version, DEVIN_CLI_VERSION) < 0) throw new Error('This Devin version is older than the one Sotto checked. Your threads are kept. Use Devin CLI ' + DEVIN_CLI_VERSION + ' or newer before connecting.')
+    if (compareClientVersions(version, DEVIN_CLI_VERSION) < 0) throw new ProviderUnavailable('too-old', 'This Devin version is older than the one Sotto checked. Your threads are kept. Use Devin CLI ' + DEVIN_CLI_VERSION + ' or newer before connecting.', version)
     const [aliases, projects] = await Promise.all([this.aliasStore.read(), this.projectStore.read()])
     if (generation !== this.generation) throw new DevinUncertain('Devin connection changed.')
     const catalog = await this.start(this.catalogDirectory, 'nothing')
@@ -343,7 +349,8 @@ export class DevinAcpHost implements AgentHost {
       await this.revalidate(catalog, this.catalogDirectory, generation)
       // This empty session belongs only to discovery; no inference runs at connect.
       if (disposableSession) await catalog.rpc.request('session/delete', { sessionId: disposableSession })
-      if (!this.state.models.length) throw new Error('Devin returned no available models. Run devin auth login and check your account access, then reconnect. Your threads and drafts are kept.')
+      // Devin lists no models to an account it has no sign-in for.
+      if (!this.state.models.length) throw new ProviderUnavailable('signed-out', 'Devin returned no available models. Run devin auth login and check your account access, then reconnect. Your threads and drafts are kept.', version)
     } finally { catalog.intentionalClose = true; catalog.rpc.close(); await catalog.rpc.closed }
     if (generation !== this.generation) throw new DevinUncertain('Devin connection changed.')
     // Replace what this process holds only once discovery has succeeded. A
@@ -354,7 +361,7 @@ export class DevinAcpHost implements AgentHost {
     for (const id of Object.keys(this.aliases)) {
       this.thread(id); this.log.seed(id, this.history?.messageIdentities(id) ?? [])
     }
-    this.state.connected = true; this.state.version = version + ' / ACP 1'; delete this.state.error
+    this.state.connected = true; this.state.version = version + ' / ACP 1'; delete this.state.error; delete this.state.problem
     if (compareClientVersions(version, DEVIN_CLI_VERSION) > 0) this.state.verifiedVersion = DEVIN_CLI_VERSION
     else delete this.state.verifiedVersion
     // A thread that cannot be opened is that thread's error, not the provider's: the rest stay usable.
@@ -380,15 +387,17 @@ export class DevinAcpHost implements AgentHost {
     }, value => {
       current()
       if (sessionModeConfig(value).current !== mode.devinMode) throw new Error('Devin did not confirm the selected permission setting.')
+      connection.mode = mode.devinMode
     })
   }
   private open(id: string): Promise<Connection> {
     const stopping = this.stopping.get(id)
     if (stopping) return stopping.then(() => this.open(id))
-    const existing = this.connections.get(id)
-    if (existing) return Promise.resolve(existing)
+    // A connection still loading has not had its mode set, so a caller waits for the load rather than using it.
     const current = this.loading.get(id)
     if (current) return current
+    const existing = this.connections.get(id)
+    if (existing) return Promise.resolve(existing)
     const loading = this.load(id).finally(() => { if (this.loading.get(id) === loading) this.loading.delete(id) })
     this.loading.set(id, loading); return loading
   }
@@ -397,6 +406,10 @@ export class DevinAcpHost implements AgentHost {
     const alias = this.aliases[id]!
     if (!alias?.devinSessionId) throw new Error('Devin did not confirm this thread’s creation. Your thread is kept; do not repeat the creation automatically.')
     const mode = modeOf(alias.providerMode)
+    // A history read loads the session in a process of its own, and Devin lets one process hold a session at a
+    // time. Opening alongside a read in flight would find the session taken by Sotto itself, so the open waits.
+    await this.reading.get(id)?.catch(() => undefined)
+    if (generation !== this.generation) throw new DevinUncertain('Devin connection changed.')
     const connection = await this.start(await existingWorkingDirectory(alias.cwd), mode.allows, id, false)
     if (generation !== this.generation) { connection.intentionalClose = true; connection.rpc.close(); throw new DevinUncertain('Devin connection changed.') }
     connection.replaying = true
@@ -478,6 +491,8 @@ export class DevinAcpHost implements AgentHost {
     if (this.polling) return this.polling
     const now = Date.now()
     const ids = [...this.connections.keys()].filter(id => {
+      // A session still opening is read once its open settles, not on this tick.
+      if (this.loading.has(id)) return false
       const busy = this.active.has(id) || this.thread(id).requests.length > 0
       const interval = this.options.pollIntervalMs ?? (busy ? 1_500 : 15_000)
       return (this.observed.has(id) || busy) && now - (this.lastReadAt.get(id) ?? 0) >= interval
@@ -493,6 +508,10 @@ export class DevinAcpHost implements AgentHost {
   private readHistory(id: string): Promise<void> {
     const previous = this.reading.get(id)
     if (previous) return previous
+    // A read loads the session in a process of its own and would take it from an open in progress, so it
+    // starts once the open settles. The open waits only for a read already running, so neither waits on the other.
+    const opening = this.loading.get(id)
+    if (opening) return opening.then(() => this.readHistory(id), () => this.readHistory(id))
     this.lastReadAt.set(id, Date.now())
     const reading = this.read(id).finally(() => { if (this.reading.get(id) === reading) this.reading.delete(id) })
     this.reading.set(id, reading); return reading
@@ -585,7 +604,10 @@ export class DevinAcpHost implements AgentHost {
       const update = record(params.update)
       if (!update) throw new Error('Invalid Devin update.')
       if (!connection.replaying && alias.settingsConfirmed && update.sessionUpdate === 'config_option_update' && modelConfig(update).current !== alias.modelId) throw new Error('Devin changed the selected model.')
-      if (update.sessionUpdate === 'current_mode_update' && update.currentModeId !== 'accept-edits') throw new Error('Devin changed the session mode.')
+      // Devin announces every mode it is set to, the thread's own included. Until it confirms the mode Sotto set
+      // on this process, what it announces is where the session opened or was left, not a change of its own;
+      // a history read never sets one and never acts.
+      if (update.sessionUpdate === 'current_mode_update' && connection.mode !== undefined && update.currentModeId !== connection.mode) throw new Error('Devin changed the session mode.')
       if (connection.replaying) { this.consume(id, connection.transcript, update); return }
       if (typeof update.toolCallId === 'string') {
         if (connection.tools.size >= 1000 && !connection.tools.has(update.toolCallId)) throw new Error('Too many pending Devin tools.')

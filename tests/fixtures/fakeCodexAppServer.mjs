@@ -155,6 +155,8 @@ createInterface({ input: process.stdin }).on('line', line => {
       : { config: { developer_instructions: script.developerInstructions ?? null }, origins: {}, layers: null })
     return
   }
+  // Its account, only when a test scripts one (ADR-0037); otherwise the method is unknown, as from an older Codex.
+  if (method === 'account/read' && 'account' in script) { reply({ account: script.account, requiresOpenaiAuth: true }); return }
   if (method === 'initialize') reply({ userAgent: 'codex/0.154.0', codexHome: process.env.CODEX_HOME, platformFamily: 'windows', platformOs: 'windows' })
   else if (method === 'model/list') reply(script.modelPages?.[params.cursor ?? 'first'] ?? { data: script.models ?? [{ id: 'model', model: 'fixture-model', displayName: 'Fixture Codex', isDefault: true,
     defaultReasoningEffort: 'low', supportedReasoningEfforts: [{ reasoningEffort: 'low' }, { reasoningEffort: 'high' }] }], nextCursor: null })
