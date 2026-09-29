@@ -114,7 +114,7 @@ jobs:
   ios:
     name: Native iOS client (macOS)
     runs-on: macos-26
-    timeout-minutes: 20
+    timeout-minutes: 35
     env:
       # The same Xcode as the TestFlight workflow: App Store Connect accepts only iOS 26 SDK builds.
       # Its Swift 6 compiler builds in Swift 5 mode, above Package.swift's 5.9 tools and the iOS 17 minimum.
@@ -128,3 +128,14 @@ jobs:
           swift --version
       - name: Test native protocol and build the unsigned simulator app
         run: sh apps/ios/Scripts/verify.sh
+      - name: Exercise Focus on small and large iPhones
+        run: sh apps/ios/Scripts/verify-ui.sh
+      - name: Retain native journeys and screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-focus-journeys
+          path: apps/ios/.build-ui/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14

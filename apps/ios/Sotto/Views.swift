@@ -1,7 +1,7 @@
 import SwiftUI
 import SottoCore
 
-/// Pairing until this iPhone holds a computer, then three tabs: Needs you, Threads and Computers.
+/// Pairing until this iPhone holds a computer, then Threads, Computers and Settings.
 struct RootView: View {
     @EnvironmentObject var model: AppModel
     var body: some View {
@@ -11,20 +11,20 @@ struct RootView: View {
 
 struct MainTabs: View {
     @EnvironmentObject var model: AppModel
-    @State private var tab = Tab.needsYou
-    enum Tab: Hashable { case needsYou, threads, computers }
+    @State private var tab = Tab.threads
+    enum Tab: Hashable { case threads, computers, settings }
     var body: some View {
         TabView(selection: $tab) {
-            NavigationStack { NeedsYouView().threadDestination() }
-                .tabItem { Label("Needs you", systemImage: "tray") }
-                .badge(waitingCount)
-                .tag(Tab.needsYou)
             NavigationStack { ThreadsView().threadDestination() }
                 .tabItem { Label("Threads", systemImage: "list.bullet") }
+                .badge(waitingCount)
                 .tag(Tab.threads)
             NavigationStack { ComputersView() }
                 .tabItem { Label("Computers", systemImage: "laptopcomputer") }
                 .tag(Tab.computers)
+            NavigationStack { SettingsView() }
+                .tabItem { Label("Settings", systemImage: "slider.horizontal.3") }
+                .tag(Tab.settings)
         }
         .toolbarBackground(Palette.surface, for: .tabBar)
         .sheet(isPresented: $model.adding, onDismiss: { model.closeAdding() }) { AddComputerSheet() }
@@ -184,50 +184,6 @@ struct ComputerDot: View {
         case .unreachable: return Palette.warning
         case .connecting: return Palette.muted
         }
-    }
-}
-
-/// The strip at the top of Needs you and Threads: All, then one pill per computer. It narrows both
-/// tabs to one computer. With one computer paired there is nothing to narrow, so it isn't shown.
-struct ComputerStrip: View {
-    @EnvironmentObject var model: AppModel
-    var body: some View {
-        if model.computers.count > 1 {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    StripPill(title: "All", status: nil, chosen: model.show == .all, label: "Show all computers") { model.show = .all }
-                    ForEach(model.computers, id: \.hostID) { computer in
-                        StripPill(title: computer.name, status: model.status(computer.hostID), chosen: model.show == .only(computer.hostID),
-                                  label: "Show only \(computer.name)") { model.show = .only(computer.hostID) }
-                    }
-                }
-            }
-            .scrollClipDisabled()
-        }
-    }
-}
-
-private struct StripPill: View {
-    let title: String
-    let status: ComputerStatus?
-    let chosen: Bool
-    let label: String
-    let action: () -> Void
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 7) {
-                if let status { ComputerDot(status: status) }
-                Text(title).font(.figtree(14, .subheadline, .semibold)).lineLimit(1)
-            }
-            .padding(.horizontal, 13).frame(minHeight: 34)
-            .foregroundStyle(chosen ? Palette.canvas : Palette.ink)
-            .background(chosen ? Palette.ink : Palette.raised, in: Capsule())
-            .frame(minHeight: 44).contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(label)
-        .accessibilityValue(status?.words ?? "")
-        .accessibilityAddTraits(chosen ? .isSelected : [])
     }
 }
 

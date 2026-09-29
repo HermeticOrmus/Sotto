@@ -15,6 +15,7 @@ import SwiftUI
                 }
                 .task { model.phase(phase) }
                 .onChange(of: phase) { _, value in model.phase(value) }
+                .modifier(PhoneDisplayPreferences())
         }
     }
 }
