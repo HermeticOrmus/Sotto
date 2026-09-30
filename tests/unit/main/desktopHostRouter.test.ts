@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { DesktopHostRouter, type DesktopHostConnection } from '../../../src/main/hosts/desktopHostRouter'
 import { emptyDesktopState } from '../../../src/main/hosts/inactiveLocalHost'
 import { desktopWindowClient } from '../../../src/main/agents/hostService'
+import { HostConnectionError } from '../../../src/main/agents/socketHostService'
 import { hostEntityKey } from '../../../src/shared/clientIdentity'
 import { hostForThread, capabilitiesForThread, noProviderRefusal, type AgentCommand } from '../../../src/shared/agents'
 
@@ -22,6 +23,16 @@ function fixture(hostId: string, kind: 'local' | 'remote') {
   return { state, command, detail, observe, connection }
 }
 describe('desktop host routing', () => {
+  it.each(['disconnected', 'unavailable', 'version_mismatch'] as const)('keeps %s failures on the uncertain command path', async code => {
+    const router = new DesktopHostRouter(emptyDesktopState), remote = fixture(REMOTE, 'remote')
+    router.add(remote.connection)
+    const error = new HostConnectionError('The host did not confirm the command.', code)
+    remote.command.mockRejectedValueOnce(error)
+    await expect(router.command({ type: 'configure-thread', threadId: hostEntityKey(REMOTE, 'thread'), runtimeMode: 'full-access' }, desktopWindowClient())).rejects.toBe(error)
+    expect(router.shell().error).toBeNull()
+    router.dispose()
+  })
+
   it('names the host in its no-provider refusal by the name this computer saved it under (#459)', async () => {
     const router = new DesktopHostRouter(emptyDesktopState), local = fixture(LOCAL, 'local'), remote = fixture(REMOTE, 'remote')
     router.add(local.connection); router.add({ ...remote.connection, name: 'forge' })

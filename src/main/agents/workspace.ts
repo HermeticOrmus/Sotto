@@ -74,7 +74,8 @@ const markOf = (message: AgentMessage): MessageMark =>
 
 /**
  * One thread as `workspace.json` keeps it: no messages, and no summary either, because the summary
- * quotes them. Both are read back from the thread store, which is what the history switch governs.
+ * quotes them. Both are read back from the thread store, which is what the history switch governs. The
+ * user's last message ID is the adapter's to say again once it runs; a saved one could only be stale.
  * Subagent task/result text has only one durable copy, in the roster store. The ordinary activity
  * store and JSON migration fallback retain only text-free subagent classification.
  */
@@ -91,8 +92,8 @@ function retainedActivities(activities: AgentActivity[]): AgentActivity[] {
 }
 
 function organizationOnly(thread: AgentThread, keepActivities = false): AgentThread {
-  const { summary, earlierAvailable, monitoring, backgroundWork, subagentSummary, activities, ...rest } = thread
-  void summary; void earlierAvailable; void monitoring; void backgroundWork; void subagentSummary
+  const { summary, earlierAvailable, monitoring, backgroundWork, subagentSummary, activities, lastUserMessageId, ...rest } = thread
+  void summary; void earlierAvailable; void monitoring; void backgroundWork; void subagentSummary; void lastUserMessageId
   return { ...rest, messages: [], ...(keepActivities && activities ? { activities: retainedActivities(activities) } : {}) }
 }
 

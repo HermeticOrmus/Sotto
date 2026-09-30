@@ -1,5 +1,6 @@
 import { HOST_NODE_MAJOR } from './sshFailure'
 import { quoteRemoteArgument, type ValidatedSshHostConfiguration } from './sshConfiguration'
+import { desktopAnswerSetupSql } from '../memory/migrations.mjs'
 
 /**
  * The launch script: fixed Node source the desktop pipes to one `ssh` command per operation. It finds or
@@ -161,6 +162,28 @@ const admin = async () => {
     return finish({ type: 'pairing-code', code: value.code, expiresAt: value.expiresAt, hostId: value.hostId });
   } catch { return finish({ type: 'failed' }); }
 };
+// The authenticated SSH account establishes its desktop's default authority, through the same policy
+// records the running host reads. One conditional write preserves revoked decisions and works with
+// existing host archives, without exposing a new grant operation to paired socket clients.
+const desktopAnswers = async () => {
+  const current = await discover().catch(() => null);
+  if (!current || current.hostId !== cfg.hostId || typeof cfg.clientId !== 'string' || !cfg.clientId || cfg.clientId.length > 512 || /[\p{Cc}]/u.test(cfg.clientId)) return finish({ type: 'failed' });
+  let db;
+  try {
+    const paired = JSON.parse(await fs.readFile(path.join(data, 'paired-clients.json'), 'utf8'));
+    if (!Array.isArray(paired.clients) || !paired.clients.some(client => client.clientId === cfg.clientId)) return finish({ type: 'failed' });
+    const file = path.join(data, 'memory.sqlite');
+    if (!(await fs.stat(file)).isFile()) return finish({ type: 'failed' });
+    const { DatabaseSync } = require('node:sqlite');
+    db = new DatabaseSync(file);
+    db.exec('PRAGMA busy_timeout=10000');
+    const scope = 'client:' + cfg.clientId;
+    db.prepare(${JSON.stringify(desktopAnswerSetupSql)}).run(crypto.randomUUID(), 'remote-answer', cfg.clientId, scope, 'allow', 'user',
+      "Sotto connected this desktop through the user's authenticated SSH session.", new Date().toISOString(), null, null, scope, cfg.clientId);
+    return finish({ type: 'desktop-answers', hostId: current.hostId });
+  } catch { return finish({ type: 'failed' }); }
+  finally { if (db) db.close(); }
+};
 // SIGTERM, which a host answers by saving its workspace and exiting; one still running after the drain is killed.
 const stopProcess = async pid => {
   try { process.kill(pid, 'SIGTERM'); } catch {}
@@ -318,6 +341,7 @@ const runUpdate = async () => {
   try {
     if (cfg.op === 'launch') await launch();
     else if (cfg.op === 'pairing-code' || cfg.op === 'revoke-client') await admin();
+    else if (cfg.op === 'desktop-answers') await desktopAnswers();
     else if (cfg.op === 'stop-host') await stopHost();
     else if (updating) await finish(await runUpdate());
     else await finish({ type: 'failed' });
@@ -447,6 +471,7 @@ export const HOST_ARCHIVE_LIMIT_BYTES = 512 * 1024 * 1024
 export type LaunchOperation =
   | { readonly op: 'launch' }
   | { readonly op: 'pairing-code'; readonly hostId: string }
+  | { readonly op: 'desktop-answers'; readonly hostId: string; readonly clientId: string }
   | { readonly op: 'revoke-client'; readonly hostId: string; readonly clientId: string }
   | { readonly op: 'stop-host'; readonly hostId: string }
   /** Download `version`'s archive for the host's own platform, and its checksum, from `releasesUrl`, and check one against the other. */

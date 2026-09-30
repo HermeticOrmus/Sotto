@@ -55,6 +55,8 @@ export interface SshHostConnection {
   /** Where the user's SSH configuration sent the target, from `ssh -G`. */
   readonly route: SshRoute
   showHostPairingCode(): Promise<SshPairingCode>
+  /** Establish this SSH desktop's default policy once; prior policy decisions are never changed. */
+  ensureDesktopAnswers(clientId: string): Promise<void>
   revokeClient(clientId: string): Promise<boolean>
   stopHost(): Promise<boolean>
   /** One operation of a host update on this host. A failure the host reports comes back as its `error` result; a lost connection throws. */
@@ -77,6 +79,7 @@ export interface SshLauncherDependencies {
 const healthSchema = z.object({ v: z.literal(1), status: z.literal('ready'), hostId: z.uuid(), pid: z.number().int().positive(), port: z.number().int().min(1).max(65535) })
 const readySchema = healthSchema.extend({ type: z.literal('ready'), owned: z.boolean() })
 const pairingSchema = z.object({ type: z.literal('pairing-code'), code: z.string().min(1).max(256), expiresAt: z.string().datetime(), hostId: z.uuid() })
+const desktopAnswersSchema = z.object({ type: z.literal('desktop-answers'), hostId: z.uuid() })
 const revokedSchema = z.object({ type: z.literal('revoked'), revoked: z.boolean(), hostId: z.uuid() })
 const stoppedSchema = z.object({ type: z.literal('host-stopped'), stopped: z.boolean(), hostId: z.uuid().nullable() })
 const archiveName = z.string().regex(HOST_ARCHIVE_PATTERN)
@@ -279,7 +282,7 @@ export class SshHostLauncher {
       attempt.connected = true
       this.status(attempt, 'ready')
       return { url: `http://127.0.0.1:${localPort}`, hostId: remote.hostId, owned: remote.owned, route,
-        close: () => this.closeAttempt(attempt), showHostPairingCode: () => this.pairingCode(attempt), revokeClient: clientId => this.revokeClient(attempt, clientId),
+        close: () => this.closeAttempt(attempt), showHostPairingCode: () => this.pairingCode(attempt), ensureDesktopAnswers: clientId => this.ensureDesktopAnswers(attempt, clientId), revokeClient: clientId => this.revokeClient(attempt, clientId),
         stopHost: async () => { try { return await this.stopHost(attempt) } finally { await this.closeAttempt(attempt) } },
         updateHost: (operation, options) => this.updateHost(attempt, operation, options) }
     } catch (error) {
@@ -582,6 +585,15 @@ export class SshHostLauncher {
     return this.request(attempt, { op: 'revoke-client', hostId, clientId }, 'revoke-failed', REQUEST_BUDGET_MS, value => {
       const revoked = revokedSchema.safeParse(value)
       return revoked.success && revoked.data.hostId === hostId ? revoked.data.revoked : undefined
+    })
+  }
+  private async ensureDesktopAnswers(attempt: Attempt, clientId: string): Promise<void> {
+    if (attempt.closed || !attempt.connected || !attempt.ready) throw new SshFailure('not-connected', 'Connect to the SSH host before setting up desktop permissions.')
+    if (!clientId || clientId.length > 512 || /[\p{Cc}]/u.test(clientId)) throw new Error('Choose a valid paired client.')
+    const hostId = attempt.ready.hostId
+    await this.request(attempt, { op: 'desktop-answers', hostId, clientId }, 'permission-setup-failed', REQUEST_BUDGET_MS, value => {
+      const result = desktopAnswersSchema.safeParse(value)
+      return result.success && result.data.hostId === hostId ? true : undefined
     })
   }
   private stopHost(attempt: Attempt): Promise<boolean> {
