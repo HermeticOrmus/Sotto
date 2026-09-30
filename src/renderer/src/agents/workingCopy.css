@@ -32,6 +32,7 @@
 .branch-notice .tt-button[aria-disabled='true'] { cursor: progress; opacity: .6; }
 .working-copy__ignored { list-style: none; max-height: 190px; overflow: auto; margin: 6px 0 12px; padding: 0; border: 1px solid var(--tt-hairline); border-radius: var(--tt-radius-md); }
 .working-copy__ignored li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; padding: 7px 12px; border-bottom: 1px solid var(--tt-hairline); overflow-wrap: anywhere; }
+.working-copy__ignored li:has(.working-copy__nested-note) { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); }
 .working-copy__ignored li:last-child { border-bottom: 0; }
 .working-copy__file-note, .working-copy__nested-note { color: var(--tt-text-muted); font-size: 13px; }
 .working-copy__nested-note { color: var(--tt-warning); }
