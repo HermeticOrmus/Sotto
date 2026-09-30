@@ -36,3 +36,7 @@ Constraints:
 - Agent voice commands share the hosted route. The earlier rule that agent voice must use the local worker no longer applies, because there is no local worker.
 - OpenRouter's transcription endpoint has no streaming partials, so streaming transcription still means per-segment requests during a long dictation, not live text.
 - If OpenRouter drops or re-prices the model, the bench harness in `scripts/asr-bench/bench-stt.mjs` is the tool for choosing the replacement; adding a second hosted model is a settings choice, not an architecture change.
+
+## Legacy key migration recovery
+
+Amended 2026-09-30 (#513). If a legacy OpenRouter key cannot be moved into the credential store, Sotto removes the plaintext key from settings anyway. Settings says it could not be stored securely and asks you to enter it again. The recovery notice carries only a stable code; no key or vault error reaches the renderer or logs.

@@ -51,6 +51,7 @@ import {
 type MediaDevicesAdapter = Pick<MediaDevices, 'enumerateDevices' | 'addEventListener' | 'removeEventListener'>
 
 export interface SettingsViewProps {
+  readonly openRouterKeyMigrationFailed?: boolean
   readonly settings: AppSettings
   readonly platform: SottoPlatform
   /** The page's sentence, seated at the room's bottom right. */
@@ -128,6 +129,7 @@ function canonicalAccelerator(value: string, platform: SottoPlatform): string {
 
 export function SettingsView({
   settings,
+  openRouterKeyMigrationFailed = false,
   platform,
   statusText,
   updateStatus,
@@ -444,7 +446,7 @@ export function SettingsView({
                     <h3>MAI-Transcribe-2</h3>
                     <p>Speech recognition by Microsoft.</p>
                   </div>
-                  <OpenRouterKeyField apiKey={settings.llmApiKey} onUpdateSettings={onUpdateSettings} onCheckTranscriptionKey={onCheckTranscriptionKey} />
+                  <OpenRouterKeyField migrationFailed={openRouterKeyMigrationFailed} apiKey={settings.llmApiKey} onUpdateSettings={onUpdateSettings} onCheckTranscriptionKey={onCheckTranscriptionKey} />
                   <Field label="Language"><Select value={settings.language} onChange={(event) => void save({ language: event.currentTarget.value })}>{!languageKnown ? <option value={settings.language}>Saved language ({settings.language})</option> : null}{KNOWN_LANGUAGES.map((language) => <option key={language.value} value={language.value}>{language.label}</option>)}</Select></Field>
                   <Toggle label="Whitespace formatting" checked={settings.formatWhitespace} onCheckedChange={(checked) => void save({ formatWhitespace: checked })} description="Trim and normalize repeated whitespace without changing words." />
                   <p className="settings-disclosure">{TRANSCRIPTION_PRIVACY_NOTICE}</p>

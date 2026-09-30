@@ -517,7 +517,7 @@ async function createRuntime(): Promise<NativeRuntimeController> {
   const grokSpeech = new GrokSpeechService({ credentials, ...(e2eConfiguration === null ? {} : { fetchFn: e2eGrokSpeechFetch }) })
   const kokoroSpeech = new KokoroSpeechService({ credentials, ...(e2eConfiguration === null ? {} : { fetchFn: e2eKokoroSpeechFetch }) })
   const settings = new SecureSettings(plainSettings, credentials)
-  await settings.migrate().catch(() => logOperational('secure-key-migration-unavailable'))
+  await settings.migrate(() => recoveryNotices.publish({ code: 'OPENROUTER_KEY_MIGRATION_FAILED' })).catch(() => logOperational('secure-key-migration-unavailable'))
   await plainSettings.migrateProjectWorkingCopyDefaults(await loadHostIdentity(userDataPath))
   const startupSettings = await settings.get()
   let agentHistoryEnabled = startupSettings.historyEnabled

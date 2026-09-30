@@ -472,6 +472,8 @@ Builds are ad-hoc signed and not notarized, so anyone installing the disk image 
 
 ## Troubleshooting
 
+If a legacy OpenRouter key cannot be moved into the credential store, Sotto removes the plaintext key from settings anyway. Settings says it could not be stored securely and asks you to enter it again.
+
 ### Either platform
 
 - **Codex shows only your messages after a restart:** Open the thread while Codex is connected. Sotto reconciles repeated saved prompts without removing the original replies. **Show earlier messages** also reaches replies outside the newest ten turns.
