@@ -932,10 +932,10 @@ export class ClaudeStreamJsonHost implements AgentHost {
       else if (typeof frame.request_id === 'string') {
         const requestId = frame.request_id
         let response: Promise<void>
+        if (!flooded) this.report(unreadableRequest('Claude Code'))
         if (object(frame.request)?.subtype === 'can_use_tool') {
           // can_use_tool is the CLI asking for the user. Denying one Sotto could not read is the only safe
           // answer, and Claude reads that denial as the user's own, so the thread is told what happened.
-          if (!flooded) this.report(unreadableRequest('Claude Code'))
           response = this.reply(runtime, requestId, claudeDenial())
         } else response = runtime.protocol.write({ type: 'control_response', response: { subtype: 'error', request_id: requestId, error: 'Unsupported Claude control request.' } })
         void response.catch(() => undefined)

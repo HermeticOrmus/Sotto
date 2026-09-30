@@ -228,6 +228,15 @@ describe('Claude recovery and safety', () => {
     await expect.poll(async () => JSON.stringify(await f.driver.requests())).toContain('"behavior":"deny"')
     expect((await thread()).requests).toEqual([])
   })
+  it.each(['elicitation', 'request_user_dialog'])('reports an unreadable %s request when declining it', async subtype => {
+    await f.action(id, { type: 'raw', frame: { type: 'control_request', request_id: 'unreadable-dialog', request: { subtype, dialog_kind: 'unknown' } } })
+    await expect.poll(async () => (await f.driver.requests()).some(record => {
+      const frame = record.params?.frame as { response?: { subtype?: string; request_id?: string } }
+      return frame.response?.request_id === 'unreadable-dialog' && frame.response.subtype === 'error'
+    })).toBe(true)
+    expect((await f.host.snapshot()).error).toContain('only you can answer')
+    expect((await thread()).requests).toEqual([])
+  })
   // Paired with the test above: the fixture differs only in whether its session lists the question tool,
   // so that one proves the list is read and this one proves a complete list is not complained about.
   it('stays quiet while a session offers the question tool', async () => {
