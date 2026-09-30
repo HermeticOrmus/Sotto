@@ -2565,7 +2565,6 @@ export class AgentControl {
       void result.answerCompletion.then(async delivered => {
         if (!delivered) return
         if (answerIntent) this.recordAnsweredRequest(answerIntent)
-        this.recordAnswerAttribution(command, client)
         if (this.visibleCommandError === uncertaintyError && this.state.error === uncertaintyError.message) {
           this.setCommandError(undefined, null)
         }

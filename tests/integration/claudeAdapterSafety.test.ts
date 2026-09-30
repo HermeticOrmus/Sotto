@@ -435,6 +435,8 @@ describe('Claude recovery and safety', () => {
     const credentials = new AgentCredentials(f.root, { isEncryptionAvailable: () => false, encryptString: value => Buffer.from(value), decryptString: value => value.toString() })
     await credentials.load()
     const registry = new ThreadRegistry(f.root), wrapped = new SottoThreadHost('claude', f.adapter, registry)
+    const recordAnswer = vi.fn()
+    Object.assign(wrapped, { recordAnswer })
     const control = new AgentControl({ schedule: immediatePublishScheduler, directory: f.root, host: wrapped, credentials, reasoner: e2eAgentReasoner,
       membership: { status: async () => ({ status: 'beta', label: 'Test', expiresAt: null }), action: async () => ({ status: 'beta', label: 'Test', expiresAt: null }) } })
     let delayed: ReturnType<typeof delayStdin> | undefined
@@ -446,6 +448,7 @@ describe('Claude recovery and safety', () => {
       const requestId = (await thread()).requests[0]!.id
       delayed = delayStdin(f.adapter, id)
       await control.command({ type: 'answer', threadId, requestId, answer: 'Blue' })
+      expect(recordAnswer).toHaveBeenCalledTimes(1)
       await control.refreshRequestDraft(threadId)
       expect((await thread()).requests[0]!.answerRetryReady).toBeUndefined()
       expect(control.requestAnswerRecovery(threadId, 'claude').uncertainRequestIds).toEqual([requestId])
@@ -460,6 +463,7 @@ describe('Claude recovery and safety', () => {
       await expect.poll(() => control.requestAnswerRecovery(threadId, 'claude').uncertainRequestIds).toEqual([])
       await expect.poll(() => control.requestAnswerRecovery(threadId, 'claude').completed).toMatchObject([{ requestId }])
       await expect.poll(() => control.get().error).toBe(expectedError)
+      expect(recordAnswer).toHaveBeenCalledTimes(1)
       await expect.poll(async () => (await thread()).requests).toEqual([])
       await expect.poll(async () => (await f.driver.requests()).filter(record => f.protocol!.permissionDecision(record) !== undefined)
         .map(record => f.protocol!.permissionDecision(record))).toEqual([true])
