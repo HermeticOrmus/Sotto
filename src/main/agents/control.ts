@@ -692,6 +692,7 @@ export class AgentControl {
       return bytes
     } }
   }
+  membershipStatus(): AgentState['membership']['status'] { return this.state.membership.status }
   /** Configuration alone. get() copies every thread's history, which is costly on every provider event. */
   configuration(): AgentConfiguration {
     return structuredClone(this.state.configuration)
