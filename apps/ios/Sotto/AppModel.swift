@@ -21,6 +21,11 @@ struct Live {
 /// Every paired computer, each with its own connection, session and state. A computer that can't be
 /// reached, or fails, never holds up the others. Everything that names a thread names its computer too.
 @MainActor final class AppModel: ObservableObject {
+    private static let requestNoLongerWaiting = "That request is no longer waiting."
+    private static let markersUnreadable = "Saved unconfirmed actions could not be read. Check your threads before sending again. Nothing was resent."
+    private static func pairingWarning(_ hostID: String) -> String {
+        "Pair computer \(hostID) again. Its saved connection details could not be read."
+    }
     /// In the order they were added. Credentials live in the Keychain, one item per host ID.
     @Published private(set) var computers: [SavedComputer] = []
     @Published private(set) var live: [String: Live] = [:]
@@ -122,6 +127,10 @@ struct Live {
             live[host] = Live(status: host == laptop ? .online : .unreachable, shell: shell, mayAnswer: false)
         }
         storageReady = true
+        let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains("--ui-feedback-request-gone") { feedback = Self.requestNoLongerWaiting }
+        if arguments.contains("--ui-feedback-markers-unreadable") { feedback = Self.markersUnreadable }
+        if arguments.contains("--ui-feedback-computer-unreadable") { feedback = "Recovered the saved computer list. " + Self.pairingWarning(studio) }
     }
     #endif
 
@@ -215,15 +224,15 @@ struct Live {
                     let computer = try plan.adopt.flatMap { $0.hostID == hostID ? $0 : nil }
                         ?? readComputer(ComputerStore.account(hostID))
                     if let computer, computer.hostID == hostID { kept.append(computer) }
-                    else { warnings.append("Pair computer \(hostID) again. Its saved connection details could not be read.") }
+                    else { warnings.append(Self.pairingWarning(hostID)) }
                 } catch is KeychainStore.UndecodableItem {
-                    warnings.append("Pair computer \(hostID) again. Its saved connection details could not be read.")
+                    warnings.append(Self.pairingWarning(hostID))
                 }
             }
             var markers: [PendingOperation] = []
             do { markers = try keychain.read([PendingOperation].self, account: ComputerStore.pendingAccount) ?? [] }
             catch is KeychainStore.UndecodableItem {
-                warnings.append("Saved unconfirmed actions could not be read. Check your threads before sending again. Nothing was resent.")
+                warnings.append(Self.markersUnreadable)
             }
             // All reads must succeed before migration writes: a locked item never looks missing.
             if let adopt = plan.adopt { try keychain.write(adopt, account: ComputerStore.account(adopt.hostID)) }
@@ -636,7 +645,7 @@ struct Live {
             guard confirmed || noLongerWaiting else { return }
             try forgetMarker(item.id)
             if feedback == nil || feedbackOperations.contains(item.id) {
-                feedback = confirmed ? "Answer sent." : "That request is no longer waiting."
+                feedback = confirmed ? "Answer sent." : Self.requestNoLongerWaiting
             }
         } else if delivery?.status == "failed" {
             try rejectOperation(item)
