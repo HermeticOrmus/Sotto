@@ -8,7 +8,6 @@ Verified on Windows in the built Electron app with synthetic providers.
 
 The Settings journey checks dark and light at 1600×1000, 1280×800 and 820×560, with no horizontal overflow and the choice in view. Escape returns focus to Project defaults with reduced motion enabled. Inspected the minimum-size dark and light captures: the labels and controls remain readable, and the row shows New worktree. There is no layout or copy change and no design baseline regeneration.
 
-- Dark: `artifacts/new-thread-setup/project-defaults-820-dark.png`
-- Light: `artifacts/new-thread-setup/project-defaults-820-light.png`
+After merging the current main branch, typecheck, lint, third-party notices verification and build passed again. Both Electron journeys passed again (2 tests); their minimum-size dark and light captures were inspected and restored as incidental output. This fix changes no layout or copy. Separate standards and spec reviews found no substantive findings.
 
-The initial expanded-row check incorrectly assumed Settings stayed mounted when visiting Threads; reopening Project defaults corrected the test. Both journeys then passed. Native provider worktree allocation on first send and macOS were not exercised by these synthetic Windows journeys.
+Native provider worktree allocation on first send and macOS were not exercised by these synthetic Windows journeys.
