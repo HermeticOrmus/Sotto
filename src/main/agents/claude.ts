@@ -92,7 +92,7 @@ type ClaudeSettingsStep = { field: keyof ClaudeSettings; request: ClaudeFrame }
  * by starting the CLI again, refused by the CLI (a restart or a refusal follows), or left unconfirmed. Event
  * names only; a model, a level or a mode never reaches the log.
  */
-export type ClaudeSettingsEvent = 'claude-settings-applied-live' | 'claude-settings-applied-restart' | 'claude-settings-live-rejected' | 'claude-settings-unconfirmed'
+export type ClaudeAdapterEvent = 'claude-mcp-config-cleanup-failed' | 'claude-settings-applied-live' | 'claude-settings-applied-restart' | 'claude-settings-live-rejected' | 'claude-settings-unconfirmed'
 /** What an alias, or the thread that shows it, says the settings are; one saved without a mode runs approval-required. */
 const settingsOf = (value: Pick<Alias, 'modelId' | 'reasoningEffort' | 'runtimeMode'>): ClaudeSettings =>
   ({ modelId: value.modelId, reasoningEffort: value.reasoningEffort, runtimeMode: value.runtimeMode ?? 'approval-required' })
@@ -146,7 +146,7 @@ export interface ClaudeStreamJsonHostOptions {
   /** Session reaper cadence and idle threshold; see `sessionReaper.ts`. */
   reaperSweepMs?: number; sessionIdleMs?: number
   /** Stable event names only; never a model, a level, a mode or anything a thread said. */
-  logEvent?: (event: ClaudeSettingsEvent | 'claude-mcp-config-cleanup-failed') => void
+  logEvent?: (event: ClaudeAdapterEvent) => void
 }
 /** `client` is the client generation the CLI was launched from: see `clientUpdated`. */
 type Runtime = { protocol: ClaudeProtocol; requests: Map<string, ClaudePending>; answered: Set<string>; clientRevision: number }

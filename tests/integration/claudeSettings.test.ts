@@ -8,7 +8,7 @@ import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import { AgentControl } from '../../src/main/agents/control'
 import { AgentCredentials } from '../../src/main/agents/credentials'
-import type { ClaudeSettingsEvent } from '../../src/main/agents/claude'
+import type { ClaudeAdapterEvent } from '../../src/main/agents/claude'
 import { claudeFixture } from '../fixtures/claudeFixture'
 import { immediatePublishScheduler } from '../fixtures/publishScheduler'
 
@@ -22,10 +22,10 @@ const models = [
 const settingsRequests = new Set(['set_model', 'apply_flag_settings', 'set_permission_mode'])
 
 /** A connected fixture with two models and one thread on `fixture-model` at low effort; `start` runs its CLI. */
-async function fixture(start = true): Promise<{ f: Fixture; id: string; events: ClaudeSettingsEvent[] }> {
+async function fixture(start = true): Promise<{ f: Fixture; id: string; events: ClaudeAdapterEvent[] }> {
   const root = await mkdtemp(join(tmpdir(), 'sotto-claude-'))
   await writeFile(join(root, 'models.json'), JSON.stringify(models))
-  const events: ClaudeSettingsEvent[] = []
+  const events: ClaudeAdapterEvent[] = []
   const f = await claudeFixture(root, undefined, undefined, { logEvent: event => events.push(event) })
   fixtures.push(f)
   await f.host.connect()

@@ -5,7 +5,7 @@ import { ShortTextWriter } from '../llm/shortTextWriter'
 import { threadTitleWriter } from '../llm/threadTitle'
 import { threadBranchWriter } from '../llm/threadBranch'
 import { CodexAppServerHost } from './codex'
-import { ClaudeStreamJsonHost, type ClaudeSettingsEvent } from './claude'
+import { ClaudeStreamJsonHost, type ClaudeAdapterEvent } from './claude'
 import { GrokAcpHost } from './grok'
 import { DevinAcpHost } from './devin'
 import { ConfiguredProviderHost } from './providerSwitch'
@@ -47,7 +47,7 @@ export interface AgentRuntimeOptions {
   bindRequestDraftDecision?: ControlDependencies['bindRequestDraftDecision']
   logFailure?: ControlDependencies['logFailure']
   /** How a Claude settings change reached its CLI, as stable event names; never a model, a level or a mode. */
-  claudeSettingsLog?: (event: ClaudeSettingsEvent) => void
+  claudeSettingsLog?: (event: ClaudeAdapterEvent) => void
   clientUpdated?: ControlDependencies['clientUpdated']
   missingAttachment?: ControlDependencies['missingAttachment']
   /** The headless host says so: it connects every signed-in provider at start and names itself in refusals (ADR-0036). */
