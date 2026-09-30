@@ -77,7 +77,7 @@ The large simulator also used accessibility text size and reduced motion. This
 evidence precedes the clean merge of main at `4af39aa2`; final merged-state gate
 results are recorded in the PR.
 
-These two inspected captures are retained:
+These four inspected captures are retained:
 
 - [Neutral request message, small phone in dark](../../artifacts/review-iphone-feedback/request-gone-small-dark.png).
   The message and dismissal remain readable and reachable.
