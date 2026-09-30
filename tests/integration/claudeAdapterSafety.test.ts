@@ -409,20 +409,22 @@ describe('Claude recovery and safety', () => {
     try {
       await control.start(); await control.command({ type: 'connect' })
       const threadId = registry.all().find(binding => binding.sessionId === id)!.threadId
-      await wrapped.refreshThread(threadId); await f.driver.raisePermission(id, 'Build')
+      await wrapped.refreshThread(threadId); await f.driver.raiseQuestion(id, 'Color?')
       await expect.poll(async () => (await thread()).requests.length).toBe(1)
       const requestId = (await thread()).requests[0]!.id
       delayed = delayStdin(f.adapter, id)
-      await control.command({ type: 'answer', threadId, requestId, answer: '', approved: false })
+      await control.command({ type: 'answer', threadId, requestId, answer: 'Blue' })
       await control.refreshRequestDraft(threadId)
       expect((await thread()).requests[0]!.answerRetryReady).toBeUndefined()
       expect(control.requestAnswerRecovery(threadId, 'claude').uncertainRequestIds).toEqual([requestId])
       delayed.release(); delayed.restore()
       await expect.poll(() => control.requestAnswerRecovery(threadId, 'claude').uncertainRequestIds).toEqual([])
-      expect(control.requestAnswerRecovery(threadId, 'claude').completed).toMatchObject([{ requestId }])
+      await expect.poll(() => control.requestAnswerRecovery(threadId, 'claude').completed).toMatchObject([{ requestId }])
       await expect.poll(async () => (await thread()).requests).toEqual([])
       await expect.poll(async () => (await f.driver.requests()).filter(record => f.protocol!.permissionDecision(record) !== undefined)
-        .map(record => f.protocol!.permissionDecision(record))).toEqual([false])
+        .map(record => f.protocol!.permissionDecision(record))).toEqual([true])
+      const delivered = (await f.driver.requests()).filter(record => f.protocol!.permissionDecision(record) !== undefined)
+      expect(delivered[0]!.params!.frame).toMatchObject({ response: { response: { updatedInput: { answers: { 'Color?': 'Blue' } } } } })
     } finally { delayed?.release(); delayed?.restore(); control.dispose(); await registry.flush() }
   })
   it('reopens a project answer through the coordinator Check again path', async () => {
