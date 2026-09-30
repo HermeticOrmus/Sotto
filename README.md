@@ -60,7 +60,13 @@ First-run setup asks you to test your microphone or choose **Skip for now** befo
 
 ## Privacy and cost
 
-Sotto has no account of its own and collects nothing about you: no analytics, no crash reports. Your data leaves your computer only when a feature you use needs it, and only to that feature's service:
+Sotto has no account of its own and collects nothing about you: no analytics, no crash reports.
+
+**Reset settings** restores defaults and reopens setup. It keeps your saved OpenRouter key, including when the reset fails.
+
+If a key saved by an older version of Sotto cannot be moved into the credential store, Sotto removes the plaintext key from settings anyway. Settings says it could not be stored securely and asks you to enter it again.
+
+Your data leaves your computer only when a feature you use needs it, and only to that feature's service:
 
 - **Dictation** goes to OpenRouter (`openrouter.ai`) on your key, where Microsoft MAI-Transcribe-2 transcribes it. Audio is never saved to disk. OpenRouter charges about $0.10 per hour of audio.
 - **Optional AI cleanup** sends the finished text to OpenRouter too. It is off until you turn it on.
