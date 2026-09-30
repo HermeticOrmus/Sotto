@@ -85,6 +85,14 @@ now allows 45 minutes for simulator startup, interaction, screenshots and cleanu
 The test assertions and their deadlines are unchanged. The replacement check's
 status is recorded in the PR.
 
+Main later advanced to `d343d76a`. Its iPhone new-thread flow was merged with
+these fixes; the new creation tests use the same real Keychain decoding seam.
+Independent reviews checked the conflict resolutions, including returned creation
+results, ID-only reconciliation, receipt scripts and feedback ownership. The PR
+records the final merged gates. The captures below show the feedback surfaces
+before that later merge; main's new-thread design evidence is recorded separately
+in [its verification note](2026-09-30-iphone-new-threads.md).
+
 These four inspected captures are retained:
 
 - [Neutral request message, small phone in dark](../../artifacts/review-iphone-feedback/request-gone-small-dark.png).

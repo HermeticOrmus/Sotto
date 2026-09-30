@@ -14,6 +14,7 @@ struct Live {
     var status = ComputerStatus.connecting
     var shell: Shell?
     var mayAnswer = false
+    var features: [String] = []
     /// Why the last connection ended, for the computer's own page.
     var problem: String?
 }
@@ -52,6 +53,8 @@ struct Live {
     @Published private(set) var found: FoundHost?
     /// Whether the Add computer sheet is over the tabs.
     @Published var adding = false
+    @Published private(set) var creatingHostID: String?
+    @Published var creationFeedback: String?
     /// The computer menu on Threads.
     @Published var show = ComputerFilter.all
     @Published private var openDetail: ThreadDetail?
@@ -74,6 +77,7 @@ struct Live {
     /// Simulator journeys use in-memory display data; this code is absent from Release.
     private var isUIFixture = false
     private var fixtureDetails: [String: ThreadDetail] = [:]
+    private var fixtureShells: [String: [String: Any]] = [:]
     private func loadUIFixture() {
         isUIFixture = true
         if ProcessInfo.processInfo.arguments.contains("--reset-ui-preferences"), let bundle = Bundle.main.bundleIdentifier {
@@ -85,7 +89,7 @@ struct Live {
         }
         let laptop = "11111111-1111-4111-8111-111111111111"
         let studio = "22222222-2222-4222-8222-222222222222"
-        let caps: [String: Bool] = ["submit": false, "interrupt": false, "questions": false, "permissions": false]
+        let caps: [String: Bool] = ["submit": false, "interrupt": false, "questions": false, "permissions": false, "projects": true, "threads": true]
         let rows: [(String, String, String, String, Int)] = [
             ("release", "Choose the release target", "sotto", "idle", 2),
             ("iphone", "Refine the iPhone thread view", "sotto", "running", 6),
@@ -121,10 +125,15 @@ struct Live {
         for (host, name) in [(laptop, "Laptop"), (studio, "Studio Mac")] {
             let pairing = decode(Pairing.self, ["v": 1, "hostId": host, "clientId": "ui-fixture", "token": "not-a-credential"])
             computers.append(SavedComputer(address: "https://fixture.invalid.ts.net", pairing: pairing, reportedName: name))
-            let shell = decode(Shell.self, ["hostId": host, "host": ["hostId": host, "name": name,
-                "threads": threads[host] ?? [], "projects": [["id": "sotto", "title": "Sotto"],
-                    ["id": "panel", "title": "Panel tools"], ["id": "house", "title": "House"]], "capabilities": caps]])
-            live[host] = Live(status: host == laptop ? .online : .unreachable, shell: shell, mayAnswer: false)
+            let shellObject: [String: Any] = ["hostId": host, "host": ["hostId": host, "name": name,
+                "threads": threads[host] ?? [], "projects": [["id": "sotto", "title": "Sotto", "path": "D:\\Talk to Text Application"],
+                    ["id": "panel", "title": "Panel tools", "path": "D:\\Engineering\\Panel tools"], ["id": "house", "title": "House", "path": "D:\\House"]],
+                "models": [["id": "fixture-model", "name": "GPT-6.1 Sol", "provider": "Codex", "providerId": "codex", "ready": true,
+                    "reasoningEfforts": ["low", "medium", "high"], "defaultReasoningEffort": "high", "runtimeModes": ["approval-required", "full-access"]]],
+                "providers": [["id": "codex", "connection": "connected", "capabilities": caps]], "capabilities": caps]]
+            fixtureShells[host] = shellObject
+            let shell = decode(Shell.self, shellObject)
+            live[host] = Live(status: host == laptop ? .online : .unreachable, shell: shell, mayAnswer: false, features: ["host-folders"])
         }
         storageReady = true
         let arguments = ProcessInfo.processInfo.arguments
@@ -314,6 +323,7 @@ struct Live {
                 $0.status = .online
                 // An older host can push a newer shell before hello finishes, without this field.
                 if $0.shell?.clientCapabilities == nil { $0.mayAnswer = greeting.value.capabilities.mayAnswer }
+                $0.features = greeting.value.features ?? []
             }
             if let selected, selected.hostID == hostID, thread(selected) == nil { self.selected = nil }
         } catch {
@@ -585,29 +595,36 @@ struct Live {
     private func forgetMarker(_ id: String) throws {
         let next = pending.filter { $0.id != id }; try keychain.write(next, account: ComputerStore.pendingAccount); pending = next; submitted.removeValue(forKey: id)
     }
-    private func dispatch(_ command: JSONValue, operation: PendingOperation) async {
+    @discardableResult private func dispatch(_ command: JSONValue, operation: PendingOperation) async -> Shell? {
         let hostID = operation.hostID, current = generations[hostID]
         if operation.kind == "answer" { dispatchingAnswers.insert(operation.id) }
         defer { dispatchingAnswers.remove(operation.id) }
-        guard let connection = connections[hostID] else { operationFeedback(ClientError.uncertain.localizedDescription, operations: [operation.id]); return }
+        guard let connection = connections[hostID] else { operationFeedback(ClientError.uncertain.localizedDescription, operations: [operation.id]); return nil }
         do {
             let result = try await connection.callReceived(["op": .string("command"), "command": command], id: operation.id)
-            guard generations[hostID] == current else { return }
+            guard generations[hostID] == current else { return nil }
             let next = try await Wire.readValue(result.value, as: Shell.self)
-            guard generations[hostID] == current else { return }
+            guard generations[hostID] == current else { return nil }
             try applyShell(next, from: hostID, sequence: result.sequence, reconcileAnswers: false)
             await checkDelivery(hostID)
+            guard generations[hostID] == current else { return nil }
+            if let error = next.error {
+                if operation.kind.hasPrefix("create-") { creationFeedback = error }
+                return nil
+            }
+            return next
         } catch let error as HostRefusal {
-            guard generations[hostID] == current else { return }
+            guard generations[hostID] == current else { return nil }
             // Revocation can replace an acknowledgement AFTER the action ran.
             // Generic unavailable failures may also follow provider side effects.
             if ["invalid_request", "stale_request", "forbidden", "busy"].contains(error.failure.code) {
-                do { try rejectOperation(operation) } catch { feedback = error.localizedDescription; return }
+                do { try rejectOperation(operation) } catch { feedback = error.localizedDescription; return nil }
             }
             if error.failure.code == "forbidden" { update(hostID) { $0.mayAnswer = false } }
             if error.failure.code == "unauthenticated" { update(hostID) { $0.status = .unreachable; $0.problem = error.localizedDescription } }
             feedback = error.localizedDescription
         } catch { if generations[hostID] == current { operationFeedback("Delivery is unconfirmed. Reconnect and check the thread before sending again.", operations: [operation.id]) } }
+        return nil
     }
     func checkDelivery(_ hostID: String) async {
         guard online(hostID), !scoped(hostID).isEmpty, let connection = connections[hostID] else { return }
@@ -632,6 +649,11 @@ struct Live {
         feedback = words; feedbackOperations = operations
     }
     private func settle(_ item: PendingOperation, receipt: Receipt? = nil, shell: Shell?) throws {
+        // A phone-minted Sotto ID identifies this exact creation even after its receipt expired.
+        if item.kind == "create-thread", shell?.host.threads.contains(where: { $0.id == item.threadID }) == true {
+            try forgetMarker(item.id)
+            return
+        }
         let delivery = shell?.deliveries?.first { $0.threadId == item.threadID && $0.draftId == item.draftID }
         let delivered = shell?.deliveredDrafts?.contains { $0.threadId == item.threadID && $0.draftId == item.draftID } == true
         let accepted = delivered || delivery?.status == "accepted"
@@ -670,6 +692,137 @@ struct Live {
     func acknowledgeUnknown(_ id: String) {
         do { try forgetMarker(id); feedback = "Unconfirmed action dismissed. Nothing was resent." }
         catch { feedback = error.localizedDescription }
+    }
+
+    // MARK: New threads on one computer
+
+    var pendingCreations: [PendingOperation] {
+        pending.filter { item in
+            item.kind.hasPrefix("create-") && computer(item.hostID).map { item.matches(hostID: $0.hostID, clientID: $0.pairing.clientId) } == true
+        }
+    }
+    func creationModels(_ hostID: String) -> [ThreadModel] {
+        guard let host = live[hostID]?.shell?.host else { return [] }
+        return NewThreads.availableModels(host)
+    }
+    func initialCreationModelID(_ hostID: String) -> String {
+        live[hostID]?.shell.map(NewThreads.startingModelID) ?? ""
+    }
+    func initialCreationEffort(_ hostID: String, model: ThreadModel) -> String {
+        live[hostID]?.shell.map { NewThreads.startingEffort(model, shell: $0) } ?? model.startingEffort
+    }
+    func projects(_ hostID: String) -> [Project] {
+        (live[hostID]?.shell?.host.projects ?? []).filter { $0.workspaceSettledAt == nil }
+    }
+    func canBrowseFolders(_ hostID: String) -> Bool { online(hostID) && live[hostID]?.features.contains("host-folders") == true }
+    func folders(_ hostID: String, path: JSONValue? = nil) async throws -> FolderResult {
+        #if DEBUG && os(iOS)
+        if isUIFixture {
+            let target = path?.string ?? "D:\\Engineering"
+            let top = path == .null
+            let children: [[String: Any]] = top ? [["name": "D:", "path": "D:\\", "git": false]]
+                : target == "D:\\New project" ? [] : [["name": "New project", "path": "D:\\New project", "git": true], ["name": "Panel tools", "path": "D:\\Engineering\\Panel tools", "git": false]]
+            let json: [String: Any] = ["status": "listed", "path": top ? NSNull() : target as Any, "home": "D:\\Engineering", "separator": "\\",
+                "crumbs": top ? [["name": "Drives", "path": NSNull()]] : [["name": "Drives", "path": NSNull()], ["name": target == "D:\\New project" ? "New project" : "Engineering", "path": target]],
+                "folders": children, "truncated": false]
+            return try JSONDecoder().decode(FolderResult.self, from: JSONSerialization.data(withJSONObject: json))
+        }
+        #endif
+        guard canBrowseFolders(hostID), let connection = connections[hostID], let epoch = generations[hostID] else {
+            throw ClientError.rejected("Folder browsing is unavailable. Reconnect or update Sotto on this computer.")
+        }
+        let result = try await connection.call(NewThreads.folderRequest(path: path))
+        guard generations[hostID] == epoch, online(hostID) else { throw ClientError.disconnected }
+        return try await Wire.readValue(result, as: FolderResult.self)
+    }
+    /// Registration and creation are separate commands. Neither is replayed after a lost acknowledgement.
+    func createThread(on hostID: String, projectID: String?, folder: FolderListing?, modelID: String,
+                      effort: String, permissionID: String) async -> ThreadRef? {
+        #if DEBUG && os(iOS)
+        if isUIFixture {
+            guard online(hostID), var root = fixtureShells[hostID], var host = root["host"] as? [String: Any],
+                  let chosen = creationModels(hostID).first(where: { $0.id == modelID }) else { return nil }
+            let threadID = UUID().uuidString, chosenProject = projectID ?? "new-project"
+            do {
+                _ = try Commands.createThread(projectID: chosenProject, threadID: threadID, model: chosen,
+                                              effort: effort, permissionID: permissionID, mayAnswer: mayAnswer(hostID))
+                // Only this debug simulator fixture can mutate in-memory display data without a host.
+                var rows = host["threads"] as? [[String: Any]] ?? []
+                rows.append(["id": threadID, "projectId": chosenProject, "title": "New thread", "providerId": "codex", "status": "idle", "requests": []])
+                var projects = host["projects"] as? [[String: Any]] ?? []
+                if let folder { projects.append(["id": chosenProject, "title": folder.projectName, "path": folder.path ?? ""]) }
+                host["threads"] = rows; host["projects"] = projects; root["host"] = host
+                let next = try JSONDecoder().decode(Shell.self, from: JSONSerialization.data(withJSONObject: root))
+                fixtureShells[hostID] = root
+                update(hostID) { $0.shell = next }
+                fixtureDetails[hostID + "/" + threadID] = try JSONDecoder().decode(ThreadDetail.self, from: JSONSerialization.data(withJSONObject: ["threadId": threadID, "revision": 1, "messages": []]))
+                return ThreadRef(hostID: hostID, threadID: threadID)
+            } catch { creationFeedback = error.localizedDescription; return nil }
+        }
+        #endif
+        guard creatingHostID == nil, storageReady, online(hostID),
+              !pendingCreations.contains(where: { $0.hostID == hostID }), let computer = computer(hostID),
+              let epoch = generations[hostID] else { return nil }
+        creatingHostID = hostID; creationFeedback = nil
+        defer { creatingHostID = nil }
+        let threadID = UUID().uuidString
+        do {
+            guard (projectID != nil) != (folder != nil),
+                  let model = creationModels(hostID).first(where: { $0.id == modelID }) else {
+                throw ClientError.rejected("The project or model changed. Choose it again before opening a thread.")
+            }
+            // Validate the visible options before registering anything on the computer.
+            _ = try Commands.createThread(projectID: projectID ?? "new-project", threadID: threadID, model: model,
+                                          effort: effort, permissionID: permissionID, mayAnswer: mayAnswer(hostID))
+            var chosenProject = projectID
+            if let folder, let path = folder.path {
+                guard case .listed(let fresh) = try await folders(hostID, path: .string(path)), fresh.path != nil else {
+                    throw ClientError.rejected("This folder can no longer be opened. Nothing was added. Choose another folder.")
+                }
+                guard generations[hostID] == epoch, online(hostID) else { throw ClientError.disconnected }
+                let confirmedPath = fresh.path!
+                chosenProject = live[hostID]?.shell?.host.projects.first { NewThreads.sameFolder($0.path, confirmedPath, separator: fresh.separator) }?.id
+                if chosenProject == nil {
+                    guard let providerID = model.providerId,
+                          live[hostID]?.shell?.host.providers?.first(where: { $0.id == providerID })?.capabilities.projects == true else {
+                        throw ClientError.rejected("This provider cannot add a project folder. Choose another model.")
+                    }
+                    let command = try Commands.createProject(providerID: providerID, title: fresh.projectName, path: confirmedPath)
+                    let marker = PendingOperation(hostID: hostID, clientID: computer.pairing.clientId, threadID: threadID, kind: "create-project")
+                    try remember(marker)
+                    guard let result = await dispatch(command, operation: marker), generations[hostID] == epoch,
+                          !pending.contains(where: { $0.id == marker.id }) else {
+                        creationFeedback = creationResultWords(hostID, kind: "Project registration")
+                        return nil
+                    }
+                    chosenProject = result.host.projects.first { NewThreads.sameFolder($0.path, confirmedPath, separator: fresh.separator) && ($0.providerId == nil || $0.providerId == providerID) }?.id
+                }
+            }
+            guard generations[hostID] == epoch, online(hostID), let chosenProject,
+                  live[hostID]?.shell?.host.projects.contains(where: { $0.id == chosenProject }) == true,
+                  let currentModel = creationModels(hostID).first(where: { $0.id == modelID }) else {
+                throw ClientError.rejected("The project or model is no longer available. Reconnect and choose it again.")
+            }
+            let command = try Commands.createThread(projectID: chosenProject, threadID: threadID, model: currentModel,
+                                                   effort: effort, permissionID: permissionID, mayAnswer: mayAnswer(hostID))
+            let marker = PendingOperation(hostID: hostID, clientID: computer.pairing.clientId, threadID: threadID, kind: "create-thread")
+            try remember(marker)
+            _ = await dispatch(command, operation: marker)
+            let ref = ThreadRef(hostID: hostID, threadID: threadID)
+            guard generations[hostID] == epoch, online(hostID), thread(ref) != nil,
+                  !pending.contains(where: { $0.id == marker.id }) else {
+                creationFeedback = creationResultWords(hostID, kind: "Thread creation")
+                return nil
+            }
+            return ref
+        } catch { creationFeedback = error.localizedDescription; return nil }
+    }
+    private func creationResultWords(_ hostID: String, kind: String) -> String {
+        let explanation = creationFeedback.map { $0 + " " } ?? ""
+        if pendingCreations.contains(where: { $0.hostID == hostID }) {
+            return explanation + "\(kind) on \(name(hostID)) is unconfirmed. Nothing was resent. Close this sheet and check Threads before trying again."
+        }
+        return creationFeedback ?? feedback ?? "\(kind) did not finish. Choose the project and model again."
     }
 
     // MARK: Updates from a computer

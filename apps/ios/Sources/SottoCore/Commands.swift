@@ -6,14 +6,16 @@ public struct QuestionAnswer: Codable, Equatable, Sendable {
 }
 /// The commands this client builds, each with the only fields the host accepts from a paired device.
 /// A copy of the rows it uses from the host's closed allow-list in src/host/remoteCommands.ts, which is
-/// the authority: anything not listed there is refused. The app builds nothing that list gates behind
-/// the remote-answer policy except `answer` (runtime and provider modes, discarding uncommitted work).
+/// the authority: anything not listed there is refused. A permissive creation mode, like an answer,
+/// needs the computer's remote-answer policy. The host checks that policy again when it acts.
 public enum RemoteCommands {
     public static let allowed: [String: Set<String>] = [
         "manual-send": ["threadId", "text", "attachments", "skills", "files", "draftId"],
         "interrupt": ["threadId"],
         "load-earlier-messages": ["threadId"],
         "answer": ["threadId", "requestId", "answer", "approved", "questionAnswers", "permissionChoice"],
+        "create-project": ["provider", "title", "path", "useExisting"],
+        "create-thread": ["projectId", "title", "modelId", "titleSource", "threadId", "workingCopy", "reasoningEffort", "runtimeMode", "providerMode", "managed"],
     ]
     /// Commands the host accepts only from a client holding its remote-answer policy (`mayAnswer`).
     public static let needAnswerPolicy: Set<String> = ["answer"]

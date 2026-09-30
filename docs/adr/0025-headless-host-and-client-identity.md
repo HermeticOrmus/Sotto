@@ -55,7 +55,7 @@ Some commands on the list are the user's answer to a question in another form, s
 
 ## September 23 amendment: the host reclaims its own worktrees
 
-A headless host owns worktrees as the desktop's local host does, so it reclaims them the same way (ADR-0019, #245). The worktree cleanup is built by the shared agent runtime rather than by the desktop's entry, and both entries start it once they are up; closing the runtime drains a sweep in progress, letting it finish the worktree in hand and start no other, before the coordinator and the workspace close. A host follows the cleanup rules in its own data folder's settings, read at start and all off by default, and asks GitHub through the host machine's own `gh` sign-in only when the merged rule is on there. A paired client cannot change those rules yet; they are not on the remote command list.
+A headless host owns worktrees as the desktop's local host does, so it reclaims them the same way (ADR-0041, #245). The worktree cleanup is built by the shared agent runtime rather than by the desktop's entry, and both entries start it once they are up; closing the runtime drains a sweep in progress, letting it finish the worktree in hand and start no other, before the coordinator and the workspace close. A host follows the cleanup rules in its own data folder's settings, read at start and all off by default, and asks GitHub through the host machine's own `gh` sign-in only when the merged rule is on there. A paired client cannot change those rules yet; they are not on the remote command list.
 
 ## September 23 amendment: what a reconnect downloads, and the listener's budgets
 

@@ -8,6 +8,8 @@ final class AppModelTests: XCTestCase {
         TestKeychain.locked = false; TestKeychain.unreadableAccount = nil
         HostConnection.mayAnswer = false; HostConnection.receipt = .object(["status": .string("unknown")])
         HostConnection.loseAcknowledgement = false
+        HostConnection.shells = [:]; HostConnection.commandHandler = nil; HostConnection.folderHandler = nil
+        HostConnection.receipts = [:]; HostConnection.features = ["host-folders"]
         let host = "00000000-0000-4000-8000-000000000001"
         let pairing = try JSONDecoder().decode(Pairing.self, from: Data(#"{"v":1,"hostId":"\#(host)","clientId":"phone","token":"fixture"}"#.utf8))
         let saved = SavedComputer(address: "https://laptop.example.ts.net:8443", pairing: pairing, reportedName: "Laptop")

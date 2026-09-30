@@ -23,7 +23,10 @@ import SottoCore
     }
 }
 
-struct HostRefusal: Error { let failure: WireFailure }
+struct HostRefusal: Error, LocalizedError {
+    let failure: WireFailure
+    var errorDescription: String? { failure.message }
+}
 
 @MainActor final class HostConnection {
     static var instances: [HostConnection] = []
@@ -35,9 +38,16 @@ struct HostRefusal: Error { let failure: WireFailure }
     static var mayAnswer = false
     static var receipt: JSONValue = .object(["status": .string("unknown")])
     static var loseAcknowledgement = false
+    static var shells: [String: JSONValue] = [:]
+    static var features = ["host-folders"]
+    static var commandHandler: ((String, JSONValue, String) async throws -> JSONValue)?
+    static var folderHandler: ((String, JSONValue) async throws -> JSONValue)?
+    static var receipts: [String: JSONValue] = [:]
     var onPush: ((IncomingFrame, Int) -> Void)?
     var onDisconnect: (() -> Void)?
     var operations: [String] = []
+    var commands: [JSONValue] = []
+    var hostID = ""
     var disconnects = 0
     var detailStarted: (() -> Void)?
     var heldDetail: CheckedContinuation<JSONValue, Error>?
@@ -45,8 +55,10 @@ struct HostRefusal: Error { let failure: WireFailure }
     var received = 0
     init() { Self.instances.append(self) }
     func connect(endpoint: HostEndpoint, pairing: Pairing) async throws -> Received<Hello> {
+        hostID = pairing.hostId
         let hello = try JSONValue.object(["hostId": .string(pairing.hostId), "clientId": .string(pairing.clientId),
-            "shell": Self.shell, "capabilities": .object(["mayAnswer": .bool(Self.mayAnswer)])]).decode(Hello.self)
+            "shell": Self.shells[hostID] ?? Self.shell, "features": .array(Self.features.map(JSONValue.string)),
+            "capabilities": .object(["mayAnswer": .bool(Self.mayAnswer)])]).decode(Hello.self)
         received += 1; let sequence = received
         Self.afterGreeting?(self)
         return Received(hello, sequence: sequence)
@@ -61,7 +73,7 @@ struct HostRefusal: Error { let failure: WireFailure }
     func call(_ operation: [String: JSONValue], id: String = UUID().uuidString) async throws -> JSONValue {
         let op = operation["op"]?.string ?? ""
         operations.append(op)
-        if op == "command", Self.loseAcknowledgement { throw ClientError.uncertain }
+
         if op == "observe", case .array(let ids) = operation["threadIds"], let id = ids.first?.string {
             if Self.failDetail { throw ClientError.rejected("Thread read refused") }
             push(.detail(threadID: id, value: try Self.detail.decode(ThreadDetail.self)))
@@ -74,8 +86,15 @@ struct HostRefusal: Error { let failure: WireFailure }
             }
             return Self.detail
         }
-        if op == "shell" || op == "command" { return Self.shell }
-        if op == "receipt" { return Self.receipt }
+        if op == "command" {
+            let command = operation["command"] ?? .null; commands.append(command)
+            if Self.loseAcknowledgement { throw ClientError.uncertain }
+            if let handler = Self.commandHandler { return try await handler(hostID, command, id) }
+            return Self.shells[hostID] ?? Self.shell
+        }
+        if op == "shell" { return Self.shells[hostID] ?? Self.shell }
+        if op == "receipt" { return Self.receipts[operation["commandId"]?.string ?? ""] ?? Self.receipt }
+        if op == "host-folders", let handler = Self.folderHandler { return try await handler(hostID, operation["request"] ?? .null) }
         return .null
     }
     func disconnect() { disconnects += 1 }
