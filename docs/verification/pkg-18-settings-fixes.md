@@ -49,3 +49,5 @@ Independent gpt-6.1-sol reviewers at high reasoning reviewed Standards and Spec 
 The full two-worker gate run passed 6,431 tests with 153 skipped across 521 files (880.00 seconds). The final notice follow-up was also covered by the separate 151-test affected run. No deadlines, skips or assertions were weakened.
 
 Main was integrated at `268fa07d`; both artifact-exclusion lists were retained when resolving the conflicts that blocked GitHub from starting pull-request CI. Typecheck, lint and notices passed on the integration. All 425 affected tests passed across six files, and the rebuilt Electron run passed all six tests across the three specs above plus `new-thread-settings.spec.ts` (47.7 seconds). The refreshed minimum-size microphone captures were inspected.
+
+After Gates (Windows) passed on `6751c6e3`, main was fetched and merged through `d343d76a`. That brought in wake preparation and CI path filters without changing Settings code. Typecheck, lint and notices passed again; all 428 affected tests passed across seven files, including wake preparation, and the rebuilt three-spec Electron run passed all four tests (37.9 seconds).
