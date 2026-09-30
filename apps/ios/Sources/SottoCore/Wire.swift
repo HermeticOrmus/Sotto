@@ -114,11 +114,13 @@ public struct WireFailure: Decodable, Sendable { public let code: String; public
 public struct Receipt: Decodable, Sendable { public let status: String; public let error: WireFailure? }
 public struct Hello: Decodable, Sendable {
     public let hostId: String; public let clientId: String; public let shell: Shell; public let capabilities: Capabilities
+    public let features: [String]?
     public struct Capabilities: Decodable, Sendable { public let mayAnswer: Bool }
 }
 public struct Shell: Decodable, Sendable {
     public let hostId: String?; public let host: HostSnapshot; public let deliveries: [Delivery]?; public let deliveredDrafts: [DeliveryReceipt]?
     public let globalLaneBusy: Bool?; public let busyThreadIds: [String]?; public let error: String?
+    public let configuration: ThreadStartPreferences?
     public func validate(hostID: String) throws {
         guard hostId == hostID, host.hostId == hostID,
               host.threads.allSatisfy({ $0.hostId == nil || $0.hostId == hostID }) else { throw ClientError.invalidIdentity }
@@ -127,11 +129,18 @@ public struct Shell: Decodable, Sendable {
 public struct HostSnapshot: Decodable, Sendable {
     public let hostId: String?; public let name: String; public let threads: [ThreadSummary]
     public let projects: [Project]; public let providers: [Provider]?
+    public let models: [ThreadModel]?
     public let capabilities: ProviderCapabilities
 }
-public struct Project: Decodable, Sendable { public let id: String; public let title: String; public let workspaceSettledAt: String? }
+public struct Project: Decodable, Identifiable, Sendable {
+    public let id: String; public let title: String; public let workspaceSettledAt: String?
+    public let path: String?; public let providerId: String?
+}
 public struct Provider: Decodable, Sendable { public let id: String; public let connection: String; public let capabilities: ProviderCapabilities }
-public struct ProviderCapabilities: Decodable, Sendable { public let submit: Bool; public let interrupt: Bool; public let questions: Bool; public let permissions: Bool }
+public struct ProviderCapabilities: Decodable, Sendable {
+    public let submit: Bool; public let interrupt: Bool; public let questions: Bool; public let permissions: Bool
+    public let projects: Bool?; public let threads: Bool?
+}
 public struct ThreadSummary: Decodable, Identifiable, Sendable {
     public let id: String; public let hostId: String?; public let projectId: String; public let title: String
     public let providerId: String?; public let status: String; public let requests: [AgentRequest]
