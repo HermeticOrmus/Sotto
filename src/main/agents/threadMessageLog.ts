@@ -144,7 +144,7 @@ export class ThreadMessageLog {
    * alone when none is. What the pane draws for a thread outside the watched set comes from the store.
    */
   publishedThread<T extends Published>(thread: T): T {
-    if (this.holding(thread.id)) return { ...thread, messages: this.published(thread.id), ...this.lastUser(thread.id) }
+    if (this.holding(thread.id)) return { ...thread, messages: this.published(thread.id), ...this.lastUserMessageIdField(thread.id) }
     return this.summarizedThread(thread)
   }
   /**
@@ -158,14 +158,14 @@ export class ThreadMessageLog {
   }
   /** One thread with its summary and no messages. */
   private summarizedThread<T extends Published>(thread: T): T {
-    return { ...thread, messages: [], summary: this.summaryBeside(thread.id, thread.activities), ...this.lastUser(thread.id) }
+    return { ...thread, messages: [], summary: this.summaryBeside(thread.id, thread.activities), ...this.lastUserMessageIdField(thread.id) }
   }
   /**
    * The user's newest message by ID, which a send names back for the stale-reply check. It comes from the
    * facts, not the window: a window taken back up after its messages were put away holds none of the older
    * ones, and reading the user's last message from it made every send to that thread look like a race.
    */
-  private lastUser(threadId: string): { lastUserMessageId?: string } {
+  private lastUserMessageIdField(threadId: string): { lastUserMessageId?: string } {
     const id = this.lastUserMessageId(threadId)
     return id === undefined ? {} : { lastUserMessageId: id }
   }

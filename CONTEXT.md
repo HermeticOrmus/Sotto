@@ -150,7 +150,7 @@ Answering a question or permission request and creating a project are also part 
 
 **Takeover.** The user sends a message to an assigned thread directly through the provider (for example `codex resume` in the Codex CLI). The adapter reports that message as a user message with no command ID, so the coordinator switches the assignment to manual mode and keeps watching. Opening or reading a thread is not a takeover.
 
-**Stale-reply check.** The adapter's refusal of a send that names a different user message as the thread's newest than the one it recorded, so a reply written before a takeover is not sent after it. The coordinator names the thread's `lastUserMessageId`, which the adapter publishes from what it recorded rather than from the window of messages it holds: a window put away while the thread's session ended and taken back up later holds none of the older messages. The refusal says "The latest user message changed" and sends nothing.
+**Stale-reply check.** The adapter's refusal of a send that names a different user message as the thread's newest than the one it recorded, so a reply written before a takeover is not sent after it. The coordinator names the thread's `lastUserMessageId`, which the adapter publishes from what it recorded rather than from the window of messages it holds: a window put away while the thread's session ended and taken back up later holds none of the older messages. Each adapter words its refusal its own way, says the thread changed, and sends nothing.
 
 ## History and the host
 

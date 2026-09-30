@@ -53,6 +53,23 @@ it('names the user’s last message on a thread whose window was put away and ta
     .toMatchObject({ accepted: true })
 })
 
+it('still refuses a send when the user typed in Claude Code after the thread was read', async () => {
+  const f = await fixture()
+  f.adapter.observeThreads(['first'])
+  expect(await f.host.execute({ type: 'send', threadId: 'first', commandId: randomUUID(), messageId: randomUUID(), text: 'Plan the trip' })).toMatchObject({ accepted: true })
+  await f.driver.completeTurn('first', 'Here is the plan.')
+  await expect.poll(async () => (await f.host.snapshot()).threads.find(t => t.id === 'first')!.status).toBe('idle')
+
+  await endWhileAway(f)
+  const read = (await f.adapter.refreshThread('first')).threads.find(t => t.id === 'first')!
+  const prompts = async () => (await f.driver.requests()).filter(record => record.method === 'user').length
+  const before = await prompts()
+  await f.driver.typeInProvider('first', 'Typed in Claude Code instead')
+  await expect(f.host.execute({ type: 'send', threadId: 'first', commandId: randomUUID(), messageId: randomUUID(), text: 'Stale reply', expectedLastUserMessageId: read.lastUserMessageId ?? null }))
+    .rejects.toThrow('The latest user message changed')
+  expect(await prompts()).toBe(before)
+})
+
 it('sends from the composer to a thread whose session ended while another thread was open', async () => {
   const f = await fixture()
   const credentials = new AgentCredentials(f.root, { isEncryptionAvailable: () => false, encryptString: value => Buffer.from(value), decryptString: value => value.toString() })
