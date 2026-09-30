@@ -78,6 +78,7 @@ function settleDropped(chat: PersonalChat): void {
 function definedFields<T extends object>(value: T): { [K in keyof T]: Exclude<T[K], undefined> } {
   return Object.fromEntries(Object.entries(value).filter(([, field]) => field !== undefined)) as { [K in keyof T]: Exclude<T[K], undefined> }
 }
+const uncertainAnswer = 'Answer delivery is uncertain. Refresh the conversation; the answer will not be replayed.'
 export type PersonalConversationHost = Pick<CodexAppServerHost, 'closed' | 'connect' | 'createPersonalConversation' | 'disconnect' | 'execute' | 'listThreadSkills' | 'personalSnapshot' | 'refreshThread' | 'sendPersonalConversation' | 'subscribe'>
   /** Told that a new client is on disk, so each process moves to it as it goes idle (ADR-0021). */
   & { clientUpdated?(): Promise<void> }
@@ -485,7 +486,8 @@ export class PersonalChatService {
       if (questions.length) await this.options.bindRequestDraftDecision?.({ kind: 'personal', ownerId: chatId, providerId: this.chat(chatId).providerId, requestId: request.id, questions }, decisionId, draftAnswers)
       const result = await this.host(chatId).execute({ ...definedFields(answer), type: 'answer', commandId: decisionId, threadId: chatId })
       status = result.accepted && !result.uncertain ? 'accepted' : 'uncertain'
-      if (!result.accepted) this.error = 'Answer delivery is uncertain. Refresh the conversation; the answer will not be replayed.'
+      if (!result.accepted) this.error = uncertainAnswer
+      else if (status === 'accepted' && this.error === uncertainAnswer) this.error = undefined
     } catch (error) { status = 'failed'; failure = error }
     await this.mutate(saved => {
       const decision = this.chat(chatId, saved).decisions!.find(d => d.id === decisionId)!

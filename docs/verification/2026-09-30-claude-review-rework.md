@@ -18,6 +18,7 @@ The answer-recovery flow was prototyped with the existing controls. The throwawa
 - `npm run build` and `npx playwright test tests/e2e/thread-activity.spec.ts tests/e2e/phase-three-personal-requests.spec.ts` passed: five cases. The complete-app personal request case also passed in a separate capture run.
 - Independent Standards and Spec reviews used gpt-6.1-sol at high reasoning. The first Spec review caught application-level retry blockers; those were fixed and both final reviews reported no material findings. The CLI's Windows read-only sandbox initially failed before file access; reviewers were retried with working process access and explicit read-only instructions.
 - After Windows CI passed on the rework, `origin/main` at `475e6da2` was merged without conflicts. Its four-file delta concerns socket frames and Devin RPC behavior. Typecheck, lint and notices passed again; the affected socket/Devin files and Claude regressions passed together (160 tests, eight skipped). The app rebuilt and all 16 `tests/e2e/app.spec.ts` cases passed. The PR records Windows CI for the synchronized revision.
+- A final recovery assertion reproduced a stale personal-chat uncertainty notice after a confirmed retry. The service now clears that specific notice on confirmation. The three focused safety/service/renderer files passed (81 tests), typecheck/lint/notices passed again, and the rebuilt complete-app personal request case passed. The earlier uncertain decision remains recorded.
 
 ## Rendered check
 

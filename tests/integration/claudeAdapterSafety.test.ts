@@ -309,6 +309,7 @@ describe('Claude recovery and safety', () => {
       expect((await f.driver.requests()).filter(record => f.protocol!.permissionDecision(record) !== undefined)).toHaveLength(0)
       await service.answer({ ...answer, approved: true })
       expect(service.get().chats[0]!.decisions!.map(decision => decision.status)).toEqual(['uncertain', 'accepted'])
+      expect(service.get().error).toBeUndefined()
       expect(personalAnswerHeld(service.get().chats[0]!, requestId)).toBe(false)
       await expect.poll(async () => (await f.driver.requests()).filter(record => f.protocol!.permissionDecision(record) !== undefined).map(record => f.protocol!.permissionDecision(record))).toEqual([true])
     } finally { await service.close() }
