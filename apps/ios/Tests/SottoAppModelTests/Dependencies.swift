@@ -12,7 +12,10 @@ import SottoCore
     func remove(account: String) throws { Self.items[account] = nil }
 }
 
-struct HostRefusal: Error { let failure: WireFailure }
+struct HostRefusal: Error, LocalizedError {
+    let failure: WireFailure
+    var errorDescription: String? { failure.message }
+}
 
 @MainActor final class HostConnection {
     static var instances: [HostConnection] = []
