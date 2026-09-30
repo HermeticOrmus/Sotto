@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { createHash } from 'node:crypto'
-import { mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises'
+import { cp, mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -75,8 +75,7 @@ describe('NaturalSpeechModels', () => {
     const backup = `${installed}.backup-12345678-1234-1234-1234-123456789abc`
     await rename(installed, backup)
     if (installedExists) {
-      const fresh = new NaturalSpeechModels(userRoot, { downloader })
-      await fresh.download()
+      await cp(backup, installed, { recursive: true })
     }
     const restarted = new NaturalSpeechModels(userRoot, { downloader })
     const before = downloader.mock.calls.length
