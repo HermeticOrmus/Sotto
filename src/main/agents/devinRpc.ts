@@ -5,7 +5,7 @@ import { z } from 'zod'
 import { findCli, withCliPath, type CliLookupOptions } from './cliLookup'
 
 /**
- * Devin's floor: the oldest client Sotto connects (ADR-0021), and what a host's tile says an update needs
+ * Devin's floor: the oldest client Sotto connects (ADR-0042), and what a host's tile says an update needs
  * (ADR-0035). The reason: 3000.10.31 is the version whose ACP `session/load` replay, standard elicitation for
  * questions and the ask-before-everything profile Sotto writes for it were checked (ADR-0016, ADR-0017, ADR-0022);
  * earlier versions changed exactly those. Move it only after checking a newer one against the adapter contract.
