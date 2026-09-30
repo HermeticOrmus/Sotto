@@ -1,5 +1,7 @@
 # 4. Authority lives in policy records
 
+September 29, 2026 amendment: [ADR-0025](0025-headless-host-and-client-identity.md#september-29-amendment-an-ssh-desktop-can-answer-at-setup) records Zach's choice that an authenticated SSH desktop connection creates its own client-scoped remote-answer policy automatically when none has ever existed. It changes how that desktop's policy is established, not who answers requests: the user still chooses permissions, supervision approves nothing, and a phone still needs an explicit grant. Existing revoked or expired records remain in force as a refusal to establish the default again.
+
 ## Status
 
 Accepted — 2026-09-10. ADR-0025's September 22 amendment applies this to paired clients: the commands a paired device may send, and which of them need a `remote-answer` policy record. ADR-0029 (September 25, 2026) makes one standing exception: by default a thread may open, navigate, click and type in Sotto's own browser without asking, through a grant shaped like a policy record with the source `settings`.

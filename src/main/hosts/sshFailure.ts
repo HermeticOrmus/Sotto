@@ -27,6 +27,7 @@ export type SshFailureCode =
   | 'forward-failed'
   | 'forward-timeout'
   | 'pairing-failed'
+  | 'permission-setup-failed'
   | 'revoke-failed'
   | 'stop-failed'
   | 'update-failed'
@@ -61,6 +62,7 @@ const MESSAGES: Readonly<Record<SshFailureCode, string>> = {
   'forward-failed': 'The SSH port forward could not open. Reconnect, and if it fails again, check that the SSH server allows port forwarding.',
   'forward-timeout': 'The SSH forward was not ready in time. Check SSH access and reconnect.',
   'pairing-failed': 'The pairing code could not be read from the host. Check that the host is running and try again.',
+  'permission-setup-failed': 'Desktop permissions could not be set up on the host. Nothing was replaced. Check its data folder, then reconnect.',
   'revoke-failed': 'Client access could not be revoked. Check the host connection and try Forget again.',
   'stop-failed': 'The host could not be stopped. It may still be running on the SSH host.',
   'update-failed': 'The connection to the host closed before this step of its update finished.',
@@ -119,6 +121,7 @@ const FAILURE_STEPS: Partial<Readonly<Record<SshFailureCode, HostSetupStep>>> = 
   'descriptor-invalid': 'start', 'port-taken': 'start', 'host-busy': 'start', 'host-start-failed': 'start', 'host-timeout': 'start',
   'forward-failed': 'start', 'forward-timeout': 'start',
   'pairing-failed': 'pair',
+  'permission-setup-failed': 'pair',
 }
 export const failureStep = (code: SshFailureCode): HostSetupStep | undefined => FAILURE_STEPS[code]
 
