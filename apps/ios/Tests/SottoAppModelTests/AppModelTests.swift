@@ -168,6 +168,43 @@ final class AppModelTests: XCTestCase {
         XCTAssertTrue(model.online(ref.hostID))
         XCTAssertEqual(connection.disconnects, 0)
     }
+    @MainActor private func shellWithAnswerAuthority(_ allowed: Bool) throws -> Shell {
+        var shell = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(HostConnection.shell)) as? [String: Any])
+        shell["clientCapabilities"] = ["mayAnswer": allowed]
+        return try JSONDecoder().decode(Shell.self, from: JSONSerialization.data(withJSONObject: shell))
+    }
+    @MainActor func testLiveShellRefreshesAnswerAuthorityAndIgnoresStaleUpdates() async throws {
+        let (model, ref) = try fixture()
+        model.phase(.active); await model.reconnectAll()
+        let connection = try XCTUnwrap(HostConnection.instances.last)
+        XCTAssertFalse(model.mayAnswer(ref.hostID))
+        connection.push(.shell(try shellWithAnswerAuthority(true)))
+        XCTAssertTrue(model.mayAnswer(ref.hostID))
+        connection.onPush?(.shell(try shellWithAnswerAuthority(false)), 1)
+        XCTAssertTrue(model.mayAnswer(ref.hostID), "An old shell must not revoke newer authority")
+        connection.push(.shell(try shellWithAnswerAuthority(false)))
+        XCTAssertFalse(model.mayAnswer(ref.hostID))
+        connection.push(.shell(try shellWithAnswerAuthority(true)))
+        connection.push(.shell(try HostConnection.shell.decode(Shell.self)))
+        XCTAssertTrue(model.mayAnswer(ref.hostID), "Older hosts omit the optional field; keep their hello authority")
+    }
+    @MainActor func testHelloDoesNotReplaceNewerPushedAnswerAuthority() async throws {
+        let (model, ref) = try fixture()
+        HostConnection.afterGreeting = { connection in
+            connection.push(.shell(try! self.shellWithAnswerAuthority(true)))
+        }
+        model.phase(.active); await model.reconnectAll()
+        XCTAssertTrue(model.mayAnswer(ref.hostID))
+    }
+    @MainActor func testOlderHostHelloSuppliesAuthorityAfterANewerShellPush() async throws {
+        let (model, ref) = try fixture()
+        HostConnection.mayAnswer = true
+        HostConnection.afterGreeting = { connection in
+            connection.push(.shell(try! HostConnection.shell.decode(Shell.self)))
+        }
+        model.phase(.active); await model.reconnectAll()
+        XCTAssertTrue(model.mayAnswer(ref.hostID))
+    }
     @MainActor func testAThreadReadFailureDoesNotDisconnectItsOnlineComputer() async throws {
         let (model, ref) = try fixture()
         await model.select(ref)

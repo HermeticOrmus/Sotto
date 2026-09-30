@@ -269,7 +269,11 @@ struct Live {
             let greeting = try await connection(hostID).connect(endpoint: endpoint, pairing: saved.pairing)
             guard generations[hostID] == current else { return }
             try applyShell(greeting.value.shell, from: hostID, sequence: greeting.sequence)
-            update(hostID) { $0.mayAnswer = greeting.value.capabilities.mayAnswer; $0.status = .online }
+            update(hostID) {
+                $0.status = .online
+                // An older host can push a newer shell before hello finishes, without this field.
+                if $0.shell?.clientCapabilities == nil { $0.mayAnswer = greeting.value.capabilities.mayAnswer }
+            }
             if let selected, selected.hostID == hostID, thread(selected) == nil { self.selected = nil }
         } catch {
             guard generations[hostID] == current else { return }
@@ -620,7 +624,10 @@ struct Live {
         try next.validate(hostID: hostID)
         guard sequence > (shellSequences[hostID] ?? 0) else { return }
         shellSequences[hostID] = sequence
-        update(hostID) { $0.shell = next }
+        update(hostID) {
+            $0.shell = next
+            if let allowed = next.clientCapabilities?.mayAnswer { $0.mayAnswer = allowed }
+        }
         // Live evidence can arrive after the acknowledgement timed out. Never resend to settle it.
         // A Keychain write failure is local feedback, not a lost connection to the computer.
         for item in scoped(hostID) {

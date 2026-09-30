@@ -16,6 +16,7 @@ import { execFileSync } from 'node:child_process'
 import { SCREENSHOT_NOT_ITS_TYPE, type AgentCommand, type AgentThreadDetail, type AgentThreadDetailDelta, type AgentThreadDetailUpdate } from '../../src/shared/agents'
 import { hostVersionMismatch } from '../../src/shared/hostProtocol'
 import { version as packageVersion } from '../../package.json'
+import { rawPeer } from '../fixtures/rawHostPeer'
 import { HOST_BUSY, HOST_EVENT_PAGE_SIZE } from '../../src/shared/hostProtocol'
 
 let root: string
@@ -51,6 +52,23 @@ describe('authenticated host socket', () => {
     await client.revokePairing()
     expect(host.pairing.verifyToken(result.token)).toBeUndefined()
     await expect(client.connect()).rejects.toMatchObject({ code: 'unauthenticated' })
+  })
+  it('pushes each client answer authority when the host policy changes', async () => {
+    const first = await pair('First'), second = await pair('Second')
+    const peers = await Promise.all([first, second].map(({ result }) => rawPeer(host.descriptor!.port, host.pairing.signSession(result.clientId))))
+    const descriptor = JSON.parse(await readFile(join(root, 'host-listener.json'), 'utf8')) as { adminToken: string }
+    try {
+      for (const peer of peers) await peer.call('hello', { op: 'hello' })
+      for (const allowed of [true, false]) {
+        for (const peer of peers) peer.messages.length = 0
+        const response = await fetch(url + '/v1/admin/' + (allowed ? 'allow-answers' : 'deny-answers'), {
+          method: 'POST', headers: { Authorization: 'Bearer ' + descriptor.adminToken, 'Content-Type': 'application/json' }, body: JSON.stringify({ clientId: first.result.clientId }),
+        })
+        expect(response.status).toBe(200)
+        await expect.poll(() => peers[0]!.messages.find(message => message.event === 'shell')).toMatchObject({ state: { clientCapabilities: { mayAnswer: allowed } } })
+        await expect.poll(() => peers[1]!.messages.find(message => message.event === 'shell')).toMatchObject({ state: { clientCapabilities: { mayAnswer: false } } })
+      }
+    } finally { for (const peer of peers) peer.frames.close() }
   })
   it('deduplicates commands by authenticated client and refuses a changed payload', async () => {
     const { client } = await pair()
@@ -398,25 +416,6 @@ it('coalesces a burst of shell changes and answers a thread or an event page too
   } finally { await client.close(); await server.close() }
 })
 
-/** A peer speaking the wire directly, the way a client of another codebase (the iPhone app) would. */
-async function rawPeer(port: number, session: string) {
-  const key = randomBytes(16).toString('base64')
-  const messages: Record<string, unknown>[] = []
-  const frames = await new Promise<SocketFrames>((resolve, reject) => {
-    const request = httpRequest('http://127.0.0.1:' + port + '/v1/socket', { headers: { Upgrade: 'websocket', Connection: 'Upgrade', 'Sec-WebSocket-Version': '13', 'Sec-WebSocket-Key': key, Authorization: 'Bearer ' + session } })
-    request.on('error', reject)
-    request.on('upgrade', (_response, stream, head) => {
-      const socket = new SocketFrames(stream, true, text => messages.push(JSON.parse(text) as Record<string, unknown>))
-      socket.feed(head); resolve(socket)
-    }); request.end()
-  })
-  const call = async (id: string, operation: Record<string, unknown>) => {
-    frames.send({ v: 1, id, session, ...operation })
-    await expect.poll(() => messages.some(message => message.id === id)).toBe(true)
-    return messages.find(message => message.id === id)!
-  }
-  return { frames, messages, call }
-}
 
 describe('thread detail over the socket', () => {
   const message = (text: string) => ({ id: 'reply', role: 'assistant' as const, text, createdAt: '2026-09-23T00:00:00.000Z' })

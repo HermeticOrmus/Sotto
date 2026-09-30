@@ -119,6 +119,8 @@ public struct Hello: Decodable, Sendable {
 public struct Shell: Decodable, Sendable {
     public let hostId: String?; public let host: HostSnapshot; public let deliveries: [Delivery]?; public let deliveredDrafts: [DeliveryReceipt]?
     public let globalLaneBusy: Bool?; public let busyThreadIds: [String]?; public let error: String?
+    /// Authority for this paired client, refreshed with the shell. Older hosts send it only in hello.
+    public let clientCapabilities: Hello.Capabilities?
     public func validate(hostID: String) throws {
         guard hostId == hostID, host.hostId == hostID,
               host.threads.allSatisfy({ $0.hostId == nil || $0.hostId == hostID }) else { throw ClientError.invalidIdentity }
