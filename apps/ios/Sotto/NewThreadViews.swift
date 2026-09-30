@@ -232,12 +232,12 @@ private struct ComputerFolderPicker: View {
                 }.foregroundStyle(Palette.accent)
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Full folder path").font(.figtree(13, .footnote)).foregroundStyle(Palette.muted)
-                    TextField("Enter a folder path", text: $path).textInputAutocapitalization(.never).autocorrectionDisabled()
+                    TextField("Enter a folder path", text: $path, prompt: Text("Enter a folder path").foregroundStyle(Palette.muted)).textInputAutocapitalization(.never).autocorrectionDisabled()
                         .submitLabel(.go).onSubmit { if !path.isEmpty { read(.string(path)) } }.fieldSurface()
                         .accessibilityIdentifier("project-folder-path").accessibilityLabel("Full folder path on \(model.name(hostID))")
                     Button("Go to folder") { read(.string(path)) }.disabled(path.isEmpty).frame(minHeight: 44)
                 }
-                TextField("Filter folders", text: $filter).textInputAutocapitalization(.never).autocorrectionDisabled()
+                TextField("Filter folders", text: $filter, prompt: Text("Filter folders").foregroundStyle(Palette.muted)).textInputAutocapitalization(.never).autocorrectionDisabled()
                     .fieldSurface().accessibilityLabel("Filter folders in this directory").accessibilityIdentifier("folder-filter")
                 if loading { ProgressView("Reading folders…").frame(maxWidth: .infinity) }
                 if let problem { Text(problem).foregroundStyle(Palette.warning) }

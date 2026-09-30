@@ -10,10 +10,11 @@ The fixture prototype is archived separately on `prototype/iphone-new-thread` (`
 
 - `npm run typecheck`: passed.
 - `npm run lint`: passed.
-- `npm test -- --maxWorkers=2`: 480 files passed, 39 skipped; 6,363 tests passed, 153 skipped.
+- `npm test -- --maxWorkers=2`: 480 files passed, 39 skipped; 6,364 tests passed, 153 skipped.
 - `npm run notices:verify`: passed, 174 components.
 - `git diff --check`: passed.
-- Swift package tests, simulator build and native UI journeys: pending macOS CI. There is no local Swift/Xcode on this Windows machine; the configured Forge SSH host is Linux and has neither tool.
+- After review fixes: `workspaceControl.test.ts` passed all 9 tests; the built Electron project/thread journey passed.
+- Swift package tests and the unsigned simulator build passed at `7fe5f36f`; native UI journeys are running in [CI](https://github.com/millZach/Sotto/actions/runs/36768497714). There is no local Swift/Xcode on this Windows machine; the configured Forge SSH host is Linux and has neither tool.
 
 ## Native journeys to inspect
 
@@ -39,3 +40,5 @@ Reviewed independently by gpt-6.1-sol at high reasoning against the plan and Zac
 - A folder deleted after browsing could be recreated during registration. Fixed in the host’s existing-folder path, with a real filesystem integration check that the missing folder remains absent and no provider command runs.
 
 Original review: Standards 2 findings (1 fixed, 1 dismissed with source evidence); Spec 2 findings (both fixed). Native checks remain pending; these reviews are not test results.
+
+The new surfaces use the existing native theme roles. Measured contrast from the asset catalog (light/dark): Ink on Canvas 15.66/19.51, Muted on Canvas 5.64/8.21, Muted on Surface 5.84/7.98, Accent on Canvas 4.70/8.44, Warning on Canvas 4.92/11.83, and ActionInk on Action 4.87/8.02. Folder-field placeholders now use Muted explicitly, as the existing Threads search does.
