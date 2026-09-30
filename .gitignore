@@ -3,6 +3,7 @@ out/
 dist/
 dist-electron/
 /release/
+artifacts/windows-askpass/
 coverage/
 playwright-report/
 test-results/
