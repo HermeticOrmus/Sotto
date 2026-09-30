@@ -75,7 +75,7 @@ one skip and no failures. All four Focus journeys passed on each phone size,
 including all three feedback scenarios in both appearances and reachable dismissal.
 The large simulator also used accessibility text size and reduced motion. This
 evidence precedes the clean merge of main at `4af39aa2`; final merged-state gate
-results are recorded in the PR.
+status is recorded in the PR.
 
 These four inspected captures are retained:
 
