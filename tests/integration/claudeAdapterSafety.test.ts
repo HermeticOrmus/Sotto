@@ -7,6 +7,7 @@ import { claudeFixture } from '../fixtures/claudeFixture'
 import { claudeAnswer, claudePending } from '../../src/main/agents/claudeRequests'
 import { authoredClaudeUser } from '../../src/main/agents/claudeSessionLog'
 import { ClaudeSessionLog } from '../../src/main/agents/claudeSessionLog'
+import { ClaudeProtocol } from '../../src/main/agents/claudeProtocol'
 import { SottoThreadHost, ThreadRegistry } from '../../src/main/agents/threads'
 import { AtomicJsonStore } from '../../src/main/storage/atomicJsonStore'
 import { AgentControl } from '../../src/main/agents/control'
@@ -238,6 +239,33 @@ describe('Claude recovery and safety', () => {
     expect(await f.sessions!.starts(personal)).toBe(2)
     const launch = (await f.driver.requests()).filter(record => record.method === 'resume').at(-1)!
     expect((launch.params!.frame as { args: string[] }).args.join(' ')).toContain(memories[0]!.content)
+  })
+  it('lets the user retry an uncertain answer after a turn result without replaying it', async () => {
+    await f.driver.raisePermission(id, 'Build')
+    await expect.poll(async () => (await thread()).requests.length).toBe(1)
+    const requestId = (await thread()).requests[0]!.id
+    const write = ClaudeProtocol.prototype.write
+    const failed = vi.spyOn(ClaudeProtocol.prototype, 'write').mockImplementationOnce(() => Promise.reject(new Error('Uncertain write')))
+    const command = { type: 'answer' as const, commandId: 'first-answer', threadId: id, requestId, answer: '', approved: false }
+    expect(await f.host.execute(command)).toEqual({ accepted: false, uncertain: true })
+    failed.mockRestore()
+    await f.driver.completeTurn(id, 'Turn ended before the answer arrived.')
+    await expect.poll(async () => (await thread()).status).toBe('idle')
+    expect((await thread()).requests[0]!.delivery).toBe('uncertain')
+    expect((await f.driver.requests()).filter(record => f.protocol!.permissionDecision(record) !== undefined)).toHaveLength(0)
+    await expect(f.host.execute({ type: 'send', commandId: 'blocked', messageId: 'blocked', threadId: id, text: 'Continue' })).rejects.toThrow('pending Claude request')
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const retryWrite = vi.spyOn(ClaudeProtocol.prototype, 'write').mockImplementationOnce(async function (this: ClaudeProtocol, frame) { await gate; await write.call(this, frame) })
+    const retry = f.host.execute({ ...command, commandId: 'retry', approved: true })
+    try {
+      await expect.poll(() => retryWrite.mock.calls.length).toBe(1)
+      expect(await f.host.execute({ ...command, commandId: 'duplicate' })).toEqual({ accepted: false, uncertain: true })
+      release(); expect(await retry).toEqual({ accepted: true })
+    } finally { release(); await retry; retryWrite.mockRestore() }
+    expect((await thread()).requests).toEqual([])
+    await expect.poll(async () => (await f.driver.requests()).filter(record => f.protocol!.permissionDecision(record) !== undefined).map(record => f.protocol!.permissionDecision(record))).toEqual([true])
+    expect(await f.host.execute({ type: 'send', commandId: 'unblocked', messageId: 'unblocked', threadId: id, text: 'Continue' })).toEqual({ accepted: true })
   })
   it.each(['browser', 'setup'] as const)('cancels a launch superseded during %s tool setup without blocking its next send', async tools => {
     let entered!: () => void, release!: () => void

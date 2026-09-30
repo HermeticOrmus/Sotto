@@ -146,7 +146,7 @@ export interface ClaudeStreamJsonHostOptions {
   /** Session reaper cadence and idle threshold; see `sessionReaper.ts`. */
   reaperSweepMs?: number; sessionIdleMs?: number
   /** Stable event names only; never a model, a level, a mode or anything a thread said. */
-  logEvent?: (event: ClaudeSettingsEvent) => void
+  logEvent?: (event: ClaudeSettingsEvent | 'claude-mcp-config-cleanup-failed') => void
 }
 /** `client` is the client generation the CLI was launched from: see `clientUpdated`. */
 type Runtime = { protocol: ClaudeProtocol; requests: Map<string, ClaudePending>; answered: Set<string>; clientRevision: number }
@@ -673,7 +673,7 @@ export class ClaudeStreamJsonHost implements AgentHost {
     if (command.type === 'answer') {
       const pending = runtime.requests.get(command.requestId)
       if (!pending) throw new Error('That request is no longer pending.')
-      if (runtime.answered.has(pending.id)) return { accepted: false, uncertain: true }
+      if (runtime.answered.has(pending.id) && pending.request.delivery !== 'uncertain') return { accepted: false, uncertain: true }
       const answer = claudeAnswer(pending, command.answer, command.approved, command.questionAnswers, command.permissionChoice)
       // Only another explicit user answer retries uncertain delivery. Clearing the marker while
       // it is in flight keeps a concurrent answer from sending a second response.
