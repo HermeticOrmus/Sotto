@@ -45,6 +45,51 @@ async function fixture(options: { remote?: boolean; gh?: GhFixture; commitMessag
 }
 
 describe('the stacked Git action, the way T3 runs it', () => {
+  it.each([false, true])('keeps command arguments constant for thousands of paths (selected files: %s)', async selectedFiles => {
+    const f = await fixture({ remote: false })
+    const snapshot = await new GitStatusReader({}).read(f.repo, { remote: false })
+    const argumentLists: string[][][] = []
+    for (const count of [3, 3000]) {
+      const paths = Array.from({ length: count }, (_, i) => `scaffold/long-project-file-${i}.txt`)
+      const excluded = selectedFiles ? Array.from({ length: count }, (_, i) => `excluded/staged-file-${i}.txt`) : []
+      const calls: { args: readonly string[]; stdin: string | undefined }[] = []
+      const run: RunGitCommand = async (_cwd, _command, args, options) => {
+        calls.push({ args, stdin: options?.stdin })
+        if (args[0] === 'rev-parse' && args.includes('--show-toplevel')) return f.repo
+        if (args[0] === 'rev-parse' && args.includes('--verify')) throw new Error('No operation in progress')
+        if (args[0] === 'status') return paths.map(path => `? ${path}\0`).join('')
+        if (args[0] === 'diff' && args.includes('--name-only')) return excluded.join('\0')
+        if (args[0] === 'diff' && args.includes('--name-status')) return `A\t${paths[0]}`
+        if (args[0] === 'write-tree' || args[0] === 'rev-parse') return 'abc123'
+        return ''
+      }
+      const actions = new GitActions({ run, status: { read: async () => snapshot, invalidate: () => undefined }, writeCommitMessage: async () => null, writePullRequestText: async () => null })
+      const result = await actions.runStackedAction({ threadId: 't', cwd: f.repo, action: 'commit', commitMessage: 'Commit scaffold', ...(selectedFiles ? { filePaths: paths } : {}) })
+      expect(result.commit.status).toBe('created')
+      const mutations = calls.filter(call => call.args.includes('add') || call.args.includes('reset'))
+      expect(mutations.map(call => call.stdin)).toEqual(selectedFiles ? [`${excluded.join('\0')}\0`, `${paths.join('\0')}\0`, `${paths.join('\0')}\0`] : [`${paths.join('\0')}\0`])
+      for (const call of mutations) {
+        expect(call.args).toContain('--literal-pathspecs')
+        expect(call.args).toContain('--pathspec-from-file=-')
+        expect(call.args).toContain('--pathspec-file-nul')
+      }
+      argumentLists.push(calls.map(call => [...call.args]))
+    }
+    expect(argumentLists[1]).toEqual(argumentLists[0])
+  })
+  it('keeps stdin pathspecs literal when adding and restoring selected staging', async () => {
+    const f = await fixture({ remote: false })
+    await writeFile(join(f.repo, '[a].txt'), 'chosen\n')
+    await writeFile(join(f.repo, 'a.txt'), 'excluded\n')
+    await writeFile(join(f.repo, '[skip].txt'), 'also excluded\n')
+    git(f.repo, 'add', 'a.txt', '[skip].txt')
+    const result = await f.actions.runStackedAction({ threadId: 't', cwd: f.repo, action: 'commit', filePaths: ['[a].txt'], commitMessage: 'Add literal filename' })
+    expect(result.commit.status).toBe('created')
+    expect(git(f.repo, 'show', '--pretty=', '--name-only', 'HEAD')).toBe('[a].txt')
+    expect(git(f.repo, 'diff', '--cached', '--name-only')).toBe('[skip].txt\na.txt')
+    expect(git(f.repo, 'show', ':a.txt')).toBe('excluded')
+    expect(git(f.repo, 'show', ':[skip].txt')).toBe('also excluded')
+  })
   it.each([false, true])('preserves staged hunks and excluded staging (exclude files: %s)', async exclude => {
     const f = await fixture({ remote: false })
     await writeFile(join(f.repo, 'work.txt'), 'staged\n'); git(f.repo, 'add', 'work.txt')

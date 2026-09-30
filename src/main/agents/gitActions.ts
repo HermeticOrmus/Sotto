@@ -182,12 +182,12 @@ export class GitActions {
     const restore = async (committed: boolean): Promise<void> => {
       if (committed && excluded.length === 0) return
       await this.git(cwd, ['read-tree', originalTree])
-      if (committed) await this.git(cwd, ['--literal-pathspecs', 'reset', '-q', 'HEAD', '--', ...selected])
+      if (committed) await this.git(cwd, ['--literal-pathspecs', 'reset', '-q', 'HEAD', '--pathspec-from-file=-', '--pathspec-file-nul'], { stdin: `${[...selected].join('\0')}\0` })
     }
     try {
-      if (excluded.length > 0) await this.git(cwd, ['--literal-pathspecs', 'reset', '-q', '--', ...excluded])
+      if (excluded.length > 0) await this.git(cwd, ['--literal-pathspecs', 'reset', '-q', '--pathspec-from-file=-', '--pathspec-file-nul'], { stdin: `${excluded.join('\0')}\0` })
       const unstaged = [...selected].filter(path => !stagedPaths.has(path))
-      if (unstaged.length > 0) await this.git(cwd, ['--literal-pathspecs', 'add', '-A', '--', ...unstaged])
+      if (unstaged.length > 0) await this.git(cwd, ['--literal-pathspecs', 'add', '-A', '--pathspec-from-file=-', '--pathspec-file-nul'], { stdin: `${unstaged.join('\0')}\0` })
       return { hasChanges: (await this.git(cwd, ['diff', '--cached', '--name-status'])).trim().length > 0, restore }
     } catch (error) {
       await restore(false)
