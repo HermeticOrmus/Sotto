@@ -640,6 +640,18 @@ describe('independent working-copy allocation', () => {
     await git(repository, ['worktree', 'add', '--', replacement, 'nested'])
     expect((await lstat(replacement)).isDirectory()).toBe(true)
   })
+  it('refuses an unseen ignored file inside a confirmed nested repository row', async () => {
+    const f = await fixture(); const a = await f.service.ensure(await f.service.allocate(f.project, 'independent'))
+    const nested = join(a.path!, 'nested'); await mkdir(nested); await git(nested, ['init'])
+    await writeFile(join(nested, '.gitignore'), '*.secret\n')
+    const preview = await f.service.reclaimFacts(a)
+    expect(preview.items.find(item => item.path === 'nested/')?.fileCount).toBeGreaterThan(0)
+    await writeFile(join(nested, 'unseen.secret'), 'keep this')
+    const latest = await f.service.reclaimFacts(a)
+    expect(latest.repositories).toEqual(preview.repositories)
+    await expect(f.service.reclaim(a, { withUncommittedChanges: true, confirmedItems: preview.items, confirmedIgnored: preview.ignored, confirmedRepositories: preview.repositories })).rejects.toThrow('The folder changed')
+    expect(await readFile(join(nested, 'unseen.secret'), 'utf8')).toBe('keep this')
+  })
   it.each(['none', 'some', 'all'])('counts nested repository commits not on a remote (%s published)', async published => {
     const f = await fixture(); const a = await f.service.ensure(await f.service.allocate(f.project, 'independent'))
     const nested = join(a.path!, 'nested'); await mkdir(nested); await git(nested, ['init'])

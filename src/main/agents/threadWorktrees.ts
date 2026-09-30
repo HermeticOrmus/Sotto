@@ -498,7 +498,14 @@ export class ThreadWorktrees {
             }
           }
           await visit(full, entry.name === 'node_modules' ? undefined : summary, gitMetadata || entry.name === '.git' || bare, gitMarker && !gitMetadata && entry.name !== '.git' ? full : indexRoot)
-        } else if (summary) { summary.bytes += info.size; summary.fileCount++ }
+        } else {
+          if (summary) { summary.bytes += info.size; summary.fileCount++ }
+          // Nested repository rows can overlap an ignored parent row. Count their contents too,
+          // including ignored files that their own status output does not name.
+          for (const item of items) {
+            if (item !== summary && item.path.endsWith('/') && local.startsWith(item.path)) { item.bytes += info.size; item.fileCount++ }
+          }
+        }
       }
     }
     await visit(path)
