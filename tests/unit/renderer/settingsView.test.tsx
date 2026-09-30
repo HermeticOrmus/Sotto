@@ -17,6 +17,8 @@ import {
 } from '../../../src/shared/contracts'
 import { DEFAULT_SETTINGS } from '../../../src/shared/settings'
 import { agentContextFixture } from '../../fixtures/agentContext'
+import { clientAgentState, hostEntityKey } from '../../../src/shared/clientIdentity'
+import { beginNewThread } from '../../../src/renderer/src/agents/newThread'
 
 vi.mock('../../../src/renderer/src/agents/AgentContext', async importOriginal => ({
   ...await importOriginal<typeof import('../../../src/renderer/src/agents/AgentContext')>(),
@@ -1065,7 +1067,7 @@ describe('SettingsView', () => {
   })
 })
 
-function withProjects(): void {
+function withProjects(hostId?: string): AgentState {
   const state: AgentState = {
     configuration: defaultAgentConfiguration(), connection: 'disconnected',
     host: {
@@ -1079,10 +1081,52 @@ function withProjects(): void {
     credentials: { reasoning: false, grokSpeech: false, secure: true }, reasoningAccounts: [],
     membership: { status: 'beta', label: 'Test', expiresAt: null },
   }
-  vi.mocked(useOptionalAgents).mockReturnValue(agentContextFixture(state, vi.fn(async () => state)))
+  const clientState = hostId ? clientAgentState({ ...state, hostId }) : state
+  vi.mocked(useOptionalAgents).mockReturnValue(agentContextFixture(clientState, vi.fn(async () => clientState)))
+  return clientState
 }
 
 describe('Project thread defaults in Application settings', () => {
+  it('saves a local host project override that new thread creation actually uses', async () => {
+    const state = withProjects('11111111-1111-4111-8111-111111111111')
+    state.host.models = [{ id: 'codex:model', name: 'Model', provider: 'Codex', providerId: 'codex', ready: true }]
+    let settings: SettingsViewProps['settings'] = { ...DEFAULT_SETTINGS, projectThreadWorkingCopyDefaults: { missing: 'shared' } }
+    const onUpdateSettings = vi.fn<SettingsViewProps['onUpdateSettings']>(async patch => { settings = { ...settings, ...patch }; return true })
+    vi.stubGlobal('sotto', { getSettings: async () => settings })
+    try {
+      const { rerender } = render(<SettingsView {...baseProps({ settings, onUpdateSettings })} />)
+      await selectCategory('Application')
+      await userEvent.click(screen.getByRole('button', { name: 'Project defaults' }))
+      const choice = screen.getByRole('combobox', { name: 'New threads in this project work in' })
+      await userEvent.selectOptions(choice, 'independent')
+      const command = vi.fn(async () => state)
+      await beginNewThread(state, command, state.host.projects[0]!)
+      expect(command).toHaveBeenCalledWith(expect.objectContaining({ workingCopy: 'independent', startFromOrigin: true }))
+      expect(settings.projectThreadWorkingCopyDefaults).toEqual({ missing: 'shared', one: 'independent' })
+      rerender(<SettingsView {...baseProps({ settings, onUpdateSettings })} />)
+      expect(choice).toHaveValue('independent')
+      await userEvent.selectOptions(choice, 'inherit')
+      expect(settings.projectThreadWorkingCopyDefaults).toEqual({ missing: 'shared' })
+      await beginNewThread(state, command, state.host.projects[0]!)
+      expect(command).toHaveBeenLastCalledWith(expect.objectContaining({ workingCopy: 'shared' }))
+    } finally { vi.unstubAllGlobals() }
+  })
+
+  it('keeps remote project defaults host-qualified when a local connection is present', async () => {
+    const localHostId = '11111111-1111-4111-8111-111111111111'
+    const remoteHostId = '22222222-2222-4222-8222-222222222222'
+    const state = withProjects(remoteHostId)
+    state.connections = [{ hostId: localHostId, kind: 'local', name: 'Local', connected: true }]
+    const onUpdateSettings = vi.fn(async () => true)
+    render(<SettingsView {...baseProps({ settings: { ...DEFAULT_SETTINGS, projectThreadWorkingCopyDefaults: { one: 'shared' } }, onUpdateSettings })} />)
+    await selectCategory('Application')
+    await userEvent.click(screen.getByRole('button', { name: 'Project defaults' }))
+    const choice = screen.getByRole('combobox', { name: 'New threads in this project work in' })
+    expect(choice).toHaveValue('inherit')
+    await userEvent.selectOptions(choice, 'independent')
+    expect(onUpdateSettings).toHaveBeenCalledWith({ projectThreadWorkingCopyDefaults: { one: 'shared', [hostEntityKey(remoteHostId, 'one')]: 'independent' } })
+  })
+
   it('edits one project without losing other overrides and can restore inheritance', async () => {
     withProjects()
     const onUpdateSettings = vi.fn(async () => true)
