@@ -32,6 +32,9 @@ final class NewThreadModelTests: XCTestCase {
                                                      "providerId": .string("codex"), "status": .string("idle"), "requests": .array([])])])
                 HostConnection.detail = try self.json(#"{"threadId":"\#(thread)","revision":1,"messages":[]}"#)
             }
+            if command["type"] == .string("manual-send") {
+                root["deliveries"] = .array([.object(["threadId": command["threadId"], "draftId": command["draftId"], "status": .string("accepted")])])
+            }
             root["host"] = .object(source); result = .object(root)
             HostConnection.shells[host] = result
             HostConnection.receipts[id] = .object(["status": .string("completed")])
@@ -165,6 +168,21 @@ final class NewThreadModelTests: XCTestCase {
         let creation7 = await create(model, folder: selected, permission: "full-access")
         XCTAssertNil(creation7)
         XCTAssertTrue(HostConnection.instances.flatMap(\.commands).isEmpty)
+    }
+    @MainActor func testRegistrationFailureKeepsTheComputerExplanationWithItsUncertainty() async throws {
+        let model = try await fixture(projects: false), selected = try await folder(model)
+        HostConnection.commandHandler = { host, _, id in
+            guard case .object(var shell) = HostConnection.shells[host]! else { throw ClientError.invalidProtocol }
+            shell["error"] = .string("That folder no longer exists. Nothing was added. Choose another folder.")
+            HostConnection.shells[host] = .object(shell)
+            HostConnection.receipts[id] = .object(["status": .string("completed"), "error": .object(["code": .string("unavailable"), "message": .string("That folder no longer exists.")])])
+            return .object(shell)
+        }
+        let result = await create(model, folder: selected)
+        XCTAssertNil(result)
+        XCTAssertTrue(model.creationFeedback?.contains("That folder no longer exists.") == true)
+        XCTAssertTrue(model.creationFeedback?.contains("Project registration") == true)
+        XCTAssertEqual(HostConnection.instances.flatMap(\.commands).map { $0["type"].string }, ["create-project"])
     }
     @MainActor func testHostPermissionRefusalClearsTheMarkerAndDoesNotReportSuccess() async throws {
         let model = try await fixture()

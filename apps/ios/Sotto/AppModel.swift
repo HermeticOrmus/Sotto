@@ -551,7 +551,12 @@ struct Live {
             guard generations[hostID] == current else { return nil }
             try applyShell(next, from: hostID, sequence: result.sequence)
             await checkDelivery(hostID)
-            guard generations[hostID] == current, next.error == nil else { return nil }
+            guard generations[hostID] == current else { return nil }
+            if let error = next.error {
+                feedback = error
+                if operation.kind.hasPrefix("create-") { creationFeedback = error }
+                return nil
+            }
             return next
         } catch let error as HostRefusal {
             guard generations[hostID] == current else { return nil }
@@ -743,10 +748,11 @@ struct Live {
         } catch { creationFeedback = error.localizedDescription; return nil }
     }
     private func creationResultWords(_ hostID: String, kind: String) -> String {
+        let explanation = creationFeedback.map { $0 + " " } ?? ""
         if pendingCreations.contains(where: { $0.hostID == hostID }) {
-            return "\(kind) on \(name(hostID)) is unconfirmed. Nothing was resent. Close this sheet and check Threads before trying again."
+            return explanation + "\(kind) on \(name(hostID)) is unconfirmed. Nothing was resent. Close this sheet and check Threads before trying again."
         }
-        return feedback ?? "The computer did not open the thread. Choose the project and model again."
+        return creationFeedback ?? feedback ?? "\(kind) did not finish. Choose the project and model again."
     }
 
     // MARK: Updates from a computer
