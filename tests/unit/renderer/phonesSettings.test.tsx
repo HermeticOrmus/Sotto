@@ -153,3 +153,10 @@ it('saves the name phones show on Enter, and Escape puts the saved one back', as
   await user.type(field, 'Den{Enter}')
   expect(update).toHaveBeenCalledWith({ phoneAccessName: 'Den' })
 })
+
+it('shows unfinished cleanup and offers a retry while the setting is off', async () => {
+  const { command } = show({ ...OFF, phase: 'cleanup-failed', serve: { status: 'failed', reason: 'cleanup' } })
+  expect(await screen.findByText(/Phone access is still stopping/)).toBeTruthy()
+  await userEvent.setup().click(screen.getByRole('button', { name: 'Try again' }))
+  expect(command).toHaveBeenCalledWith({ type: 'retry' })
+})

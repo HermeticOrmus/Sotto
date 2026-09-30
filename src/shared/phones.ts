@@ -24,7 +24,7 @@ export type ServeCheck =
        * `not-enabled`: the tailnet has not turned Serve on; `canOpenSetup` says whether Sotto has the page that turns it on.
        * `listener`: Sotto could not open its own loopback listener. `failed`: the serve command failed some other way.
        */
-      readonly reason: 'port-taken' | 'not-enabled' | 'listener' | 'failed'
+      readonly reason: 'port-taken' | 'not-enabled' | 'listener' | 'failed' | 'cleanup'
       readonly canOpenSetup?: boolean
     }
 
@@ -45,7 +45,7 @@ export interface PhonesState {
   /** Phone access serves the local host's threads, so it needs the local host running. */
   readonly localHostRunning: boolean
   /** `starting` while Sotto checks Tailscale and sets up Serve; `on` once phones can connect. */
-  readonly phase: 'off' | 'starting' | 'on' | 'failed'
+  readonly phase: 'off' | 'starting' | 'on' | 'failed' | 'cleanup-failed'
   readonly tailscale: TailscaleCheck
   readonly serve: ServeCheck
   /** `https://<name>.<tailnet>.ts.net:8443`, once Serve is in place. */

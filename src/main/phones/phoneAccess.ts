@@ -136,7 +136,7 @@ export class PhoneAccess {
   async command(command: PhonesCommand): Promise<PhonesState> {
     switch (command.type) {
       case 'retry':
-        this.enqueue(async () => { if (this.wanted()) await this.turnOn() })
+        this.enqueue(async () => { if (this.phase === 'cleanup-failed') await this.reconcile(); else if (this.wanted()) await this.turnOn() })
         await this.queue
         break
       case 'show-code': {
@@ -188,8 +188,7 @@ export class PhoneAccess {
     let timer: ReturnType<typeof setTimeout> | undefined
     await Promise.race([this.queue, new Promise<void>(resolve => { timer = setTimeout(resolve, limit); timer.unref?.() })])
     clearTimeout(timer)
-    await this.listener?.close().catch(() => undefined)
-    this.listener = undefined
+    if (!this.record.mapped) await this.closeListener()
   }
 
   private defaultName(): string {
@@ -212,6 +211,10 @@ export class PhoneAccess {
   }
 
   private async reconcile(): Promise<void> {
+    if (this.phase === 'cleanup-failed') {
+      await this.turnOff()
+      if (this.phase === 'cleanup-failed') return
+    }
     if (this.wanted()) { if (this.phase === 'off') await this.turnOn() }
     else if (this.phase !== 'off' || this.listener || this.record.mapped) await this.turnOff()
   }
@@ -276,7 +279,7 @@ export class PhoneAccess {
    */
   private async fail(): Promise<void> {
     this.phase = 'failed'
-    await this.removeMapping()
+    if (!await this.removeMapping()) { this.cleanupFailed(); return }
     await this.closeListener()
     this.publish()
   }
@@ -284,21 +287,31 @@ export class PhoneAccess {
   private async turnOff(): Promise<void> {
     this.clearRetry()
     this.cancelCode()
-    await this.removeMapping()
+    if (!await this.removeMapping()) { this.cleanupFailed(); return }
     await this.closeListener()
     this.reset('off')
     this.publish()
   }
 
   /** Removes Sotto's own Serve setting when the record says one may be there. Anyone else's on 8443 is never touched. */
-  private async removeMapping(): Promise<void> {
-    if (!this.record.mapped) return
+  private async removeMapping(): Promise<boolean> {
+    if (!this.record.mapped) return true
     try {
       const owner = servePortOwner(await this.options.tailscale.serveStatus(), PHONE_ACCESS_SERVE_PORT, this.ourPorts())
-      if (owner === 'ours' && !await this.options.tailscale.unserve(PHONE_ACCESS_SERVE_PORT)) { this.options.log?.('phone-access-serve-remove-failed'); return }
+      if (owner === 'ours' && !await this.options.tailscale.unserve(PHONE_ACCESS_SERVE_PORT)) { this.options.log?.('phone-access-serve-remove-failed'); return false }
       // Free, removed, or someone else's now: in each case no setting of Sotto's is left.
       await this.save({ ...this.record, mapped: false })
-    } catch { this.options.log?.('phone-access-serve-remove-failed') }
+      return true
+    } catch { this.options.log?.('phone-access-serve-remove-failed'); return false }
+  }
+
+  private cleanupFailed(): void {
+    this.phase = 'cleanup-failed'
+    this.address = null
+    this.cancelCode()
+    this.serveCheck = { status: 'failed', reason: 'cleanup' }
+    if (!this.closed) this.scheduleRetry()
+    this.publish()
   }
 
   private async listen(): Promise<Listener> {
@@ -346,7 +359,7 @@ export class PhoneAccess {
     this.clearRetry()
     this.retryTimer = setTimeout(() => {
       this.retryTimer = undefined
-      this.enqueue(async () => { if (this.wanted() && this.phase === 'failed' && this.tailscaleCheck.status === 'failed') await this.turnOn() })
+      this.enqueue(async () => { if (!this.closed && this.phase === 'cleanup-failed') await this.reconcile(); else if (this.wanted() && this.phase === 'failed' && this.tailscaleCheck.status === 'failed') await this.turnOn() })
     }, this.options.retryMs ?? 30_000)
     this.retryTimer.unref?.()
   }

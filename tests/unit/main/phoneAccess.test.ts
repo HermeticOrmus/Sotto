@@ -228,3 +228,35 @@ it('removes a setting of its own left by a crash when a start then fails, so 844
   expect(server.started.every(entry => entry.closed)).toBe(true)
   expect(await record()).toMatchObject({ mapped: false })
 })
+
+it.each(['status', 'remove'] as const)('retries unfinished cleanup after a %s failure before closing the listener', async failure => {
+  vi.useFakeTimers()
+  const fake = fakeTailscale(), server = fakeServer()
+  const { access, settings } = create({ tailscale: fake.tailscale, startServer: server.startServer })
+  try {
+    await access.start()
+    if (failure === 'status') vi.mocked(fake.tailscale.serveStatus).mockRejectedValueOnce(new Error('unavailable'))
+    else vi.mocked(fake.tailscale.unserve).mockResolvedValueOnce(false)
+    settings.phoneAccess = false
+    access.settingsChanged()
+    await access.command({ type: 'cancel-code' })
+    await vi.waitFor(() => expect(access.get().phase).toBe('cleanup-failed'))
+    expect(server.started[0]!.closed).toBe(false)
+    expect(await record()).toMatchObject({ mapped: true })
+    await vi.advanceTimersByTimeAsync(60_000)
+    await vi.waitFor(() => expect(access.get().phase).toBe('off'))
+    expect(server.started[0]!.closed).toBe(true)
+    expect(fake.proxy()).toBeUndefined()
+  } finally { await access.close(); vi.useRealTimers() }
+})
+
+it('keeps the listener until process exit when quit cleanup is unfinished', async () => {
+  const fake = fakeTailscale(), server = fakeServer()
+  const { access } = create({ tailscale: fake.tailscale, startServer: server.startServer })
+  await access.start()
+  vi.mocked(fake.tailscale.unserve).mockResolvedValue(false)
+  await access.close()
+  expect(access.get().phase).toBe('cleanup-failed')
+  expect(server.started[0]!.closed).toBe(false)
+  expect(await record()).toMatchObject({ mapped: true })
+})

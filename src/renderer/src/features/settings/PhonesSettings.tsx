@@ -13,6 +13,7 @@ type Step = 'ok' | 'failed' | 'waiting'
 
 /** What a failed step says: what happened, that nothing was changed, and what to do. */
 export function phonesFailure(state: PhonesState): string | null {
+  if (state.phase === 'cleanup-failed') return 'Sotto couldn’t remove its Tailscale Serve setting yet. Phone access is still stopping. Sotto will try again while it is open. Check Tailscale, then press Try again.'
   if (state.tailscale.status === 'failed') {
     return state.tailscale.reason === 'missing'
       ? 'Tailscale isn’t installed on this computer. Phones can’t reach it yet, and nothing was changed. Install Tailscale and sign in, then press Try again.'
@@ -23,6 +24,7 @@ export function phonesFailure(state: PhonesState): string | null {
     case 'port-taken': return `Another app already uses port ${PHONE_ACCESS_SERVE_PORT} in Tailscale Serve on this computer. Sotto left that setting alone, and nothing was changed. Stop the other app using port ${PHONE_ACCESS_SERVE_PORT}, then press Try again.`
     case 'not-enabled': return 'Tailscale Serve isn’t turned on for your tailnet. Nothing was changed. Turn it on in Tailscale, then press Try again.'
     case 'listener': return 'Sotto couldn’t open its listener for phones on this computer. Nothing was changed. Press Try again, or restart Sotto.'
+    case 'cleanup': return null
     case 'failed': return `Tailscale Serve couldn’t be set up on port ${PHONE_ACCESS_SERVE_PORT}. Nothing was changed. Check Tailscale on this computer, then press Try again.`
   }
 }
