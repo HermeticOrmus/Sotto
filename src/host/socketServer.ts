@@ -431,8 +431,20 @@ export async function startSocketServer(options: SocketServerOptions) {
   const descriptor: HostDescriptor = { v: 1, hostId, pid: process.pid, port: address.port, sottoVersion, features: [...features] }
   const expiry = setInterval(() => { for (const peer of peers) if (!authenticated(peer)) peer.frames.close() }, 1000)
   expiry.unref()
+  const stopServing = (): void => {
+    if (closing) return
+    closing = true; clearInterval(expiry); unsubscribe(); unsubscribeDetails?.(); shellPublisher.dispose(); detailPublisher.dispose()
+    server.removeAllListeners('request')
+    server.removeAllListeners('upgrade')
+    server.removeAllListeners('connection')
+    server.on('connection', socket => socket.destroy())
+    for (const peer of peers) peer.frames.close()
+    server.closeAllConnections()
+  }
   return {
     descriptor, adminToken,
+    /** Ends the host protocol while reserving its loopback port for pending cleanup. */
+    stopServing,
     /** How many paired clients hold an open socket: the host's measure of a window being in front. */
     peers: (): number => peers.size,
     /** The paired clients holding an open socket now, each once. */
@@ -440,9 +452,7 @@ export async function startSocketServer(options: SocketServerOptions) {
     /** Closes at once every socket whose client is no longer paired, after a revocation made outside this listener. */
     dropRevoked: (): void => { for (const peer of peers) if (!authenticated(peer)) peer.frames.close() },
     close: async (): Promise<void> => {
-      closing = true; clearInterval(expiry); unsubscribe(); unsubscribeDetails?.(); shellPublisher.dispose(); detailPublisher.dispose()
-      for (const peer of peers) peer.frames.close()
-      server.closeAllConnections()
+      stopServing()
       await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
       await Promise.allSettled([...operations]); await pairing.settled()
     },

@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { createServer, connect } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -35,7 +36,7 @@ function fakeServer(options: { refusePort?: number } = {}) {
     const port = input.port || next++
     const entry = { port, closed: false, name: input.name!, admin: input.admin, ...(input.onPaired ? { onPaired: input.onPaired } : {}) }
     started.push(entry)
-    return { descriptor: { port }, connectedClients: () => [], dropRevoked: vi.fn(), close: async () => { entry.closed = true } }
+    return { descriptor: { port }, connectedClients: () => [], dropRevoked: vi.fn(), stopServing: () => { entry.closed = true }, close: async () => { entry.closed = true } }
   })
   return { startServer: startServer as unknown as NonNullable<PhoneAccessOptions['startServer']>, started }
 }
@@ -230,7 +231,7 @@ it('removes a setting of its own left by a crash when a start then fails, so 844
   expect(await record()).toMatchObject({ mapped: false })
 })
 
-it.each(['status', 'remove'] as const)('retries unfinished cleanup after a %s failure before closing the listener', async failure => {
+it.each(['status', 'remove'] as const)('retries unfinished cleanup after a %s failure with the host protocol stopped', async failure => {
   vi.useFakeTimers()
   const fake = fakeTailscale(), server = fakeServer()
   const { access, settings } = create({ tailscale: fake.tailscale, startServer: server.startServer })
@@ -242,7 +243,7 @@ it.each(['status', 'remove'] as const)('retries unfinished cleanup after a %s fa
     access.settingsChanged()
     await access.command({ type: 'cancel-code' })
     await vi.waitFor(() => expect(access.get().phase).toBe('cleanup-failed'))
-    expect(server.started[0]!.closed).toBe(false)
+    expect(server.started[0]!.closed).toBe(true)
     expect(await record()).toMatchObject({ mapped: true })
     await vi.advanceTimersByTimeAsync(60_000)
     await vi.waitFor(() => expect(access.get().phase).toBe('off'))
@@ -251,14 +252,14 @@ it.each(['status', 'remove'] as const)('retries unfinished cleanup after a %s fa
   } finally { await access.close(); vi.useRealTimers() }
 })
 
-it('keeps the listener until process exit when quit cleanup is unfinished', async () => {
+it('ends phone access when quit cleanup is unfinished', async () => {
   const fake = fakeTailscale(), server = fakeServer()
   const { access } = create({ tailscale: fake.tailscale, startServer: server.startServer })
   await access.start()
   vi.mocked(fake.tailscale.unserve).mockResolvedValue(false)
   await access.close()
   expect(access.get().phase).toBe('cleanup-failed')
-  expect(server.started[0]!.closed).toBe(false)
+  expect(server.started[0]!.closed).toBe(true)
   expect(await record()).toMatchObject({ mapped: true })
 })
 
@@ -285,4 +286,87 @@ it('requires a saved phone access record before setup and recovers on retry', as
     expect(access.get().phase).toBe('on')
     expect(await record()).toMatchObject({ mapped: true })
   } finally { write.mockRestore(); await access.close() }
+})
+
+
+async function freePort(): Promise<number> {
+  const server = createServer()
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const port = (server.address() as { port: number }).port
+  await new Promise<void>(resolve => server.close(() => resolve()))
+  return port
+}
+async function expectReserved(port: number): Promise<void> {
+  const server = createServer()
+  await expect(new Promise<void>((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(port, '127.0.0.1', resolve)
+  })).rejects.toMatchObject({ code: 'EADDRINUSE' })
+  await new Promise<void>((resolve, reject) => {
+    const socket = connect(port, '127.0.0.1')
+    socket.on('error', reject)
+    socket.on('close', () => resolve())
+  })
+}
+
+it.each([false, true])('reserves pending cleanup at restart with phone access set to %s', async enabled => {
+  const port = await freePort()
+  await writeFile(join(root, 'phone-access.json'), JSON.stringify({ port, mapped: true }))
+  const fake = fakeTailscale({ other: serveTarget(port) }), server = fakeServer()
+  vi.mocked(fake.tailscale.unserve).mockResolvedValue(false)
+  const { access, settings } = create({ tailscale: fake.tailscale, startServer: server.startServer }, { phoneAccess: enabled, phoneAccessName: '' })
+  try {
+    await access.start()
+    expect(access.get().phase).toBe('cleanup-failed')
+    expect(server.started).toEqual([])
+    await expectReserved(port)
+    settings.phoneAccess = false
+    vi.mocked(fake.tailscale.unserve).mockResolvedValue(true)
+    await access.command({ type: 'retry' })
+    expect(access.get().phase).toBe('off')
+    const rebound = createServer()
+    await new Promise<void>(resolve => rebound.listen(port, '127.0.0.1', resolve))
+    await new Promise<void>(resolve => rebound.close(() => resolve()))
+  } finally { await access.close() }
+})
+
+it('keeps cleanup pending after a setup failure while the setting remains on', async () => {
+  const port = await freePort()
+  await writeFile(join(root, 'phone-access.json'), JSON.stringify({ port, mapped: false }))
+  const fake = fakeTailscale({ other: serveTarget(port), serve: { ok: false, reason: 'failed' } }), server = fakeServer()
+  const { access } = create({ tailscale: fake.tailscale, startServer: server.startServer })
+  vi.mocked(fake.tailscale.unserve).mockResolvedValue(false)
+  try {
+    await access.start()
+    expect(access.get()).toMatchObject({ enabled: true, phase: 'cleanup-failed' })
+    expect(server.started[0]!.closed).toBe(true)
+    vi.mocked(fake.tailscale.unserve).mockResolvedValue(true)
+    await access.command({ type: 'retry' })
+    expect(access.get().phase).toBe('failed')
+  } finally { vi.mocked(fake.tailscale.unserve).mockResolvedValue(true); await access.close() }
+})
+
+it.each(['corrupt', 'unreadable'])('checks cleanup rather than declaring an occupied mapping another app’s with a %s record', async kind => {
+  await writeFile(join(root, 'phone-access.json'), 'not json')
+  const read = kind === 'unreadable' ? vi.spyOn(AtomicJsonStore.prototype, 'read').mockRejectedValueOnce(new Error('unreadable')) : undefined
+  const fake = fakeTailscale({ other: serveTarget(41000) }), server = fakeServer()
+  const { access } = create({ tailscale: fake.tailscale, startServer: server.startServer })
+  try {
+    await access.start()
+    expect(fake.tailscale.serveStatus).toHaveBeenCalled()
+    expect(access.get()).toMatchObject({ phase: 'cleanup-failed', serve: { reason: 'cleanup-record' } })
+    expect(server.started).toEqual([])
+    expect(fake.tailscale.unserve).not.toHaveBeenCalled()
+    if (kind === 'corrupt') expect(await record()).toEqual({ port: null, mapped: true })
+    else expect(await readFile(join(root, 'phone-access.json'), 'utf8')).toBe('not json')
+    await access.close()
+    const restarted = create({ tailscale: fake.tailscale, startServer: server.startServer }).access
+    await restarted.start()
+    expect(restarted.get()).toMatchObject({ phase: 'cleanup-failed', serve: { reason: 'cleanup-record' } })
+    await writeFile(join(root, 'phone-access.json'), JSON.stringify({ port: 41000, mapped: true }))
+    await restarted.command({ type: 'retry' })
+    expect(fake.tailscale.unserve).toHaveBeenCalled()
+    expect(restarted.get().phase).toBe('on')
+    await restarted.close()
+  } finally { read?.mockRestore(); await access.close() }
 })

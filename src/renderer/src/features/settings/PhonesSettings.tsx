@@ -13,7 +13,9 @@ type Step = 'ok' | 'failed' | 'waiting'
 
 /** What a failed step says: what happened, that nothing was changed, and what to do. */
 export function phonesFailure(state: PhonesState): string | null {
-  if (state.phase === 'cleanup-failed') return 'Sotto couldn’t remove its Tailscale Serve setting yet. Phone access is still stopping. Sotto will try again while it is open. Check Tailscale, then press Try again.'
+  if (state.phase === 'cleanup-failed') return state.serve.status === 'failed' && state.serve.reason === 'cleanup-record'
+    ? 'Phones can’t connect. Sotto couldn’t read its saved cleanup record, so it can’t identify the Tailscale Serve setting. Restore the record in Sotto’s data folder, then press Try again. Sotto is still finishing cleanup.'
+    : 'Phones can’t connect. Sotto is still finishing cleanup of its Tailscale Serve setting and will try again while it is open. Check Tailscale, then press Try again.'
   if (state.tailscale.status === 'failed') {
     return state.tailscale.reason === 'missing'
       ? 'Tailscale isn’t installed on this computer. Phones can’t reach it yet, and nothing was changed. Install Tailscale and sign in, then press Try again.'
@@ -25,6 +27,7 @@ export function phonesFailure(state: PhonesState): string | null {
     case 'not-enabled': return 'Tailscale Serve isn’t turned on for your tailnet. Nothing was changed. Turn it on in Tailscale, then press Try again.'
     case 'listener': return 'Sotto couldn’t open its listener for phones on this computer. Nothing was changed. Press Try again, or restart Sotto.'
     case 'record': return 'Sotto couldn’t save its phone access settings. Phone access wasn’t started. Check that Sotto can write to its data folder, then press Try again.'
+    case 'cleanup-record':
     case 'cleanup': return null
     case 'failed': return `Tailscale Serve couldn’t be set up on port ${PHONE_ACCESS_SERVE_PORT}. Nothing was changed. Check Tailscale on this computer, then press Try again.`
   }

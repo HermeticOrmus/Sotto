@@ -22,9 +22,12 @@ export type ServeCheck =
       /**
        * `port-taken`: port 8443 already carries another Serve setting, which Sotto leaves alone.
        * `not-enabled`: the tailnet has not turned Serve on; `canOpenSetup` says whether Sotto has the page that turns it on.
+       * `cleanup`: phones cannot connect while Sotto finishes removing its Serve setting.
+       * `cleanup-record`: cleanup cannot identify an occupied setting because its saved record is unreadable.
+       * `record`: setup stopped because Sotto could not save its cleanup record.
        * `listener`: Sotto could not open its own loopback listener. `failed`: the serve command failed some other way.
        */
-      readonly reason: 'port-taken' | 'not-enabled' | 'listener' | 'failed' | 'cleanup' | 'record'
+      readonly reason: 'port-taken' | 'not-enabled' | 'listener' | 'failed' | 'cleanup' | 'cleanup-record' | 'record'
       readonly canOpenSetup?: boolean
     }
 
@@ -44,7 +47,7 @@ export interface PhonesState {
   readonly enabled: boolean
   /** Phone access serves the local host's threads, so it needs the local host running. */
   readonly localHostRunning: boolean
-  /** `starting` while Sotto checks Tailscale and sets up Serve; `on` once phones can connect. */
+  /** `starting` checks setup; `on` accepts phones; `failed` stops setup; `cleanup-failed` denies connections while cleanup retries. */
   readonly phase: 'off' | 'starting' | 'on' | 'failed' | 'cleanup-failed'
   readonly tailscale: TailscaleCheck
   readonly serve: ServeCheck

@@ -156,7 +156,7 @@ it('saves the name phones show on Enter, and Escape puts the saved one back', as
 
 it('shows unfinished cleanup and offers a retry while the setting is off', async () => {
   const { command } = show({ ...OFF, phase: 'cleanup-failed', serve: { status: 'failed', reason: 'cleanup' } })
-  expect(await screen.findByText(/Phone access is still stopping/)).toBeTruthy()
+  expect(await screen.findByText(/Phones can’t connect/)).toBeTruthy()
   await userEvent.setup().click(screen.getByRole('button', { name: 'Try again' }))
   expect(command).toHaveBeenCalledWith({ type: 'retry' })
 })
@@ -165,4 +165,10 @@ it('shows unfinished cleanup and offers a retry while the setting is off', async
 it('explains when phone access settings could not be saved', async () => {
   show({ ...OFF, enabled: true, phase: 'failed', serve: { status: 'failed', reason: 'record' } })
   expect(await screen.findByText(/Phone access wasn’t started/)).toBeTruthy()
+})
+
+
+it('explains cleanup when the saved record could not be read', async () => {
+  show({ ...OFF, phase: 'cleanup-failed', serve: { status: 'failed', reason: 'cleanup-record' } })
+  expect(await screen.findByText(/couldn’t read its saved cleanup record/)).toBeVisible()
 })
