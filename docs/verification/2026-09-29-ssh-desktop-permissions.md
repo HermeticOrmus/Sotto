@@ -23,7 +23,7 @@ The throwaway demonstration is on `prototype/ssh-desktop-permissions`, commit `e
 
 The existing Forge host advertised Sotto 0.1.26. This desktop was paired but had zero matching permission records and could not answer. The new launch-script operation ran through the existing authenticated SSH route against that host. Afterwards there was exactly one matching allow record, and the permission check returned true. The host stayed running; its installation and threads were not changed.
 
-This repairs the missing host permission for the installed desktop now. The automatic setup implementation remains a local branch; it has not been installed or released. No model turn was sent, and native provider mode changes on Forge were not separately exercised. The real remote permission path is covered below using scripted providers.
+This repaired the missing host permission for the installed desktop. At the time of this September 29 check, the automatic setup implementation was only a local branch and had not been installed or released. No model turn was sent, and native provider mode changes on Forge were not separately exercised. The real remote permission path is covered below using scripted providers.
 
 ## Validation
 
@@ -49,3 +49,15 @@ Independent code-review skill passes by `gpt-6.1-sol` at high reasoning reviewed
 Standards: no code violations or actionable baseline smells. One documentation finding identified the initial verification note's stale instruction to grant Forge permission separately; it now links this follow-up and describes the earlier check in the past tense.
 
 Spec: no findings. Automatic setup precedes routing, uses authenticated identity, preserves policy history and leaves code/phone pairing unchanged. Definite refusals remain distinct from connection uncertainty. The reviewers did not rerun tests; the execution results above are this session's evidence.
+
+## September 30 validation against current main
+
+Before opening the PR, the branch merged `77d24f8d` (Release 0.1.27) without conflicts. Independent Standards and Spec reviews of the resulting diff against that commit found no remaining issues. The host client update routing added on main remains intact.
+
+- `npm run typecheck`, `npm run lint`: passed.
+- `npm run notices:verify`: 174 components verified.
+- `npm test -- --maxWorkers=2`: 480 files passed, 39 skipped; 6,376 tests passed, 153 skipped.
+- `npm run build`: passed.
+- `npx playwright test tests/e2e/pending-settings.spec.ts tests/e2e/hosts.spec.ts tests/e2e/host-identity.spec.ts tests/e2e/host-agent-setup.spec.ts tests/e2e/host-setup.spec.ts --workers=1`: all 6 passed.
+
+The current-main remote composer capture at the minimum-size light view was visually inspected again. No design baseline was regenerated. These are local results; GitHub's checks must pass before merge.
