@@ -70,12 +70,13 @@ final class NewThreadsTests: XCTestCase {
         XCTAssertThrowsError(try NewThreads.folderRequest(path: .string("")))
     }
     func testFolderIdentityPreservesPOSIXCaseAndWindowsDriveRoots() {
-        XCTAssertTrue(NewThreads.sameFolder(#"D:\Panel\"#, "d:/panel"))
-        XCTAssertTrue(NewThreads.sameFolder(#"D:\"#, "d:/"))
-        XCTAssertTrue(NewThreads.sameFolder("/home/zach/project/", "/home/zach/project"))
-        XCTAssertFalse(NewThreads.sameFolder("/home/Zach", "/home/zach"))
-        XCTAssertFalse(NewThreads.sameFolder("/home/zach", "home/zach"))
-        XCTAssertFalse(NewThreads.sameFolder(nil, "/home/zach"))
+        XCTAssertTrue(NewThreads.sameFolder(#"D:\Panel\"#, "d:/panel", separator: "\\"))
+        XCTAssertTrue(NewThreads.sameFolder(#"D:\"#, "d:/", separator: "\\"))
+        XCTAssertTrue(NewThreads.sameFolder("/home/zach/project/", "/home/zach/project", separator: "/"))
+        XCTAssertFalse(NewThreads.sameFolder("/home/Zach", "/home/zach", separator: "/"))
+        XCTAssertFalse(NewThreads.sameFolder("/home/zach", "home/zach", separator: "/"))
+        XCTAssertFalse(NewThreads.sameFolder(nil, "/home/zach", separator: "/"))
+        XCTAssertFalse(NewThreads.sameFolder("/:Project", "/:project", separator: "/"))
     }
     func testUnavailableProvidersAreNotCreationChoices() throws {
         let host = try JSONDecoder().decode(HostSnapshot.self, from: Data(#"{"name":"Laptop","threads":[],"projects":[],"models":[{"id":"m","name":"Model","provider":"Codex","providerId":"codex","ready":true}],"capabilities":{"submit":true,"interrupt":true,"questions":true,"permissions":true,"threads":true},"providers":[{"id":"codex","connection":"disconnected","capabilities":{"submit":true,"interrupt":true,"questions":true,"permissions":true,"threads":true}}]}"#.utf8))

@@ -710,7 +710,7 @@ struct Live {
                 }
                 guard generations[hostID] == epoch, online(hostID) else { throw ClientError.disconnected }
                 let confirmedPath = fresh.path!
-                chosenProject = live[hostID]?.shell?.host.projects.first { NewThreads.sameFolder($0.path, confirmedPath) }?.id
+                chosenProject = live[hostID]?.shell?.host.projects.first { NewThreads.sameFolder($0.path, confirmedPath, separator: fresh.separator) }?.id
                 if chosenProject == nil {
                     guard let providerID = model.providerId,
                           live[hostID]?.shell?.host.providers?.first(where: { $0.id == providerID })?.capabilities.projects == true else {
@@ -724,7 +724,7 @@ struct Live {
                         creationFeedback = creationResultWords(hostID, kind: "Project registration")
                         return nil
                     }
-                    chosenProject = result.host.projects.first { NewThreads.sameFolder($0.path, confirmedPath) && ($0.providerId == nil || $0.providerId == providerID) }?.id
+                    chosenProject = result.host.projects.first { NewThreads.sameFolder($0.path, confirmedPath, separator: fresh.separator) && ($0.providerId == nil || $0.providerId == providerID) }?.id
                 }
             }
             guard generations[hostID] == epoch, online(hostID), let chosenProject,

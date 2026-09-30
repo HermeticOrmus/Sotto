@@ -93,12 +93,11 @@ public enum NewThreads {
             return host.capabilities.threads == true
         }
     }
-    /// Windows paths compare without case; POSIX paths preserve it. No native provider IDs are parsed.
-    public static func sameFolder(_ lhs: String?, _ rhs: String) -> Bool {
+    /// The host declares its path format. Windows compares without case; POSIX preserves it.
+    public static func sameFolder(_ lhs: String?, _ rhs: String, separator: String) -> Bool {
         guard let lhs else { return false }
         func key(_ value: String) -> String {
-            let windows = value.count >= 2 && value.dropFirst().first == ":"
-            let normalized = windows ? value.replacingOccurrences(of: "\\", with: "/").lowercased() : value
+            let normalized = separator == "\\" ? value.replacingOccurrences(of: "\\", with: "/").lowercased() : value
             var result = normalized
             while result.count > 1 && result.hasSuffix("/") { result.removeLast() }
             return result
