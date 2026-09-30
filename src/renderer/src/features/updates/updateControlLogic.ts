@@ -49,7 +49,9 @@ export function updateTooltip(status: UpdateStatus | null): string {
     case 'available':
       return phase.problem === null
         ? `Update ${phase.version} ready to download`
-        : `Update ${phase.version} is still offered. Click to download.`
+        : phase.failedStep === 'download'
+          ? `Download failed for ${phase.version}. Click to retry.`
+          : `Update check failed. Update ${phase.version} is still offered. Click to download.`
     case 'downloading':
       return `Downloading update (${phase.percent}%)`
     case 'downloaded':

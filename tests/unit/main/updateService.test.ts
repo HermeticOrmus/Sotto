@@ -196,7 +196,7 @@ describe('UpdateService', () => {
     clock = 2
     await service.check(trigger)
     expect(updater.calls.check).toBe(2)
-    expect(service.status().phase).toEqual({ ...available, problem: 'offline' })
+    expect(service.status().phase).toEqual({ ...available, problem: 'offline', failedStep: 'check' })
     expect(service.status().checkedAt).toBe(2)
   })
 
@@ -342,7 +342,7 @@ describe('UpdateService', () => {
 
     await service.check('manual')
     await expect(service.download()).resolves.toEqual({ ok: false, reason: 'unavailable' })
-    expect(service.status().phase).toEqual({ phase: 'available', version: '3.5.0', problem: 'ECONNRESET' })
+    expect(service.status().phase).toEqual({ phase: 'available', version: '3.5.0', problem: 'ECONNRESET', failedStep: 'download' })
 
     // A retry that lands clears the earlier problem.
     updater.adapter.download = async () => { updater.emit({ type: 'downloaded', version: '3.5.0' }) }
@@ -362,7 +362,7 @@ describe('UpdateService', () => {
 
     await service.check('manual')
     await service.download()
-    expect(service.status().phase).toEqual({ phase: 'available', version: '3.5.0', problem: 'sha512 checksum mismatch' })
+    expect(service.status().phase).toEqual({ phase: 'available', version: '3.5.0', problem: 'sha512 checksum mismatch', failedStep: 'download' })
   })
 
   it('refuses to download or install anything that was never offered', async () => {

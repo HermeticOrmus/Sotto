@@ -51,7 +51,7 @@ describe('updateTooltip', () => {
     expect(updateTooltip(status({ phase: 'up-to-date' }))).toBe('Check for updates')
     expect(updateTooltip(status({ phase: 'checking' }))).toBe('Checking for updates…')
     expect(updateTooltip(status({ phase: 'available', version: '3.5.0', problem: null }))).toBe('Update 3.5.0 ready to download')
-    expect(updateTooltip(status({ phase: 'available', version: '3.5.0', problem: 'x' }))).toBe('Update 3.5.0 is still offered. Click to download.')
+    expect(updateTooltip(status({ phase: 'available', version: '3.5.0', problem: 'x' }))).toBe('Update check failed. Update 3.5.0 is still offered. Click to download.')
     expect(updateTooltip(status({ phase: 'downloading', version: '3.5.0', percent: 42 }))).toBe('Downloading update (42%)')
     expect(updateTooltip(status({ phase: 'downloaded', version: '3.5.0', problem: null }))).toBe('Update 3.5.0 downloaded. Click to restart and install.')
     expect(updateTooltip(status({ phase: 'downloaded', version: '3.5.0', problem: 'x' }))).toBe('Install failed for 3.5.0. Click to retry.')
@@ -98,6 +98,17 @@ describe('UpdateControl', () => {
     expect(screen.getByRole('button', { name: /downloaded/ })).toHaveAttribute('data-state', 'downloaded')
   })
 
+  it.each(['check', 'download'] as const)('names a failed %s in the tooltip and accessible name', failedStep => {
+    const offered = status({ phase: 'available', version: '3.5.0', problem: 'offline', failedStep })
+    const name = failedStep === 'download'
+      ? 'Download failed for 3.5.0. Click to retry.'
+      : 'Update check failed. Update 3.5.0 is still offered. Click to download.'
+    render(<UpdateControl status={offered} busy={false} onActivate={vi.fn()} />)
+    expect(updateTooltip(offered)).toBe(name)
+    expect(screen.getByRole('button', { name })).toHaveAttribute('title', name)
+    expect(updateAction(offered)).toBe('download')
+  })
+
   it('hands the press to its owner with the action it means, and never while busy', async () => {
     const user = userEvent.setup()
     const onActivate = vi.fn()
@@ -113,16 +124,16 @@ describe('UpdateControl', () => {
     await user.click(screen.getByRole('button'))
     expect(onActivate).toHaveBeenLastCalledWith('install')
   })
-})
 
- it('shows a manual check failure while keeping the download offer', async () => {
-  const offered = status({ phase: 'available', version: '3.5.0', problem: 'offline' })
-  const notify = vi.fn()
-  const { result } = renderHook(() => useUpdateFlow({
-    status: offered, checkRequest: 0, check: async () => offered,
-    download: async () => true, install: async () => true, notify,
-  }))
-  await act(async () => { await result.current.check() })
-  expect(notify).toHaveBeenCalledWith({ tone: 'error', title: 'Could not check for updates', detail: 'offline' })
-  expect(updateAction(offered)).toBe('download')
+  it('shows a manual check failure while keeping the download offer', async () => {
+    const offered = status({ phase: 'available', version: '3.5.0', problem: 'offline' })
+    const notify = vi.fn()
+    const { result } = renderHook(() => useUpdateFlow({
+      status: offered, checkRequest: 0, check: async () => offered,
+      download: async () => true, install: async () => true, notify,
+    }))
+    await act(async () => { await result.current.check() })
+    expect(notify).toHaveBeenCalledWith({ tone: 'error', title: 'Could not check for updates', detail: 'offline' })
+    expect(updateAction(offered)).toBe('download')
+  })
 })
