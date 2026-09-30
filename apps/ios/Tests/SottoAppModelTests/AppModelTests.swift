@@ -5,6 +5,7 @@ final class AppModelTests: XCTestCase {
     @MainActor private func fixture() throws -> (AppModel, ThreadRef) {
         HostConnection.instances = []; HostConnection.failDetail = false; HostConnection.holdDetail = false; KeychainStore.items = [:]
         HostConnection.afterGreeting = nil
+        KeychainStore.locked = false
         let host = "00000000-0000-4000-8000-000000000001"
         let pairing = try JSONDecoder().decode(Pairing.self, from: Data(#"{"v":1,"hostId":"\#(host)","clientId":"phone","token":"fixture"}"#.utf8))
         let saved = SavedComputer(address: "https://laptop.example.ts.net:8443", pairing: pairing, reportedName: "Laptop")
@@ -14,6 +15,42 @@ final class AppModelTests: XCTestCase {
         HostConnection.shell = try JSONDecoder().decode(JSONValue.self, from: Data(#"{"hostId":"\#(host)","host":{"hostId":"\#(host)","name":"Laptop","threads":[{"id":"t","projectId":"p","title":"Thread","status":"idle","requests":[]}],"projects":[],"capabilities":{"submit":true,"interrupt":true,"questions":true,"permissions":true}}}"#.utf8))
         HostConnection.detail = try JSONDecoder().decode(JSONValue.self, from: Data(#"{"threadId":"t","revision":1,"messages":[{"id":"m","role":"assistant","text":"Ready"}]}"#.utf8))
         return (AppModel(), ThreadRef(hostID: host, threadID: "t"))
+    }
+    @MainActor func testLockedLaunchLoadsComputersAndMarkersWhenActiveAfterUnlock() async throws {
+        let (_, ref) = try fixture()
+        let marker = PendingOperation(hostID: ref.hostID, clientID: "phone", threadID: ref.threadID, draftID: "draft", kind: "reply")
+        try KeychainStore().write([marker], account: ComputerStore.pendingAccount)
+        KeychainStore.locked = true
+        let model = AppModel()
+        XCTAssertFalse(model.storageReady)
+        XCTAssertTrue(model.computers.isEmpty)
+        model.phase(.active)
+        XCTAssertFalse(model.storageReady)
+        KeychainStore.locked = false
+        let reconnected = expectation(description: "Recovered computers connect when storage becomes readable")
+        HostConnection.afterGreeting = { _ in reconnected.fulfill() }
+        model.phase(.active)
+        XCTAssertTrue(model.storageReady)
+        XCTAssertEqual(model.computers.map(\.hostID), [ref.hostID])
+        XCTAssertEqual(model.pending, [marker])
+        XCTAssertNil(model.feedback)
+        XCTAssertNil(model.pairFeedback)
+        await fulfillment(of: [reconnected], timeout: 10)
+        XCTAssertTrue(model.online(ref.hostID))
+    }
+    @MainActor func testUndecodableStorageItemsDoNotLockLaunch() throws {
+        for account in [ComputerStore.indexAccount, ComputerStore.pendingAccount, ComputerStore.legacyAccount] {
+            _ = try fixture()
+            KeychainStore.items[account] = Data("incompatible item".utf8)
+            let model = AppModel()
+            XCTAssertTrue(model.storageReady, account)
+            XCTAssertNil(model.feedback, account)
+        }
+        let (_, ref) = try fixture()
+        KeychainStore.items[ComputerStore.account(ref.hostID)] = Data("incompatible computer".utf8)
+        let model = AppModel()
+        XCTAssertTrue(model.storageReady)
+        XCTAssertTrue(model.computers.isEmpty)
     }
     @MainActor func testAThreadReadFailureDoesNotDisconnectItsOnlineComputer() async throws {
         let (model, ref) = try fixture()

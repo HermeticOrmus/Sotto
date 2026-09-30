@@ -9,7 +9,8 @@ struct KeychainStore {
         var result: CFTypeRef?; let status = SecItemCopyMatching(query as CFDictionary, &result)
         if status == errSecItemNotFound { return nil }
         guard status == errSecSuccess, let data = result as? Data else { throw Self.failure }
-        return try JSONDecoder().decode(type, from: data)
+        // An item from an incompatible build is empty; an inaccessible Keychain still throws above.
+        return try? JSONDecoder().decode(type, from: data)
     }
     func write<T: Encodable>(_ value: T, account: String) throws {
         let data = try JSONEncoder().encode(value)

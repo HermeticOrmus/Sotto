@@ -176,6 +176,12 @@ struct Live {
             return
         }
         #endif
+        loadComputers()
+    }
+    /// Secure storage may be locked during a prewarmed launch. Publish nothing until all reads succeed.
+    private func loadComputers() {
+        guard !storageReady else { return }
+        let storageProblem = "Secure connection details could not be read. Unlock this iPhone and try again."
         do {
             let index = try keychain.read([String].self, account: ComputerStore.indexAccount)
             let legacy = try readComputer(ComputerStore.legacyAccount)
@@ -194,8 +200,10 @@ struct Live {
             computers = kept
             for computer in kept { live[computer.hostID] = Live() }
             storageReady = true
+            if feedback == storageProblem { feedback = nil }
+            if pairFeedback == storageProblem { pairFeedback = nil }
         } catch {
-            feedback = "Secure connection details could not be read. Unlock this iPhone and reopen Sotto."
+            feedback = storageProblem
             pairFeedback = feedback
         }
     }
@@ -214,7 +222,9 @@ struct Live {
         if isUIFixture { return }
         #endif
         if phase == .active {
-            guard !active else { return }; active = true
+            let wasStorageReady = storageReady
+            loadComputers()
+            guard !active || (!wasStorageReady && storageReady) else { return }; active = true
             Task { await reconnectAll() }
         } else if phase == .background {
             cancelDetailReload()

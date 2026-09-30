@@ -5,8 +5,11 @@ import SottoCore
 @MainActor final class KeychainStore {
     static let failure = ClientError.rejected("Secure storage unavailable")
     static var items: [String: Data] = [:]
+    static var locked = false
     func read<T: Decodable>(_ type: T.Type, account: String) throws -> T? {
-        try Self.items[account].map { try JSONDecoder().decode(type, from: $0) }
+        if Self.locked { throw Self.failure }
+        guard let data = Self.items[account] else { return nil }
+        return try? JSONDecoder().decode(type, from: data)
     }
     func write<T: Encodable>(_ value: T, account: String) throws { Self.items[account] = try JSONEncoder().encode(value) }
     func remove(account: String) throws { Self.items[account] = nil }
