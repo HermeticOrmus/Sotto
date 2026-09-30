@@ -24,6 +24,8 @@ struct HostRefusal: Error { let failure: WireFailure }
     static var shell: JSONValue = .null
     static var detail: JSONValue = .null
     static var afterGreeting: ((HostConnection) -> Void)?
+    static var mayAnswer = false
+    static var receipt: JSONValue = .object(["status": .string("unknown")])
     var onPush: ((IncomingFrame, Int) -> Void)?
     var onDisconnect: (() -> Void)?
     var operations: [String] = []
@@ -35,7 +37,7 @@ struct HostRefusal: Error { let failure: WireFailure }
     init() { Self.instances.append(self) }
     func connect(endpoint: HostEndpoint, pairing: Pairing) async throws -> Received<Hello> {
         let hello = try JSONValue.object(["hostId": .string(pairing.hostId), "clientId": .string(pairing.clientId),
-            "shell": Self.shell, "capabilities": .object(["mayAnswer": .bool(false)])]).decode(Hello.self)
+            "shell": Self.shell, "capabilities": .object(["mayAnswer": .bool(Self.mayAnswer)])]).decode(Hello.self)
         received += 1; let sequence = received
         Self.afterGreeting?(self)
         return Received(hello, sequence: sequence)
@@ -63,7 +65,7 @@ struct HostRefusal: Error { let failure: WireFailure }
             return Self.detail
         }
         if op == "shell" || op == "command" { return Self.shell }
-        if op == "receipt" { return .object(["status": .string("unknown")]) }
+        if op == "receipt" { return Self.receipt }
         return .null
     }
     func disconnect() { disconnects += 1 }

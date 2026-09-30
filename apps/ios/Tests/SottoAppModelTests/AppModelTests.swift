@@ -6,6 +6,7 @@ final class AppModelTests: XCTestCase {
         HostConnection.instances = []; HostConnection.failDetail = false; HostConnection.holdDetail = false; KeychainStore.items = [:]
         HostConnection.afterGreeting = nil
         KeychainStore.locked = false
+        HostConnection.mayAnswer = false; HostConnection.receipt = .object(["status": .string("unknown")])
         let host = "00000000-0000-4000-8000-000000000001"
         let pairing = try JSONDecoder().decode(Pairing.self, from: Data(#"{"v":1,"hostId":"\#(host)","clientId":"phone","token":"fixture"}"#.utf8))
         let saved = SavedComputer(address: "https://laptop.example.ts.net:8443", pairing: pairing, reportedName: "Laptop")
@@ -51,6 +52,53 @@ final class AppModelTests: XCTestCase {
         let model = AppModel()
         XCTAssertTrue(model.storageReady)
         XCTAssertTrue(model.computers.isEmpty)
+    }
+    @MainActor private func changeShell(status: String = "idle", requests: [[String: Any]] = [], error: String? = nil) throws -> Shell {
+        var shell = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(HostConnection.shell)) as? [String: Any])
+        var host = try XCTUnwrap(shell["host"] as? [String: Any])
+        var threads = try XCTUnwrap(host["threads"] as? [[String: Any]])
+        threads[0]["status"] = status; threads[0]["requests"] = requests
+        host["threads"] = threads; shell["host"] = host; shell["error"] = error
+        HostConnection.shell = try JSONDecoder().decode(JSONValue.self, from: JSONSerialization.data(withJSONObject: shell))
+        return try HostConnection.shell.decode(Shell.self)
+    }
+    @MainActor private func modelWithMarker(_ marker: PendingOperation) throws -> AppModel {
+        try KeychainStore().write([marker], account: ComputerStore.pendingAccount)
+        return AppModel()
+    }
+    @MainActor func testCompletedReceiptDoesNotClaimAnAnswerWithItsRequestStillWaiting() async throws {
+        let (_, ref) = try fixture()
+        let marker = PendingOperation(hostID: ref.hostID, clientID: "phone", threadID: ref.threadID, requestID: "request", kind: "answer")
+        _ = try changeShell(requests: [["id": "request", "kind": "permission", "text": "Read files?", "options": []]])
+        HostConnection.receipt = .object(["status": .string("completed")])
+        let model = try modelWithMarker(marker)
+        model.phase(.active); await model.reconnectAll()
+        XCTAssertEqual(model.pending, [marker])
+        XCTAssertNotEqual(model.feedback, "Answer sent.")
+    }
+    @MainActor func testAnsweredRequestSettlesDespiteAnUnrelatedComputerError() async throws {
+        let (_, ref) = try fixture()
+        let marker = PendingOperation(hostID: ref.hostID, clientID: "phone", threadID: ref.threadID, requestID: "old", kind: "answer")
+        _ = try changeShell(requests: [["id": "next", "kind": "permission", "text": "Read files?", "options": []]], error: "Another thread failed")
+        HostConnection.mayAnswer = true
+        let model = try modelWithMarker(marker)
+        model.phase(.active); await model.reconnectAll()
+        XCTAssertTrue(model.pending.isEmpty)
+        XCTAssertEqual(model.feedback, "Answer sent.")
+        XCTAssertTrue(model.canAnswer(try XCTUnwrap(model.thread(ref)?.requests.first), in: ref))
+    }
+    @MainActor func testUncertainOrMissingRequestThreadDoesNotConfirmAnAnswer() async throws {
+        let (_, ref) = try fixture()
+        let marker = PendingOperation(hostID: ref.hostID, clientID: "phone", threadID: ref.threadID, requestID: "request", kind: "answer")
+        _ = try changeShell(requests: [["id": "request", "kind": "permission", "text": "Read files?", "options": [], "delivery": "uncertain"]])
+        HostConnection.receipt = .object(["status": .string("completed")])
+        let model = try modelWithMarker(marker)
+        model.phase(.active); await model.reconnectAll()
+        XCTAssertEqual(model.pending, [marker])
+        let missing = PendingOperation(hostID: ref.hostID, clientID: "phone", threadID: "missing", requestID: "request", kind: "answer")
+        let missingModel = try modelWithMarker(missing)
+        missingModel.phase(.active); await missingModel.reconnectAll()
+        XCTAssertEqual(missingModel.pending, [missing])
     }
     @MainActor func testAThreadReadFailureDoesNotDisconnectItsOnlineComputer() async throws {
         let (model, ref) = try fixture()

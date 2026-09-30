@@ -583,13 +583,16 @@ struct Live {
         let delivered = shell?.deliveredDrafts?.contains { $0.threadId == item.threadID && $0.draftId == item.draftID } == true
         let accepted = delivered || delivery?.status == "accepted"
         let thread = shell?.host.threads.first { $0.id == item.threadID }
-        let uncertainRequest = thread?.requests.contains { $0.id == item.requestID && $0.delivery == "uncertain" } == true
+        // A completed transport receipt can still carry a provider refusal in the shared shell.
+        // Only this answer's request disappearing establishes that it no longer needs an answer.
+        let answered = item.kind == "answer" && item.requestID != nil && thread != nil
+            && thread?.requests.contains(where: { $0.id == item.requestID }) == false
         if delivery?.status == "failed" {
             try rejectOperation(item)
             // Named, because the thread open now may be another one, on another computer.
             let title = thread.map { "“\($0.title)”" } ?? "a thread"
             feedback = "Your reply to \(title) on \(name(item.hostID)) wasn’t sent. Its text is back in that thread."
-        } else if accepted || (shell?.error == nil && !uncertainRequest && item.reconciled(receipt: receipt, deliveries: shell?.deliveries ?? [])) {
+        } else if accepted || answered || (item.kind != "answer" && item.reconciled(receipt: receipt, deliveries: shell?.deliveries ?? [])) {
             try forgetMarker(item.id)
             feedback = item.kind == "answer" ? "Answer sent." : nil
         }
