@@ -61,3 +61,5 @@ Before opening the PR, the branch merged `77d24f8d` (Release 0.1.27) without con
 - `npx playwright test tests/e2e/pending-settings.spec.ts tests/e2e/hosts.spec.ts tests/e2e/host-identity.spec.ts tests/e2e/host-agent-setup.spec.ts tests/e2e/host-setup.spec.ts --workers=1`: all 6 passed.
 
 The current-main remote composer capture at the minimum-size light view was visually inspected again. No design baseline was regenerated. These are local results; GitHub's checks must pass before merge.
+
+The first PR Linux run passed the socket contract and archive verification but exposed the native sshd test's old count of four SSH operations. Desktop policy setup correctly adds a fifth. The test now accounts for it and probes authenticated `mayAnswer` through the real forward after setup, reconnect and host restart, while retaining its assertions that the host key and passphrase are asked once per connection. The targeted Windows run passed 57 tests with 3 skipped; the native sshd journey requires the PR's Linux runner. Independent Standards and Spec reviews of this follow-up found no issues.
