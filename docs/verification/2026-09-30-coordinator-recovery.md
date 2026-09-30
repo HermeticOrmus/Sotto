@@ -4,12 +4,12 @@ Verified on Windows, September 30, 2026, with scripted providers. No live provid
 
 ## Behaviour
 
-- Stop is dispatched when saving the follow-up queue pause fails. The assignment stays paused, and the error tells the user to review the thread before resuming queued messages. A separate failure to save the Stop intent still prevents dispatch and reports that failure.
+- Stop is dispatched when saving the follow-up queue pause fails. The assignment stays paused, and the error tells the user to check saved queued messages before sending another message. The Stop turn is recorded as completed; the queue-save failure is surfaced separately. Closed and unsupported threads refuse Stop without changing management, including when the target changes while queue persistence is pending. The restored state is saved. A separate failure to save the Stop intent still prevents dispatch and reports that failure.
 - An uncertain Stop can be retried without replaying a prompt. The existing independent interrupt lanes and prompt admission checks stay in place.
-- Loading earlier messages preserves management, context age, attention and speech. Coverage includes 2,001 earlier messages, two unchanged refreshes, and actual manual input both during and after paging.
+- Loading earlier messages preserves management, context age, attention and speech. Coverage includes 2,001 earlier messages, two unchanged refreshes, and actual manual input both during and after paging. Saved identities stay within 2,000, use Set membership, and compare the previous visible window separately. Starting management and restoring an oversized saved record are also covered.
 - Shutdown cancellation preserves the managed assignment without a false blocked item, including a failed final write and restart.
 - An uncertain answer records attribution once; a definitive refusal does not.
-- Coordinator actions retain their client context and use the existing command admission policy.
+- Coordinator actions retain their client context and use the existing command admission policy. Socket and unit tests cover composition and submission while preserving ordinary draft ownership.
 
 ## Electron journeys
 
@@ -21,6 +21,14 @@ Queue-pause storage failure, paging and shutdown timing were verified through co
 
 ## Review
 
-Separate standards and spec reviews found missing prototype-spy cleanup and a history window exceeding the 2,000-ID retention limit. Both were fixed and reviewed again with no remaining findings.
+The follow-up standards and spec reviews found an admission expression that did not preserve an ordinary draft's null binding and a Stop refusal race during queue persistence. Both were corrected and covered by regression tests. Separate standards and spec re-reviews found no remaining actionable findings. Both were read-only source reviews; the test results are recorded separately below.
 
-The first Windows CI run passed the coordinator regressions but failed an existing host-update restart check. Its launch script and fake host are unchanged from main. The complete file passed locally (12 passed, 1 skipped), and the failing journey passed 20 consecutive local runs. The assertion now includes the structured outcome's type, reason, cause and restart flag when it fails, so a further CI failure can be diagnosed. Its expected readiness and ownership, and its deadlines, are unchanged. The original restart failure's cause was not established locally.
+The earlier Windows host-update readiness failure did not recur in subsequent Windows CI runs, including run 36767962482 on `724652be`. Its unrelated diagnostic was removed from this PR. The readiness assertion and deadlines are unchanged; the original transient failure's cause remains unverified.
+
+## Follow-up verification
+
+The socket Send admission regression fails when its context gate is removed. The Stop outcome regression fails when a queue-save warning is recorded as a failed Stop. The composition, refused Stop and identity-cap regressions also failed before their corresponding fixes.
+
+The revised queue-save message was previewed in the existing Threads error line in dark and light at 820x560. Both [dark](../../artifacts/queued-steering/stop-message-dark.png) and [light](../../artifacts/queued-steering/stop-message-light.png) captures were visually inspected. This preview injects the same copy through scripted provider effects; the actual storage failure is exercised by the workspace regression. The throwaway preview source is retained locally on `prototype/stop-save-message` at `1d6814cf`; no prototype code is included in this PR.
+
+`npm run build` and the four Electron specs listed above passed all 15 journeys again. Typecheck, lint and notices passed. The final `npm test -- --maxWorkers=2` run passed 6,412 tests with 153 skipped (482 files passed, 39 skipped). An initial rework run had two status assertions fail in unchanged `codexSessionProcesses.test.ts`; all five cases passed alone, and both passed in the final full run. No assertion or deadline changed. Latest CI results are recorded on PR #624. No look changed or baseline was regenerated.
