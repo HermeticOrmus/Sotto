@@ -10,6 +10,8 @@ export interface ConfirmationDialogProps {
   readonly cancelLabel: string
   readonly onConfirm: () => Promise<boolean | void>
   readonly onCancel: () => void
+  /** Escape may dismiss a question without taking its secondary button's action. */
+  readonly onDismiss?: () => void
   readonly danger?: boolean
   readonly confirmDisabled?: boolean
   readonly failureMessage?: ReactNode
@@ -24,6 +26,7 @@ export function ConfirmationDialog({
   cancelLabel,
   onConfirm,
   onCancel,
+  onDismiss = onCancel,
   danger = true,
   confirmDisabled = false,
   failureMessage,
@@ -34,14 +37,14 @@ export function ConfirmationDialog({
   const [failed, setFailed] = useState(false)
   const cancelRef = useRef<HTMLButtonElement>(null)
   const submittingRef = useRef(false)
-  const onCancelRef = useRef(onCancel)
+  const onDismissRef = useRef(onDismiss)
   const titleId = useId()
   const descriptionId = useId()
 
-  onCancelRef.current = onCancel
+  onDismissRef.current = onDismiss
   submittingRef.current = submitting
-  // Escape is Cancel, except while the confirmation is under way.
-  const dialogRef = useDialogFocus({ onEscape: () => { if (!submittingRef.current) onCancelRef.current() }, initialFocus: cancelRef, fallbackFocus: fallbackFocusRef })
+  // Escape dismisses, except while the confirmation is under way.
+  const dialogRef = useDialogFocus({ onEscape: () => { if (!submittingRef.current) onDismissRef.current() }, initialFocus: cancelRef, fallbackFocus: fallbackFocusRef })
 
   const confirm = async (): Promise<void> => {
     if (submittingRef.current) return

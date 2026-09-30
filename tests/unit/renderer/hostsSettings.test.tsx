@@ -648,10 +648,41 @@ it("asks a saved host's SSH question on any page, sends the answer, and Switch i
   expect(command).toHaveBeenCalledWith({ type: 'ssh-answer', id: REMOTE, promptId: 'prompt-2', answer: 'synthetic' })
   push({ hosts: [{ ...reconnecting, prompt: { id: 'prompt-3', kind: 'host-key', text: 'The authenticity of host forge cannot be established.' } }] })
   const trust = screen.getByRole('dialog', { name: 'Trust the SSH host forge?' })
-  await user.keyboard('{Escape}')
+  await user.click(within(trust).getByRole('button', { name: 'Switch it off' }))
   expect(command).toHaveBeenLastCalledWith({ type: 'set-enabled', id: REMOTE, enabled: false })
   push({ hosts: [{ ...reconnecting, phase: 'disconnected', enabled: false }] })
   expect(trust.isConnected).toBe(false)
+})
+
+it.each(['passphrase', 'host-key'] as const)('dismisses a saved host %s question on Escape without switching it off', async kind => {
+  const prompt = { id: 'dismissed-prompt', kind, text: 'Synthetic SSH question' }
+  const connecting = host({ phase: 'connecting', prompt })
+  const { bridge, command, push, state } = fixture([connecting]), user = userEvent.setup()
+  render(<HostQuestionDialog bridge={bridge} />)
+  await screen.findByRole('dialog')
+  await user.keyboard('{Escape}')
+  expect(screen.queryByRole('dialog')).toBeNull()
+  expect(command).not.toHaveBeenCalled()
+  expect(state().hosts[0]?.enabled).toBe(true)
+  push({ hosts: [{ ...connecting }] })
+  expect(screen.queryByRole('dialog')).toBeNull()
+  push({ hosts: [{ ...connecting, prompt: { ...prompt, id: 'next-prompt' } }] })
+  expect(screen.getByRole('dialog')).toBeTruthy()
+})
+
+it('lets each saved host ask without reopening another host question already dismissed', async () => {
+  const first = host({ name: 'forge', phase: 'connecting', prompt: { id: 'forge-prompt', kind: 'passphrase', text: 'First question' } })
+  const second = host({ id: '33333333-3333-4333-8333-333333333333', name: 'spark', phase: 'connecting', prompt: { id: 'spark-prompt', kind: 'host-key', text: 'Second question' } })
+  const { bridge, command, push } = fixture([first, second]), user = userEvent.setup()
+  render(<HostQuestionDialog bridge={bridge} />)
+  await screen.findByRole('dialog', { name: 'Unlock the SSH connection to forge' })
+  await user.keyboard('{Escape}')
+  expect(screen.getByRole('dialog', { name: 'Trust the SSH host spark?' })).toBeTruthy()
+  await user.keyboard('{Escape}')
+  expect(screen.queryByRole('dialog')).toBeNull()
+  push({ hosts: [first, second] })
+  expect(screen.queryByRole('dialog')).toBeNull()
+  expect(command).not.toHaveBeenCalled()
 })
 
 it("waits with a saved host's SSH question while a Hosts dialog is open", async () => {
