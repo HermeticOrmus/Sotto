@@ -309,7 +309,8 @@ export class UpdateService {
     try {
       await adapter.check()
     } catch (error) {
-      if (this.currentPhase() === 'checking' || this.currentPhase() === 'failed') this.recordCheckFailure(describeProblem(error))
+      if (this.currentPhase() !== 'downloading' && this.currentPhase() !== 'downloaded') this.recordCheckFailure(describeProblem(error))
+      this.previousOffer = null
       return this.status()
     }
     // A check that completed without offering a version found nothing newer.
@@ -319,6 +320,7 @@ export class UpdateService {
   }
 
   private recordCheckFailure(problem: string | null): void {
+    problem ??= 'The update check could not be completed. Check the connection and try again.'
     this.setPhase(this.previousOffer === null ? { phase: 'failed', problem } : { ...this.previousOffer, problem })
   }
 

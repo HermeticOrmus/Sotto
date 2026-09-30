@@ -1,8 +1,9 @@
 import React from 'react'
-import { cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, render, renderHook, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { useUpdateFlow } from '../../../src/renderer/src/features/updates/useUpdateFlow'
 import { UpdateControl } from '../../../src/renderer/src/features/updates/UpdateControl'
 import {
   installConfirmation,
@@ -50,7 +51,7 @@ describe('updateTooltip', () => {
     expect(updateTooltip(status({ phase: 'up-to-date' }))).toBe('Check for updates')
     expect(updateTooltip(status({ phase: 'checking' }))).toBe('Checking for updates…')
     expect(updateTooltip(status({ phase: 'available', version: '3.5.0', problem: null }))).toBe('Update 3.5.0 ready to download')
-    expect(updateTooltip(status({ phase: 'available', version: '3.5.0', problem: 'x' }))).toBe('Download failed for 3.5.0. Click to retry.')
+    expect(updateTooltip(status({ phase: 'available', version: '3.5.0', problem: 'x' }))).toBe('Update 3.5.0 is still offered. Click to download.')
     expect(updateTooltip(status({ phase: 'downloading', version: '3.5.0', percent: 42 }))).toBe('Downloading update (42%)')
     expect(updateTooltip(status({ phase: 'downloaded', version: '3.5.0', problem: null }))).toBe('Update 3.5.0 downloaded. Click to restart and install.')
     expect(updateTooltip(status({ phase: 'downloaded', version: '3.5.0', problem: 'x' }))).toBe('Install failed for 3.5.0. Click to retry.')
@@ -112,4 +113,16 @@ describe('UpdateControl', () => {
     await user.click(screen.getByRole('button'))
     expect(onActivate).toHaveBeenLastCalledWith('install')
   })
+})
+
+ it('shows a manual check failure while keeping the download offer', async () => {
+  const offered = status({ phase: 'available', version: '3.5.0', problem: 'offline' })
+  const notify = vi.fn()
+  const { result } = renderHook(() => useUpdateFlow({
+    status: offered, checkRequest: 0, check: async () => offered,
+    download: async () => true, install: async () => true, notify,
+  }))
+  await act(async () => { await result.current.check() })
+  expect(notify).toHaveBeenCalledWith({ tone: 'error', title: 'Could not check for updates', detail: 'offline' })
+  expect(updateAction(offered)).toBe('download')
 })
