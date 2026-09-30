@@ -60,7 +60,7 @@ export interface SettingsViewProps {
   readonly mediaDevices?: MediaDevicesAdapter | undefined
   /** Injected in tests; production runs the same browser test onboarding uses. */
   readonly createMicrophoneTest?: () => MicrophoneTestController
-  readonly onNotice?: (message: string) => void
+  readonly onNotice?: (message: string | null) => void
   readonly onUpdateSettings: (patch: SettingsPatch) => Promise<boolean>
   readonly onReplaceHotkey: (accelerator: string) => Promise<HotkeyChangeResult>
   readonly onSetStartup: (enabled: boolean) => Promise<StartupState | null>
@@ -292,6 +292,7 @@ export function SettingsView({
     if (settingsRef.current.microphoneSkipped) await onUpdateSettings({ microphoneSkipped: false }).catch(() => false)
   }
 
+  const dictionarySaveSequenceRef = useRef(0)
   const mountedRef = useRef(true)
   useEffect(() => {
     mountedRef.current = true
@@ -306,11 +307,14 @@ export function SettingsView({
     }
     const submission = llmDictionaryDraft.begin(value, true)
     if (submission === null) return
+    const sequence = ++dictionarySaveSequenceRef.current
     const saved = announce
       ? await save({ llmDictionary: value }, 'Dictionary saved.')
       : await onUpdateSettings({ llmDictionary: value }).catch(() => false)
     llmDictionaryDraft.settle(submission, saved, false)
-    if (!saved && !mountedRef.current) {
+    if (sequence !== dictionarySaveSequenceRef.current) return
+    if (saved) onNotice?.(null)
+    else if (!mountedRef.current) {
       onNotice?.('Your dictionary edits were not saved. Open Settings, choose Cleanup and enter them again.')
     }
   }

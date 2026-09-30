@@ -40,6 +40,16 @@ it.each(['unmount', 'blur'] as const)('shows dictionary save failures after Sett
   await act(async () => { pending.reject(new Error('Synthetic save failure')) })
   expect(await screen.findByText('Your dictionary edits were not saved. Open Settings, choose Cleanup and enter them again.')).toBeVisible()
   expect(screen.getByText('Your dictionary edits were not saved. Open Settings, choose Cleanup and enter them again.')).toHaveAttribute('role', 'alert')
+  if (trigger === 'blur') {
+    await userEvent.click(screen.getByRole('button', { name: 'Dismiss dictionary save notice' }))
+  } else {
+    vi.mocked(bridge.updateSettings).mockResolvedValueOnce({ ...DEFAULT_SETTINGS, onboardingComplete: true, llmDictionary: 'Recovered dictionary' })
+    act(() => shell.navigate('settings'))
+    await userEvent.click(screen.getByRole('tab', { name: 'Cleanup' }))
+    await userEvent.type(screen.getByRole('textbox', { name: 'Personal dictionary' }), 'Recovered dictionary')
+    await userEvent.tab()
+  }
+  await waitFor(() => expect(screen.queryByText('Your dictionary edits were not saved. Open Settings, choose Cleanup and enter them again.')).not.toBeInTheDocument())
 })
 
 it('retains failed dictation across navigation and later dictation, and copies without retranscription or paste', async () => {

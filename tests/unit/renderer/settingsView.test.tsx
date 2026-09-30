@@ -1341,6 +1341,24 @@ describe('Personal dictionary draft acknowledgements', () => {
     expect(update).toHaveBeenCalledExactlyOnceWith({ llmDictionary: 'Sotto\nZach' })
   })
 
+  it('keeps an older failed save quiet when a newer dictionary save is pending after close', async () => {
+    const older = deferred<boolean>()
+    const newer = deferred<boolean>()
+    const onNotice = vi.fn()
+    const update = vi.fn().mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise)
+    const view = render(<SettingsView {...baseProps({ onUpdateSettings: update, onNotice })} />)
+    await selectCategory('Cleanup')
+    const input = screen.getByRole('textbox', { name: 'Personal dictionary' })
+    fireEvent.change(input, { target: { value: 'Older' } })
+    fireEvent.blur(input)
+    fireEvent.change(input, { target: { value: 'Newer' } })
+    view.unmount()
+    await act(async () => older.resolve(false))
+    expect(onNotice).not.toHaveBeenCalled()
+    await act(async () => newer.resolve(true))
+    expect(onNotice).toHaveBeenCalledExactlyOnceWith(null)
+  })
+
   it('does not duplicate an in-flight dictionary blur save on unmount', async () => {
     const pending = deferred<boolean>()
     const update = vi.fn(() => pending.promise)

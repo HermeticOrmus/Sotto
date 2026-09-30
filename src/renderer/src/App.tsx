@@ -107,7 +107,7 @@ export function App({ createMicrophoneTest = () => new BrowserMicrophoneTest() }
   const microphoneReleasesRef = useRef(new WeakMap<MicrophoneTestController, Promise<void>>())
   const systemDark = useSystemPrefersDark()
   const appearanceEdits = useAppearancePreviewVersion()
-  const [settingsNotice, setSettingsNotice] = useState<ToastMessage | null>(null)
+  const [settingsNotice, setSettingsNotice] = useState<string | null>(null)
   const [themeNotice, setThemeNotice] = useState<ToastMessage | null>(null)
   const latestSettingsRef = useRef(app.settings)
   latestSettingsRef.current = app.settings
@@ -366,7 +366,7 @@ export function App({ createMicrophoneTest = () => new BrowserMicrophoneTest() }
         break
       case 'settings':
         view = <SettingsView
-          onNotice={message => setSettingsNotice({ id: 'settings-save', message, tone: 'error' })}
+          onNotice={setSettingsNotice}
           settings={app.settings}
           platform={app.platform}
           statusText={statusText}
@@ -453,7 +453,10 @@ export function App({ createMicrophoneTest = () => new BrowserMicrophoneTest() }
             message: recoveryMessages[notice.code],
           })),
           ...(themeNotice === null ? [] : [themeNotice]),
-          ...(settingsNotice === null ? [] : [settingsNotice]),
+          ...(settingsNotice === null ? [] : [{
+            id: 'settings-save', tone: 'error' as const,
+            message: <>{settingsNotice} <button type="button" className="tt-toast__link tt-focusable" aria-label="Dismiss dictionary save notice" onClick={() => setSettingsNotice(null)}>Dismiss</button></>,
+          }]),
           ...updateToasts,
         ]} />
       </>
