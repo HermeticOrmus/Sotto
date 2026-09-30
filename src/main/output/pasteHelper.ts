@@ -54,7 +54,7 @@ export function createWarmPasteAdapter(options: WarmPasteAdapterOptions): WarmPa
     const pending = session.pending.splice(0)
     for (const request of pending) {
       clearTimer(request.timer)
-      request.resolve(session.ready ? false : 'unavailable')
+      request.resolve(session.ready || disposed ? false : 'unavailable')
     }
   }
 

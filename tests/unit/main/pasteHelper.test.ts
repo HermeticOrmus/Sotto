@@ -307,6 +307,17 @@ describe('createWarmPasteAdapter', () => {
     expect(processes[0]?.writes).toEqual([])
   })
 
+  it('does not paste through the fallback when disposed while waiting for ready', async () => {
+    const helper = new FakeHelperProcess()
+    const fallback = fallbackAdapter()
+    const adapter = createWarmPasteAdapter({ spawnHelper: () => helper, fallback })
+    const pending = adapter.run(buildPasteInvocation())
+    adapter.dispose()
+    await expect(pending).resolves.toBe(false)
+    expect(fallback.calls).toBe(0)
+    expect(helper.writes).toEqual([])
+  })
+
   it('dispose() kills the helper and routes later pastes to the fallback', async () => {
     const processes: FakeHelperProcess[] = []
     const fallback = fallbackAdapter(true)
