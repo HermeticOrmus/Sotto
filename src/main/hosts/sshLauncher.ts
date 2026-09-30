@@ -233,11 +233,11 @@ export class SshHostLauncher {
     this.status(attempt, 'connecting')
     callbacks.onStep?.('reach')
     const authentication = this.dependencies.authenticationTimeoutMs ?? 120_000
-    // Bounds signing in only. It stops at the launch command's first output, which only a signed-in
+    // Starts once the local helper is ready. It stops at the launch command's first output, which only a signed-in
     // session can send; from there each step has its own budget, so a slow sign-in cannot eat the host's start.
     // Once Tailscale SSH holds the connection for approval, the wait is the approval budget instead.
     const expire = (): void => this.fail(attempt, new SshFailure(attempt.approval ? 'tailscale-unapproved' : attempt.prompt ? 'prompt-unanswered' : 'connect-timeout'))
-    let timeout = setTimeout(expire, authentication)
+    let timeout: ReturnType<typeof setTimeout> | undefined
     attempt.onHold = () => { clearTimeout(timeout); timeout = setTimeout(expire, this.dependencies.approvalTimeoutMs ?? TAILSCALE_APPROVAL_MS) }
     const signedIn = (): void => { clearTimeout(timeout); this.advance(attempt, 'install') }
     try {
@@ -245,6 +245,7 @@ export class SshHostLauncher {
       const broker = await AskpassBroker.start((caller, question, withdrawn) => this.ask(attempt, caller, question, withdrawn), { node: this.dependencies.askpassNode ?? process.execPath, platform: this.platform() })
       attempt.broker = broker
       if (attempt.closed) { await broker.close(); throw attempt.failure ?? new SshFailure('cancelled') }
+      timeout = setTimeout(expire, authentication)
       const route = attempt.route = await this.resolve(attempt)
       const result = await this.control(attempt, { op: 'launch' }, authentication + this.readyTimeout(), 'host-start-failed', { onOutput: signedIn, onStarting: () => { this.advance(attempt, 'start'); this.status(attempt, 'starting') } })
       if (result.type === 'error') throw this.launchFailure(result)
@@ -504,9 +505,9 @@ export class SshHostLauncher {
     return new SshFailure(reason as SshFailureCode)
   }
   /**
-   * A question from the askpass helper. On Windows it arrives as its first line only, so a host-key
-   * question gets its fingerprint back from the same ssh process's debug output. A notice takes no
-   * answer and is not shown. A question ssh stops waiting for is taken off the screen.
+   * A question from the askpass helper. A host-key question missing its fingerprint gets it from the
+   * same ssh process's debug output. A notice takes no answer and is not shown. A question ssh stops
+   * waiting for is taken off the screen.
    */
   private async ask(attempt: Attempt, caller: string, question: AskpassQuestion, withdrawn: AbortSignal): Promise<string | null> {
     if (attempt.closed || withdrawn.aborted) return null
