@@ -7,6 +7,7 @@ import { join, resolve } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import { SshFailure, SshHostLauncher, type SshApproval, type SshPrompt } from '../../src/main/hosts/sshLauncher'
 import { CONTROL_OPTIONS, type SpawnSsh } from '../../src/main/hosts/sshProcess'
+import { AskpassBroker } from '../../src/main/hosts/sshAskpass'
 import { LAUNCH_SCRIPT_SOURCE } from '../../src/main/hosts/launchScript'
 import { createServer } from 'node:http'
 import { hostRelease, localArchiveName, releasesPage, sha256, sidecar, tarGz } from '../fixtures/hostArchive'
@@ -55,6 +56,35 @@ it.each(['started', 'discovered'])('discovers readiness, verifies the forward an
   // -G, launch, forward, pairing code: four ssh processes, and only the forward outlives its answer.
   expect(spawned.map(item => item.resolve ? 'resolve' : item.tunnel ? 'forward' : item.op)).toEqual(['resolve', 'launch', 'forward', 'pairing-code'])
   expect(spawned.find(item => item.tunnel)?.args).toContainEqual(expect.stringMatching(/^127\.0\.0\.1:\d+:127\.0\.0\.1:4317$/u))
+})
+it('starts the sign-in deadline after the askpass helper is ready', async () => {
+  const { launcher } = await fixture('started')
+  const preparing = Promise.withResolvers<void>(), ready = Promise.withResolvers<void>()
+  const start = AskpassBroker.start.bind(AskpassBroker)
+  const preparation = vi.spyOn(AskpassBroker, 'start').mockImplementation(async (...args) => {
+    preparing.resolve()
+    await ready.promise
+    return start(...args)
+  })
+  const statuses: string[] = []
+  vi.useFakeTimers()
+  const connecting = launcher.connect(configuration, { onStatus: status => statuses.push(status) })
+  void connecting.catch(error => preparing.reject(error))
+  try {
+    await preparing.promise
+    await vi.advanceTimersByTimeAsync(10_001)
+    expect(statuses).toEqual(['connecting'])
+    vi.useRealTimers()
+    ready.resolve()
+    const connection = await connecting
+    expect(connection.hostId).toBe('11111111-1111-4111-8111-111111111111')
+    await connection.close()
+  } finally {
+    vi.useRealTimers()
+    ready.resolve()
+    preparation.mockRestore()
+    await connecting.catch(() => undefined)
+  }
 })
 it('turns multiplexing and any configured remote command off and asks through askpass on every ssh, and pipes the launch script to every control command', async () => {
   const { launcher, spawns } = await fixture('started')
@@ -152,7 +182,7 @@ it('shows a host key with its fingerprint and trusts it once', async () => {
   expect(prompts).toHaveLength(1)
   expect(prompts[0]).toMatchObject({ kind: 'host-key' })
   expect(prompts[0]!.text).toContain("The authenticity of host 'forge (192.0.2.1)' can't be established.")
-  // Windows' cmd.exe keeps only the first line of the question; the fingerprint comes back from ssh's own debug output.
+  // The helper keeps the fingerprint in OpenSSH's question on both platforms.
   expect(prompts[0]!.text).toMatch(/key fingerprint is SHA256:fixtureKey\./u)
   expect((await spawns())[0]!.args).toContain(process.platform === 'win32' ? 'LogLevel=DEBUG1' : 'LogLevel=INFO')
   await connection.close()

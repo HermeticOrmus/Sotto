@@ -3,6 +3,7 @@ out/
 dist/
 dist-electron/
 /release/
+artifacts/windows-askpass/
 coverage/
 playwright-report/
 test-results/
@@ -102,3 +103,6 @@ artifacts/codex-restored-replies/
 
 # Native iPhone Focus verification captures; force-add only images cited by the note.
 artifacts/ios-focus/
+
+# Native iPhone thread-creation captures; force-add only images cited by the note.
+artifacts/iphone-new-threads/
