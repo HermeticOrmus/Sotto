@@ -61,6 +61,21 @@ The rework review also found disappearance pushes racing the reconnect shell and
 hello. Both now retain the marker through its own receipt check, with regressions
 asserting one receipt read and no command resubmission.
 
+## Native visual evidence
+
+The first rework CI run, [36774010024](https://github.com/millZach/Sotto/actions/runs/36774010024),
+captured the neutral request message and unreadable-action warning on the small
+iPhone simulator before XCTest rejected the longer recovery message as an
+identifier. The corrected query matches its full label with a predicate; it keeps
+the same assertion. Latest package and small/large journey results are in the PR.
+
+These two inspected captures are retained:
+
+- [Neutral request message, small phone in dark](../../artifacts/review-iphone-feedback/request-gone-small-dark.png).
+  The message and dismissal remain readable and reachable.
+- [Unreadable actions, small phone in light with larger text](../../artifacts/review-iphone-feedback/markers-small-light-larger-text.png).
+  The entire warning wraps within the existing feedback surface without clipping.
+
 ## Limits
 
 Windows cannot run SwiftUI or the native package tests. The macOS CI gate runs
