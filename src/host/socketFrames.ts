@@ -68,7 +68,7 @@ export class SocketFrames {
       const frame = this.take(offset + size)
       const payload = Buffer.from(frame.subarray(offset))
       if (masked) for (let index = 0; index < size; index++) payload[index] = payload[index]! ^ header[maskOffset + index % 4]!
-      if (opcode === 8) { this.write(8, payload); this.close(); return }
+      if (opcode === 8) { if (this.write(8, payload)) { this.stream.end(); this.closed() } return }
       if (opcode === 9) { this.write(10, payload); continue }
       if (opcode === 10) continue
       if ((opcode === 0 && this.fragments.length === 0) || (opcode === 1 && this.fragments.length > 0)) { this.close(); return }
