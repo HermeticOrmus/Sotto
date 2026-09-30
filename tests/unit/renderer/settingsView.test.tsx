@@ -80,6 +80,25 @@ async function selectCategory(name: string): Promise<void> {
 }
 
 describe('SettingsView', () => {
+  it('does not save or announce unchanged shortcut and numeric fields on blur', async () => {
+    const props = baseProps()
+    render(<SettingsView {...props} />)
+    const hotkey = screen.getByRole('textbox', { name: 'Global shortcut' })
+    fireEvent.blur(hotkey)
+    fireEvent.change(hotkey, { target: { value: 'Control+Shift+Space' } })
+    fireEvent.blur(hotkey)
+    await selectCategory('Output')
+    for (const name of ['Paste delay', 'Success message duration']) {
+      const input = screen.getByRole('textbox', { name })
+      fireEvent.blur(input)
+      fireEvent.change(input, { target: { value: ` ${String((input as HTMLInputElement).value)} ` } })
+      fireEvent.blur(input)
+    }
+    expect(props.onReplaceHotkey).not.toHaveBeenCalled()
+    expect(props.onUpdateSettings).not.toHaveBeenCalled()
+    expect(document.querySelector('.settings-notice')).not.toBeInTheDocument()
+  })
+
   it('preserves quick cleanup changes before their settings publications arrive', async () => {
     const update = vi.fn(async () => true)
     render(<SettingsView {...baseProps({ onUpdateSettings: update })} />)

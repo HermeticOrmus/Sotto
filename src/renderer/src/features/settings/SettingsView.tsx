@@ -300,7 +300,8 @@ export function SettingsView({
       return
     }
     setPasteDelayError(undefined)
-    const submission = pasteDelayDraft.begin(value)!
+    const submission = pasteDelayDraft.begin(value, true)
+    if (submission === null) return
     const saved = await save({ pasteDelayMs: value }, 'Paste delay saved.')
     pasteDelayDraft.settle(submission, saved, true)
   }
@@ -312,7 +313,8 @@ export function SettingsView({
       return
     }
     setSuccessDurationError(undefined)
-    const submission = successDurationDraft.begin(value)!
+    const submission = successDurationDraft.begin(value, true)
+    if (submission === null) return
     const saved = await save({ successDisplayMs: value }, 'Success duration saved.')
     successDurationDraft.settle(submission, saved, true)
   }
@@ -355,7 +357,8 @@ export function SettingsView({
       setNotice({ text: 'Enter a valid shortcut. Your previous shortcut is still active.', error: true })
       return
     }
-    const submission = hotkeyDraft.begin(candidate)!
+    const submission = hotkeyDraft.begin(candidate, true)
+    if (submission === null) return
     const result = await onReplaceHotkey(candidate).catch(() => ({ ok: false as const, reason: 'unavailable' as const }))
     const latest = hotkeyDraft.isLatest(submission)
     hotkeyDraft.settle(submission, result.ok, true)
