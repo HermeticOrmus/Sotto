@@ -1,9 +1,13 @@
 // @vitest-environment node
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+vi.mock('node:child_process', async importOriginal => {
+  const original = await importOriginal<typeof import('node:child_process')>()
+  return { ...original, execFile: vi.fn(original.execFile) }
+})
 import { runWorktreeGitProcess } from '../../../src/main/agents/threadWorktrees'
 
 const roots: string[] = []
@@ -58,6 +62,34 @@ describe('worktree Git process deadlines', () => {
           else process.kill(cleanupPid, 'SIGKILL')
         } catch { /* The regression already stopped it. */ }
       }
+    }
+  })
+  it.skipIf(process.platform !== 'win32')('refuses promptly if taskkill fails and leaves the running folder alone', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sotto-git-timeout-')); roots.push(root)
+    const launcher = join(root, 'git.cjs'), pidFile = join(root, 'launcher.pid')
+    await writeFile(launcher, `require('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setInterval(() => {}, 1000);`)
+    let deadline: (() => void) | undefined
+    const realTimer = globalThis.setTimeout
+    vi.spyOn(globalThis, 'setTimeout').mockImplementation(((callback: () => void, delay?: number, ...args: unknown[]) => {
+      if (delay === 300_000) deadline = callback
+      return realTimer(callback, delay, ...args)
+    }) as typeof setTimeout)
+    vi.mocked(execFile).mockImplementationOnce(((_file: string, _args: string[], _options: unknown, callback: (error: Error) => void) => {
+      callback(new Error('Synthetic taskkill failure'))
+      return {} as ReturnType<typeof execFile>
+    }) as typeof execFile)
+    const result = runWorktreeGitProcess(root, ['worktree', 'add'], { executable: process.execPath, prefix: [launcher] }).catch(error => error as Error)
+    try {
+      await expect.poll(async () => readFile(pidFile, 'utf8').catch(() => '')).not.toBe('')
+      deadline!()
+      expect(await result).toMatchObject({ message: expect.stringContaining('could not be stopped') })
+      const pid = Number(await readFile(pidFile, 'utf8'))
+      expect(() => process.kill(pid, 0)).not.toThrow()
+      expect(await readFile(pidFile, 'utf8')).toBe(String(pid))
+    } finally {
+      // Use the real taskkill executable through spawn; the synthetic failure must not affect cleanup.
+      const pid = await readFile(pidFile, 'utf8')
+      await new Promise<void>(done => spawn('taskkill', ['/pid', pid, '/T', '/F'], { windowsHide: true }).on('close', () => done()))
     }
   })
   it('reports unavailable executables without marking them as timed-out checkouts', async () => {

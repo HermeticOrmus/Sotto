@@ -25,7 +25,7 @@ export function runWorktreeGitProcess(cwd: string, args: string[], options: { ex
       stopping = process.platform === 'win32'
         ? new Promise<void>((done, fail) => { execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }, error => error ? fail(error) : done()) })
         : new Promise<void>((done, fail) => { try { process.kill(-child.pid!, 'SIGKILL'); done() } catch (error) { fail(error) } })
-      void stopping.catch(() => undefined)
+      void stopping.catch(() => reject(new Error('Git took too long and its checkout processes could not be stopped. The folder was kept.')))
     }
     const collect = (target: Buffer[], chunk: Buffer): void => {
       bytes += chunk.length
@@ -437,19 +437,18 @@ export class ThreadWorktrees {
     const observed = identityInLane ? { root: (await this.git(metadata.path!, ['rev-parse', '--show-toplevel'])).trim(), listing: await this.git(metadata.repositoryRoot!, ['worktree', 'list', '--porcelain', '-z']) } : undefined
     const { worktree: inspected, identity } = await this.inspectWithin(metadata, identityInLane, observed)
     const path = inspected.path!
-    const [listing, index, untrackedListing] = await Promise.all([
+    const [listing, untrackedListing] = await Promise.all([
       this.git(path, ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z']),
-      this.git(path, ['ls-files', '--stage', '-z']),
       this.git(path, ['ls-files', '--others', '--exclude-standard', '-z']),
     ])
     const ignored = listing.split('\0').filter(entry => entry && !DEPENDENCY_FOLDER.test(entry)).sort()
-    const gitlinks = new Set(index.split('\0').filter(entry => entry.startsWith('160000 ')).map(entry => entry.slice(entry.indexOf('\t') + 1)))
+
     const items: Array<{ path: string; bytes: number; fileCount: number }> = []
     const repositories: Array<{ path: string; changeCount: number; kind: 'worktree' | 'repository' }> = []
     const submodules: string[] = []
     const canonicalRoot = await realpath(path)
     let outsideLink: string | undefined
-    const visit = async (directory: string, row?: { path: string; bytes: number; fileCount: number }): Promise<void> => {
+    const visit = async (directory: string, row?: { path: string; bytes: number; fileCount: number }, gitMetadata = false, indexRoot = path): Promise<void> => {
       const handle = await opendir(directory)
       for await (const entry of handle) {
         if (directory === path && entry.name === '.git') continue
@@ -468,21 +467,27 @@ export class ThreadWorktrees {
         if (info.isDirectory() && !info.isSymbolicLink()) {
           // Dependencies need link inspection but never become rows. A gitlink belongs to the parent index.
           const gitMarker = await lstat(join(full, '.git')).catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return undefined; throw error })
-          if (gitMarker) {
-            const status = await this.git(full, ['status', '--porcelain', '--untracked-files=all', '-z'])
-            const ignoredModule = gitlinks.has(local) ? (await this.git(full, ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z'])).split('\0').filter(item => item && !DEPENDENCY_FOLDER.test(item)) : []
-            if (gitlinks.has(local)) submodules.push(local)
-            if (!gitlinks.has(local) || status.length || ignoredModule.length) {
+          const bareCandidate = !gitMarker && entry.name !== '.git' && !gitMetadata && await lstat(join(full, 'HEAD')).then(info => info.isFile(), () => false) && await lstat(join(full, 'objects')).then(info => info.isDirectory(), () => false)
+          const bare = bareCandidate && (await this.git(full, ['rev-parse', '--is-bare-repository'])).trim() === 'true'
+          let submodule = false
+          if (!gitMetadata && entry.name !== '.git' && (gitMarker || bare)) {
+            const indexedPath = relative(indexRoot, full).split(sep).join('/')
+            const indexEntry = await this.git(indexRoot, ['--literal-pathspecs', 'ls-files', '--stage', '-z', '--', indexedPath])
+            submodule = indexEntry.split('\0').some(record => record.startsWith('160000 ') && record.slice(record.indexOf('\t') + 1) === indexedPath)
+            const status = bare ? '' : await this.git(full, ['status', '--porcelain', '--untracked-files=all', '-z'])
+            const ignoredModule = submodule ? (await this.git(full, ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z'])).split('\0').filter(item => item && !DEPENDENCY_FOLDER.test(item)) : []
+            if (submodule) submodules.push(local)
+            if (!submodule || status.length || ignoredModule.length) {
               const records = status.split('\0').filter(Boolean)
               // Porcelain -z gives a second path for renames, not a second change.
               let changeCount = 0
               for (let i = 0; i < records.length; i++) { changeCount++; if (/^[RC]|^.[RC]/u.test(records[i]!)) i++ }
               const repositoryPath = local + '/'
-              repositories.push({ path: repositoryPath, changeCount, kind: gitMarker.isFile() ? 'worktree' : 'repository' })
+              repositories.push({ path: repositoryPath, changeCount, kind: gitMarker?.isFile() ? 'worktree' : 'repository' })
               if (!ignored.includes(repositoryPath)) { ignored.push(repositoryPath); items.push({ path: repositoryPath, bytes: 0, fileCount: 0 }) }
             }
           }
-          await visit(full, entry.name === 'node_modules' ? undefined : summary)
+          await visit(full, entry.name === 'node_modules' ? undefined : summary, gitMetadata || entry.name === '.git' || bare, gitMarker && !gitMetadata && entry.name !== '.git' ? full : indexRoot)
         } else if (summary) { summary.bytes += info.size; summary.fileCount++ }
       }
     }
@@ -521,6 +526,15 @@ export class ThreadWorktrees {
         JSON.stringify(latest.ignored) !== JSON.stringify(facts.ignored) ||
         JSON.stringify(latest.untracked) !== JSON.stringify(facts.untracked) ||
         JSON.stringify(latest.repositories) !== JSON.stringify(facts.repositories)) throw new Error('The files changed. Nothing was removed. Choose Remove worktree again to review them.')
+      const [ignoredNow, untrackedNow, statusNow] = await Promise.all([
+        this.git(facts.path, ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z']),
+        this.git(facts.path, ['ls-files', '--others', '--exclude-standard', '-z']),
+        this.git(facts.path, ['status', '--porcelain', '--untracked-files=normal', '--ignore-submodules=none']),
+      ])
+      const ignoredRows = [...new Set([...ignoredNow.split('\0').filter(item => item && !DEPENDENCY_FOLDER.test(item)), ...latest.repositories.map(item => item.path)])].sort()
+      if (JSON.stringify(ignoredRows) !== JSON.stringify(facts.ignored) ||
+        JSON.stringify(untrackedNow.split('\0').filter(Boolean).sort()) !== JSON.stringify(facts.untracked) ||
+        Boolean(statusNow.length) !== facts.dirty) throw new Error('The files changed. Nothing was removed. Choose Remove worktree again to review them.')
       // Git's ordinary clean check refuses initialized submodules. Our final check covered their contents.
       return this.git(metadata.repositoryRoot!, ['worktree', 'remove', ...(facts.dirty || facts.repositories.length || submodules.length ? ['--force'] : []), '--', facts.path])
     })

@@ -61,7 +61,7 @@ describe('independent working-copy allocation', () => {
     calls.length = 0
     expect((await service.reclaim(restored)).reclaimedAt).toBeDefined()
     // Reclaim adds bounded listings and repeats the ownership/content check before removal.
-    expect(calls).toHaveLength(16)
+    expect(calls).toHaveLength(17)
   })
 
   it('checks the original repository independently before reading a discovered checkout status', async () => {
@@ -594,32 +594,56 @@ describe('independent working-copy allocation', () => {
     await writeFile(join(a.path!, 'dist', 'two.js'), 'more cache')
     expect((await f.service.reclaim(a, { confirmedIgnored: facts.ignored })).reclaimedAt).toBeTruthy()
   })
-  it.each(['ignored', 'untracked'])('refuses a new %s path discovered in the final check', async kind => {
+  it.each(['ignored', 'untracked'])('refuses a new %s path added during the final filesystem walk', async kind => {
     const f = await fixture(); const a = await f.service.ensure(await f.service.allocate(f.project, 'independent'))
-    await writeFile(join(a.path!, '.gitignore'), '*.env\n')
+    await writeFile(join(a.path!, '.gitignore'), '*.env\n.cache/\n')
     await git(a.path!, ['add', '.gitignore'])
     await git(a.path!, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'Ignore secrets'])
+    const nested = join(a.path!, '.cache', 'nested'); await mkdir(nested, { recursive: true }); await git(nested, ['init'])
+    const preview = await f.service.reclaimFacts(a)
     let reads = 0
     const service = new ThreadWorktrees(f.root, async (cwd, args) => {
-      if (args.includes('--ignored') && ++reads === 2) await writeFile(join(a.path!, kind === 'ignored' ? 'new.env' : 'unsaved.txt'), 'keep me')
+      // Both early ls-files calls have completed by the time the walk enters this repository.
+      if (cwd === nested && args[0] === 'status' && ++reads === 2) await writeFile(join(a.path!, kind === 'ignored' ? 'new.env' : 'unsaved.txt'), 'keep me')
       return git(cwd, args)
     })
-    await expect(service.reclaim(a, { confirmedIgnored: [] })).rejects.toThrow('files changed')
+    await expect(service.reclaim(a, { confirmedIgnored: preview.ignored, confirmedRepositories: preview.repositories })).rejects.toThrow('files changed')
     expect(await readFile(join(a.path!, kind === 'ignored' ? 'new.env' : 'unsaved.txt'), 'utf8')).toBe('keep me')
   })
-  it('does not flag a clean initialized submodule as a nested worktree and allows automatic removal', async () => {
+  it.each([false, true])('allows automatic removal of clean initialized submodules (recursive: %s)', async recursive => {
     const f = await fixture()
     const module = join(f.root, 'module'); await mkdir(module)
     await git(module, ['init'])
     await writeFile(join(module, 'module.txt'), 'committed')
     await git(module, ['add', '.'])
     await git(module, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'Module'])
+    if (recursive) {
+      const childModule = join(f.root, 'child-module'); await mkdir(childModule)
+      await git(childModule, ['init'])
+      await writeFile(join(childModule, 'child.txt'), 'committed child')
+      await git(childModule, ['add', '.'])
+      await git(childModule, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'Child'])
+      await git(module, ['-c', 'protocol.file.allow=always', 'submodule', 'add', childModule, 'child'])
+      await git(module, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-am', 'Add child module'])
+    }
     await git(f.project, ['-c', 'protocol.file.allow=always', 'submodule', 'add', module, 'module'])
     await git(f.project, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-am', 'Add submodule'])
     const a = await f.service.ensure(await f.service.allocate(f.project, 'independent'))
-    await git(a.path!, ['-c', 'protocol.file.allow=always', 'submodule', 'update', '--init'])
+    await git(a.path!, ['-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', '--recursive'])
     expect((await f.service.reclaimFacts(a)).repositories).toEqual([])
     expect((await f.service.reclaim(a, { automatic: true })).reclaimedAt).toBeTruthy()
+  })
+  it('lists a bare repository hidden inside dependencies and requires the tick', async () => {
+    const f = await fixture(); const a = await f.service.ensure(await f.service.allocate(f.project, 'independent'))
+    await writeFile(join(a.path!, '.gitignore'), 'node_modules/\n')
+    await git(a.path!, ['add', '.gitignore'])
+    await git(a.path!, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'Ignore dependencies'])
+    const nested = join(a.path!, 'node_modules', 'local.git'); await mkdir(nested, { recursive: true })
+    await git(nested, ['init', '--bare'])
+    const facts = await f.service.reclaimFacts(a)
+    expect(facts.repositories).toEqual([{ path: 'node_modules/local.git/', changeCount: 0, kind: 'repository' }])
+    await expect(f.service.reclaim(a, { automatic: true })).rejects.toThrow('besides installed dependencies')
+    expect((await f.service.reclaim(a, { confirmedIgnored: facts.ignored, confirmedRepositories: facts.repositories })).reclaimedAt).toBeTruthy()
   })
   it('resolves authoritative cwd before project fallback and blocks unresolved setup', () => {
     expect(resolveThreadWorkingDirectory({ workingDirectory: '/actual' }, { path: '/project' })).toBe('/actual')

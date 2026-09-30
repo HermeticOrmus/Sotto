@@ -220,6 +220,10 @@ export async function startSocketServer(options: SocketServerOptions) {
     const refusal = remoteCommandRefusal(input, { mayAnswer: options.mayAnswer?.(peer.client) ?? false, askingProviderModes: askingProviderModes(input),
       clientUpdates: options.clientUpdates === true })
     if (refusal) throw new Refusal(refusal)
+    if (input.type === 'preview-reclaim-thread-worktree') {
+      const result = await service.command(input, peer.client)
+      return { ...shell(peer), error: result.error, ...(result.worktreeReclaimPreview ? { worktreeReclaimPreview: result.worktreeReclaimPreview } : {}) }
+    }
     const recorded = !UNRECEIPTED.has(input.type)
     if (recorded) makeRoomForReceipt()
     if (input.type === 'answer') {
