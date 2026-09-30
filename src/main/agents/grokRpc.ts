@@ -5,7 +5,7 @@ import { z } from 'zod'
 import { findCli, withCliPath, type CliLookupOptions } from './cliLookup'
 
 /**
- * Grok Build's floor: the oldest client Sotto connects (ADR-0021), and what a host's tile says an update needs
+ * Grok Build's floor: the oldest client Sotto connects (ADR-0042), and what a host's tile says an update needs
  * (ADR-0035). The reason: the adapter reads the ACP 1 shapes 1.0.5 was checked against (docs/research/
  * 2026-09-11-issue-23-grok-acp-verification.md): `initialize._meta.agentVersion` and `_meta.modelState` for the
  * model catalog, `cached_token` sign-in without an API key, and `session/load` for resuming a thread. An older
@@ -21,7 +21,7 @@ export class GrokUncertain extends Error {}
 export class GrokUnreadable extends GrokUncertain {}
 /** A client Sotto will not drive: an older CLI, another protocol version, or no subscription sign-in. */
 export class GrokUnsupported extends Error {}
-/** A client older than the version Sotto checked (ADR-0021), carrying the version it reported. */
+/** A client older than the version Sotto checked (ADR-0042), carrying the version it reported. */
 export class GrokTooOld extends GrokUnsupported { constructor(message: string, readonly version: string) { super(message) } }
 /** A client that offers no cached sign-in: Grok Build is not signed in on this machine. */
 export class GrokSignedOut extends GrokUnsupported {}

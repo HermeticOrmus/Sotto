@@ -89,9 +89,11 @@ const savedSchema = z.object({
   })),
 })
 type Saved = z.infer<typeof savedSchema>
+const MAX_SEEN_MESSAGE_IDS = 2000
 /** A write handed to the store: the state it carries, serialized and by outbox, and its landing. */
 type QueuedWrite = { serialized: string; outbox: Saved['outbox']; written: Promise<void> }
 class SupersededSupervision extends Error {}
+class RefusedInterrupt extends Error {}
 const PRIVACY_CLEANUP_ERROR = 'Could not finish applying history privacy. Sotto will retry when local storage is available.'
 /** The 30-second upkeep of previews and staged images failed: nothing anyone still needs was touched. */
 const ATTACHMENT_UPKEEP_ERROR = 'Could not remove screenshots Sotto no longer needs. Nothing was lost. Check access to local storage.'
@@ -213,6 +215,7 @@ export class AgentControl {
   private readonly providerReconnect = new Map<ProviderId, ReturnType<typeof setTimeout>>()
   private retirementFailure: string | null = null
   private disposed = false
+  private readonly earlierMessageBoundaries = new Map<string, string | undefined>()
   /** Requests Sotto owns, merged into their threads (ADR-0035); absent until main gives the coordinator some. */
   private sottoRequests: SottoThreadRequests | undefined
   private unsubscribeSottoRequests: (() => void) | undefined
@@ -291,7 +294,7 @@ export class AgentControl {
     locateClient?: (provider: ProviderId) => Promise<string | undefined>
     /**
      * Anything else in this process running a client, told once an install has put a new one on disk so it
-     * moves its processes to it as they go idle (ADR-0021). Personal chats hold their own copy of each client.
+     * moves its processes to it as they go idle (ADR-0042). Personal chats hold their own copy of each client.
      */
     clientUpdated?: (provider: ProviderId) => Promise<void>
     /** The sentence a send is refused with when an image it names is no longer kept; a headless host names itself. */
@@ -357,6 +360,7 @@ export class AgentControl {
     const cutoff = Date.now() - 7 * 86_400_000
     const historyDisabled = this.dependencies.historyEnabled?.() === false
     for (const assignment of this.state.assignments) {
+      assignment.seenMessageIds = assignment.seenMessageIds.slice(-MAX_SEEN_MESSAGE_IDS)
       if (assignment.contextUpdatedAt < cutoff || historyDisabled) {
         if (assignment.instruction) assignment.paused = true
         assignment.instruction = ''
@@ -1055,7 +1059,7 @@ export class AgentControl {
     await done
   }
   /**
-   * Replace one client while everything keeps running, the way T3 Code does (ADR-0021). The installer puts the
+   * Replace one client while everything keeps running, the way T3 Code does (ADR-0042). The installer puts the
    * new client beside the one in use: Windows lets a running executable's folder be renamed, and every channel
    * Sotto drives does that or replaces the file for itself. Nothing disconnects and no turn is stopped. After a
    * good install each host is told, and moves each thread to the new client as it goes idle; a failed install
@@ -1109,7 +1113,7 @@ export class AgentControl {
         throw new Error(`The installer finished, but ${label} still reports ${record.installed}. Nothing was lost and your threads kept working. ${record.command ? `Run ${record.command} in a terminal to see what the installer says.` : `Check how ${label} was installed, then try again.`}`)
       }
       // Threads still working finish on the client they have and move over when idle; that is true without
-      // being said, so the notice says only what changed (the user's pick, ADR-0021).
+      // being said, so the notice says only what changed (the user's pick, ADR-0042).
       this.say(`${label} updated.`)
     } finally { this.updatingClient = null }
   }
@@ -1770,16 +1774,39 @@ export class AgentControl {
     const turn = this.beginTurn({ source: 'command', commandType: 'interrupt', text: '', threadId: command.threadId,
       projectId: this.state.host.threads.find(thread => thread.id === command.threadId)?.projectId ?? null })
     let failure: string | undefined
+    const assignment = this.state.assignments.find(item => item.threadId === command.threadId)
+    const wasPaused = assignment?.paused
     // Stopping a turn waits for nothing, not even that thread's own lane, but the thread is working on it.
     const release = this.mark(this.busyThreads, command.threadId)
     try {
       this.state.error = null
       this.publish()
-      await this.followupStore.pause(command.threadId, 'The turn was interrupted. Review the thread and resume queued follow-ups when ready.')
+      this.validateInterrupt(command.threadId)
+      if (assignment) assignment.paused = true
+      let pauseFailure: string | undefined
+      try { await this.followupStore.pause(command.threadId, 'The turn was interrupted. Review the thread and resume queued follow-ups when ready.') }
+      catch { pauseFailure = 'Stop was sent, but the queue pause could not be saved. Your queued messages are still saved. Check them before sending another message.' }
       this.syncFollowups(); await this.execute(command, turn); await this.persist()
-    } catch (error) { failure = error instanceof Error ? error.message : 'Could not interrupt this thread.'; this.state.error = failure }
+      if (pauseFailure) this.state.error = pauseFailure
+    } catch (error) {
+      failure = error instanceof Error ? error.message : 'Could not interrupt this thread.'
+      if (error instanceof RefusedInterrupt && assignment && wasPaused !== undefined && assignment.paused !== wasPaused) {
+        assignment.paused = wasPaused
+        try { await this.persist() }
+        catch { failure = 'Stop was refused, and the previous management state could not be saved. Refresh before resuming management.' }
+      }
+      this.state.error = failure
+    }
     release()
     this.publish(); await this.finishTurn(turn, failure); return this.shell()
+  }
+  private validateInterrupt(threadId: string): void {
+    try {
+      this.canAct(undefined, false)
+      const thread = this.thread(threadId)
+      if (!capabilitiesForThread(this.state.host, thread).interrupt) throw new Error('This connection cannot stop agent work.')
+      if (isThreadClosed(thread)) throw new Error('This thread is settled or archived. There is no open work to stop.')
+    } catch (error) { throw new RefusedInterrupt(error instanceof Error ? error.message : 'Could not interrupt this thread.') }
   }
   private async steerFollowup(command: Extract<AgentCommand, { type: 'steer-followup' }>, turn?: ActiveTurn): Promise<void> {
     const queued = this.followupStore.get().items.find(item => item.threadId === command.threadId && item.id === command.itemId)
@@ -1985,7 +2012,7 @@ export class AgentControl {
         this.acceptSnapshot(await this.dependencies.host.snapshot(command.provider)); return
       case 'check-reasoning': await this.checkReasoning(command.provider); return
       case 'check-client-updates': await this.checkClientUpdates(true); return
-      // `force` is still accepted and means nothing: an update no longer stops a working thread (ADR-0021).
+      // `force` is still accepted and means nothing: an update no longer stops a working thread (ADR-0042).
       case 'update-client': await this.updateClient(command.provider); return
       case 'queue-client-updates': this.queueClientUpdates(command.providers); return
       case 'cancel-client-updates': this.cancelClientUpdates(command.providers); return
@@ -2031,7 +2058,7 @@ export class AgentControl {
         this.say(`Recovered draft ready in ${target.title}. Review it before sending.`)
         return
       }
-      case 'send': await this.sendDraft(turn, manualRetryId, selectionRevision); return
+      case 'send': await this.sendDraft(turn, manualRetryId, selectionRevision, client); return
       case 'manual-send': await this.sendManual(command.threadId, command.text, turn, manualRetryId, command.attachments, command.draftId, command.skills, command.files); return
       case 'steer-followup': await this.steerFollowup(command, turn); return
       case 'steer': await this.steer(command, turn); return
@@ -2098,7 +2125,9 @@ export class AgentControl {
         this.observe(); return
       case 'load-earlier-messages': {
         if (!this.dependencies.host.loadEarlierMessages) throw new Error('Earlier messages could not be read. Nothing was lost; refresh and open the thread again.')
-        this.acceptSnapshot(await this.dependencies.host.loadEarlierMessages(command.threadId))
+        this.earlierMessageBoundaries.set(command.threadId, this.thread(command.threadId).messages.at(-1)?.id)
+        try { this.acceptSnapshot(await this.dependencies.host.loadEarlierMessages(command.threadId)) }
+        finally { this.earlierMessageBoundaries.delete(command.threadId) }
         return
       }
       case 'retry-thread-worktree':
@@ -2250,11 +2279,7 @@ export class AgentControl {
       }
       case 'pause': this.assignment(command.threadId).paused = true; this.say(`Paused management of ${this.thread(command.threadId).title}. Provider work continues.`); return
       case 'interrupt': {
-        const validate = (): void => {
-          this.canAct(undefined, false)
-          if (!capabilitiesForThread(this.state.host, this.thread(command.threadId)).interrupt) throw new Error('This connection cannot stop agent work.')
-          if (isThreadClosed(this.thread(command.threadId))) throw new Error('This thread is settled or archived. There is no open work to stop.')
-        }
+        const validate = (): void => this.validateInterrupt(command.threadId)
         validate()
         const assignment = this.state.assignments.find(item => item.threadId === command.threadId)
         if (assignment) assignment.paused = true
@@ -2325,7 +2350,7 @@ export class AgentControl {
     this.state.assignments.push({ threadId, mode: 'managed', instruction, followups: 0, paused: false,
       startedAt: new Date().toISOString(), origin: 'unknown', stopReason: 'none', stoppedAt: '',
       contextUpdatedAt: Date.now(),
-      seenMessageIds: thread.messages.map(m => m.id), ownMessageIds: [], handledRequestIds: [], lastFailure: '' })
+      seenMessageIds: thread.messages.slice(-MAX_SEEN_MESSAGE_IDS).map(m => m.id), ownMessageIds: [], handledRequestIds: [], lastFailure: '' })
     if (selectionRevision === this.selectionRevision) {
       this.state.activeThreadId = threadId; this.state.activeProjectId = thread.projectId
       this.restoreManagedDraft(threadId)
@@ -2519,6 +2544,10 @@ export class AgentControl {
       return
     }
     if (prompt && draftId) this.setDelivery(prompt.threadId, draftId, result.accepted || result.uncertain ? 'uncertain' : 'failed')
+    if (command.type === 'answer' && (result.accepted || result.uncertain)) {
+      // The user gave this answer whether or not the provider confirmed taking it, so who gave it is recorded either way.
+      this.recordAnswerAttribution(command, client)
+    }
     // An adapter that knows more about what an unconfirmed action cost says it; the intent is kept either way.
     if (result.uncertain && this.outbox.some(o => o.id === command.commandId)) throw new Error(result.error ?? PROVIDER_RESULT_UNCONFIRMED)
     if ((command.type === 'configure-thread' || prompt) && result.accepted) {
@@ -2538,8 +2567,6 @@ export class AgentControl {
     }
     if (command.type === 'answer' && result.accepted) {
       if (!result.uncertain && answerIntent) this.recordAnsweredRequest(answerIntent)
-      // The user gave this answer whether or not the provider confirmed taking it, so who gave it is recorded either way.
-      this.recordAnswerAttribution(command, client)
     }
     this.outbox = this.outbox.filter(o => o.id !== command.commandId)
     await this.persist()
@@ -2610,7 +2637,7 @@ export class AgentControl {
     this.say(`Sent to ${thread.title}.`)
     this.observe()
   }
-  private async sendDraft(turn?: ActiveTurn, retryId?: string, selectionRevision = this.selectionRevision): Promise<void> {
+  private async sendDraft(turn?: ActiveTurn, retryId?: string, selectionRevision = this.selectionRevision, client = this.localClient): Promise<void> {
     const pendingId = retryId ?? this.outbox.find(item => item.threadId === this.state.draftThreadId)?.id
     if (pendingId) {
       this.canAct()
@@ -2640,7 +2667,7 @@ export class AgentControl {
       if (attachments.length) throw new Error('Images cannot answer a pending question. Remove the images and answer it explicitly.')
       const requestId = this.state.draftRequestId
       if (!thread.requests.some(request => request.id === requestId && request.kind === 'question')) throw new Error('This question is no longer pending. Your answer is saved; review it before starting a new prompt.')
-      await this.execute({ type: 'answer', threadId: thread.id, requestId, answer: text }, turn, undefined, selectionRevision)
+      await this.execute({ type: 'answer', threadId: thread.id, requestId, answer: text }, turn, undefined, selectionRevision, client)
       return
     }
     if (thread.requests.length) throw new Error('Answer the pending question or permission explicitly before sending a new prompt.')
@@ -2800,6 +2827,7 @@ export class AgentControl {
     // Sotto's own requests join the provider's before anything below reads the threads, so the attention queue
     // takes and keeps them the same way (ADR-0035).
     const snapshot = this.withSottoRequests(incoming)
+    const previousThreads = new Map(this.state.host.threads.map(thread => [thread.id, thread]))
     this.state.host = snapshot
     this.scheduleProviderReconnects()
     if (this.state.activeProjectId) this.state.activeProjectId = this.dependencies.host.resolveProjectId?.(this.state.activeProjectId) ?? this.state.activeProjectId
@@ -2863,7 +2891,13 @@ export class AgentControl {
     for (const assignment of this.state.assignments) {
       const thread = snapshot.threads.find(t => t.id === assignment.threadId)
       if (!thread || isThreadClosed(thread) || !isThreadProviderConnected(snapshot, thread)) continue
-      const fresh = thread.messages.filter(m => !assignment.seenMessageIds.includes(m.id))
+      const previousMessages = previousThreads.get(thread.id)?.messages ?? []
+      const restoredBoundary = previousMessages.length === 0 ? assignment.seenMessageIds.at(-1) : undefined
+      const boundary = this.earlierMessageBoundaries.get(thread.id)
+        ?? (restoredBoundary && thread.messages.some(message => message.id === restoredBoundary) ? restoredBoundary : undefined)
+      const seenMessageIds = new Set([...assignment.seenMessageIds, ...previousMessages.map(message => message.id)])
+      const fresh = thread.messages.slice(boundary ? thread.messages.findIndex(message => message.id === boundary) + 1 : 0)
+        .filter(m => !seenMessageIds.has(m.id))
       if (fresh.length) assignment.contextUpdatedAt = Date.now()
       if (assignment.contextUpdatedAt < Date.now() - 7 * 86_400_000 && assignment.instruction) {
         assignment.instruction = ''; assignment.paused = true
@@ -2877,7 +2911,8 @@ export class AgentControl {
         assignment.mode = 'manual'
         this.state.queue = this.state.queue.filter(q => q.threadId !== thread.id || q.kind === 'question' || q.kind === 'permission')
       }
-      assignment.seenMessageIds = [...new Set([...assignment.seenMessageIds, ...thread.messages.map(m => m.id)])].slice(-2000)
+      const currentMessageIds = new Set(thread.messages.map(message => message.id))
+      assignment.seenMessageIds = [...assignment.seenMessageIds.filter(id => !currentMessageIds.has(id)), ...currentMessageIds].slice(-MAX_SEEN_MESSAGE_IDS)
       assignment.ownMessageIds = assignment.ownMessageIds.slice(-1000)
       assignment.handledRequestIds = assignment.handledRequestIds.slice(-1000)
       for (const request of thread.requests) {
@@ -2908,7 +2943,10 @@ export class AgentControl {
     this.pumpFollowups()
     this.generateTitles()
     if (!announcedManualControl) this.presentQueue(false)
-    void this.persist().catch(() => { this.state.assignments.forEach(a => { a.paused = true }); this.state.error = 'Agent state could not be saved. Management paused.'; this.publish() })
+    void this.persist().catch(() => {
+      if (this.disposed) return
+      this.state.assignments.forEach(a => { a.paused = true }); this.state.error = 'Agent state could not be saved. Management paused.'; this.publish()
+    })
     this.publish()
   }
   private enqueue(thread: AgentThread, kind: AgentQueueItem['kind'], text: string, requestId?: string): void {
@@ -3011,12 +3049,14 @@ export class AgentControl {
       }
     } catch (error) {
       if (error instanceof SupersededSupervision) { failure = error.message; return }
+      if (this.disposed) return
       assignment.paused = true
       assignment.stopReason = 'error'; assignment.stoppedAt = new Date().toISOString()
       failure = error instanceof Error ? error.message : 'Sotto needs your attention to continue.'
       this.enqueue(thread, 'blocked', failure)
     } finally {
       await this.persist().catch(error => {
+        if (this.disposed) return
         assignment.paused = true
         if (assignment.stopReason === 'none') {
           assignment.stopReason = 'error'; assignment.stoppedAt = new Date().toISOString()
