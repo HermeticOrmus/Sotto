@@ -41,6 +41,24 @@ describe('Devin dispatch and decision boundaries', () => {
     expect(await readFile(join(f.root, 'devin-threads.json'), 'utf8')).not.toContain('Identical synthetic prompt')
   })
 
+  it('receives multi-megabyte output live and reopens the same thread through native replay', async () => {
+    const reply = 'x'.repeat(4 * 1024 * 1024)
+    await send()
+    const native = await f.realId(threadId)
+    await f.driver.completeTurn(threadId, reply)
+    await expect.poll(async () => (await thread()).status).toBe('idle')
+    expect((await thread()).messages.find(message => message.role === 'assistant')?.text === reply).toBe(true)
+    // The next fixture process must replay saved history, not repeat the completion command.
+    await rm(join(f.root, `control-${native}.json`))
+
+    f = await f.driver.restart(); f.host.observeThreads([threadId]); await f.host.connect()
+    await f.host.refreshThread(threadId)
+    expect((await thread()).status).toBe('idle')
+    expect((await thread()).messages.find(message => message.role === 'assistant')?.text === reply).toBe(true)
+    expect(await f.realId(threadId)).toBe(native)
+    expect((await f.driver.requests()).filter(record => record.method === 'session/prompt')).toHaveLength(1)
+  })
+
   it('rejects duplicate permission answers without sending another native decision', async () => {
     await send(); await f.driver.raisePermission(threadId, 'Run synthetic check?')
     await expect.poll(async () => (await thread()).requests.length).toBe(1)
