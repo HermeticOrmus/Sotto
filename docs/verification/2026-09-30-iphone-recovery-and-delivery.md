@@ -97,6 +97,13 @@ no-resend assertions rather than sleeping. The captures below show the feedback 
 before that later merge; main's new-thread design evidence is recorded separately
 in [its verification note](2026-09-30-iphone-new-threads.md).
 
+Main moved once more to `1f9a5597` while the replacement checks ran. Its coordinator
+recovery and secure-settings fixes were merged; the only conflict joined adjacent
+socket regression groups. Both groups remain, and all 166 focused coordinator and
+socket tests passed, including answer refusal and uncertainty after disappearance.
+Both independent reviewers cleared the integration. No iPhone source changed in
+this later merge.
+
 These four inspected captures are retained:
 
 - [Neutral request message, small phone in dark](../../artifacts/review-iphone-feedback/request-gone-small-dark.png).
