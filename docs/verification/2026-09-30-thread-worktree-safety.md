@@ -42,7 +42,7 @@ Existing recovery regressions cover complete/partial initialization, missing and
 
 Separate read-only `gpt-6.1-sol` reviews at high reasoning checked Standards and Spec. They found remote preview reply loss/cache propagation, final-list timing, recursive submodules, stop-failure handling and inconsistent submodule visibility. All findings were fixed and rechecked. The parent inspected the integrated diff and rendered captures.
 
-Final committed source: `cc52060b`.
+Full-suite worktree fixes: `cc52060b`.
 
 - `npm run typecheck`: passed.
 - `npm run lint`: passed.
@@ -54,3 +54,5 @@ Final committed source: `cc52060b`.
 `origin/main` at `ff2c8c9e` was merged without conflicts before these final checks.
 
 The earlier full run overlapped review edits and failed four new cases: prompt refusal after failed taskkill, setup/restore registry coordination, clean recursive submodule removal and a bare repository inside dependency content. Those cases passed on corrected, committed source before the fresh final full run. The initial run also reported an after-test cleanup error for the taskkill fixture. No deadline was shortened and no assertion was skipped to pass the gates.
+
+After the first Windows CI pass, `origin/main` advanced to `475e6da2` with a socket-frame fix. It was merged without conflicts. The affected socket-frame, authenticated socket-host, workspace-control and desktop-router regressions passed all 77 tests; typecheck, lint and notices were rerun after the merge. The removal UI and its six captures are unchanged by that transport-only merge.
