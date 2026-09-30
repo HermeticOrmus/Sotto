@@ -461,7 +461,7 @@ export function SettingsView({
                         {microphoneState === 'requesting' ? 'Waiting for microphone permission...' : null}
                         {microphoneState === 'idle' ? (settings.microphoneSkipped ? 'No microphone is set up. Run this test to set one up.' : 'Run a quick input-level test.') : null}
                         {microphoneState === 'denied' ? copy.settingsMicrophoneUnavailable : null}
-                        {microphoneState === 'missing' ? 'No microphone was found.' : null}
+                        {microphoneState === 'missing' ? settings.microphoneId !== null && microphones.length > 0 ? 'The chosen microphone is not connected. Plug it in or choose another.' : 'No microphone was found.' : null}
                         {microphoneState === 'error' ? 'The microphone test could not start.' : null}
                       </p>
                       <Button
