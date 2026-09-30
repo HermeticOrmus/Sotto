@@ -81,6 +81,21 @@ describe('HistoryRepository', () => {
     )
   })
 
+  it.runIf(process.platform === 'win32').each(['unlink', 'readdir'] as const)(
+    'retries a transient Windows %s lock and cleans the abandoned file', async operation => {
+      const { filePath, repository } = await createRepository()
+      const temporary = `${filePath}.tmp-123-12345678-1234-1234-1234-123456789abc`
+      await writeFile(temporary, 'abandoned transcript')
+      const log = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+      const locked = Object.assign(new Error('private lock details'), { code: 'EBUSY' })
+      if (operation === 'unlink') vi.mocked(unlink).mockRejectedValueOnce(locked)
+      else vi.mocked(readdir).mockRejectedValueOnce(locked)
+      await expect(repository.initialize()).resolves.toBeUndefined()
+      expect(await nativeFs.readdir(dirname(filePath))).toEqual([])
+      expect(log).not.toHaveBeenCalled()
+    },
+  )
+
   it('continues startup when the history directory cannot be swept', async () => {
     const { filePath, repository } = await createRepository()
     const saved = createEntry('saved', 1)

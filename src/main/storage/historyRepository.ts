@@ -1,6 +1,5 @@
 import { readdir, unlink } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
-import { setTimeout as delay } from 'node:timers/promises'
 
 import { z } from 'zod'
 
@@ -9,7 +8,8 @@ import {
   parseHistoryEntry,
   type HistoryEntry,
 } from '../../shared/history'
-import { AtomicJsonStore, WINDOWS_FILE_RETRY_DELAYS_MS } from './atomicJsonStore'
+import { AtomicJsonStore } from './atomicJsonStore'
+import { retryWindowsFileOperation } from './windowsFileRetry'
 import type { RecoveryNotice } from '../../shared/recoveryNotice'
 
 const historySchema = z.array(historyEntrySchema)
@@ -169,7 +169,7 @@ export class HistoryRepository {
     let siblingNames: string[]
 
     try {
-      siblingNames = await readdir(directory)
+      siblingNames = await retryWindowsFileOperation(() => readdir(directory))
     } catch (error) {
       if (hasErrorCode(error, 'ENOENT')) {
         return
@@ -186,7 +186,7 @@ export class HistoryRepository {
           || (includeRecovery && name.startsWith(recoveryPrefix)))
         .map(async (name) => {
           try {
-            await this.removeSibling(join(directory, name))
+            await retryWindowsFileOperation(() => unlink(join(directory, name)))
           } catch (error) {
             if (!hasErrorCode(error, 'ENOENT')) {
               if (includeRecovery) throw error
@@ -195,20 +195,6 @@ export class HistoryRepository {
           }
         }),
     )
-  }
-
-  private async removeSibling(path: string): Promise<void> {
-    for (let attempt = 0; ; attempt += 1) {
-      try {
-        await unlink(path)
-        return
-      } catch (error) {
-        const retryDelay = WINDOWS_FILE_RETRY_DELAYS_MS[attempt]
-        if (process.platform !== 'win32' || retryDelay === undefined
-          || (!hasErrorCode(error, 'EPERM') && !hasErrorCode(error, 'EBUSY'))) throw error
-        await delay(retryDelay)
-      }
-    }
   }
 
   private enqueueMutation<Result>(mutation: () => Promise<Result>): Promise<Result> {
