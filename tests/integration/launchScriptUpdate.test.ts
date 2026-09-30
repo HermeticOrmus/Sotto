@@ -135,8 +135,7 @@ it('restarts from one installed version to the next and keeps only the running o
     expect(last(await run(configuration, { op: 'update-fetch', version, releasesUrl: page.url }))).toMatchObject({ type: 'update-fetched' })
     expect(last(await run(configuration, { op: 'update-install', version, file, sha256: sha256(archive) }))).toMatchObject({ type: 'update-installed' })
     const ready = last(await run(configuration, { op: 'update-restart', hostId: HOST_ID, version }))
-    expect(ready, JSON.stringify({ type: ready.type, reason: ready.reason, cause: ready.cause, restarted: ready.restarted }))
-      .toMatchObject({ type: 'ready', owned: true })
+    expect(ready).toMatchObject({ type: 'ready', owned: true })
     hosts.push(ready.pid as number)
   }
   expect((await readdir(join(configuration.installPath, 'versions'))).filter(name => /^\d/u.test(name)).sort()).toEqual(['9.9.8', NEW])
