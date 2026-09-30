@@ -85,7 +85,7 @@ final class NewThreadsTests: XCTestCase {
         let missing = try JSONDecoder().decode(FolderResult.self, from: Data(#"{"status":"missing","path":"/gone"}"#.utf8))
         guard case .missing = missing else { return XCTFail("Wrong folder status") }
         XCTAssertThrowsError(try JSONDecoder().decode(FolderResult.self, from: Data(#"{"status":"future"}"#.utf8)))
-        let drives = try JSONDecoder().decode(FolderResult.self, from: Data(#"{"status":"listed","path":null,"home":"C:\\Users\\Zach","separator":"\\","crumbs":[{"name":"Drives","path":null}],"folders":[{"name":"D:","path":"D:\\","git":false}],"truncated":false}"#.utf8)))
+        let drives = try JSONDecoder().decode(FolderResult.self, from: Data(#"{"status":"listed","path":null,"home":"C:\\Users\\Zach","separator":"\\","crumbs":[{"name":"Drives","path":null}],"folders":[{"name":"D:","path":"D:\\","git":false}],"truncated":false}"#.utf8))
         guard case .listed(let value) = drives else { return XCTFail("Missing drive listing") }
         XCTAssertNil(value.path); XCTAssertEqual(value.folders.first?.path, #"D:\"#)
     }
