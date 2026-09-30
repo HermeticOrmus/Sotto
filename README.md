@@ -36,7 +36,7 @@ Settings → Application sets the working-copy default for new threads. Expand *
 
 New threads open in Unsettled with the defaults saved in Settings → Agents. An existing empty thread is reused only while it is unsettled, its known model, effort and permission choices match those defaults, and no setting change is pending.
 
-In Settings, **Test microphone** checks the same input selected for dictation. **Stop test**, hiding the window, or leaving Dictation closes the microphone. Changing the input clears the previous test.
+In Settings, **Test microphone** checks the same input selected for dictation. **Stop test**, hiding the window, or leaving Dictation closes the microphone. Changing the input clears the previous test. A quiet test asks you to check that the microphone is not muted.
 
 The personal dictionary holds up to 4,000 characters. It saves when you leave the field or Settings.
 

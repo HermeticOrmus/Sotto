@@ -141,11 +141,30 @@ describe('SettingsView', () => {
     expect(document.querySelector('.settings-microphone-test')).toHaveAttribute('data-state', 'missing')
   })
 
+  it.each([0, 0.01, 0.02, 0.021, 0.7])('judges the peak input level on Stop and resets it for the next test (%s)', async peak => {
+    let publishLevel!: (level: number) => void
+    const stop = vi.fn(async () => undefined)
+    render(<SettingsView {...baseProps({ createMicrophoneTest: () => ({
+      start: vi.fn(async onLevel => { publishLevel = onLevel; return 'ready' as const }), stop,
+    }) })} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Test microphone' }))
+    await screen.findByRole('button', { name: 'Stop test' })
+    act(() => { publishLevel(peak); publishLevel(0) })
+    await userEvent.click(screen.getByRole('button', { name: 'Stop test' }))
+    expect(screen.getByText(peak > 0.02 ? 'Sotto heard you. The microphone is closed.' : 'Sotto did not hear anything. Check that the microphone is not muted.')).toBeVisible()
+    expect(stop).toHaveBeenCalledOnce()
+    await userEvent.click(screen.getByRole('button', { name: 'Test again' }))
+    await screen.findByRole('button', { name: 'Stop test' })
+    await userEvent.click(screen.getByRole('button', { name: 'Stop test' }))
+    expect(screen.getByText('Sotto did not hear anything. Check that the microphone is not muted.')).toBeVisible()
+    expect(stop).toHaveBeenCalledTimes(2)
+  })
+
   it('closes a listening microphone with the keyboard Stop test control', async () => {
     const user = userEvent.setup()
     const stop = vi.fn(async () => undefined)
     render(<SettingsView {...baseProps({ createMicrophoneTest: () => ({
-      start: vi.fn(async () => 'ready' as const), stop,
+      start: vi.fn(async onLevel => { onLevel(0.3); return 'ready' as const }), stop,
     }) })} />)
     await user.click(screen.getByRole('button', { name: 'Test microphone' }))
     const button = await screen.findByRole('button', { name: 'Stop test' })

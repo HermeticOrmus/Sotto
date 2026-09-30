@@ -72,6 +72,9 @@ export interface SettingsViewProps {
   readonly onInstallUpdate: () => Promise<boolean>
 }
 
+// VoiceWave reports a normalized 0..1 level. Ignore tiny background activity.
+const MICROPHONE_TEST_HEARD_THRESHOLD = 0.02
+
 const SETTINGS_SECTIONS = [
   { id: 'settings-capture', label: 'Dictation', icon: Mic },
   { id: 'settings-transcription', label: 'Transcription', icon: AudioLines },
@@ -148,6 +151,7 @@ export function SettingsView({
   const [microphones, setMicrophones] = useState<readonly MediaDeviceInfo[]>([])
   const [microphoneState, setMicrophoneState] = useState<MicrophoneTestState | 'closed'>('idle')
   const [microphoneLevel, setMicrophoneLevel] = useState(0)
+  const microphonePeakRef = useRef(0)
   const microphoneTestRef = useRef<MicrophoneTestController | null>(null)
   const microphoneTestGeneration = useRef(0)
   const [deviceState, setDeviceState] = useState<'loading' | 'ready' | 'error'>('loading')
@@ -216,6 +220,7 @@ export function SettingsView({
   // A result belongs to one input. A changed selection also invalidates pending permission.
   useEffect(() => {
     setMicrophoneState('idle')
+    microphonePeakRef.current = 0
     setMicrophoneLevel(0)
     return () => {
       ++microphoneTestGeneration.current
@@ -255,6 +260,7 @@ export function SettingsView({
     const previous = microphoneTestRef.current
     microphoneTestRef.current = null
     setMicrophoneLevel(0)
+    microphonePeakRef.current = 0
     setMicrophoneState('requesting')
     if (previous !== null) await Promise.resolve(previous.stop()).catch(() => undefined)
     if (generation !== microphoneTestGeneration.current || document.hidden) return
@@ -265,7 +271,10 @@ export function SettingsView({
     }
     microphoneTestRef.current = controller
     const outcome = await controller.start((level) => {
-      if (microphoneTestRef.current === controller) setMicrophoneLevel(level)
+      if (microphoneTestRef.current !== controller) return
+      const safeLevel = Number.isFinite(level) ? Math.min(1, Math.max(0, level)) : 0
+      microphonePeakRef.current = Math.max(microphonePeakRef.current, safeLevel)
+      setMicrophoneLevel(safeLevel)
     }, selectedDeviceId, () => {
       if (microphoneTestRef.current !== controller) return
       microphoneTestRef.current = null
@@ -457,7 +466,7 @@ export function SettingsView({
                       <VoiceWave stage={microphoneState === 'requesting' || microphoneState === 'ready' ? 'listening' : 'idle'} value={microphoneLevel} label="Microphone level" size="deck" />
                       <p role="status">
                         {microphoneState === 'ready' ? 'Listening. Say something.' : null}
-                        {microphoneState === 'closed' ? 'Sotto heard you. The microphone is closed.' : null}
+                        {microphoneState === 'closed' ? microphonePeakRef.current > MICROPHONE_TEST_HEARD_THRESHOLD ? 'Sotto heard you. The microphone is closed.' : 'Sotto did not hear anything. Check that the microphone is not muted.' : null}
                         {microphoneState === 'requesting' ? 'Waiting for microphone permission...' : null}
                         {microphoneState === 'idle' ? (settings.microphoneSkipped ? 'No microphone is set up. Run this test to set one up.' : 'Run a quick input-level test.') : null}
                         {microphoneState === 'denied' ? copy.settingsMicrophoneUnavailable : null}
