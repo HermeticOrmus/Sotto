@@ -159,7 +159,8 @@ struct Live {
         return (capabilities(for: ref)?.submit ?? false) && (source == nil || source?.connection == "connected")
     }
     func canInterrupt(_ ref: ThreadRef) -> Bool {
-        canAct(on: ref) && thread(ref)?.status == "running" && (capabilities(for: ref)?.interrupt ?? false)
+        online(ref.hostID) && pending(for: ref).allSatisfy { $0.kind == "reply" }
+            && thread(ref)?.status == "running" && (capabilities(for: ref)?.interrupt ?? false)
     }
     func canAnswer(_ request: AgentRequest, in ref: ThreadRef) -> Bool {
         guard canAct(on: ref), mayAnswer(ref.hostID), request.supported else { return false }
@@ -578,7 +579,7 @@ struct Live {
             }
         } catch { if generations[hostID] == current { feedback = "Delivery to \(name(hostID)) could not be checked. Nothing was resent. Reconnect to try again." } }
     }
-    private func settle(_ item: PendingOperation, receipt: Receipt, shell: Shell?) throws {
+    private func settle(_ item: PendingOperation, receipt: Receipt? = nil, shell: Shell?) throws {
         let delivery = shell?.deliveries?.first { $0.threadId == item.threadID && $0.draftId == item.draftID }
         let delivered = shell?.deliveredDrafts?.contains { $0.threadId == item.threadID && $0.draftId == item.draftID } == true
         let accepted = delivered || delivery?.status == "accepted"
@@ -592,7 +593,7 @@ struct Live {
             // Named, because the thread open now may be another one, on another computer.
             let title = thread.map { "“\($0.title)”" } ?? "a thread"
             feedback = "Your reply to \(title) on \(name(item.hostID)) wasn’t sent. Its text is back in that thread."
-        } else if accepted || answered || (item.kind != "answer" && item.reconciled(receipt: receipt, deliveries: shell?.deliveries ?? [])) {
+        } else if accepted || answered || (item.kind != "answer" && receipt.map { item.reconciled(receipt: $0, deliveries: shell?.deliveries ?? []) } == true) {
             try forgetMarker(item.id)
             feedback = item.kind == "answer" ? "Answer sent." : nil
         }
@@ -620,6 +621,12 @@ struct Live {
         guard sequence > (shellSequences[hostID] ?? 0) else { return }
         shellSequences[hostID] = sequence
         update(hostID) { $0.shell = next }
+        // Live evidence can arrive after the acknowledgement timed out. Never resend to settle it.
+        // A Keychain write failure is local feedback, not a lost connection to the computer.
+        for item in scoped(hostID) {
+            do { try settle(item, shell: next) }
+            catch { feedback = error.localizedDescription }
+        }
         if let selected, selected.hostID == hostID, !next.host.threads.contains(where: { $0.id == selected.threadID }) {
             cancelDetailReload(); self.selected = nil; openDetail = nil; detailProblem = nil
         }

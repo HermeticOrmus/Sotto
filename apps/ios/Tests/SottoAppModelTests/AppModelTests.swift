@@ -7,6 +7,7 @@ final class AppModelTests: XCTestCase {
         HostConnection.afterGreeting = nil
         KeychainStore.locked = false
         HostConnection.mayAnswer = false; HostConnection.receipt = .object(["status": .string("unknown")])
+        HostConnection.loseAcknowledgement = false
         let host = "00000000-0000-4000-8000-000000000001"
         let pairing = try JSONDecoder().decode(Pairing.self, from: Data(#"{"v":1,"hostId":"\#(host)","clientId":"phone","token":"fixture"}"#.utf8))
         let saved = SavedComputer(address: "https://laptop.example.ts.net:8443", pairing: pairing, reportedName: "Laptop")
@@ -53,12 +54,13 @@ final class AppModelTests: XCTestCase {
         XCTAssertTrue(model.storageReady)
         XCTAssertTrue(model.computers.isEmpty)
     }
-    @MainActor private func changeShell(status: String = "idle", requests: [[String: Any]] = [], error: String? = nil) throws -> Shell {
+    @MainActor private func changeShell(status: String = "idle", requests: [[String: Any]] = [], error: String? = nil, deliveries: [[String: Any]] = []) throws -> Shell {
         var shell = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(HostConnection.shell)) as? [String: Any])
         var host = try XCTUnwrap(shell["host"] as? [String: Any])
         var threads = try XCTUnwrap(host["threads"] as? [[String: Any]])
         threads[0]["status"] = status; threads[0]["requests"] = requests
         host["threads"] = threads; shell["host"] = host; shell["error"] = error
+        shell["deliveries"] = deliveries
         HostConnection.shell = try JSONDecoder().decode(JSONValue.self, from: JSONSerialization.data(withJSONObject: shell))
         return try HostConnection.shell.decode(Shell.self)
     }
@@ -99,6 +101,72 @@ final class AppModelTests: XCTestCase {
         let missingModel = try modelWithMarker(missing)
         missingModel.phase(.active); await missingModel.reconnectAll()
         XCTAssertEqual(missingModel.pending, [missing])
+    }
+    @MainActor func testStopRemainsAvailableAfterAReplyAcknowledgementIsLost() async throws {
+        let (model, ref) = try fixture()
+        model.phase(.active); await model.reconnectAll()
+        let connection = try XCTUnwrap(HostConnection.instances.last)
+        HostConnection.loseAcknowledgement = true
+        model.drafts[ref.id] = "Continue"
+        await model.send(ref)
+        XCTAssertEqual(model.pending(for: ref).map(\.kind), ["reply"])
+        connection.push(.shell(try changeShell(status: "running")))
+        XCTAssertTrue(model.canInterrupt(ref))
+        await model.interrupt(ref)
+        XCTAssertEqual(model.pending(for: ref).map(\.kind), ["reply", "interrupt"])
+        XCTAssertFalse(model.canInterrupt(ref), "An unconfirmed stop must not create duplicate stops")
+    }
+    @MainActor func testLiveShellSettlesALostReplyWithoutCheckingAgainOrResending() async throws {
+        let (model, ref) = try fixture()
+        model.phase(.active); await model.reconnectAll()
+        let connection = try XCTUnwrap(HostConnection.instances.last)
+        HostConnection.loseAcknowledgement = true
+        model.drafts[ref.id] = "Continue"
+        await model.send(ref)
+        let marker = try XCTUnwrap(model.pending.first)
+        let accepted = try changeShell(deliveries: [["threadId": ref.threadID, "draftId": try XCTUnwrap(marker.draftID), "status": "accepted"]])
+        connection.onPush?(.shell(accepted), 1)
+        XCTAssertEqual(model.pending, [marker], "An older shell cannot confirm delivery")
+        connection.push(.shell(accepted))
+        XCTAssertTrue(model.pending.isEmpty)
+        XCTAssertTrue(model.canSend(ref))
+        XCTAssertEqual(connection.operations.filter { $0 == "command" }.count, 1)
+        XCTAssertEqual(connection.operations.filter { $0 == "receipt" }.count, 0)
+        XCTAssertEqual(try KeychainStore().read([PendingOperation].self, account: ComputerStore.pendingAccount), [])
+    }
+    @MainActor func testLiveShellSettlesAnAnswerAndRestoresAFailedReply() async throws {
+        let (_, ref) = try fixture()
+        let answer = PendingOperation(hostID: ref.hostID, clientID: "phone", threadID: ref.threadID, requestID: "request", kind: "answer")
+        _ = try changeShell(requests: [["id": "request", "kind": "permission", "text": "Read files?", "options": []]])
+        let model = try modelWithMarker(answer)
+        model.phase(.active); await model.reconnectAll()
+        let connection = try XCTUnwrap(HostConnection.instances.last)
+        connection.push(.shell(try changeShell()))
+        XCTAssertTrue(model.pending.isEmpty)
+        XCTAssertEqual(model.feedback, "Answer sent.")
+        HostConnection.loseAcknowledgement = true
+        model.drafts[ref.id] = "Keep this reply"
+        await model.send(ref)
+        let reply = try XCTUnwrap(model.pending.first)
+        connection.push(.shell(try changeShell(deliveries: [["threadId": ref.threadID, "draftId": try XCTUnwrap(reply.draftID), "status": "failed"]])))
+        XCTAssertTrue(model.pending.isEmpty)
+        XCTAssertEqual(model.failedReplies[ref.id], "Keep this reply")
+        model.restoreReply(ref)
+        XCTAssertEqual(model.drafts[ref.id], "Keep this reply")
+        XCTAssertTrue(model.online(ref.hostID))
+    }
+    @MainActor func testMarkerStorageFailureDuringPushDoesNotDisconnectComputer() async throws {
+        let (_, ref) = try fixture()
+        let marker = PendingOperation(hostID: ref.hostID, clientID: "phone", threadID: ref.threadID, draftID: "draft", kind: "reply")
+        let model = try modelWithMarker(marker)
+        model.phase(.active); await model.reconnectAll()
+        let connection = try XCTUnwrap(HostConnection.instances.last)
+        KeychainStore.locked = true
+        connection.push(.shell(try changeShell(deliveries: [["threadId": ref.threadID, "draftId": "draft", "status": "accepted"]])))
+        KeychainStore.locked = false
+        XCTAssertEqual(model.pending, [marker])
+        XCTAssertTrue(model.online(ref.hostID))
+        XCTAssertEqual(connection.disconnects, 0)
     }
     @MainActor func testAThreadReadFailureDoesNotDisconnectItsOnlineComputer() async throws {
         let (model, ref) = try fixture()

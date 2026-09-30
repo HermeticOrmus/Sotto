@@ -11,7 +11,10 @@ import SottoCore
         guard let data = Self.items[account] else { return nil }
         return try? JSONDecoder().decode(type, from: data)
     }
-    func write<T: Encodable>(_ value: T, account: String) throws { Self.items[account] = try JSONEncoder().encode(value) }
+    func write<T: Encodable>(_ value: T, account: String) throws {
+        if Self.locked { throw Self.failure }
+        Self.items[account] = try JSONEncoder().encode(value)
+    }
     func remove(account: String) throws { Self.items[account] = nil }
 }
 
@@ -26,6 +29,7 @@ struct HostRefusal: Error { let failure: WireFailure }
     static var afterGreeting: ((HostConnection) -> Void)?
     static var mayAnswer = false
     static var receipt: JSONValue = .object(["status": .string("unknown")])
+    static var loseAcknowledgement = false
     var onPush: ((IncomingFrame, Int) -> Void)?
     var onDisconnect: (() -> Void)?
     var operations: [String] = []
@@ -52,6 +56,7 @@ struct HostRefusal: Error { let failure: WireFailure }
     func call(_ operation: [String: JSONValue], id: String = UUID().uuidString) async throws -> JSONValue {
         let op = operation["op"]?.string ?? ""
         operations.append(op)
+        if op == "command", Self.loseAcknowledgement { throw ClientError.uncertain }
         if op == "observe", case .array(let ids) = operation["threadIds"], let id = ids.first?.string {
             if Self.failDetail { throw ClientError.rejected("Thread read refused") }
             push(.detail(threadID: id, value: try Self.detail.decode(ThreadDetail.self)))
