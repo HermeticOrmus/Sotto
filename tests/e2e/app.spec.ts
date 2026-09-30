@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { readFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
 
@@ -152,6 +153,35 @@ test('keeps history disabled without blocking dictation', async () => {
     await expect(launched.page.getByRole('heading', { name: 'Pasted.' })).toBeVisible()
     await launched.page.getByRole('link', { name: 'History' }).click()
     await expect(launched.page.getByRole('heading', { name: 'History is off.' })).toBeVisible()
+  } finally {
+    await closeSotto(launched)
+  }
+})
+
+test('deletes a retained transcript from disk while history is off', async () => {
+  const testInfo = test.info()
+  const launched = await launchSotto()
+  try {
+    await completeOnboarding(launched.page)
+    await dictateWithButton(launched.page)
+    await expect(launched.page.getByRole('heading', { name: 'Pasted.' })).toBeVisible()
+    await openPage(launched.page, 'History')
+    await expect(launched.page.locator('.history-entry')).toHaveCount(1)
+    await launched.page.evaluate(async () => window.sotto!.updateSettings({ historyEnabled: false }))
+    await expect(launched.page.getByText('History is off. Older transcripts are still here.')).toBeVisible()
+    await launched.page.locator('.history-entry__toggle').click()
+    await launched.page.screenshot({ path: testInfo.outputPath('retained-history-off.png') })
+    await launched.page.getByRole('button', { name: 'Delete saved transcript' }).click()
+    await launched.page.getByRole('dialog').getByRole('button', { name: 'Delete transcript', exact: true }).click()
+    await expect(launched.page.getByRole('dialog')).toHaveCount(0)
+    await expect(launched.page.locator('.history-entry')).toHaveCount(0)
+
+    expect(JSON.parse(await readFile(join(launched.userData, 'history.json'), 'utf8'))).toEqual([])
+    await launched.page.evaluate(async () => window.sotto!.updateSettings({ historyEnabled: true }))
+    await launched.page.reload()
+    await openPage(launched.page, 'History')
+    await expect(launched.page.getByRole('heading', { name: 'Nothing here yet.' })).toBeVisible()
+    await launched.page.screenshot({ path: testInfo.outputPath('deleted-after-reload.png') })
   } finally {
     await closeSotto(launched)
   }

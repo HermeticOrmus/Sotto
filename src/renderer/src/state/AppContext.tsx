@@ -571,7 +571,7 @@ export function AppProvider({
     deleteHistory: async (id) => {
       if (bridge === undefined) return false
       return enqueueHistoryMutation(async () => {
-        await bridge.deleteHistory(id)
+        if (!await bridge.deleteHistory(id)) throw new Error('HISTORY_UPDATE_FAILED')
         return bridge.listHistory()
       })
     },
