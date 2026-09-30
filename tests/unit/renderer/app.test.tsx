@@ -614,7 +614,7 @@ describe('Sotto application onboarding integration', () => {
 
     const toast = await screen.findByRole('alert')
     expect(toast).toHaveTextContent('Could not download update net::ERR_INTERNET_DISCONNECTED')
-    expect(screen.getByRole('button', { name: 'Download failed for 3.5.0. Click to retry.' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Update 3.5.0 is still offered. Click to download.' })).toBeInTheDocument()
 
     act(() => publish?.({ currentVersion: '3.4.0', phase: { phase: 'downloaded', version: '3.5.0', problem: 'No update filepath provided, can’t quit and install' }, checkedAt: 1 }))
     expect(screen.getByRole('button', { name: 'Install failed for 3.5.0. Click to retry.' })).toBeInTheDocument()
