@@ -51,7 +51,7 @@ Native clients retain their own subscription sign-in and model catalogs. Wake co
 
 ### Questions and permissions
 
-If delivery of your answer to Claude Code is uncertain, the request stays available. Check the native client, then press **Check again** to reopen the choices. Checking sends no answer. Only another answer you send retries it; Sotto never retries it on its own.
+If delivery of your answer to Claude Code is uncertain, press **Check again** to check its state, read the thread's activity, or press **Stop** to interrupt the work. Checking sends no answer. While the original write is pending, another answer cannot be sent. If that write finishes, Sotto keeps your original choice and marks it answered. If the write fails outright or the client is gone, **Check again** can reopen a request that is still pending so you can choose and send another answer. Sotto never retries it on its own.
 
 Model questions with choices appear above the thread's message bar. Pick an answer or type in **Write my own answer**, then press **Send answer**. The model's suggested option is marked **(recommended)** when it supplies one; nothing is selected for you. Enter adds a line to a custom answer. Escape collapses the question, and reopening it keeps your answer. Prepared choices also survive restarting Sotto. Long forms scroll inside the panel, while your message draft stays separate. In a very short split pane, collapse the question to return to reading the thread. Pending permissions and saved-answer recovery remain reachable by scrolling the pane. Questions without supplied choices keep their text-answer path.
 

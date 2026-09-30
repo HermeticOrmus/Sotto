@@ -34,7 +34,7 @@ Thread drafts save automatically while you type, including while other threads a
 
 Claude Code keeps background work running when remembered preferences change. Messages continue with the chat's previous context while that work runs. The first send after it ends refreshes the context. Deleting a memory the client is using forces a restart on the next send and stops that background work.
 
-If a Claude Code answer is unconfirmed, **Check again** reopens the request's choices. It sends nothing; you choose and send the answer again yourself.
+If a Claude Code answer is unconfirmed, **Check again** checks the request without sending anything. A delayed write keeps your original choice; another answer is allowed only after the write fails outright or the client is gone.
 
 Settings → Application sets the working-copy default for new threads. Expand **Project defaults** to choose a different default for one project. Previously saved project choices are kept when Sotto updates.
 
