@@ -219,6 +219,23 @@ describe('Claude recovery and safety', () => {
     }
     await expect.poll(retained).toBe(1)
   })
+  it('finishes joined reads without waiting for later poll arrivals', async () => {
+    clearInterval((f.adapter as unknown as { pollTimer: NodeJS.Timeout }).pollTimer)
+    const releases: (() => void)[] = []
+    const gates = Array.from({ length: 3 }, () => new Promise<void>(resolve => { releases.push(resolve) }))
+    let index = 0
+    const poll = vi.spyOn(ClaudeSessionLog.prototype, 'poll').mockImplementation(() => gates[index++] ?? Promise.resolve())
+    const first = f.adapter.pollSessionLogs()
+    let joinedDone = false
+    const joined = f.adapter.pollSessionLogs().then(() => { joinedDone = true })
+    let later: Promise<void> | undefined
+    try {
+      releases[0]!(); await expect.poll(() => poll.mock.calls.length).toBe(2)
+      later = f.adapter.pollSessionLogs()
+      releases[1]!(); await expect.poll(() => poll.mock.calls.length).toBe(3)
+      await expect.poll(() => joinedDone).toBe(true)
+    } finally { releases.forEach(release => release()); await Promise.all([first, joined, later]); poll.mockRestore() }
+  })
   it('waits for personal background work before restarting for changed memories', async () => {
     const personal = randomUUID()
     await f.adapter.createPersonalConversation({ commandId: 'personal', threadId: personal, title: 'Personal', modelId: f.modelId, workingDirectory: f.root })

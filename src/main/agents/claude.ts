@@ -221,7 +221,7 @@ export class ClaudeStreamJsonHost implements AgentHost {
   private outdatedTimer: ReturnType<typeof setImmediate> | undefined
   private pollTimer: ReturnType<typeof setInterval> | undefined
   private polling: Promise<void> | undefined
-  private pollAgain = false
+  private queuedPoll: Promise<void> | undefined
   private readonly closures = new Set<Promise<void>>()
   private trackClosure(work: Promise<void>): void {
     this.closures.add(work)
@@ -808,12 +808,20 @@ export class ClaudeStreamJsonHost implements AgentHost {
     return { accepted: true, snapshot: this.view(command.historyFromEvents) }
   }
   async pollSessionLogs(): Promise<void> {
-    if (this.polling) { this.pollAgain = true; return this.polling }
-    const work = this.drainSessionLogs(); this.polling = work
-    try { await work } finally { if (this.polling === work) this.polling = undefined }
-  }
-  private async drainSessionLogs(): Promise<void> {
-    do { this.pollAgain = false; await this.readSessionLogs() } while (this.pollAgain)
+    if (this.queuedPoll) return this.queuedPoll
+    const previous = this.polling
+    // Arrivals during one read share the next read. Each caller finishes after its
+    // own pass, even if the timer queues another pass while that one is running.
+    const work = previous ? previous.then(() => {
+      if (this.queuedPoll === work) this.queuedPoll = undefined
+      return this.readSessionLogs()
+    }) : this.readSessionLogs()
+    this.polling = work
+    if (previous) this.queuedPoll = work
+    try { await work } finally {
+      if (this.polling === work) this.polling = undefined
+      if (this.queuedPoll === work) this.queuedPoll = undefined
+    }
   }
   private async readSessionLogs(): Promise<void> { for (const [id, log] of this.logs) { await log.poll(); await this.readSubagentModels(id, log) } }
   /**
