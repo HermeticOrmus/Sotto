@@ -62,6 +62,22 @@ describe('reclaiming a thread worktree', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     expect(command).toHaveBeenCalledTimes(1)
   })
+  it.each(['pane', 'settle'])('shows the folder-change refusal inside the %s question', async surface => {
+    const message = 'The folder changed. Nothing was removed. Choose Remove worktree again to see the new list.'
+    const command = vi.fn<(request: AgentCommand) => Promise<AgentState>>(async request => request.type === 'reclaim-thread-worktree' ? refused(message) : ok())
+    if (surface === 'pane') {
+      render(<ThreadWorkingCopy thread={thread} project={project} command={command} />)
+      fireEvent.click(screen.getByRole('button', { name: /Working copy:/ }))
+      fireEvent.click(screen.getByRole('button', { name: 'Remove worktree folder, keeping its branch' }))
+    } else {
+      render(<SettleButton target={thread} command={command} />)
+      fireEvent.click(screen.getByRole('button', { name: 'Settle', exact: true }))
+    }
+    const button = await screen.findByRole('button', { name: 'Remove worktree', exact: true })
+    await waitFor(() => expect(button).toBeEnabled())
+    fireEvent.click(button)
+    expect(await screen.findByRole('alert')).toHaveTextContent(message)
+  })
   it('hides the tick when an outside link blocks removal', async () => {
     const result = ok()
     result.worktreeReclaimPreview!.ignored = ['.env']
