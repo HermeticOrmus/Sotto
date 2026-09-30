@@ -107,6 +107,7 @@ export function App({ createMicrophoneTest = () => new BrowserMicrophoneTest() }
   const microphoneReleasesRef = useRef(new WeakMap<MicrophoneTestController, Promise<void>>())
   const systemDark = useSystemPrefersDark()
   const appearanceEdits = useAppearancePreviewVersion()
+  const [settingsNotice, setSettingsNotice] = useState<ToastMessage | null>(null)
   const [themeNotice, setThemeNotice] = useState<ToastMessage | null>(null)
   const latestSettingsRef = useRef(app.settings)
   latestSettingsRef.current = app.settings
@@ -365,6 +366,7 @@ export function App({ createMicrophoneTest = () => new BrowserMicrophoneTest() }
         break
       case 'settings':
         view = <SettingsView
+          onNotice={message => setSettingsNotice({ id: 'settings-save', message, tone: 'error' })}
           settings={app.settings}
           platform={app.platform}
           statusText={statusText}
@@ -451,6 +453,7 @@ export function App({ createMicrophoneTest = () => new BrowserMicrophoneTest() }
             message: recoveryMessages[notice.code],
           })),
           ...(themeNotice === null ? [] : [themeNotice]),
+          ...(settingsNotice === null ? [] : [settingsNotice]),
           ...updateToasts,
         ]} />
       </>

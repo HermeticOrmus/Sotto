@@ -60,6 +60,7 @@ export interface SettingsViewProps {
   readonly mediaDevices?: MediaDevicesAdapter | undefined
   /** Injected in tests; production runs the same browser test onboarding uses. */
   readonly createMicrophoneTest?: () => MicrophoneTestController
+  readonly onNotice?: (message: string) => void
   readonly onUpdateSettings: (patch: SettingsPatch) => Promise<boolean>
   readonly onReplaceHotkey: (accelerator: string) => Promise<HotkeyChangeResult>
   readonly onSetStartup: (enabled: boolean) => Promise<StartupState | null>
@@ -134,6 +135,7 @@ export function SettingsView({
   mediaDevices = typeof navigator === 'undefined' ? undefined : navigator.mediaDevices,
   createMicrophoneTest = () => new BrowserMicrophoneTest(),
   onUpdateSettings,
+  onNotice,
   onReplaceHotkey,
   onSetStartup,
   onResetSettings,
@@ -280,6 +282,12 @@ export function SettingsView({
     if (settingsRef.current.microphoneSkipped) await onUpdateSettings({ microphoneSkipped: false }).catch(() => false)
   }
 
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => { mountedRef.current = false }
+  }, [])
+
   const saveDictionary = async (announce = true): Promise<void> => {
     const value = llmDictionaryDraft.read()
     if (value.length > 4000) {
@@ -292,6 +300,9 @@ export function SettingsView({
       ? await save({ llmDictionary: value }, 'Dictionary saved.')
       : await onUpdateSettings({ llmDictionary: value }).catch(() => false)
     llmDictionaryDraft.settle(submission, saved, false)
+    if (!saved && !mountedRef.current) {
+      onNotice?.('Your dictionary edits were not saved. Open Settings, choose Cleanup and enter them again.')
+    }
   }
 
   const saveDictionaryRef = useRef(saveDictionary)
