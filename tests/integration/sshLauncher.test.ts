@@ -80,6 +80,16 @@ it('turns multiplexing and any configured remote command off and asks through as
     expect(item.args.join(' ')).not.toContain('process.stdout.on')
   }
 })
+
+it('sets up desktop permissions through the verified SSH host, carrying no credential', async () => {
+  const { launcher, spawns } = await fixture('started')
+  const connection = await launcher.connect(configuration)
+  await connection.ensureDesktopAnswers('22222222-2222-4222-8222-222222222222')
+  const control = (await spawns()).find(item => item.op === 'desktop-answers')!
+  expect(control.stdinSha256).toBe(SCRIPT_SHA)
+  expect(control.args.join(' ')).not.toContain('Sotto connected this desktop')
+  await expect(connection.ensureDesktopAnswers('bad\nclient')).rejects.toThrow('valid paired client')
+})
 it('asks for a password once per connect although three ssh processes sign in, and never records it', async () => {
   const { launcher, events } = await fixture('password')
   const prompts: SshPrompt[] = []

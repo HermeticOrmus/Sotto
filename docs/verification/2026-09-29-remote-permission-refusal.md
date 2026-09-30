@@ -1,5 +1,7 @@
 # Remote permission choices retain the host's refusal
 
+This records the initial refusal-routing fix. Zach later chose automatic permission setup for SSH desktops. The [follow-up verification](2026-09-29-ssh-desktop-permissions.md) supersedes the separate desktop-grant requirement below and records the policy established on Forge.
+
 ## Acceptance checks
 
 - [x] A remote permission refusal reaches the chip with its reason instead of the generic connection error and unknown-provider-answer notice.
@@ -41,4 +43,4 @@ Captures in `artifacts/pending-settings/remote-policy-refused-dark-820.png` and 
 
 Standards: authority still comes only from the host policy; provider IDs remain inside adapters; no network, dependency, style, theme or shortcut was added to the renderer. The router translates only a definite pre-dispatch refusal. No payload logging or automatic retry was added.
 
-Spec: the reported missing permission answer is reproduced at the real desktop routing seam and prevented by the fix. Forge still needs the user's explicit answers grant before this desktop may choose a permissive mode. That requirement is existing policy, not a connection failure.
+Spec: the reported missing permission answer is reproduced at the real desktop routing seam and prevented by the fix. At this initial check, Forge needed an explicit answers grant before this desktop could choose a permissive mode. The subsequent SSH setup amendment establishes that grant automatically; the follow-up note records its verification.

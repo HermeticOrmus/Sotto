@@ -56,7 +56,7 @@ interface Retry { timer: ReturnType<typeof setTimeout> | undefined; attempt: num
  * decides, never the message.
  */
 const FINAL_SSH_FAILURES: ReadonlySet<SshFailureCode> = new Set<SshFailureCode>(['ssh-missing', 'ssh-too-old', 'auth-failed', 'host-key-changed', 'host-key-rejected',
-  'identity-file-unreadable', 'prompt-unanswered', 'tailscale-unapproved', 'node-missing', 'node-too-old', 'node-too-new', 'archive-missing', 'descriptor-invalid'])
+  'identity-file-unreadable', 'prompt-unanswered', 'tailscale-unapproved', 'node-missing', 'node-too-old', 'node-too-new', 'archive-missing', 'descriptor-invalid', 'permission-setup-failed'])
 /** A failure on this side of the connection that no retry can fix: the host is not the one saved, or pairing was lost for good. */
 class FinalHostError extends Error {}
 /** T3 Code's reconnect backoff: 3, 4, 8 and then every 16 seconds, until the user stops it. */
@@ -745,6 +745,10 @@ export class DesktopHosts {
       catchUpEvents: false })
     active.socket = socket
     const hello = await socket.connect()
+    if (this.live.get(host.id) !== active) { await socket.close(); return }
+    // Use the host's authenticated client identity, never a saved or renderer-supplied ID. The SSH
+    // account establishes the default only when this client has no policy history (ADR-0025).
+    if (!hello.capabilities.mayAnswer) await active.tunnel!.ensureDesktopAnswers(hello.clientId)
     if (this.live.get(host.id) !== active) { await socket.close(); return }
     this.update(host.id, { version: hello.sottoVersion })
     host.hostId = hello.hostId; host.clientId = hello.clientId
