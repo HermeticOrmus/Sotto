@@ -104,5 +104,8 @@ artifacts/codex-restored-replies/
 # Native iPhone Focus verification captures; force-add only images cited by the note.
 artifacts/ios-focus/
 
+# Generated captures from the Forge hand test; force-add only images cited by the note.
+artifacts/forge-hand-test/
+
 # Native iPhone thread-creation captures; force-add only images cited by the note.
 artifacts/iphone-new-threads/
