@@ -13,7 +13,8 @@ September 30, 2026. Zach asked to create threads in the iPhone app that run on i
 - [x] Source: preserve permission authority (ADR-0004/ADR-0033). Read the host's available models/modes; explicitly send the chosen mode and disable grants without Can answer. Prefer an asking provider-owned mode by its allowance, not its name or position.
 - [x] Source: reconcile uncertain creation by the minted thread ID and its receipt; keep an ID-only pending marker, block duplicate taps, and never automatically resend after disconnect/background/restart.
 - [x] Swift package tests pass for routing across computers, unavailable model/project, revoked authority, creation refusal, lost acknowledgement and restart. Update the user guide and iPhone README.
-- [ ] Native package tests and simulator compilation passed. Complete the native UI journeys and inspect their captures. Windows has no Swift/Xcode; the configured Forge SSH host reports Linux and has neither tool. macOS validation needs an available Mac or the repository's native CI job.
+- [x] Native package tests and simulator compilation passed in macOS CI: 95 tests, 1 skipped, no failures.
+- [x] Complete the native UI journeys and inspect their captures. All five journeys passed on each simulator at `0be9d2aa`: iPhone SE and iPhone 16 Pro Max, iOS 26.5. Existing-project and new-folder creation passed in dark/light; the large phone used accessibility-large text and reduced motion. Primary and independent visual inspection found no material defects. [Verification and selected captures](../verification/2026-09-30-iphone-new-threads.md).
 
 ## What exists
 
