@@ -213,6 +213,7 @@ export class AgentControl {
   private readonly providerReconnect = new Map<ProviderId, ReturnType<typeof setTimeout>>()
   private retirementFailure: string | null = null
   private disposed = false
+  private readonly earlierMessageBoundaries = new Map<string, string | undefined>()
   /** Requests Sotto owns, merged into their threads (ADR-0035); absent until main gives the coordinator some. */
   private sottoRequests: SottoThreadRequests | undefined
   private unsubscribeSottoRequests: (() => void) | undefined
@@ -2100,7 +2101,9 @@ export class AgentControl {
         this.observe(); return
       case 'load-earlier-messages': {
         if (!this.dependencies.host.loadEarlierMessages) throw new Error('Earlier messages could not be read. Nothing was lost; refresh and open the thread again.')
-        this.acceptSnapshot(await this.dependencies.host.loadEarlierMessages(command.threadId))
+        this.earlierMessageBoundaries.set(command.threadId, this.thread(command.threadId).messages.at(-1)?.id)
+        try { this.acceptSnapshot(await this.dependencies.host.loadEarlierMessages(command.threadId)) }
+        finally { this.earlierMessageBoundaries.delete(command.threadId) }
         return
       }
       case 'retry-thread-worktree':
@@ -2865,7 +2868,9 @@ export class AgentControl {
     for (const assignment of this.state.assignments) {
       const thread = snapshot.threads.find(t => t.id === assignment.threadId)
       if (!thread || isThreadClosed(thread) || !isThreadProviderConnected(snapshot, thread)) continue
-      const fresh = thread.messages.filter(m => !assignment.seenMessageIds.includes(m.id))
+      const boundary = this.earlierMessageBoundaries.get(thread.id)
+      const fresh = thread.messages.slice(boundary ? thread.messages.findIndex(message => message.id === boundary) + 1 : 0)
+        .filter(m => !assignment.seenMessageIds.includes(m.id))
       if (fresh.length) assignment.contextUpdatedAt = Date.now()
       if (assignment.contextUpdatedAt < Date.now() - 7 * 86_400_000 && assignment.instruction) {
         assignment.instruction = ''; assignment.paused = true
@@ -2879,7 +2884,7 @@ export class AgentControl {
         assignment.mode = 'manual'
         this.state.queue = this.state.queue.filter(q => q.threadId !== thread.id || q.kind === 'question' || q.kind === 'permission')
       }
-      assignment.seenMessageIds = [...new Set([...assignment.seenMessageIds, ...thread.messages.map(m => m.id)])].slice(-2000)
+      assignment.seenMessageIds = [...new Set([...assignment.seenMessageIds.slice(-2000), ...thread.messages.map(m => m.id)])]
       assignment.ownMessageIds = assignment.ownMessageIds.slice(-1000)
       assignment.handledRequestIds = assignment.handledRequestIds.slice(-1000)
       for (const request of thread.requests) {

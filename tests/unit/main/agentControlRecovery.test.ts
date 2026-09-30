@@ -547,6 +547,63 @@ describe('the hidden coordinator', () => {
 })
 
 describe('supervision event ordering', () => {
+  it.each([1, 2001])('keeps management and context age when %s earlier messages are loaded', async count => {
+    const f = await fixture()
+    f.host.event({ type: 'history', threadId: 'workshop', text: '', messages: [
+      { id: 'recent', role: 'user', text: 'Recent prompt', createdAt: new Date().toISOString() },
+    ] })
+    await f.control.command({ type: 'assign', threadId: 'workshop', instruction: 'Keep watching' })
+    await f.control.command({ type: 'pause', threadId: 'workshop' })
+    const before = f.control.get()
+    Object.assign(f.host, { loadEarlierMessages: async () => {
+      f.host.event({ type: 'history', threadId: 'workshop', text: '', messages: [
+        ...Array.from({ length: count }, (_, index) => ({ id: `older-${index}`, role: 'user' as const, text: 'Earlier prompt', createdAt: '2026-01-01T00:00:00.000Z' })),
+        ...before.host.threads.find(thread => thread.id === 'workshop')!.messages,
+      ] })
+      return f.host.snapshot()
+    } })
+    const after = await f.control.command({ type: 'load-earlier-messages', threadId: 'workshop' })
+    expect(after.assignments).toEqual(before.assignments.map(assignment => ({ ...assignment, seenMessageIds: after.assignments[0]!.seenMessageIds })))
+    expect(new Set(after.assignments[0]!.seenMessageIds)).toEqual(new Set(['recent', ...Array.from({ length: count }, (_, index) => `older-${index}`)]))
+    expect(after.queue).toEqual(before.queue)
+    expect(after.speech).toEqual(before.speech)
+    for (let refresh = 0; refresh < 2; refresh += 1) {
+      const refreshed = await f.control.command({ type: 'refresh' })
+      expect(refreshed.assignments[0]).toMatchObject({ mode: 'managed', contextUpdatedAt: before.assignments[0]!.contextUpdatedAt })
+      expect(refreshed.queue).toEqual(before.queue)
+      expect(refreshed.speech).toEqual(before.speech)
+    }
+    f.host.event({ type: 'manual', threadId: 'workshop', text: 'A new prompt' })
+    expect(f.control.get().assignments[0]?.mode).toBe('manual')
+  })
+  it('detects a new manual prompt while earlier messages are still loading', async () => {
+    const f = await fixture()
+    f.host.event({ type: 'history', threadId: 'workshop', text: '', messages: [
+      { id: 'recent', role: 'user', text: 'Recent prompt', createdAt: new Date().toISOString() },
+    ] })
+    await f.control.command({ type: 'assign', threadId: 'workshop', instruction: 'Keep watching' })
+    let release!: () => void
+    let started!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const waiting = new Promise<void>(resolve => { started = resolve })
+    Object.assign(f.host, { loadEarlierMessages: async () => {
+      const snapshot = await f.host.snapshot()
+      f.host.event({ type: 'history', threadId: 'workshop', text: '', messages: [
+        { id: 'older', role: 'user', text: 'Earlier prompt', createdAt: '2026-01-01T00:00:00.000Z' },
+        ...snapshot.threads.find(thread => thread.id === 'workshop')!.messages,
+      ] })
+      started(); await gate
+      return f.host.snapshot()
+    } })
+    const loading = f.control.command({ type: 'load-earlier-messages', threadId: 'workshop' })
+    try {
+      await waiting
+      expect(f.control.get().assignments[0]?.mode).toBe('managed')
+      f.host.event({ type: 'manual', threadId: 'workshop', text: 'I am handling this now' })
+      expect(f.control.get().assignments[0]?.mode).toBe('manual')
+    } finally { release(); await loading }
+    expect(f.control.get().assignments[0]?.mode).toBe('manual')
+  })
   it('restores a completed response without paying for another review, while new responses and explicit resume still work', async () => {
     const f = await fixture()
     await f.account()
