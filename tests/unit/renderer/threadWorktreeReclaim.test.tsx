@@ -71,9 +71,9 @@ describe('reclaiming a thread worktree', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Remove worktree folder, keeping its branch' }))
     } else {
       render(<SettleButton target={thread} command={command} />)
-      fireEvent.click(screen.getByRole('button', { name: 'Settle', exact: true }))
+      fireEvent.click(screen.getByRole('button', { name: 'Settle' }))
     }
-    const button = await screen.findByRole('button', { name: 'Remove worktree', exact: true })
+    const button = await screen.findByRole('button', { name: 'Remove worktree' })
     await waitFor(() => expect(button).toBeEnabled())
     fireEvent.click(button)
     expect(await screen.findByRole('alert')).toHaveTextContent(message)
