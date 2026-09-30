@@ -4,15 +4,15 @@ Package pkg-03: #485 (S-003), #506 (S-026), #507 (S-027). Windows verification u
 
 ## Accepted removal question
 
-The owner chose variant B, **List and tick**, in `D:/Talk to Text Application/docs/prototypes/reclaim-and-mic-test-prototype.html`. The file was read and rendered directly from the main checkout, read-only; it was not copied into this branch. The implemented question was visually compared with B.
+The owner chose variant B, **List and tick**, in the removal-question prototype. The implemented layout keeps that decision. The implemented question was visually compared with B.
 
 The Electron journeys check:
 
 - A clean question says the branch stays and sending restores the folder. Escape keeps it.
 - Ignored items appear as relative paths; installed dependencies do not. Each ignored folder has one size/file-count row. The single-item label uses **Delete this 1 ignored item with the folder**.
 - The callout says **These files are ignored by Git and are deleted with the folder:**. The button says **Remove with these files** and requires the separate tick.
-- Adding another ignored path while the question is open refuses removal. Reopening reads the new list.
-- Nested work is flagged with a plain count of uncommitted changes, without raw Git status. The tick adds **, including the nested worktree’s uncommitted work**. The checked tick uses the danger theme role. Escape preserves the nested files; later acknowledged removal deletes them with the folder.
+- Adding another ignored path, or adding a file inside an already listed folder, refuses removal. The pane and Settle questions show main's folder-change message and ask for Remove worktree again to see the new list.
+- Nested work is flagged with a plain count of uncommitted changes, without raw Git status. Repositories also show commits not on any remote. The tick names repositories or worktrees and uses the plural for several. The checked tick uses the danger theme role. Escape preserves the nested files; later acknowledged removal deletes them with the folder.
 - Dirty removal keeps the branch; the next send restores the committed checkout. Settle asks the same question, and Keep folder preserves it.
 
 Checked at 1600x1000, 1280x800 and 820x560, light and dark, with reduced motion on and off. Heading, tick and actions remain visible at the minimum. Recaptured and visually inspected:
@@ -28,7 +28,7 @@ These six captures are deliberate evidence for the changed question. Incidental 
 
 ## Main and transport regressions
 
-Removal compares the confirmed ignored folder rows and nested-change counts with disk. New cache files inside an acknowledged ignored folder are accepted. New ignored or untracked paths injected during the final filesystem walk are refused by the Git re-list immediately before removal. Ignored and untracked nested repositories/worktrees require the tick; an acknowledged nested worktree is deleted. A bare repository inside dependency content also requires acknowledgement. Outside links still block removal.
+Removal compares the confirmed ignored folder rows and nested-change counts with disk. Added or removed files inside an acknowledged ignored folder refuse removal. Existing cache files may be rewritten; byte sizes are not compared. New ignored or untracked paths injected during the final filesystem walk are refused by the Git re-list immediately before removal. Ignored and untracked nested repositories/worktrees require the tick. Synthesized nested rows count ignored contents too. Acknowledged nested worktrees are deleted, then their own repositories clear only those registrations; their branches and unrelated missing registrations remain. Locked nested worktrees refuse before deletion. A bare repository inside dependency content also requires acknowledgement. Outside links still block removal.
 
 Clean initialized submodules, including recursive submodules, are classified against their containing index and can be reclaimed automatically. A dirty submodule hidden by user Git settings still produces a truthful warning and can be removed only with explicit acknowledgement. The clean-settle refusal tells the user to choose Remove worktree, without referring to an unopened question.
 
@@ -56,3 +56,13 @@ Full-suite worktree fixes: `cc52060b`.
 The earlier full run overlapped review edits and failed four new cases: prompt refusal after failed taskkill, setup/restore registry coordination, clean recursive submodule removal and a bare repository inside dependency content. Those cases passed on corrected, committed source before the fresh final full run. The initial run also reported an after-test cleanup error for the taskkill fixture. No deadline was shortened and no assertion was skipped to pass the gates.
 
 Subsequent `origin/main` changes were merged without conflicts: socket frames (`475e6da2`), retained-history deletion (`cb38c1bd`) and project working-copy defaults (`64e6fa65`). Affected regression runs passed 77 socket/preview tests, 214 history/IPC/removal tests and 153 settings/worktree tests. Built Electron runs passed all 22 app/thread journeys after the history merge, and all seven new-thread-settings/thread journeys after the defaults merge. Typecheck, lint and notices passed again on the latest merged source. The removal question is unchanged; incidental recaptures were restored to the six verified variant B captures.
+
+## Second-review evidence
+
+All five second-review items are implemented in new commits after `70e483f3`. Confirmed rows carry file counts through both questions and remote commands; comparison happens inside the registry lane and excludes bytes. Nested repository history counts all local refs not reachable from remote refs, including alternate branches, tags and bare repositories with unborn HEAD. Tick suffixes cover singular, plural and mixed nested kinds. This note no longer refers to a local prototype path.
+
+The Electron unseen-file regression exposed generic failure text hiding main's refusal; both questions now show the specific message. Visual inspection exposed the longer history warning squeezing the nested path; nested columns now wrap within bounded widths. The minimum-window regression checks the path remains readable. All six cited captures were recaptured and inspected; incidental captures were restored and design baselines were not regenerated.
+
+Final `npm run build` and `npx playwright test tests/e2e/thread-worktrees.spec.ts --workers=1` passed all five journeys. Typecheck, lint and notices verification passed; notices still cover 174 components. Renderer removal regressions passed all 14 cases. Separate read-only Standards and Spec reviews found no unresolved findings after the history, lock, error-message and layout fixes.
+
+An earlier overlapping full-suite attempt hit the existing recursive-submodule test deadline. All three initialized-submodule cases passed when run alone; no deadline or assertion changed. The final `npm test -- --maxWorkers=2` run on `ca896ae3` passed 6,452 tests with 153 skipped; 483 files passed and 39 were skipped. No failures.
