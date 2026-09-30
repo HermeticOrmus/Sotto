@@ -79,7 +79,7 @@ function definedFields<T extends object>(value: T): { [K in keyof T]: Exclude<T[
   return Object.fromEntries(Object.entries(value).filter(([, field]) => field !== undefined)) as { [K in keyof T]: Exclude<T[K], undefined> }
 }
 export type PersonalConversationHost = Pick<CodexAppServerHost, 'closed' | 'connect' | 'createPersonalConversation' | 'disconnect' | 'execute' | 'listThreadSkills' | 'personalSnapshot' | 'refreshThread' | 'sendPersonalConversation' | 'subscribe'>
-  /** Told that a new client is on disk, so each process moves to it as it goes idle (ADR-0021). */
+  /** Told that a new client is on disk, so each process moves to it as it goes idle (ADR-0042). */
   & { clientUpdated?(): Promise<void> }
 export interface PersonalChatOptions {
   userDataPath: string
@@ -354,7 +354,7 @@ export class PersonalChatService {
     return this.get()
   }
   /**
-   * A new client is on disk for one provider (ADR-0021). The chats keep their connection: the client's
+   * A new client is on disk for one provider (ADR-0042). The chats keep their connection: the client's
    * host moves each of its processes to the new one as it goes idle, and a chat mid-answer finishes on
    * the old one first. Nothing here disconnects, and a provider the chats do not use is left alone. A host that
    * cannot move to the new client says why, and the update reports it.

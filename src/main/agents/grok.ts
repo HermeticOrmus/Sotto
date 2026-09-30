@@ -62,7 +62,7 @@ function sessionPolicy(mode: GrokRuntimeMode | undefined): { yoloMode: boolean; 
  * Each thread session is its own agent process, never a proxy to Grok's shared leader. A leader serves every
  * client from one binary, and a client newer than the leader asks it to relaunch onto the new binary with a
  * five-second grace for running turns, so an update would cut off every working thread. An agent of its own
- * keeps a working thread on the binary it started with until it goes idle (ADR-0021).
+ * keeps a working thread on the binary it started with until it goes idle (ADR-0042).
  */
 export function grokArguments(): string[] {
   return ['--permission-mode', 'default', 'agent', '--no-leader', 'stdio']
@@ -83,7 +83,7 @@ const initializeSchema = z.object({ protocolVersion: z.number(), agentCapabiliti
 type GrokClient = z.infer<typeof initializeSchema>
 /** Why Sotto will not drive this client, or undefined when it will. */
 function clientRefusal(client: GrokClient): GrokUnsupported | undefined {
-  // The pin is a floor, not one exact version (ADR-0021): an exact pin is what kept an installed
+  // The pin is a floor, not one exact version (ADR-0042): an exact pin is what kept an installed
   // client on 1.0.5 while 1.0.40 was published. Older than the checked version is still refused.
   if (client.protocolVersion !== GROK_ACP_VERSION) return new GrokUnsupported(`Sotto speaks ACP ${GROK_ACP_VERSION}, and this client answered ACP ${client.protocolVersion}.`)
   if (compareClientVersions(client._meta.agentVersion, GROK_CLI_VERSION) < 0) return new GrokTooOld(`Grok CLI ${GROK_CLI_VERSION} or newer is required, and this client is ${client._meta.agentVersion}.`, client._meta.agentVersion)
@@ -539,7 +539,7 @@ export class GrokAcpHost implements AgentHost {
   /**
    * The Grok client on disk was updated while Sotto stayed connected. Find it again (the installer may have
    * moved it), ask the new binary which client it is, and hold it to the same checks connecting applies
-   * (ADR-0021). An accepted client becomes the provider's version and the one every new process starts
+   * (ADR-0042). An accepted client becomes the provider's version and the one every new process starts
    * from; each thread moves onto it as it goes idle: an idle session stops now, invisibly, as the reaper
    * stops one, and a working one finishes its turn on the process it started with and stops after. Nothing
    * is disconnected, cancelled or answered here. A client Sotto cannot find, or would refuse, is refused with

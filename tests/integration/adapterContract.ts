@@ -75,7 +75,7 @@ export interface AdapterFixture {
    */
   settings?: { snapshot: boolean; loseConfirmation?(): Promise<void> }
   /**
-   * Where the adapter is told its client was replaced on disk (ADR-0021, ADR-0038): which provider it is, and
+   * Where the adapter is told its client was replaced on disk (ADR-0042, ADR-0038): which provider it is, and
    * `install`, which puts a newer client where the adapter will find it and answers the version it reports.
    * Absent where the client updates with another app, as Devin's does.
    */
@@ -587,7 +587,7 @@ export function describeAdapterContract(name: string, factory: (session?: Adapte
     })
   })
 
-  // A client update (ADR-0021, ADR-0038). The installer replaces the client on disk while Sotto stays connected;
+  // A client update (ADR-0042, ADR-0038). The installer replaces the client on disk while Sotto stays connected;
   // the adapter reads the new version and moves each thread to the new client as it goes idle. Runs where the
   // adapter takes the news and the fixture can install a newer client.
   describe(`${name} client update`, () => {

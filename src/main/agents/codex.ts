@@ -408,7 +408,7 @@ export class CodexAppServerHost implements AgentHost {
     this.emit()
   }
   /**
-   * The client on disk was replaced while Sotto stayed connected (ADR-0021). Every thread runs its own app-server,
+   * The client on disk was replaced while Sotto stayed connected (ADR-0042). Every thread runs its own app-server,
    * so nothing is disconnected: the client is found again (an update may have moved it), a new provider app-server
    * reads its version and models, and each thread moves to it as it goes idle. An idle thread's app-server stops
    * now the way the reaper stops one, and its next action starts the new client; a busy one finishes on the old
