@@ -17,7 +17,7 @@ Electron 43.1.0's [dictionary URL patch](https://github.com/electron/electron/bl
 
 The revised helper also compiled under native Windows PowerShell, emitted `ready` and exited cleanly without dispatching a paste.
 
-`npm run build` succeeded. `npx playwright test tests/e2e/dictation-recovery.spec.ts tests/e2e/agent-browser.spec.ts tests/e2e/spellcheck-privacy.spec.ts --workers=1` passed all four journeys. The spellcheck journey was rerun against the actual production browser session after review and passed.
+`npm run build` succeeded. `npx playwright test tests/e2e/dictation-recovery.spec.ts tests/e2e/agent-browser.spec.ts tests/e2e/spellcheck-privacy.spec.ts tests/e2e/new-thread-settings.spec.ts tests/e2e/git-actions.spec.ts --workers=1` passed all seven journeys on the merged revision. `npx playwright test tests/e2e/files-panel.spec.ts --workers=1` passed its working-folder journey, including the exact copied path through the E2E clipboard adapter and no paste command. The spellcheck journey uses the actual production browser session.
 
 The dictation journey covers clipboard-failure recovery, keyboard Copy text, navigation, later dictation, and history off. It checks dark and light at 1600x1000, 1280x800 and 820x560 with reduced motion enabled. The browser journeys cover real local-page actions, user decisions, default grants, Stop, keyboard actions, themes, sizes and the focused-thread player. These are fixture-driven journeys; they do not establish live provider or native target-app behavior.
 
