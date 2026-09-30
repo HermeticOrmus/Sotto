@@ -43,6 +43,10 @@ const frameSchema = z.object({
 export type DevinFrame = z.infer<typeof frameSchema>
 type Waiter = { operation: string; resolve(): void; reject(error: Error): void; apply(value: unknown): Promise<void> | void; timer: ReturnType<typeof setTimeout> | undefined }
 const MAX_BYTES = 1024 * 1024
+// Live tool output and session/load replay can exceed a megabyte. Match Grok and Codex's
+// incoming transport guards; the adapter separately bounds transcripts and tool details.
+const MAX_FRAME_BYTES = 128 * 1024 * 1024
+const MAX_QUEUED_BYTES = MAX_FRAME_BYTES * 2
 
 /** One bounded ACP process. A timeout leaves the mutation pending so late evidence is applied, never retried. */
 export class DevinRpc {
@@ -58,18 +62,19 @@ export class DevinRpc {
     this.closed = new Promise(resolve => this.child.once('close', () => { this.fail(); void this.frames.then(resolve, resolve) }))
     this.child.once('exit', () => { this.child.stdout.destroy(); this.child.stderr.destroy() })
     this.child.on('error', () => this.fail()); this.child.stdin.on('error', () => this.fail())
-    let buffer = ''; let queued = 0; let stderr = 0
+    let buffer = ''; let bufferedBytes = 0; let queued = 0; let stderr = 0
     this.child.stdout.setEncoding('utf8')
     this.child.stdout.on('data', (chunk: string) => {
       if (this.stopped) return
-      buffer += chunk
-      if (Buffer.byteLength(buffer) > MAX_BYTES) { this.fail(); return }
+      buffer += chunk; bufferedBytes += Buffer.byteLength(chunk)
+      if (bufferedBytes > MAX_FRAME_BYTES) { this.fail(); return }
       let end: number
       while ((end = buffer.indexOf('\n')) >= 0) {
         const line = buffer.slice(0, end); buffer = buffer.slice(end + 1)
+        const size = Buffer.byteLength(line); bufferedBytes -= size + 1
         if (!line.trim()) continue
-        const size = Buffer.byteLength(line); queued += size
-        if (queued > MAX_BYTES) { this.fail(); return }
+        queued += size
+        if (queued > MAX_QUEUED_BYTES) { this.fail(); return }
         this.frames = this.frames.then(async () => {
           try {
             if (this.stopped) return
