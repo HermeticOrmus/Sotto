@@ -45,6 +45,30 @@ async function setup(download?: (url: string, target: string, bytes: number) => 
 }
 
 describe('NaturalSpeechModels', () => {
+  it('sweeps interrupted staging on startup without touching installed or unrelated assets or link targets', async () => {
+    const { manager, userRoot, root, downloader } = await setup()
+    const parent = join(userRoot, 'onnx-community')
+    await mkdir(parent, { recursive: true })
+    const partial = '.Supertonic-TTS-ONNX.partial-12345678-1234-1234-1234-123456789abc'
+    await mkdir(join(parent, partial))
+    await writeFile(join(parent, partial, 'unfinished'), 'partial bytes')
+    await mkdir(join(parent, 'Supertonic-TTS-ONNX'))
+    await writeFile(join(parent, 'unrelated.partial-file'), 'keep')
+    const outside = join(root, 'outside')
+    await mkdir(outside)
+    await writeFile(join(outside, 'keep'), 'outside')
+    await symlink(outside, join(parent, partial.replace('12345678', 'abcdefab')), 'junction')
+    await manager.initialize()
+    expect(await readdir(parent)).not.toContain(partial)
+    expect(await readdir(parent)).toContain('Supertonic-TTS-ONNX')
+    expect(await readFile(join(parent, 'unrelated.partial-file'), 'utf8')).toBe('keep')
+    expect(await readFile(join(outside, 'keep'), 'utf8')).toBe('outside')
+    expect(downloader).not.toHaveBeenCalled()
+    await manager.download()
+    await manager.initialize()
+    expect((await manager.status()).ready).toBe(true)
+  })
+
   it('does not download on status or protocol lookup, then publishes all verified files only after explicit download', async () => {
     const { manager, downloader, userRoot } = await setup()
     expect(await manager.status()).toEqual({ ready: false, completedBytes: 0, totalBytes: fixture.paths.reduce((n, p) => n + Buffer.byteLength(p), 0) })

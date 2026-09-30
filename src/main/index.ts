@@ -502,6 +502,7 @@ async function createRuntime(): Promise<NativeRuntimeController> {
   const runtimeVerification = e2eConfiguration === null
     ? beginRuntimeVerification(join(resourceRoot, 'runtime'))
     : null
+  await naturalSpeechModels.initialize()
   // Packaged builds get the brand icon stamped onto the executable by
   // electron-builder; an unpackaged run has to name the repository icon itself.
   const unpackagedIconPath = app.isPackaged

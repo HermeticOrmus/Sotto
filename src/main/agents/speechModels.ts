@@ -55,6 +55,7 @@ export class NaturalSpeechModels {
   private readonly parent: string
   private readonly root: string
   private readonly downloader: ModelDownloader
+  private initialization: Promise<void> | null = null
   private operation: Promise<NaturalSpeechModelStatus> | null = null
   private verification: Promise<boolean> | null = null
   private fingerprint: string | null = null
@@ -66,6 +67,23 @@ export class NaturalSpeechModels {
     this.parent = join(this.userRoot, 'onnx-community')
     this.root = join(this.userRoot, ...manifest.repository.split('/'))
     this.downloader = options.downloader ?? createHttpsDownloader()
+  }
+
+  initialize(): Promise<void> {
+    this.initialization ??= this.sweepTemporary()
+    return this.initialization
+  }
+
+  private async sweepTemporary(): Promise<void> {
+    try {
+      await this.assertDirectory(this.userRoot)
+      await this.assertDirectory(this.parent)
+      for (const name of await readdir(this.parent)) {
+        if (/^\.Supertonic-TTS-ONNX\.partial-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(name)) {
+          await this.removeTemporary(join(this.parent, name))
+        }
+      }
+    } catch { /* Missing or unsafe model roots need no startup cleanup. */ }
   }
 
   async status(): Promise<NaturalSpeechModelStatus> {
@@ -99,6 +117,7 @@ export class NaturalSpeechModels {
   }
 
   private async install(): Promise<NaturalSpeechModelStatus> {
+    await this.initialize()
     let temporary: string | null = null
     this.completedBytes = 0
     try {
