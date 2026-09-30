@@ -3,7 +3,8 @@ import { configDefaults, defineConfig } from 'vitest/config'
 export default defineConfig({
   test: {
     environment: 'jsdom',
-    exclude: [...configDefaults.exclude, 'tests/e2e/**', 'scripts/tts-bench/**', 'scripts/voice-perf/**', '**/.worktrees/**', '.claude/**'],
+    include: ['tests/**/*.{test,spec}.?(c|m)[jt]s?(x)'],
+    exclude: [...configDefaults.exclude, '**/e2e/**', 'scripts/tts-bench/**', 'scripts/voice-perf/**', '**/.worktrees/**', '.claude/**'],
     setupFiles: ['./tests/setup.ts'],
     // Waiting is not the assertion. A two-core CI runner with two workers on it takes several times
     // longer over a provider round trip or a child process start than a developer machine does, and a
