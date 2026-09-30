@@ -1,13 +1,23 @@
 // @vitest-environment node
-import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rm, stat, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 
 import { ZodError } from 'zod'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { HistoryRepository } from '../../../src/main/storage/historyRepository'
 import type { HistoryEntry } from '../../../src/shared/history'
+
+vi.mock('node:fs/promises', async importOriginal => {
+  const fs = await importOriginal<typeof import('node:fs/promises')>()
+  return { ...fs, unlink: vi.fn(fs.unlink), readdir: vi.fn(fs.readdir) }
+})
+const nativeFs = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+beforeEach(() => {
+  vi.mocked(unlink).mockReset().mockImplementation(nativeFs.unlink)
+  vi.mocked(readdir).mockReset().mockImplementation(nativeFs.readdir)
+})
 
 const roots: string[] = []
 
@@ -37,33 +47,76 @@ async function recoverySiblingNames(filePath: string): Promise<string[]> {
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks()
+  vi.useRealTimers()
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
 })
 
 describe('HistoryRepository', () => {
+  it.each(['EPERM', 'EBUSY', 'EACCES'])('continues startup and loads history after cleanup %s', async code => {
+    const { filePath } = await createRepository()
+    const saved = createEntry('saved', 1)
+    const temporary = `${filePath}.tmp-123-12345678-1234-1234-1234-123456789abc`
+    const removable = `${filePath}.tmp-456-12345678-1234-1234-1234-123456789abc`
+    await writeFile(filePath, JSON.stringify([saved]), 'utf8')
+    await writeFile(temporary, 'private abandoned transcript')
+    await writeFile(removable, 'other abandoned transcript')
+    const log = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    vi.mocked(unlink).mockImplementation(async path => {
+      if (path === temporary) throw Object.assign(new Error('private path and transcript'), { code })
+      await nativeFs.unlink(path)
+    })
+    const repository = new HistoryRepository(filePath)
+    vi.useFakeTimers()
+    const startup = repository.initialize()
+    const loaded = repository.list()
+    await vi.advanceTimersByTimeAsync(1_000)
+    await expect(startup).resolves.toBeUndefined()
+    await expect(loaded).resolves.toEqual([saved])
+    expect(log.mock.calls).toEqual([['[Sotto] history-temp-cleanup-failed']])
+    expect(await nativeFs.readdir(dirname(filePath))).toContain(basename(temporary))
+    expect(await nativeFs.readdir(dirname(filePath))).not.toContain(basename(removable))
+    expect(vi.mocked(unlink).mock.calls.filter(([path]) => path === temporary)).toHaveLength(
+      process.platform === 'win32' && code !== 'EACCES' ? 6 : 1,
+    )
+  })
+
+  it('continues startup when the history directory cannot be swept', async () => {
+    const { filePath, repository } = await createRepository()
+    const saved = createEntry('saved', 1)
+    await writeFile(filePath, JSON.stringify([saved]))
+    const log = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    vi.mocked(readdir).mockRejectedValueOnce(Object.assign(new Error('private directory'), { code: 'EACCES' }))
+    await expect(repository.initialize()).resolves.toBeUndefined()
+    await expect(repository.list()).resolves.toEqual([saved])
+    expect(log.mock.calls).toEqual([['[Sotto] history-temp-cleanup-failed']])
+  })
+
+
   it('removes crashed-write transcripts at startup without changing saved history or backups', async () => {
     const { filePath, repository } = await createRepository()
     const saved = createEntry('saved', 1)
     await writeFile(filePath, JSON.stringify([saved]), 'utf8')
-    await writeFile(`${filePath}.tmp-123-crashed`, JSON.stringify([createEntry('orphan', 2)]), 'utf8')
+    await writeFile(`${filePath}.tmp-123-12345678-1234-1234-1234-123456789abc`, JSON.stringify([createEntry('orphan', 2)]), 'utf8')
     await writeFile(`${filePath}.corrupt-backup`, 'backup', 'utf8')
+    await writeFile(`${filePath}.tmp-user-note`, 'unrelated', 'utf8')
 
     await repository.initialize()
 
-    expect((await readdir(dirname(filePath))).sort()).toEqual(['history.json', 'history.json.corrupt-backup'])
+    expect((await readdir(dirname(filePath))).sort()).toEqual(['history.json', 'history.json.corrupt-backup', 'history.json.tmp-user-note'])
     expect(await repository.list()).toEqual([saved])
   })
 
   it.each([true, false])('clears crashed-write transcripts with active history present: %s', async present => {
     const { filePath, repository } = await createRepository()
     if (present) await repository.add(createEntry('saved', 1), { enabled: true, retention: 'unlimited' })
-    await writeFile(`${filePath}.tmp-123-crashed`, JSON.stringify([createEntry('orphan', 2)]), 'utf8')
-    await writeFile(join(dirname(filePath), 'settings.json.tmp-123-crashed'), 'unrelated', 'utf8')
+    await writeFile(`${filePath}.tmp-123-12345678-1234-1234-1234-123456789abc`, JSON.stringify([createEntry('orphan', 2)]), 'utf8')
+    await writeFile(join(dirname(filePath), 'settings.json.tmp-123-12345678-1234-1234-1234-123456789abc'), 'unrelated', 'utf8')
 
     await repository.clear()
 
     expect((await readdir(dirname(filePath))).sort()).toEqual([
-      ...(present ? ['history.json'] : []), 'settings.json.tmp-123-crashed',
+      ...(present ? ['history.json'] : []), 'settings.json.tmp-123-12345678-1234-1234-1234-123456789abc',
     ])
     expect(await repository.list()).toEqual([])
   })
@@ -319,7 +372,7 @@ describe('HistoryRepository', () => {
     const unrelatedFiles = [
       'history.json.corrupt',
       'history.json.corrupted-1725000000015',
-      'history.json.tmp',
+      'history.json.tmp-user-note',
       'other-history.json.corrupt-1725000000015-id',
     ]
     await Promise.all(

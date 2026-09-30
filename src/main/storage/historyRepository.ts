@@ -1,5 +1,6 @@
 import { readdir, unlink } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
 
 import { z } from 'zod'
 
@@ -8,7 +9,7 @@ import {
   parseHistoryEntry,
   type HistoryEntry,
 } from '../../shared/history'
-import { AtomicJsonStore } from './atomicJsonStore'
+import { AtomicJsonStore, WINDOWS_FILE_RETRY_DELAYS_MS } from './atomicJsonStore'
 import type { RecoveryNotice } from '../../shared/recoveryNotice'
 
 const historySchema = z.array(historyEntrySchema)
@@ -174,23 +175,40 @@ export class HistoryRepository {
         return
       }
 
-      throw error
+      if (includeRecovery) throw error
+      console.warn('[Sotto] history-temp-cleanup-failed')
+      return
     }
 
     await Promise.all(
       siblingNames
-        .filter((name) => name.startsWith(temporaryPrefix)
+        .filter((name) => (name.startsWith(temporaryPrefix) && /^\d+-[0-9a-f-]{36}$/.test(name.slice(temporaryPrefix.length)))
           || (includeRecovery && name.startsWith(recoveryPrefix)))
         .map(async (name) => {
           try {
-            await unlink(join(directory, name))
+            await this.removeSibling(join(directory, name))
           } catch (error) {
             if (!hasErrorCode(error, 'ENOENT')) {
-              throw error
+              if (includeRecovery) throw error
+              console.warn('[Sotto] history-temp-cleanup-failed')
             }
           }
         }),
     )
+  }
+
+  private async removeSibling(path: string): Promise<void> {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await unlink(path)
+        return
+      } catch (error) {
+        const retryDelay = WINDOWS_FILE_RETRY_DELAYS_MS[attempt]
+        if (process.platform !== 'win32' || retryDelay === undefined
+          || (!hasErrorCode(error, 'EPERM') && !hasErrorCode(error, 'EBUSY'))) throw error
+        await delay(retryDelay)
+      }
+    }
   }
 
   private enqueueMutation<Result>(mutation: () => Promise<Result>): Promise<Result> {
