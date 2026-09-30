@@ -2525,6 +2525,15 @@ export class AgentControl {
     }
     if (prompt && draftId) this.setDelivery(prompt.threadId, draftId, result.accepted || result.uncertain ? 'uncertain' : 'failed')
     // An adapter that knows more about what an unconfirmed action cost says it; the intent is kept either way.
+    if (command.type === 'answer' && result.answerCompletion) {
+      void result.answerCompletion.then(async delivered => {
+        if (!delivered) return
+        if (answerIntent) this.recordAnsweredRequest(answerIntent)
+        this.recordAnswerAttribution(command, client)
+        this.outbox = this.outbox.filter(item => item.id !== command.commandId)
+        await this.persist(); this.publish()
+      }).catch(() => { this.state.error = 'Answer delivery was confirmed, but could not be saved. Restore local storage access and refresh.'; this.publish() })
+    }
     if (result.uncertain && this.outbox.some(o => o.id === command.commandId)) throw new Error(result.error ?? PROVIDER_RESULT_UNCONFIRMED)
     if ((command.type === 'configure-thread' || prompt) && result.accepted) {
       // A settings change the provider confirmed comes back with the snapshot it produced, which is the

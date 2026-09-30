@@ -485,13 +485,24 @@ export class PersonalChatService {
       const draftAnswers = request.questions?.length ? answer.questionAnswers : { [request.id]: { optionIds: [answer.answer] } }
       if (questions.length) await this.options.bindRequestDraftDecision?.({ kind: 'personal', ownerId: chatId, providerId: this.chat(chatId).providerId, requestId: request.id, questions }, decisionId, draftAnswers)
       const result = await this.host(chatId).execute({ ...definedFields(answer), type: 'answer', commandId: decisionId, threadId: chatId })
+      if (result.answerCompletion) {
+        const completion = result.answerCompletion.then(async delivered => {
+          if (!delivered) return
+          await this.mutate(saved => {
+            const decision = this.chat(chatId, saved).decisions!.find(d => d.id === decisionId)!
+            decision.status = 'accepted'; delete decision.error
+            if (this.error === uncertainAnswer) this.error = undefined
+          })
+        }).catch(() => { this.error = 'Answer delivery was confirmed, but could not be saved. Restore local storage access and refresh.'; this.emit() })
+        this.jobs.add(completion); void completion.finally(() => this.jobs.delete(completion))
+      }
       status = result.accepted && !result.uncertain ? 'accepted' : 'uncertain'
       if (!result.accepted) this.error = uncertainAnswer
       else if (status === 'accepted' && this.error === uncertainAnswer) this.error = undefined
     } catch (error) { status = 'failed'; failure = error }
     await this.mutate(saved => {
       const decision = this.chat(chatId, saved).decisions!.find(d => d.id === decisionId)!
-      decision.status = status
+      if (decision.status !== 'accepted') decision.status = status
       if (failure) decision.error = failure instanceof Error ? failure.message : 'Answer could not be sent.'
     })
     if (failure) throw failure

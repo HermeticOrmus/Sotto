@@ -19,6 +19,21 @@ import { e2eAgentReasoner } from '../../src/main/e2e/agentEffects'
 import { immediatePublishScheduler } from '../fixtures/publishScheduler'
 import { handleOf, PIXEL_DATA_URL, PIXEL_PNG, promptImageOf, stageInto } from '../fixtures/stagedImages'
 
+/** Hold the actual stdin callback and bytes without replacing the protocol's deadline. */
+function delayStdin(adapter: Awaited<ReturnType<typeof claudeFixture>>['adapter'], id: string) {
+  const runtime = (adapter as unknown as { runtimes: Map<string, { protocol: ClaudeProtocol }> }).runtimes.get(id)!
+  const stdin = (runtime.protocol as unknown as { child: import('node:child_process').ChildProcessWithoutNullStreams }).child.stdin
+  const write = stdin.write.bind(stdin)
+  let release = () => undefined
+  let fail = () => undefined
+  const spy = vi.spyOn(stdin, 'write').mockImplementationOnce(((chunk: string, callback: (error?: Error | null) => void) => {
+    release = () => { release = () => undefined; write(chunk, callback) }
+    fail = () => { release = () => undefined; callback(new Error('Pipe failed')) }
+    return false
+  }) as typeof stdin.write)
+  return { release: () => release(), fail: () => fail(), restore: () => spy.mockRestore() }
+}
+
 describe('Claude native request mapping', () => {
   it('rejects malformed permissions and questions', () => {
     for (const request of [{ subtype: 'other' }, { subtype: 'can_use_tool', tool_name: 'Bash', input: [] }, { subtype: 'can_use_tool', tool_name: 'AskUserQuestion', input: { questions: [] } }]) expect(claudePending({ request_id: 'id', request })).toBeUndefined()
@@ -260,6 +275,22 @@ describe('Claude recovery and safety', () => {
     const launch = (await f.driver.requests()).filter(record => record.method === 'resume').at(-1)!
     expect((launch.params!.frame as { args: string[] }).args.join(' ')).toContain(memories[0]!.content)
   })
+  it('delivers only the original answer when stdin resumes after its deadline', async () => {
+    await f.driver.raisePermission(id, 'Build')
+    await expect.poll(async () => (await thread()).requests.length).toBe(1)
+    const requestId = (await thread()).requests[0]!.id
+    const delayed = delayStdin(f.adapter, id)
+    const answer = { type: 'answer' as const, commandId: 'deny', threadId: id, requestId, answer: '', approved: false }
+    try {
+      expect(await f.host.execute(answer)).toMatchObject({ accepted: false, uncertain: true })
+      await f.host.refreshThread!(id, { retryUncertainAnswers: true })
+      await f.host.execute({ ...answer, commandId: 'allow', approved: true })
+      delayed.release(); delayed.restore()
+      await expect.poll(async () => (await thread()).requests).toEqual([])
+      await expect.poll(async () => (await f.driver.requests()).filter(record => f.protocol!.permissionDecision(record) !== undefined)
+        .map(record => f.protocol!.permissionDecision(record))).toEqual([false])
+    } finally { delayed.release(); delayed.restore() }
+  })
   it('lets the user retry an uncertain answer after a turn result without replaying it', async () => {
     await f.driver.raisePermission(id, 'Build')
     await expect.poll(async () => (await thread()).requests.length).toBe(1)
@@ -287,6 +318,48 @@ describe('Claude recovery and safety', () => {
     await expect.poll(async () => (await f.driver.requests()).filter(record => f.protocol!.permissionDecision(record) !== undefined).map(record => f.protocol!.permissionDecision(record))).toEqual([true])
     expect(await f.host.execute({ type: 'send', commandId: 'unblocked', messageId: 'unblocked', threadId: id, text: 'Continue' })).toEqual({ accepted: true })
   })
+  it('records the original personal denial when its callback succeeds late', async () => {
+    const service = new PersonalChatService({ userDataPath: f.root, hosts: { claude: f.adapter }, configuration: () => ({ reasoning: 'claude', reasoningModel: f.modelId, reasoningEffort: 'high' }) })
+    let delayed: ReturnType<typeof delayStdin> | undefined
+    try {
+      await service.start(); await service.connect()
+      const chat = (await service.create()).chats[0]!
+      await service.saveDraft({ chatId: chat.id, revision: 1, text: 'Hello', skills: [] })
+      await service.send({ chatId: chat.id, revision: 1 }); await service.settled()
+      await f.driver.raisePermission(chat.id, 'Build')
+      await expect.poll(() => service.get().chats[0]!.requests.length).toBe(1)
+      const requestId = service.get().chats[0]!.requests[0]!.id
+      delayed = delayStdin(f.adapter, chat.id)
+      const answer = { chatId: chat.id, requestId, answer: '', approved: false }
+      await service.answer(answer)
+      const checked = await service.refresh(chat.id)
+      expect(personalAnswerHeld(checked.chats[0]!, requestId)).toBe(true)
+      await expect(service.answer({ ...answer, approved: true })).rejects.toThrow('uncertain')
+      delayed.release(); delayed.restore(); await service.settled()
+      await expect.poll(() => service.get().chats[0]!.requests).toEqual([])
+      expect(service.get().chats[0]!.decisions).toMatchObject([{ approved: false, status: 'accepted' }])
+      expect(service.get().chats[0]!.decisions).toHaveLength(1)
+      expect(service.get().error).toBeUndefined()
+      await expect.poll(async () => (await f.driver.requests()).filter(record => f.protocol!.permissionDecision(record) !== undefined)
+        .map(record => f.protocol!.permissionDecision(record))).toEqual([false])
+    } finally { delayed?.release(); delayed?.restore(); await service.close() }
+  })
+  it('permits a new answer only after a delayed stdin callback fails outright', async () => {
+    await f.driver.raisePermission(id, 'Build')
+    await expect.poll(async () => (await thread()).requests.length).toBe(1)
+    const requestId = (await thread()).requests[0]!.id
+    const delayed = delayStdin(f.adapter, id)
+    const answer = { type: 'answer' as const, commandId: 'deny', threadId: id, requestId, answer: '', approved: false }
+    try {
+      const result = await f.host.execute(answer)
+      expect(result).toMatchObject({ accepted: false, uncertain: true })
+      delayed.fail(); delayed.restore(); expect(await result.answerCompletion).toBe(false)
+      await f.host.refreshThread!(id, { retryUncertainAnswers: true })
+      expect(await f.host.execute({ ...answer, commandId: 'allow', approved: true })).toEqual({ accepted: true })
+      await expect.poll(async () => (await f.driver.requests()).filter(record => f.protocol!.permissionDecision(record) !== undefined)
+        .map(record => f.protocol!.permissionDecision(record))).toEqual([true])
+    } finally { delayed.release(); delayed.restore() }
+  })
   it('reopens a personal answer through Check again without replaying its uncertain decision', async () => {
     const service = new PersonalChatService({ userDataPath: f.root, hosts: { claude: f.adapter }, configuration: () => ({ reasoning: 'claude', reasoningModel: f.modelId, reasoningEffort: 'high' }) })
     try {
@@ -313,6 +386,32 @@ describe('Claude recovery and safety', () => {
       expect(personalAnswerHeld(service.get().chats[0]!, requestId)).toBe(false)
       await expect.poll(async () => (await f.driver.requests()).filter(record => f.protocol!.permissionDecision(record) !== undefined).map(record => f.protocol!.permissionDecision(record))).toEqual([true])
     } finally { await service.close() }
+  })
+  it('settles the original project answer receipt when its callback succeeds late', async () => {
+    const credentials = new AgentCredentials(f.root, { isEncryptionAvailable: () => false, encryptString: value => Buffer.from(value), decryptString: value => value.toString() })
+    await credentials.load()
+    const registry = new ThreadRegistry(f.root), wrapped = new SottoThreadHost('claude', f.adapter, registry)
+    const control = new AgentControl({ schedule: immediatePublishScheduler, directory: f.root, host: wrapped, credentials, reasoner: e2eAgentReasoner,
+      membership: { status: async () => ({ status: 'beta', label: 'Test', expiresAt: null }), action: async () => ({ status: 'beta', label: 'Test', expiresAt: null }) } })
+    let delayed: ReturnType<typeof delayStdin> | undefined
+    try {
+      await control.start(); await control.command({ type: 'connect' })
+      const threadId = registry.all().find(binding => binding.sessionId === id)!.threadId
+      await wrapped.refreshThread(threadId); await f.driver.raisePermission(id, 'Build')
+      await expect.poll(async () => (await thread()).requests.length).toBe(1)
+      const requestId = (await thread()).requests[0]!.id
+      delayed = delayStdin(f.adapter, id)
+      await control.command({ type: 'answer', threadId, requestId, answer: '', approved: false })
+      await control.refreshRequestDraft(threadId)
+      expect((await thread()).requests[0]!.answerRetryReady).toBeUndefined()
+      expect(control.requestAnswerRecovery(threadId, 'claude').uncertainRequestIds).toEqual([requestId])
+      delayed.release(); delayed.restore()
+      await expect.poll(() => control.requestAnswerRecovery(threadId, 'claude').uncertainRequestIds).toEqual([])
+      expect(control.requestAnswerRecovery(threadId, 'claude').completed).toMatchObject([{ requestId }])
+      await expect.poll(async () => (await thread()).requests).toEqual([])
+      await expect.poll(async () => (await f.driver.requests()).filter(record => f.protocol!.permissionDecision(record) !== undefined)
+        .map(record => f.protocol!.permissionDecision(record))).toEqual([false])
+    } finally { delayed?.release(); delayed?.restore(); control.dispose(); await registry.flush() }
   })
   it('reopens a project answer through the coordinator Check again path', async () => {
     const credentials = new AgentCredentials(f.root, { isEncryptionAvailable: () => false, encryptString: value => Buffer.from(value), decryptString: value => value.toString() })

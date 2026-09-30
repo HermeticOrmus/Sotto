@@ -31,6 +31,8 @@ export type AgentHostCommand =
 export interface AgentHostResult {
   readonly accepted: boolean
   readonly uncertain?: boolean
+  /** Local answer delivery after its deadline; observes the original write and never sends another. */
+  readonly answerCompletion?: Promise<boolean>
   /**
    * For `configure-thread`: the snapshot the adapter emitted once the provider confirmed the change, carrying
    * the thread's effective settings. The coordinator accepts it in place of reading the thread again, and

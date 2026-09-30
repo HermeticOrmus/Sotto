@@ -25,7 +25,7 @@ import type { AgentBackgroundWork } from '../../shared/agentMonitoring'
 import { claudeSkillPrompt, discoverClaudeSkills } from './claudeSkills'
 import { verifyFileMentions } from './promptFiles'
 import { ClaudeSubscriptionClient } from './subscriptionClaude'
-import { ClaudeProtocol, ClaudeRejected, object, type ClaudeFrame } from './claudeProtocol'
+import { ClaudeProtocol, ClaudeRejected, ClaudeWritePending, object, type ClaudeFrame } from './claudeProtocol'
 import { claudeTurnFailure } from './claudeTurnFailure'
 import { authoredClaudeUser, claudeDigest, ClaudeSessionLog, claudeText } from './claudeSessionLog'
 import { claudeAnswer, claudeDenial, claudePending, type ClaudePending } from './claudeRequests'
@@ -149,7 +149,7 @@ export interface ClaudeStreamJsonHostOptions {
   logEvent?: (event: ClaudeAdapterEvent) => void
 }
 /** `client` is the client generation the CLI was launched from: see `clientUpdated`. */
-type Runtime = { protocol: ClaudeProtocol; requests: Map<string, ClaudePending>; answered: Set<string>; retryableAnswers: Set<string>; clientRevision: number }
+type Runtime = { protocol: ClaudeProtocol; requests: Map<string, ClaudePending>; answered: Set<string>; retryableAnswers: Set<string>; writingAnswers: Set<string>; clientRevision: number }
 
 /** One native coding CLI per thread. Credentials and transcript persistence remain native. */
 export class ClaudeStreamJsonHost implements AgentHost {
@@ -441,7 +441,7 @@ export class ClaudeStreamJsonHost implements AgentHost {
     if (generation !== this.generation || !this.state.connected) throw new Error('Claude connection changed while reading the thread.')
     if (purpose?.retryUncertainAnswers) {
       const runtime = this.runtimes.get(id)
-      for (const pending of runtime?.requests.values() ?? []) if (pending.request.delivery === 'uncertain') {
+      for (const pending of runtime?.requests.values() ?? []) if (pending.request.delivery === 'uncertain' && !runtime!.writingAnswers.has(pending.id)) {
         delete pending.request.delivery
         pending.request.answerRetryReady = true
         runtime!.answered.delete(pending.id)
@@ -682,7 +682,7 @@ export class ClaudeStreamJsonHost implements AgentHost {
     if (command.type === 'answer') {
       const pending = runtime.requests.get(command.requestId)
       if (!pending) throw new Error('That request is no longer pending.')
-      if (runtime.answered.has(pending.id) && !runtime.retryableAnswers.has(pending.id)) return { accepted: false, uncertain: true }
+      if (runtime.writingAnswers.has(pending.id) || runtime.answered.has(pending.id) && !runtime.retryableAnswers.has(pending.id)) return { accepted: false, uncertain: true }
       const answer = claudeAnswer(pending, command.answer, command.approved, command.questionAnswers, command.permissionChoice)
       // Only another explicit user answer retries uncertain delivery. Clearing the marker while
       // it is in flight keeps a concurrent answer from sending a second response.
@@ -698,15 +698,38 @@ export class ClaudeStreamJsonHost implements AgentHost {
         throw error
       }
       if (this.runtimes.get(id) !== runtime || !runtime.requests.has(pending.id)) return { accepted: false, uncertain: true }
-      try {
-        await this.reply(runtime, pending.id, answer)
+      const settle = async (): Promise<void> => {
+        runtime.writingAnswers.delete(pending.id)
+        runtime.retryableAnswers.delete(pending.id)
+        runtime.answered.add(pending.id)
+        if (this.runtimes.get(id) === runtime && runtime.requests.get(pending.id) === pending) {
+          runtime.requests.delete(pending.id); thread.requests = thread.requests.filter(request => request.id !== pending.id); this.emit()
+        }
         if (pending.resumeDialog && answer.result === 'never') {
           alias.resumeCompactionDismissed = true
           for (const current of this.threads.values()) current.resumeCompactionDismissed = true
           await this.persist()
         }
-        runtime.requests.delete(pending.id); thread.requests = thread.requests.filter(request => request.id !== pending.id); this.emit(); return { accepted: true }
-      } catch { pending.request.delivery = 'uncertain'; runtime.retryableAnswers.add(pending.id); this.emit(); return { accepted: false, uncertain: true } }
+      }
+      const failed = (): void => {
+        runtime.writingAnswers.delete(pending.id)
+        runtime.retryableAnswers.add(pending.id)
+        if (this.runtimes.get(id) === runtime && runtime.requests.get(pending.id) === pending) {
+          pending.request.delivery = 'uncertain'; this.emit()
+        }
+      }
+      runtime.writingAnswers.add(pending.id)
+      try { await this.reply(runtime, pending.id, answer) }
+      catch (error) {
+        pending.request.delivery = 'uncertain'
+        if (error instanceof ClaudeWritePending) {
+          const answerCompletion = error.completion.then(async () => { await settle(); return true }, () => { failed(); return false })
+          this.trackClosure(answerCompletion.then(() => undefined, () => undefined))
+          this.emit(); return { accepted: false, uncertain: true, answerCompletion }
+        }
+        failed(); return { accepted: false, uncertain: true }
+      }
+      await settle(); return { accepted: true }
     }
     if (command.type === 'interrupt') {
       await this.denyPending(id, runtime)
@@ -911,7 +934,7 @@ export class ClaudeStreamJsonHost implements AgentHost {
       ...(alias.kind === 'personal' ? ['--append-system-prompt', this.personalContexts.get(id) ?? personalContext()] : []),
       resume ? '--resume' : '--session-id', alias.sessionId, '--model', alias.modelId, ...(alias.reasoningEffort ? ['--effort', alias.reasoningEffort] : [])]
     let runtime: Runtime
-    try { runtime = { requests: new Map(), answered: new Set(), retryableAnswers: new Set(), clientRevision: this.clientRevision, protocol: new ClaudeProtocol(this.executable, args, alias.cwd, { ...this.client.environment(), ...(setup ? { MCP_TOOL_TIMEOUT: '600000' } : browser ? { MCP_TOOL_TIMEOUT: '360000' } : {}) }, this.options.requestTimeoutMs ?? 15000,
+    try { runtime = { requests: new Map(), answered: new Set(), retryableAnswers: new Set(), writingAnswers: new Set(), clientRevision: this.clientRevision, protocol: new ClaudeProtocol(this.executable, args, alias.cwd, { ...this.client.environment(), ...(setup ? { MCP_TOOL_TIMEOUT: '600000' } : browser ? { MCP_TOOL_TIMEOUT: '360000' } : {}) }, this.options.requestTimeoutMs ?? 15000,
       frame => { if (this.runtimes.get(id) === runtime) this.frame(id, frame) }, () => {
         if (this.runtimes.get(id) !== runtime) return
         // Each thread has its own CLI, so one ending is this thread's failure, not the provider's: the others
