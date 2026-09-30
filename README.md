@@ -80,6 +80,8 @@ If thread messages cannot be saved, Sotto keeps them in memory and retries while
 
 The iPhone app opens on **Threads**: questions and permissions first, working threads next, then recent threads. Search stays at the top, and a computer selector narrows the list. Confirmed background work and running compaction count as ongoing work, matching desktop. Unsettled threads stay visible; **Settled** expands work put aside on desktop. **Computers** manages pairings, and **Settings** keeps this iPhone's appearance and larger-text choice. The app is in development and talks only to your own Sotto host, through your private Tailscale address. It looks the host's name up through Tailscale's own name service on the phone, pairs with a code the host prints, and never answers a permission unless you have allowed it on the host.
 
+**New thread** on iPhone lets you choose a connected computer, one of its projects or another folder on it, and that computer's model and effort. The thread uses the shared project folder and starts work when you send its first message. Permissions start by asking; a mode that allows actions without asking needs **Can answer** on that computer. Folder names and paths travel over the same private connection, and a creation the computer did not confirm is shown without being sent again.
+
 ## Build from source
 
 With Node.js 24:

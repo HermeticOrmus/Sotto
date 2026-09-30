@@ -4,6 +4,8 @@ import SottoCore
 /// Focus reads only host list summaries. Opening a thread subscribes to its detail.
 struct ThreadsView: View {
     @EnvironmentObject var model: AppModel
+    var openCreated: (ThreadRef) -> Void = { _ in }
+    @State private var creating = false
     @State private var query = ""
     @State private var settledExpanded = false
     @FocusState private var searching: Bool
@@ -21,11 +23,14 @@ struct ThreadsView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                 FeedbackBanner().padding(.top, 8)
+                ForEach(model.pendingCreations.filter { model.show.admits($0.hostID) }) { operation in
+                    CreationPendingRow(operation: operation).padding(.top, 12)
+                }
                 ForEach(model.lists.filter { model.show.admits($0.hostID) && $0.status != .online }, id: \.hostID) { computer in
                     connectionNote(computer).padding(.top, 12)
                 }
                 if groups.isEmpty {
-                    Text(groups.searching ? "No matching threads." : model.anyConnecting ? "Reading threads…" : "No threads here yet. Start one in Sotto on your computer.")
+                    Text(groups.searching ? "No matching threads." : model.anyConnecting ? "Reading threads…" : "No threads here yet. Tap New thread to start one.")
                         .foregroundStyle(Palette.muted).padding(.vertical, 28)
                 }
                 if !groups.questions.isEmpty {
@@ -61,6 +66,13 @@ struct ThreadsView: View {
                 }.padding(.horizontal, 22).padding(.bottom, 24)
             }.scrollDismissesKeyboard(.interactively).refreshable { await model.refresh() }
         }.page("Threads")
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { creating = true } label: { Image(systemName: "plus").frame(minWidth: 44, minHeight: 44) }
+                    .accessibilityLabel("New thread").accessibilityIdentifier("new-thread")
+            }
+        }
+        .sheet(isPresented: $creating) { NewThreadSheet(opened: openCreated) }
     }
     private var searchPill: some View {
         HStack(spacing: 10) {
