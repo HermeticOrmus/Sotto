@@ -149,7 +149,7 @@ export interface ClaudeStreamJsonHostOptions {
   logEvent?: (event: ClaudeAdapterEvent) => void
 }
 /** `client` is the client generation the CLI was launched from: see `clientUpdated`. */
-type Runtime = { protocol: ClaudeProtocol; requests: Map<string, ClaudePending>; answered: Set<string>; retryableAnswers: Set<string>; writingAnswers: Set<string>; contextMemoryIds: Set<string>; clientRevision: number }
+type Runtime = { protocol: ClaudeProtocol; requests: Map<string, ClaudePending>; answered: Set<string>; answerWrites: Map<string, 'pending' | 'failed'>; contextMemoryIds: Set<string>; clientRevision: number }
 
 /** One native coding CLI per thread. Credentials and transcript persistence remain native. */
 export class ClaudeStreamJsonHost implements AgentHost {
@@ -443,7 +443,7 @@ export class ClaudeStreamJsonHost implements AgentHost {
     if (generation !== this.generation || !this.state.connected) throw new Error('Claude connection changed while reading the thread.')
     if (purpose?.retryUncertainAnswers) {
       const runtime = this.runtimes.get(id)
-      for (const pending of runtime?.requests.values() ?? []) if (pending.request.delivery === 'uncertain' && !runtime!.writingAnswers.has(pending.id)) {
+      for (const pending of runtime?.requests.values() ?? []) if (pending.request.delivery === 'uncertain' && runtime!.answerWrites.get(pending.id) !== 'pending') {
         delete pending.request.delivery
         pending.request.answerRetryReady = true
         runtime!.answered.delete(pending.id)
@@ -697,25 +697,24 @@ export class ClaudeStreamJsonHost implements AgentHost {
     if (command.type === 'answer') {
       const pending = runtime.requests.get(command.requestId)
       if (!pending) throw new Error('That request is no longer pending.')
-      if (runtime.writingAnswers.has(pending.id) || runtime.answered.has(pending.id) && !runtime.retryableAnswers.has(pending.id)) return { accepted: false, uncertain: true }
+      if (runtime.answerWrites.get(pending.id) === 'pending' || runtime.answered.has(pending.id) && runtime.answerWrites.get(pending.id) !== 'failed') return { accepted: false, uncertain: true }
       const answer = claudeAnswer(pending, command.answer, command.approved, command.questionAnswers, command.permissionChoice)
       // Only another explicit user answer retries uncertain delivery. Clearing the marker while
       // it is in flight keeps a concurrent answer from sending a second response.
       const retry = pending.request.delivery === 'uncertain' || pending.request.answerRetryReady === true
       delete pending.request.answerRetryReady
       delete pending.request.delivery
-      runtime.retryableAnswers.delete(pending.id)
+      runtime.answerWrites.delete(pending.id)
       runtime.answered.add(pending.id)
       if (!alias.answeredRequestIds.includes(pending.id)) alias.answeredRequestIds.push(pending.id)
       try { await this.persist() } catch (error) {
-        if (retry) { pending.request.delivery = 'uncertain'; runtime.retryableAnswers.add(pending.id) }
+        if (retry) { pending.request.delivery = 'uncertain'; runtime.answerWrites.set(pending.id, 'failed') }
         else { alias.answeredRequestIds = alias.answeredRequestIds.filter(id => id !== pending.id); runtime.answered.delete(pending.id) }
         throw error
       }
       if (this.runtimes.get(id) !== runtime || !runtime.requests.has(pending.id)) return { accepted: false, uncertain: true }
       const settle = async (): Promise<void> => {
-        runtime.writingAnswers.delete(pending.id)
-        runtime.retryableAnswers.delete(pending.id)
+        runtime.answerWrites.delete(pending.id)
         runtime.answered.add(pending.id)
         if (this.runtimes.get(id) === runtime && runtime.requests.get(pending.id) === pending) {
           runtime.requests.delete(pending.id); thread.requests = thread.requests.filter(request => request.id !== pending.id); this.emit()
@@ -727,13 +726,12 @@ export class ClaudeStreamJsonHost implements AgentHost {
         }
       }
       const failed = (): void => {
-        runtime.writingAnswers.delete(pending.id)
-        runtime.retryableAnswers.add(pending.id)
+        runtime.answerWrites.set(pending.id, 'failed')
         if (this.runtimes.get(id) === runtime && runtime.requests.get(pending.id) === pending) {
           pending.request.delivery = 'uncertain'; this.emit()
         }
       }
-      runtime.writingAnswers.add(pending.id)
+      runtime.answerWrites.set(pending.id, 'pending')
       try { await this.reply(runtime, pending.id, answer) }
       catch (error) {
         pending.request.delivery = 'uncertain'
@@ -949,7 +947,7 @@ export class ClaudeStreamJsonHost implements AgentHost {
       ...(alias.kind === 'personal' ? ['--append-system-prompt', this.personalContexts.get(id) ?? personalContext()] : []),
       resume ? '--resume' : '--session-id', alias.sessionId, '--model', alias.modelId, ...(alias.reasoningEffort ? ['--effort', alias.reasoningEffort] : [])]
     let runtime: Runtime
-    try { runtime = { requests: new Map(), answered: new Set(), retryableAnswers: new Set(), writingAnswers: new Set(), contextMemoryIds: new Set(this.personalMemories.get(id)?.map(memory => memory.id)), clientRevision: this.clientRevision, protocol: new ClaudeProtocol(this.executable, args, alias.cwd, { ...this.client.environment(), ...(setup ? { MCP_TOOL_TIMEOUT: '600000' } : browser ? { MCP_TOOL_TIMEOUT: '360000' } : {}) }, this.options.requestTimeoutMs ?? 15000,
+    try { runtime = { requests: new Map(), answered: new Set(), answerWrites: new Map(), contextMemoryIds: new Set(this.personalMemories.get(id)?.map(memory => memory.id)), clientRevision: this.clientRevision, protocol: new ClaudeProtocol(this.executable, args, alias.cwd, { ...this.client.environment(), ...(setup ? { MCP_TOOL_TIMEOUT: '600000' } : browser ? { MCP_TOOL_TIMEOUT: '360000' } : {}) }, this.options.requestTimeoutMs ?? 15000,
       frame => { if (this.runtimes.get(id) === runtime) this.frame(id, frame) }, () => {
         if (this.runtimes.get(id) !== runtime) return
         // Each thread has its own CLI, so one ending is this thread's failure, not the provider's: the others
