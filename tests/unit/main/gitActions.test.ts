@@ -45,6 +45,45 @@ async function fixture(options: { remote?: boolean; gh?: GhFixture; commitMessag
 }
 
 describe('the stacked Git action, the way T3 runs it', () => {
+  it.each([false, true])('preserves staged hunks and excluded staging (exclude files: %s)', async exclude => {
+    const f = await fixture({ remote: false })
+    await writeFile(join(f.repo, 'work.txt'), 'staged\n'); git(f.repo, 'add', 'work.txt')
+    await writeFile(join(f.repo, 'work.txt'), 'staged\nunstaged\n')
+    if (exclude) { await writeFile(join(f.repo, 'skip.txt'), 'excluded\n'); git(f.repo, 'add', 'skip.txt') }
+    await f.actions.runStackedAction({ threadId: 't', cwd: f.repo, action: 'commit', ...(exclude ? { filePaths: ['work.txt'] } : {}), commitMessage: 'Commit staged hunk' })
+    expect(git(f.repo, 'show', 'HEAD:work.txt')).toBe('staged')
+    expect(await readFile(join(f.repo, 'work.txt'), 'utf8')).toBe('staged\nunstaged\n')
+    expect(git(f.repo, 'diff', '--cached', '--name-only')).toBe(exclude ? 'skip.txt' : '')
+    if (exclude) expect(git(f.repo, 'show', ':skip.txt')).toBe('excluded')
+  })
+  it('restores the original index after a refused commit', async () => {
+    const f = await fixture({ remote: false })
+    await writeFile(join(f.repo, 'work.txt'), 'staged\n'); git(f.repo, 'add', 'work.txt')
+    await writeFile(join(f.repo, 'work.txt'), 'staged\nunstaged\n')
+    await writeFile(join(f.repo, 'skip.txt'), 'excluded\n'); git(f.repo, 'add', 'skip.txt')
+    await mkdir(join(f.repo, '.githooks'))
+    const hook = join(f.repo, '.githooks', 'pre-commit'); await writeFile(hook, '#!/bin/sh\nexit 1\n'); await chmod(hook, 0o755)
+    const before = git(f.repo, 'write-tree')
+    await expect(f.actions.runStackedAction({ threadId: 't', cwd: f.repo, action: 'commit', filePaths: ['work.txt'], commitMessage: 'Refused' })).rejects.toThrow('Commit failed')
+    expect(git(f.repo, 'write-tree')).toBe(before)
+    expect(await readFile(join(f.repo, 'work.txt'), 'utf8')).toBe('staged\nunstaged\n')
+  })
+  it('restores the original index if staging a selected path fails', async () => {
+    const f = await fixture({ remote: false })
+    await writeFile(join(f.repo, 'work.txt'), 'staged\n'); git(f.repo, 'add', 'work.txt')
+    const before = git(f.repo, 'write-tree')
+    await expect(f.actions.runStackedAction({ threadId: 't', cwd: f.repo, action: 'commit', filePaths: ['missing.txt'], commitMessage: 'Refused' })).rejects.toThrow('pathspec')
+    expect(git(f.repo, 'write-tree')).toBe(before)
+  })
+  it('preserves excluded staging when committing selected files in an unborn repository', async () => {
+    const f = await fixture({ remote: false })
+    const repo = join(f.root, 'unborn'); await mkdir(repo); git(repo, 'init', '-q', '-b', 'main'); configure(repo)
+    await writeFile(join(repo, 'chosen.txt'), 'chosen\n'); await writeFile(join(repo, 'skip.txt'), 'excluded\n')
+    git(repo, 'add', 'skip.txt')
+    await f.actions.runStackedAction({ threadId: 't', cwd: repo, action: 'commit', filePaths: ['chosen.txt'], commitMessage: 'First selected commit' })
+    expect(git(repo, 'ls-tree', '--name-only', 'HEAD')).toBe('chosen.txt')
+    expect(git(repo, 'diff', '--cached', '--name-only')).toBe('skip.txt')
+  })
   it('commits both ends of a selected rename and leaves an excluded file alone', async () => {
     const f = await fixture({ remote: false })
     git(f.repo, 'mv', 'work.txt', 'renamed.txt')
@@ -88,7 +127,7 @@ describe('the stacked Git action, the way T3 runs it', () => {
     expect(result.commit).toMatchObject({ status: 'created', subject: 'Write the commit from the diff' })
     expect(git(f.repo, 'show', '--stat', '--pretty=', 'HEAD')).toContain('work.txt')
     expect(git(f.repo, 'show', '--stat', '--pretty=', 'HEAD')).not.toContain('skip.txt')
-    expect(git(f.repo, 'status', '--porcelain')).toBe('?? skip.txt')
+    expect(git(f.repo, 'status', '--porcelain')).toBe('A  skip.txt')
     const material = f.writeCommitMessage.mock.calls[0]![1]
     expect(material.text).toContain('+second')
     expect(material.conventions?.subjects).toEqual(['Add the rules', 'First'])

@@ -26,7 +26,7 @@ Saved Codex conversations keep both sides after a restart. Opening a thread also
 - **You answer every request.** Anything a thread's permissions don't already allow waits for you. A desktop connected through your SSH account can answer requests and change thread permissions as soon as setup finishes. A phone or another device paired by code needs your separate permission to do those things.
 - **Tools beside each thread.** A browser, a terminal, the thread's files and its changes. Terminal input stays in order; if input is refused, Sotto says so before you try again.
 - **Codex's Computer Use.** In a Codex thread set to Full access, with the Codex app open, Codex can operate the apps on your computer.
-- **Git in one press.** Commit, push and open a pull request. Leave the message empty and the agent writes it.
+- **Git in one press.** Commit, push and open a pull request. Leave the message empty and the agent writes it. Selected files keep staged hunks; files left out keep their staging.
 - **Worktrees for parallel work.** Choose the current checkout, a new worktree, or one of five recent worktrees under the composer. Search finds older worktrees. Remove a thread's own folder when you're done.
 - **Dictation anywhere.** Press `Ctrl+Shift+Space` (`⌃⇧Space` on a Mac), speak, and press it again. The text is copied and can be pasted at your cursor.
 

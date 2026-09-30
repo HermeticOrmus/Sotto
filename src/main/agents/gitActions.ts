@@ -135,23 +135,27 @@ export class GitActions {
           if (await this.git(cwd, ['rev-parse', '-q', '--verify', marker]).then(() => true, () => false)) throw new GitActionRefusal('A merge or rebase is in progress. Finish or abort it in a terminal before committing here.')
         }
         const staged = await this.stage(cwd, input.filePaths)
-        if (!staged) {
-          if (featureBranch) throw new GitActionRefusal('Cannot create a feature branch because there are no changes to commit.')
-          result.commit = { status: 'skipped_no_changes' }
-        } else {
-          const message = await this.commitMessage(input, cwd, progress)
-          if (featureBranch) {
-            progress({ kind: 'phase_started', phase: 'branch', stage: 'Preparing feature ref...' })
-            const name = await this.uniqueBranch(cwd, featureBranchName(message.subject))
-            await this.git(cwd, ['branch', name])
-            await this.git(cwd, ['checkout', name, '--'], { timeoutMs: 10_000 })
-            branch = name
-            result.branch = { status: 'created', name }
+        let committed = false
+        try {
+          if (!staged.hasChanges) {
+            if (featureBranch) throw new GitActionRefusal('Cannot create a feature branch because there are no changes to commit.')
+            result.commit = { status: 'skipped_no_changes' }
+          } else {
+            const message = await this.commitMessage(input, cwd, progress)
+            if (featureBranch) {
+              progress({ kind: 'phase_started', phase: 'branch', stage: 'Preparing feature ref...' })
+              const name = await this.uniqueBranch(cwd, featureBranchName(message.subject))
+              await this.git(cwd, ['branch', name])
+              await this.git(cwd, ['checkout', name, '--'], { timeoutMs: 10_000 })
+              branch = name
+              result.branch = { status: 'created', name }
+            }
+            progress({ kind: 'phase_started', phase: 'commit', stage: 'Committing...' })
+            const sha = await this.commit(cwd, message, progress)
+            committed = true
+            result.commit = { status: 'created', sha, subject: message.subject }
           }
-          progress({ kind: 'phase_started', phase: 'commit', stage: 'Committing...' })
-          const sha = await this.commit(cwd, message, progress)
-          result.commit = { status: 'created', sha, subject: message.subject }
-        }
+        } finally { await staged.restore(committed) }
       }
       if (wantsPush) {
         progress({ kind: 'phase_started', phase: 'push', stage: pushTarget ? `Pushing to ${pushTarget}...` : 'Pushing...' })
@@ -166,19 +170,29 @@ export class GitActions {
     })
   }
 
-  /** `git reset` then `git add -A`, or only the chosen paths, the way T3 stages; true when something is staged. */
-  private async stage(cwd: string, filePaths: readonly string[] | undefined): Promise<boolean> {
+  /** Keep staged hunks; stage only unstaged selected files and temporarily leave excluded files out. */
+  private async stage(cwd: string, filePaths: readonly string[] | undefined): Promise<{ hasChanges: boolean; restore: (committed: boolean) => Promise<void> }> {
     cwd = (await this.git(cwd, ['rev-parse', '--show-toplevel'])).trim()
-    if (filePaths) {
-      const selected = new Set(filePaths)
-      const records = parseChangedRecords(await this.git(cwd, ['status', '--porcelain=v2', '-z', '--untracked-files=all']))
-      for (const record of records) if (record.status === 'renamed' && record.originalPath && selected.has(record.path)) selected.add(record.originalPath)
-      filePaths = [...selected]
+    const originalTree = (await this.git(cwd, ['write-tree'])).trim()
+    const records = parseChangedRecords(await this.git(cwd, ['status', '--porcelain=v2', '-z', '--untracked-files=all']))
+    const selected = new Set(filePaths ?? records.map(record => record.path))
+    for (const record of records) if (record.status === 'renamed' && record.originalPath && selected.has(record.path)) selected.add(record.originalPath)
+    const stagedPaths = new Set((await this.git(cwd, ['diff', '--cached', '--name-only', '--no-renames', '-z'])).split('\0').filter(Boolean))
+    const excluded = [...stagedPaths].filter(path => !selected.has(path))
+    const restore = async (committed: boolean): Promise<void> => {
+      if (committed && excluded.length === 0) return
+      await this.git(cwd, ['read-tree', originalTree])
+      if (committed) await this.git(cwd, ['--literal-pathspecs', 'reset', '-q', 'HEAD', '--', ...selected])
     }
-    await this.git(cwd, ['reset', '-q']).catch(() => undefined)
-    if (filePaths) await this.git(cwd, ['--literal-pathspecs', 'add', '-A', '--', ...filePaths])
-    else await this.git(cwd, ['add', '-A'])
-    return (await this.git(cwd, ['diff', '--cached', '--name-status'])).trim().length > 0
+    try {
+      if (excluded.length > 0) await this.git(cwd, ['--literal-pathspecs', 'reset', '-q', '--', ...excluded])
+      const unstaged = [...selected].filter(path => !stagedPaths.has(path))
+      if (unstaged.length > 0) await this.git(cwd, ['--literal-pathspecs', 'add', '-A', '--', ...unstaged])
+      return { hasChanges: (await this.git(cwd, ['diff', '--cached', '--name-status'])).trim().length > 0, restore }
+    } catch (error) {
+      await restore(false)
+      throw error
+    }
   }
 
   private async commitMessage(input: GitActionInput, cwd: string, progress: (event: GitActionEvent) => void): Promise<{ subject: string; body: string }> {
