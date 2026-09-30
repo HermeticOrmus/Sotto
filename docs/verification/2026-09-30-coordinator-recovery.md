@@ -22,3 +22,5 @@ Queue-pause storage failure, paging and shutdown timing were verified through co
 ## Review
 
 Separate standards and spec reviews found missing prototype-spy cleanup and a history window exceeding the 2,000-ID retention limit. Both were fixed and reviewed again with no remaining findings.
+
+The first Windows CI run passed the coordinator regressions but failed an existing host-update restart check. Its launch script and fake host are unchanged from main. The complete file passed locally (12 passed, 1 skipped), and the failing journey passed 20 consecutive local runs. The assertion now includes the structured outcome's type, reason, cause and restart flag when it fails, so a further CI failure can be diagnosed. Its expected readiness and ownership, and its deadlines, are unchanged. The original restart failure's cause was not established locally.
