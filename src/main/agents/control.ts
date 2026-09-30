@@ -1774,8 +1774,12 @@ export class AgentControl {
     try {
       this.state.error = null
       this.publish()
-      await this.followupStore.pause(command.threadId, 'The turn was interrupted. Review the thread and resume queued follow-ups when ready.')
+      const assignment = this.state.assignments.find(item => item.threadId === command.threadId)
+      if (assignment) assignment.paused = true
+      try { await this.followupStore.pause(command.threadId, 'The turn was interrupted. Review the thread and resume queued follow-ups when ready.') }
+      catch { failure = 'Stop was sent, but the queue pause could not be saved. Your queued messages are still saved. Review the thread before resuming queued follow-ups.' }
       this.syncFollowups(); await this.execute(command, turn); await this.persist()
+      if (failure) this.state.error = failure
     } catch (error) { failure = error instanceof Error ? error.message : 'Could not interrupt this thread.'; this.state.error = failure }
     release()
     this.publish(); await this.finishTurn(turn, failure); return this.shell()

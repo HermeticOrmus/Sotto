@@ -78,7 +78,7 @@ If a kept screenshot disappears or is damaged, sending stops and asks you to rem
 
 You can create a thread from the Threads page while another thread has a saved coordinator draft. The draft stays with its original thread, including while the voice coordinator is hidden for the beta.
 
-Stop can cancel running work even when the provider has not confirmed the last prompt. That prompt stays unconfirmed until the provider reports receiving it; stopping does not resend it or discard its saved identity.
+Stop can cancel running work even when the provider has not confirmed the last prompt. That prompt stays unconfirmed until the provider reports receiving it; stopping does not resend it or discard its saved identity. A failure to save the queue pause does not block Stop. Other storage failures can still prevent cancellation; Sotto reports the failure.
 
 ### History and copying
 

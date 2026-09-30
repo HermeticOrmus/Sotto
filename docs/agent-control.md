@@ -65,7 +65,7 @@ Model, effort, image and permission-mode controls reflect the adapter's verified
 
 While a thread is running, **Steer now** beside a queued message sends that message into the current turn when the provider supports steering. The rest of the queue and any newer composer draft stay in place. An unconfirmed message cannot be steered again; use **Check again** to reconcile its delivery.
 
-Stop has independent admission through the coordinator and workspace, so a pending prompt acknowledgement or unresolved delivery cannot block cancellation. Its own saved intent leaves the original prompt and reconciliation record intact. Queued follow-ups stay paused, and no prompt is replayed automatically.
+Stop has independent admission through the coordinator and workspace, so a pending prompt acknowledgement or unresolved delivery cannot block cancellation. Its own saved intent leaves the original prompt and reconciliation record intact. A failure to save the queue pause does not block Stop. Other storage failures can still prevent cancellation; Sotto reports the failure. No prompt is replayed automatically.
 
 ## Working copies and Git
 

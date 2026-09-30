@@ -8,6 +8,8 @@ import { AgentControl } from '../../src/main/agents/control'
 import { AgentCredentials } from '../../src/main/agents/credentials'
 import type { AgentState } from '../../src/shared/agents'
 import { immediatePublishScheduler } from '../fixtures/publishScheduler'
+import { FollowupStore } from '../../src/main/agents/followups'
+import { AtomicJsonStore } from '../../src/main/storage/atomicJsonStore'
 
 const cleanup: Array<() => Promise<void>> = []
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close() })
@@ -29,6 +31,53 @@ async function fixture(root?: string) {
 function thread(state: AgentState) { return state.host.threads.find(thread => thread.id === state.activeThreadId)! }
 
 describe('workspace controller integration', () => {
+  it('stops native work even when the follow-up pause cannot be saved', async () => {
+    const f = await fixture()
+    const threadId = f.control.get().host.threads.find(thread => thread.providerId === 'codex')!.id
+    await f.control.command({ type: 'assign', threadId, instruction: 'Keep watching' })
+    const pause = vi.spyOn(FollowupStore.prototype, 'pause').mockRejectedValueOnce(new Error('Synthetic pause write failure'))
+    try {
+      const result = await f.control.command({ type: 'interrupt', threadId })
+      expect(f.adapters.codex.commands.filter(command => command.type === 'interrupt')).toHaveLength(1)
+      expect(result.assignments.find(item => item.threadId === threadId)?.paused).toBe(true)
+      expect(result.error).toBe('Stop was sent, but the queue pause could not be saved. Your queued messages are still saved. Review the thread before resuming queued follow-ups.')
+    } finally { pause.mockRestore() }
+  })
+
+  it('reports a failed Stop intent save without claiming cancellation reached the provider', async () => {
+    const f = await fixture()
+    const threadId = f.control.get().host.threads.find(thread => thread.providerId === 'codex')!.id
+    const pause = vi.spyOn(FollowupStore.prototype, 'pause').mockRejectedValueOnce(new Error('Synthetic pause write failure'))
+    const write = AtomicJsonStore.prototype.write
+    const save = vi.spyOn(AtomicJsonStore.prototype, 'write').mockImplementation(function (this: AtomicJsonStore<unknown>, value: unknown) {
+      if (value && typeof value === 'object' && 'outbox' in value && Array.isArray(value.outbox)
+        && value.outbox.some(item => item.type === 'interrupt')) return Promise.reject(new Error('Synthetic Stop intent failure'))
+      return write.call(this, value)
+    })
+    try {
+      const result = await f.control.command({ type: 'interrupt', threadId })
+      expect(result.error).toBe('Synthetic Stop intent failure')
+      expect(f.adapters.codex.commands.filter(command => command.type === 'interrupt')).toEqual([])
+    } finally { pause.mockRestore(); save.mockRestore() }
+  })
+
+  it('retries Stop after an uncertain interrupt without replaying a prompt', async () => {
+    const f = await fixture()
+    const threadId = f.control.get().host.threads.find(thread => thread.providerId === 'codex')!.id
+    const native = f.adapters.codex.state.threads.find(thread => thread.id === f.registry.byThread(threadId)!.sessionId)!
+    native.status = 'running'; native.lastTurn = { id: 'unconfirmed-turn', status: 'running' }
+    f.adapters.codex.emit()
+    await f.control.command({ type: 'refresh' })
+    const original = f.adapters.codex.execute.bind(f.adapters.codex)
+    const execute = vi.spyOn(f.adapters.codex, 'execute').mockResolvedValueOnce({ accepted: false, uncertain: true })
+    try {
+      expect((await f.control.command({ type: 'interrupt', threadId })).error).toBeTruthy()
+      expect(JSON.parse(await readFile(join(f.root, 'agents.json'), 'utf8')).outbox).toContainEqual(expect.objectContaining({ type: 'interrupt', threadId }))
+      execute.mockImplementation(original)
+      expect((await f.control.command({ type: 'interrupt', threadId })).error).toBeNull()
+      expect(execute.mock.calls.map(([command]) => command.type)).toEqual(['interrupt', 'interrupt'])
+    } finally { execute.mockRestore() }
+  })
   it('reopens an uncertain send through the real workspace and reconciles only its exact late receipt without replay', async () => {
     const first = await fixture()
     const threadId = first.control.get().host.threads.find(thread => thread.providerId === 'codex')!.id
