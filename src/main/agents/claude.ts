@@ -8,6 +8,7 @@ import { existingWorkingDirectory } from './threadWorktrees'
 import { NativeUsage } from './nativeUsage'
 import { compactionPending, compactionSchema } from '../../shared/compaction'
 import { randomUUID } from 'node:crypto'
+import { rm, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { z } from 'zod'
@@ -848,14 +849,21 @@ export class ClaudeStreamJsonHost implements AgentHost {
     const setup = alias.kind !== 'personal' ? await this.hostSetupTools?.mcpServer(id) : undefined
     const servers = [...(browser ? [{ server: browser, definitions: this.browserTools?.definitions ?? [] }] : []),
       ...(setup ? [{ server: setup, definitions: this.hostSetupTools?.definitions ?? [] }] : [])]
-    const toolArguments = servers.length ? ['--mcp-config', JSON.stringify({ mcpServers: Object.fromEntries(servers.map(({ server }) => [server.name, {
-      type: server.type, url: server.url, headers: Object.fromEntries(server.headers.map(header => [header.name, header.value])),
-    }])) }), ...toolAllowance(servers)] : []
+    const mcpConfig = servers.length ? join(this.options.userDataPath, `claude-mcp-${randomUUID()}.json`) : undefined
+    if (mcpConfig) {
+      try {
+        await writeFile(mcpConfig, JSON.stringify({ mcpServers: Object.fromEntries(servers.map(({ server }) => [server.name, {
+          type: server.type, url: server.url, headers: Object.fromEntries(server.headers.map(header => [header.name, header.value])),
+        }])) }), { mode: 0o600, flag: 'wx' })
+      } catch (error) { await rm(mcpConfig, { force: true }); throw error }
+    }
+    const toolArguments = mcpConfig ? ['--mcp-config', mcpConfig, ...toolAllowance(servers)] : []
     const args = [...(this.options.args ?? []), ...toolArguments, '--print', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
       '--include-partial-messages', '--replay-user-messages', ...permissionArguments(alias.runtimeMode),
       ...(alias.kind === 'personal' ? ['--append-system-prompt', this.personalContexts.get(id) ?? personalContext()] : []),
       resume ? '--resume' : '--session-id', alias.sessionId, '--model', alias.modelId, ...(alias.reasoningEffort ? ['--effort', alias.reasoningEffort] : [])]
-    const runtime: Runtime = { requests: new Map(), answered: new Set(), clientRevision: this.clientRevision, protocol: new ClaudeProtocol(this.executable, args, alias.cwd, { ...this.client.environment(), ...(setup ? { MCP_TOOL_TIMEOUT: '600000' } : browser ? { MCP_TOOL_TIMEOUT: '360000' } : {}) }, this.options.requestTimeoutMs ?? 15000,
+    let runtime: Runtime
+    try { runtime = { requests: new Map(), answered: new Set(), clientRevision: this.clientRevision, protocol: new ClaudeProtocol(this.executable, args, alias.cwd, { ...this.client.environment(), ...(setup ? { MCP_TOOL_TIMEOUT: '600000' } : browser ? { MCP_TOOL_TIMEOUT: '360000' } : {}) }, this.options.requestTimeoutMs ?? 15000,
       frame => { if (this.runtimes.get(id) === runtime) this.frame(id, frame) }, () => {
         if (this.runtimes.get(id) !== runtime) return
         // Each thread has its own CLI, so one ending is this thread's failure, not the provider's: the others
@@ -877,8 +885,9 @@ export class ClaudeStreamJsonHost implements AgentHost {
           this.markTurn(id, 'failed', saved?.origins.find(origin => origin.uuid === turn.id)?.messageId, SESSION_ENDED)
         }
         this.emit()
-      }) }
-    this.runtimes.set(id, runtime); this.closures.push(runtime.protocol.closed)
+      }) } } catch (error) { if (mcpConfig) await rm(mcpConfig, { force: true }); throw error }
+    this.runtimes.set(id, runtime)
+    this.closures.push(runtime.protocol.closed.then(async () => { if (mcpConfig) await rm(mcpConfig, { force: true }) }))
     try {
       const initialized = await runtime.protocol.control({ subtype: 'initialize', hooks: {}, sdkMcpServers: [], promptSuggestions: false, supportedDialogKinds: ['resume_return'] })
       this.threads.get(id)!.manualCompactionSupported = Array.isArray(initialized.commands) && initialized.commands.some(command => object(command)?.name === 'compact')
