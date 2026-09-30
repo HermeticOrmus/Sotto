@@ -846,7 +846,7 @@ export class ClaudeStreamJsonHost implements AgentHost {
     const previous = this.polling
     // Arrivals during one read share the next read. Each caller finishes after its
     // own pass, even if the timer queues another pass while that one is running.
-    const work = previous ? previous.then(() => {
+    const work = previous ? previous.catch(() => undefined).then(() => {
       if (this.queuedPoll === work) this.queuedPoll = undefined
       return this.readSessionLogs()
     }) : this.readSessionLogs()

@@ -237,6 +237,18 @@ describe('Claude recovery and safety', () => {
     }
     await expect.poll(retained).toBe(1)
   })
+  it('runs a queued read after the preceding read fails', async () => {
+    clearInterval((f.adapter as unknown as { pollTimer: NodeJS.Timeout }).pollTimer)
+    let fail!: (error: Error) => void
+    const gate = new Promise<void>((_, reject) => { fail = reject })
+    const poll = vi.spyOn(ClaudeSessionLog.prototype, 'poll').mockImplementationOnce(() => gate).mockResolvedValueOnce(undefined)
+    const first = f.adapter.pollSessionLogs().catch((error: Error) => error)
+    const queued = f.adapter.pollSessionLogs().then(() => 'read', (error: Error) => error.message)
+    fail(new Error('First read failed'))
+    expect(await first).toEqual(new Error('First read failed'))
+    expect(await queued).toBe('read')
+    expect(poll).toHaveBeenCalledTimes(2)
+  })
   it('finishes joined reads without waiting for later poll arrivals', async () => {
     clearInterval((f.adapter as unknown as { pollTimer: NodeJS.Timeout }).pollTimer)
     const releases: (() => void)[] = []
