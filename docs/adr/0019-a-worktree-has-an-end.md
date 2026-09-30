@@ -2,7 +2,7 @@
 
 Accepted September 22, 2026.
 
-Amended September 30, 2026 (#485): the owner chose removal prototype variant B. Both manual removal questions list every ignored item other than installed dependencies and require the separate **Delete these N ignored items with the folder** acknowledgement. Main refuses when the list differs from the one displayed, including when an initially empty list gains a file. Nested repositories and worktrees are flagged with their uncommitted work and block removal until moved out. Automatic rules still refuse ignored non-dependency items. The referenced `docs/prototypes/reclaim-and-mic-test-prototype.html` was absent from this checkout and GitHub main; the issue's binding behavior and copy supplied the implementation reference.
+Amended September 30, 2026 (#485): Zach chose prototype variant B, **List and tick**. Both manual removal questions list ignored folders and nested work, and the separate acknowledgement permits removing them. See the amendment below for the accepted copy and checks.
 
 Note, September 24, 2026: what the Git interface ([ADR-0027](0027-git-the-way-t3-code-does-it.md)) changed here.
 
@@ -26,7 +26,7 @@ A thread's own worktree can be reclaimed: its folder removed, its branch and its
 
 Sotto reclaims a worktree in three ways, and in no other:
 
-1. **Remove worktree**, in the pane's Working copy panel. The confirmation names the folder, says the branch keeps its commits and that sending puts the folder back, and, when the folder has uncommitted changes, says they are lost and turns the confirm button red.
+1. **Remove worktree**, in the pane's Working copy panel. The confirmation says the branch keeps its commits and that sending puts the folder back, and, when the folder has uncommitted changes, says they are lost and turns the confirm button red.
 2. **Settle asks.** Settling a thread whose worktree can be reclaimed settles it at once, as before, and then asks "Remove its worktree too?" with **Remove worktree** and **Keep folder**; Escape keeps it. Settle itself is unchanged and is not the confirmation.
 3. **Rules the user turned on**, T3's four with settle standing in for T3's delete: `worktreeCleanup.afterDays`, `onSettle`, `unchanged` and `merged` in Settings under Application. Every rule is off by default. A sweep runs at start, every hour, when the rules change and, for the on-settle rule, when a thread is settled. `unchanged` compares the folder's HEAD with the local copy of the repository's default branch and does not fetch; `merged` asks GitHub through `gh`, the way the Changes panel already does, and only when that rule is on.
 
@@ -53,3 +53,13 @@ The sweep's log carries two event names, `worktree-cleanup-reclaimed` and `workt
 The sweep belongs to the agent runtime that owns the worktrees, so it runs wherever a host runs: in the desktop when its local host is on, and in every headless host, which reclaims its own worktrees under the rules in its own data folder's settings (amended September 23, 2026 for #245; see ADR-0025). Each drains a sweep in progress before closing the workspace it asks. Amended September 30, 2026 for #492: the desktop gives the whole quit drain ten seconds, keeping its native windows and tray until it settles. If it does not settle, the desktop exits immediately so a hung child cannot hold its single-instance lock forever. That deadline can interrupt a sweep or an unsaved write; headless host shutdown is unchanged.
 
 Agents working in this repository are told in `AGENTS.md` to remove any worktree they created when they are done with it, and never to make one inside a thread's worktree. The 107 GB was cleared by hand on September 22 with the branches kept and fourteen patches of uncommitted work saved under `%APPDATA%\sotto\backup-worktree-patches\`.
+
+## Amendment, September 30 2026: list and tick before removing local files
+
+Zach chose variant B, **List and tick**, in the uncommitted main-checkout prototype `docs/prototypes/reclaim-and-mic-test-prototype.html`. Both removal questions say "These files are ignored by Git and are deleted with the folder:" and list ignored items other than dependencies. Each ignored folder has one row with its size and file count. Nested repositories and worktrees have their own flagged row and a count of uncommitted changes, including ones Git does not report as ignored. They do not block manual removal: the separate tick gains ", including the nested worktree’s uncommitted work". With listed items the button says **Remove with these files** and stays disabled until the tick. A single item uses **Delete this 1 ignored item with the folder**; multiple items use **Delete these N ignored items with the folder**. The question shows relative paths, not the full allocated folder path.
+
+Main compares the confirmed folder rows and nested-change counts with disk. It checks ownership, ignored rows, untracked paths, nested repositories and outside links again inside the registry lane immediately before removing. Cache writes inside an acknowledged ignored folder do not change that folder row. Rules still never confirm local files or nested work. The clean-settle rule’s refusal tells the user to choose Remove worktree to review ignored files, without referring to a question that never opened.
+
+A clean initialized submodule is part of the parent index (mode 160000), not another user-created worktree. Git’s ordinary clean check refuses removal while submodules are initialized. After the same final checks, Sotto uses Git’s force removal for the parent, without changing shared repository configuration. A submodule holding uncommitted or nondependency ignored files is flagged and needs the same explicit acknowledgement. Links outside the folder still block removal.
+
+The preview is only the requesting command’s result. It is neither saved nor broadcast to other windows or phones. Older hosts that cannot preview tell the user to update the host; no removal proceeds without a preview.

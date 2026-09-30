@@ -81,7 +81,7 @@ The branch label is re-read after relevant work, when you start typing and when 
 
 A thread's own worktree can be given back (ADR-0019). **Remove worktree**, in the pane header's Working copy panel, removes the folder and keeps its branch, and the next send puts the folder back on that branch. Settling a worktree-backed thread asks **Remove its worktree too?**. Cleanup rules under Settings → Application can do it on their own; every rule is off until turned on, and none removes uncommitted work. A thread using **Previous worktree** works in another thread's folder and cannot remove it; the thread that made it can, once no other thread is working there. **Auto-settle merged threads**, under Settings → Git, settles a thread and asks nothing, so the folder goes only if the on-settle cleanup rule is on.
 
-Both removal questions list ignored items other than installed dependencies and require **Delete these N ignored items with the folder** before discarding them. Main rechecks the list; a changed list removes nothing and requires reopening the question. Nested repositories and worktrees are flagged with their uncommitted work and must be moved out first.
+Both removal questions list ignored items other than installed dependencies and require **Delete these N ignored items with the folder** before discarding them. Main rechecks the list; a changed list removes nothing and requires reopening the question. Nested repositories and worktrees are flagged with a count of uncommitted changes. The tick explicitly includes their uncommitted work. Ignored folders have one summary row each; new cache files inside an acknowledged folder do not change the list.
 
 ### Git action
 

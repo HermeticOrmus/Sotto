@@ -8,7 +8,7 @@ import { cloneActivitySnapshot, immutableActivities, isImmutableActivities, subs
 import { readdir, unlink } from 'node:fs/promises'
 import { isAbsolute, join, relative, sep } from 'node:path'
 import { z } from 'zod'
-import { agentHostSnapshotSchema, EMPTY_AGENT_HOST, isThreadProviderConnected, RESTORE_BRANCH_NEEDS_CONFIRMATION, summarizeThread, type AgentWorkingCopyOptions, type AgentWorkingCopySelection, type AgentHostSnapshot, type AgentMessage, type AgentThread, type AgentThreadSummary, type AgentWorktree, type ProviderId } from '../../shared/agents'
+import { agentHostSnapshotSchema, EMPTY_AGENT_HOST, isThreadProviderConnected, RESTORE_BRANCH_NEEDS_CONFIRMATION, summarizeThread, type WorktreeReclaimPreview, type AgentWorkingCopyOptions, type AgentWorkingCopySelection, type AgentHostSnapshot, type AgentMessage, type AgentThread, type AgentThreadSummary, type AgentWorktree, type ProviderId } from '../../shared/agents'
 import type { AgentSkillReference } from '../../shared/agentSkills'
 import type { AnswerGivenEvent, StoredThreadEvent, ThreadEvent } from '../../shared/threadEvents'
 import { AtomicJsonStore } from '../storage/atomicJsonStore'
@@ -609,19 +609,16 @@ export class WorkspaceHost implements AgentHost {
    * another thread, or has a terminal open in it. `withUncommittedChanges` is the user's answer to the
    * confirmation; a rule never gives it.
    */
-  async previewThreadWorktreeReclaim(threadId: string): Promise<AgentHostSnapshot> {
+  async previewThreadWorktreeReclaim(threadId: string): Promise<WorktreeReclaimPreview> {
     return this.onLane(threadId, async () => {
       await this.initialize()
       const metadata = this.thread(threadId).worktree
       if (!metadata || metadata.mode !== 'independent' || metadata.reused) throw new Error('This thread has no worktree of its own to remove.')
       const facts = await this.worktrees.reclaimFacts(metadata)
-      const preview = { ...facts, ignored: [...facts.ignored], repositories: [...facts.repositories] }
-      // This preview belongs to the question, not the saved thread record.
-      const snapshot = this.workspaceSnapshot()
-      return { ...snapshot, threads: snapshot.threads.map(thread => thread.id === threadId ? { ...thread, worktree: { ...metadata, reclaimPreview: preview } } : thread) }
+      return { ...facts, ignored: [...facts.ignored], items: [...facts.items], repositories: [...facts.repositories], untracked: [...facts.untracked] }
     })
   }
-  async reclaimThreadWorktree(threadId: string, options: { withUncommittedChanges?: boolean; automatic?: boolean; confirmedIgnored?: readonly string[] } = {}): Promise<AgentHostSnapshot> {
+  async reclaimThreadWorktree(threadId: string, options: { withUncommittedChanges?: boolean; automatic?: boolean; confirmedIgnored?: readonly string[]; confirmedRepositories?: WorktreeReclaimPreview['repositories'] } = {}): Promise<AgentHostSnapshot> {
     return this.onLane(threadId, async () => {
       await this.initialize()
       const thread = this.thread(threadId)

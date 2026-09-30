@@ -39,7 +39,7 @@ export const REMOTE_COMMANDS: { readonly [T in CommandType]?: Fields<T> } = {
   'retry-thread-worktree': ['threadId'], 'refresh-thread-worktree': ['threadId'],
   'restore-thread-branch': ['threadId', 'withUncommittedChanges'],
   'preview-reclaim-thread-worktree': ['threadId'],
-  'reclaim-thread-worktree': ['threadId', 'withUncommittedChanges', 'confirmedIgnored'],
+  'reclaim-thread-worktree': ['threadId', 'withUncommittedChanges', 'confirmedIgnored', 'confirmedRepositories'],
   'configure-thread-working-copy': ['threadId', 'workingCopy', 'baseBranch', 'startFromOrigin', 'existingWorktreePath'],
   // The Git actions run on the host's own folder and discard nothing: Git refuses a switch that would lose work,
   // a push is never forced, and a pull is fast-forward only (ADR-0027).

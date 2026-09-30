@@ -99,13 +99,16 @@ export interface WorktreeReclaimFacts {
   readonly dirty: boolean
   /** Ignored paths other than installed dependencies: build output, captures, anything a rule may not discard unasked. */
   readonly ignored: readonly string[]
-  readonly repositories: readonly { path: string; changes: string[] }[]
+  readonly items: readonly { path: string; bytes: number; fileCount: number }[]
+  readonly repositories: readonly { path: string; changeCount: number; kind: 'worktree' | 'repository' }[]
+  readonly untracked: readonly string[]
   /** A link inside the folder that leads out of it. Removing the folder could follow it, so nothing is removed while one is there. */
   readonly outsideLink: string | undefined
 }
 export interface WorktreeReclaimOptions {
   /** The exact ignored paths displayed in the user's confirmation. */
   readonly confirmedIgnored?: readonly string[]
+  readonly confirmedRepositories?: readonly { path: string; changeCount: number; kind: 'worktree' | 'repository' }[]
   /** The user's answer to the uncommitted-changes confirmation. */
   readonly withUncommittedChanges?: boolean
   /** A rule acting on its own: a folder with anything but dependencies in its ignored files is left alone. */
@@ -430,41 +433,63 @@ export class ThreadWorktrees {
     return (await this.reclaimFactsWithin(metadata)).facts
   }
 
-  private async reclaimFactsWithin(metadata: AgentWorktree): Promise<{ facts: WorktreeReclaimFacts; identity?: RegistryIdentity }> {
-    const { worktree: inspected, identity } = await this.inspectWithin(metadata)
+  private async reclaimFactsWithin(metadata: AgentWorktree, identityInLane?: RegistryIdentity): Promise<{ facts: WorktreeReclaimFacts; identity?: RegistryIdentity; submodules: string[] }> {
+    const observed = identityInLane ? { root: (await this.git(metadata.path!, ['rev-parse', '--show-toplevel'])).trim(), listing: await this.git(metadata.repositoryRoot!, ['worktree', 'list', '--porcelain', '-z']) } : undefined
+    const { worktree: inspected, identity } = await this.inspectWithin(metadata, identityInLane, observed)
     const path = inspected.path!
-    const listing = await this.git(path, ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z'])
-    const ignored: string[] = []
-    const repositories: Array<{ path: string; changes: string[] }> = []
-    const visit = async (entry: string, ignoredEntry = true): Promise<void> => {
-      if (DEPENDENCY_FOLDER.test(entry)) return
-      const full = join(path, entry)
-      const info = await lstat(full)
-      if (!info.isDirectory() || info.isSymbolicLink()) { if (ignoredEntry) ignored.push(entry); return }
-      const names: string[] = []
-      const handle = await opendir(full)
-      for await (const child of handle) names.push(child.name)
-      if (entry && names.includes('.git')) {
-        if (ignoredEntry) ignored.push(entry)
-        if (!repositories.some(repository => repository.path === entry)) {
-          const status = await this.git(full, ['status', '--porcelain', '--untracked-files=all', '-z'])
-          repositories.push({ path: entry, changes: status.split('\0').filter(Boolean) })
+    const [listing, index, untrackedListing] = await Promise.all([
+      this.git(path, ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z']),
+      this.git(path, ['ls-files', '--stage', '-z']),
+      this.git(path, ['ls-files', '--others', '--exclude-standard', '-z']),
+    ])
+    const ignored = listing.split('\0').filter(entry => entry && !DEPENDENCY_FOLDER.test(entry)).sort()
+    const gitlinks = new Set(index.split('\0').filter(entry => entry.startsWith('160000 ')).map(entry => entry.slice(entry.indexOf('\t') + 1)))
+    const items: Array<{ path: string; bytes: number; fileCount: number }> = []
+    const repositories: Array<{ path: string; changeCount: number; kind: 'worktree' | 'repository' }> = []
+    const submodules: string[] = []
+    const canonicalRoot = await realpath(path)
+    let outsideLink: string | undefined
+    const visit = async (directory: string, row?: { path: string; bytes: number; fileCount: number }): Promise<void> => {
+      const handle = await opendir(directory)
+      for await (const entry of handle) {
+        if (directory === path && entry.name === '.git') continue
+        const full = join(directory, entry.name)
+        const local = relative(path, full).split(sep).join('/')
+        const info = await lstat(full)
+        if (info.isSymbolicLink()) {
+          const target = resolve(directory, await readlink(full))
+          const canonical = await realpath(target).catch(() => target)
+          const delta = relative(canonicalRoot, canonical)
+          if (isAbsolute(delta) || delta === '..' || delta.startsWith(`..${sep}`)) outsideLink ??= local
         }
-        return
-      }
-      if (!names.length && ignoredEntry) ignored.push(entry)
-      for (const name of names) {
-        if (!entry && name === '.git') continue
-        const child = (entry ? entry.replace(/\/$/u, '') + '/' : '') + name
-        if (name === 'node_modules' && (await lstat(join(path, child))).isDirectory()) continue
-        await visit(child, ignoredEntry)
+        const ignoredPath = ignored.find(item => item === local || item === local + '/')
+        const summary = ignoredPath ? { path: ignoredPath, bytes: 0, fileCount: 0 } : row
+        if (ignoredPath) items.push(summary!)
+        if (info.isDirectory() && !info.isSymbolicLink()) {
+          // Dependencies need link inspection but never become rows. A gitlink belongs to the parent index.
+          const gitMarker = await lstat(join(full, '.git')).catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return undefined; throw error })
+          if (gitMarker) {
+            const status = await this.git(full, ['status', '--porcelain', '--untracked-files=all', '-z'])
+            const ignoredModule = gitlinks.has(local) ? (await this.git(full, ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z'])).split('\0').filter(item => item && !DEPENDENCY_FOLDER.test(item)) : []
+            if (gitlinks.has(local)) submodules.push(local)
+            if (!gitlinks.has(local) || status.length || ignoredModule.length) {
+              const records = status.split('\0').filter(Boolean)
+              // Porcelain -z gives a second path for renames, not a second change.
+              let changeCount = 0
+              for (let i = 0; i < records.length; i++) { changeCount++; if (/^[RC]|^.[RC]/u.test(records[i]!)) i++ }
+              const repositoryPath = local + '/'
+              repositories.push({ path: repositoryPath, changeCount, kind: gitMarker.isFile() ? 'worktree' : 'repository' })
+              if (!ignored.includes(repositoryPath)) { ignored.push(repositoryPath); items.push({ path: repositoryPath, bytes: 0, fileCount: 0 }) }
+            }
+          }
+          await visit(full, entry.name === 'node_modules' ? undefined : summary)
+        } else if (summary) { summary.bytes += info.size; summary.fileCount++ }
       }
     }
-    for (const entry of listing.split('\0').filter(Boolean)) await visit(entry)
-    // Git omits nested .git entries even when their parent is not ignored. They still block removal.
-    await visit('', false)
+    await visit(path)
     ignored.sort()
-    return { ...(identity ? { identity } : {}), facts: { path, branch: inspected.branch, dirty: inspected.dirty === true, ignored, repositories, outsideLink: await this.outsideLink(path) } }
+    repositories.sort((a, b) => a.path.localeCompare(b.path))
+    return { ...(identity ? { identity } : {}), submodules, facts: { path, branch: inspected.branch, dirty: inspected.dirty === true, ignored, items, repositories, untracked: untrackedListing.split('\0').filter(Boolean).sort(), outsideLink } }
   }
 
   /**
@@ -482,13 +507,23 @@ export class ThreadWorktrees {
     if (!facts.branch) throw new Error('This folder has no branch checked out, so Sotto could not put it back. Switch it to a branch first. Nothing was changed.')
     if (facts.outsideLink) throw new Error(`This folder contains a link to another folder (${facts.outsideLink}). Remove the link first so nothing outside the folder is touched. Nothing was changed.`)
     if (options.automatic && facts.ignored.length) throw new Error('This folder holds ignored files besides installed dependencies, so a rule leaves it alone.')
-    if (facts.repositories.length) throw new Error('This folder holds a nested repository or worktree. Move it out before removing the folder. Nothing was changed.')
+    if (!options.automatic && facts.ignored.length && !options.confirmedIgnored) throw new Error('This folder holds ignored files. Nothing was removed. Choose Remove worktree to review them.')
     if (!options.automatic && ((facts.ignored.length && !options.confirmedIgnored) || (options.confirmedIgnored && JSON.stringify([...options.confirmedIgnored].sort()) !== JSON.stringify(facts.ignored)))) throw new Error('The ignored items changed. Nothing was removed. Close this question and choose Remove worktree again to review them.')
+    if (facts.repositories.length && JSON.stringify(options.confirmedRepositories) !== JSON.stringify(facts.repositories)) throw new Error('The nested work changed. Nothing was removed. Choose Remove worktree again to review it.')
     // A rule never answers the confirmation on the user's behalf.
     if (facts.dirty && (options.automatic || !options.withUncommittedChanges)) throw new Error(RECLAIM_WORKTREE_NEEDS_CONFIRMATION)
     // A linked worktree's .git is a file; a directory there is a repository of its own and is never removed.
     if (!(await lstat(join(facts.path, '.git'))).isFile()) throw new Error('This folder is a repository of its own, not a worktree. Nothing was changed.')
-    await this.registry(metadata.repositoryRoot!, ['worktree', 'remove', ...(facts.dirty ? ['--force'] : []), '--', facts.path], identity)
+    // Take the last observation inside the registry lane, immediately before the destructive command.
+    await coordinateRegistry(identity!, async () => {
+      const { facts: latest, submodules } = await this.reclaimFactsWithin(metadata, identity)
+      if (latest.outsideLink || latest.branch !== facts.branch || latest.dirty !== facts.dirty ||
+        JSON.stringify(latest.ignored) !== JSON.stringify(facts.ignored) ||
+        JSON.stringify(latest.untracked) !== JSON.stringify(facts.untracked) ||
+        JSON.stringify(latest.repositories) !== JSON.stringify(facts.repositories)) throw new Error('The files changed. Nothing was removed. Choose Remove worktree again to review them.')
+      // Git's ordinary clean check refuses initialized submodules. Our final check covered their contents.
+      return this.git(metadata.repositoryRoot!, ['worktree', 'remove', ...(facts.dirty || facts.repositories.length || submodules.length ? ['--force'] : []), '--', facts.path])
+    })
     return { ...metadata, branch: facts.branch, status: 'ready', error: undefined, dirty: undefined, reclaimedAt: new Date().toISOString() }
   }
 

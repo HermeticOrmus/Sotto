@@ -60,7 +60,8 @@ describe('independent working-copy allocation', () => {
     expect(await readFile(join(restored.path!, 'tracked.txt'), 'utf8')).toBe('committed baseline')
     calls.length = 0
     expect((await service.reclaim(restored)).reclaimedAt).toBeDefined()
-    expect(calls).toHaveLength(7)
+    // Reclaim adds bounded listings and repeats the ownership/content check before removal.
+    expect(calls).toHaveLength(16)
   })
 
   it('checks the original repository independently before reading a discovered checkout status', async () => {
@@ -520,7 +521,7 @@ describe('independent working-copy allocation', () => {
     await writeFile(join(a.path!, '.gitignore'), 'node_modules/\nout/\n'); await git(a.path!, ['add', '.gitignore'])
     await git(a.path!, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'Ignore'])
     await mkdir(join(a.path!, 'out')); await writeFile(join(a.path!, 'out', 'bundle.js'), '')
-    expect((await f.service.reclaimFacts(a)).ignored).toEqual(['out/bundle.js'])
+    expect((await f.service.reclaimFacts(a)).ignored).toEqual(['out/'])
     await expect(f.service.reclaim(a, { automatic: true })).rejects.toThrow('besides installed dependencies')
     // A link that leads out of the folder could be followed by the removal; the real folder behind it must stay whole.
     const shared = join(f.root, 'shared-deps'); await mkdir(shared); await writeFile(join(shared, 'keep.txt'), 'real install')
@@ -546,11 +547,14 @@ describe('independent working-copy allocation', () => {
     await mkdir(join(a.path!, 'local'))
     await writeFile(join(a.path!, 'local', 'data.txt'), 'local data')
     const facts = await f.service.reclaimFacts(a)
-    expect(facts).toMatchObject({ dirty: false, ignored: ['.env', 'local/data.txt'] })
-    await expect(f.service.reclaim(a)).rejects.toThrow('ignored items changed')
+    expect(facts).toMatchObject({ dirty: false, ignored: ['.env', 'local/'] })
+    await expect(f.service.reclaim(a)).rejects.toThrow('holds ignored files')
     await expect(f.service.reclaim(a, { confirmedIgnored: empty.ignored })).rejects.toThrow('ignored items changed')
     await expect(f.service.reclaim(a, { automatic: true, confirmedIgnored: facts.ignored })).rejects.toThrow('besides installed dependencies')
-    await writeFile(join(a.path!, 'local', 'new.txt'), 'new local work')
+    await writeFile(join(a.path!, 'another.env'), 'new local work')
+    await writeFile(join(a.path!, '.gitignore'), '.env\nanother.env\nlocal/\nnode_modules/\n')
+    await git(a.path!, ['add', '.gitignore'])
+    await git(a.path!, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'Ignore another file'])
     await expect(f.service.reclaim(a, { confirmedIgnored: facts.ignored })).rejects.toThrow('ignored items changed')
     expect(await readFile(join(a.path!, '.env'), 'utf8')).toBe('keep this secret')
     const refreshed = await f.service.reclaimFacts(a)
@@ -558,7 +562,7 @@ describe('independent working-copy allocation', () => {
   })
   it.each([
     ['repository', true], ['worktree', true], ['repository', false], ['worktree', false],
-  ] as const)('flags and refuses a nested %s (ignored: %s) even with confirmation', async (kind, ignored) => {
+  ] as const)('lists a nested %s (ignored: %s) and removes it only with the tick', async (kind, ignored) => {
     const f = await fixture(); const a = await f.service.ensure(await f.service.allocate(f.project, 'independent'))
     await writeFile(join(a.path!, '.gitignore'), ignored ? '.worktrees/\n' : '')
     await git(a.path!, ['add', '.gitignore'])
@@ -569,10 +573,53 @@ describe('independent working-copy allocation', () => {
     else await git(f.project, ['worktree', 'add', '-b', 'nested', '--', nested, 'HEAD'])
     await writeFile(join(nested, 'unsaved.txt'), 'nested uncommitted work')
     const facts = await f.service.reclaimFacts(a)
-    expect(facts.ignored).toEqual(ignored ? ['.worktrees/n'] : [])
-    expect(facts.repositories).toEqual([{ path: '.worktrees/n', changes: ['?? unsaved.txt'] }])
-    await expect(f.service.reclaim(a, { withUncommittedChanges: true, confirmedIgnored: facts.ignored })).rejects.toThrow('nested repository or worktree')
+    expect(facts.ignored).toEqual(ignored ? ['.worktrees/', '.worktrees/n/'] : ['.worktrees/n/'])
+    expect(facts.repositories).toEqual([{ path: '.worktrees/n/', changeCount: 1, kind }])
+    await expect(f.service.reclaim(a, { withUncommittedChanges: true })).rejects.toThrow('holds ignored files')
+    await expect(f.service.reclaim(a, { withUncommittedChanges: true, confirmedIgnored: facts.ignored })).rejects.toThrow('nested work changed')
     expect(await readFile(join(nested, 'unsaved.txt'), 'utf8')).toBe('nested uncommitted work')
+    expect((await f.service.reclaim(a, { withUncommittedChanges: true, confirmedIgnored: facts.ignored, confirmedRepositories: facts.repositories })).reclaimedAt).toBeTruthy()
+    await expect(lstat(nested)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+  it('summarizes an ignored cache once and accepts new files inside the confirmed folder', async () => {
+    const f = await fixture(); const a = await f.service.ensure(await f.service.allocate(f.project, 'independent'))
+    await writeFile(join(a.path!, '.gitignore'), 'dist/\n')
+    await git(a.path!, ['add', '.gitignore'])
+    await git(a.path!, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'Ignore cache'])
+    await mkdir(join(a.path!, 'dist'))
+    await writeFile(join(a.path!, 'dist', 'one.js'), '1234')
+    const facts = await f.service.reclaimFacts(a)
+    expect(facts.ignored).toEqual(['dist/'])
+    expect(facts.items).toEqual([{ path: 'dist/', bytes: 4, fileCount: 1 }])
+    await writeFile(join(a.path!, 'dist', 'two.js'), 'more cache')
+    expect((await f.service.reclaim(a, { confirmedIgnored: facts.ignored })).reclaimedAt).toBeTruthy()
+  })
+  it.each(['ignored', 'untracked'])('refuses a new %s path discovered in the final check', async kind => {
+    const f = await fixture(); const a = await f.service.ensure(await f.service.allocate(f.project, 'independent'))
+    await writeFile(join(a.path!, '.gitignore'), '*.env\n')
+    await git(a.path!, ['add', '.gitignore'])
+    await git(a.path!, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'Ignore secrets'])
+    let reads = 0
+    const service = new ThreadWorktrees(f.root, async (cwd, args) => {
+      if (args.includes('--ignored') && ++reads === 2) await writeFile(join(a.path!, kind === 'ignored' ? 'new.env' : 'unsaved.txt'), 'keep me')
+      return git(cwd, args)
+    })
+    await expect(service.reclaim(a, { confirmedIgnored: [] })).rejects.toThrow('files changed')
+    expect(await readFile(join(a.path!, kind === 'ignored' ? 'new.env' : 'unsaved.txt'), 'utf8')).toBe('keep me')
+  })
+  it('does not flag a clean initialized submodule as a nested worktree and allows automatic removal', async () => {
+    const f = await fixture()
+    const module = join(f.root, 'module'); await mkdir(module)
+    await git(module, ['init'])
+    await writeFile(join(module, 'module.txt'), 'committed')
+    await git(module, ['add', '.'])
+    await git(module, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'Module'])
+    await git(f.project, ['-c', 'protocol.file.allow=always', 'submodule', 'add', module, 'module'])
+    await git(f.project, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-am', 'Add submodule'])
+    const a = await f.service.ensure(await f.service.allocate(f.project, 'independent'))
+    await git(a.path!, ['-c', 'protocol.file.allow=always', 'submodule', 'update', '--init'])
+    expect((await f.service.reclaimFacts(a)).repositories).toEqual([])
+    expect((await f.service.reclaim(a, { automatic: true })).reclaimedAt).toBeTruthy()
   })
   it('resolves authoritative cwd before project fallback and blocks unresolved setup', () => {
     expect(resolveThreadWorkingDirectory({ workingDirectory: '/actual' }, { path: '/project' })).toBe('/actual')

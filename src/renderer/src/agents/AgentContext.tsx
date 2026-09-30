@@ -186,7 +186,7 @@ export function useAgentConnection(bridge: AgentBridge | undefined): AgentConnec
           // A shell held for its frame is older than this response; it commits first so it can never land after.
           // Both commit urgently: the user is watching their own action land, and a transition here could let
           // the sync command reply paint before the older pending shell it must follow.
-          if (version === session.observed) { commitPendingShell({ urgent: true }); receiveState(next, { urgent: true }) }
+          if (request.type !== 'preview-reclaim-thread-worktree' && version === session.observed) { commitPendingShell({ urgent: true }); receiveState(next, { urgent: true }) }
         }
         return next
       } catch {

@@ -260,12 +260,13 @@ const agentThreadSummarySchema = z.object({
 export type AgentThreadSummary = z.infer<typeof agentThreadSummarySchema>
 export const worktreeReclaimPreviewSchema = z.object({
   path: z.string(), branch: z.string().optional(), dirty: z.boolean(), ignored: z.array(z.string()),
-  repositories: z.array(z.object({ path: z.string(), changes: z.array(z.string()) })),
+  repositories: z.array(z.object({ path: z.string(), changeCount: z.number().int().nonnegative(), kind: z.enum(['worktree', 'repository']) })),
+  items: z.array(z.object({ path: z.string(), bytes: z.number().nonnegative(), fileCount: z.number().int().nonnegative() })),
+  untracked: z.array(z.string()),
   outsideLink: z.string().optional(),
 }).strict()
 export type WorktreeReclaimPreview = z.infer<typeof worktreeReclaimPreviewSchema>
 export const agentWorktreeSchema = z.object({
-  reclaimPreview: worktreeReclaimPreviewSchema.optional(),
   mode: z.enum(['independent', 'shared']), status: z.enum(['pending', 'ready', 'error']),
   path: z.string().optional(), repositoryRoot: z.string().optional(), branch: z.string().optional(),
   baseCommit: z.string().optional(), error: z.string().optional(), dirty: z.boolean().optional(),
@@ -599,6 +600,7 @@ export type AgentDelivery = z.infer<typeof agentDeliverySchema>
 export const agentDeliveryReceiptsSchema = z.array(z.object({ threadId: id, draftId: z.uuid() })).max(MAX_DELIVERED_DRAFTS)
 export const providerUpgradeSchema = z.object({ recoveryPath: z.string(), migratedAt: z.number() })
 export const agentStateSchema = z.object({
+  worktreeReclaimPreview: worktreeReclaimPreviewSchema.optional(),
   clientScoped: z.boolean().optional(),
   connections: z.array(z.object({ hostId: z.uuid(), name: z.string(), kind: z.enum(['local', 'remote']), connected: z.boolean() })).optional(),
   hostId: z.uuid().optional(),
@@ -873,7 +875,7 @@ export const agentCommandSchema = z.discriminatedUnion('type', [
   /** Remove the thread's own worktree folder and keep its branch (ADR-0019). `withUncommittedChanges`
    * is the user's answer to the confirmation; without it a folder with uncommitted work is left alone. */
   z.object({ type: z.literal('preview-reclaim-thread-worktree'), threadId: id }).strict(),
-  z.object({ type: z.literal('reclaim-thread-worktree'), threadId: id, withUncommittedChanges: z.boolean().optional(), confirmedIgnored: z.array(z.string()).optional() }).strict(),
+  z.object({ type: z.literal('reclaim-thread-worktree'), threadId: id, withUncommittedChanges: z.boolean().optional(), confirmedIgnored: z.array(z.string()).optional(), confirmedRepositories: z.array(z.object({ path: z.string(), changeCount: z.number().int().nonnegative(), kind: z.enum(['worktree', 'repository']) }).strict()).optional() }).strict(),
   agentWorkingCopySelectionSchema.extend({ type: z.literal('configure-thread-working-copy'), threadId: id }).strict(),
   /** T3's stacked Git action on the thread's folder: commit, push, create the pull request, or a prefix of the three (ADR-0027).
    * `filePaths` limits the commit to those files; `featureBranch` commits on a new `feature/` branch first; `allowDefaultBranch`
