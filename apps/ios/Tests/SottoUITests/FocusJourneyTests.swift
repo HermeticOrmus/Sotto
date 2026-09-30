@@ -105,6 +105,60 @@ import XCTest
     }
     private func back() { app.navigationBars.buttons.element(boundBy: 0).tap() }
 
+    func testCreateThreadInAKnownProject() {
+        app.buttons["new-thread"].tap()
+        let offline = app.buttons["new-thread-computer-22222222-2222-4222-8222-222222222222"]
+        XCTAssertTrue(offline.waitForExistence(timeout: 5))
+        XCTAssertFalse(offline.isEnabled)
+        capture("new-thread-computers-dark")
+        app.buttons["new-thread-computer-\(laptop)"].tap()
+        let project = app.buttons["new-thread-project-sotto"]
+        XCTAssertTrue(project.waitForExistence(timeout: 5))
+        project.tap()
+        let open = app.buttons["open-new-thread"]
+        XCTAssertTrue(open.waitForExistence(timeout: 5))
+        XCTAssertTrue(open.isEnabled)
+        capture("new-thread-options-dark")
+        open.tap()
+        XCTAssertTrue(app.buttons["thread-pane-activity"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["New thread"].exists)
+        capture("new-thread-conversation-dark")
+    }
+
+    func testCreateThreadByBrowsingANewFolder() {
+        app.tabBars.buttons["Settings"].tap()
+        app.buttons["setting-light"].tap()
+        app.tabBars.buttons["Threads"].tap()
+        app.buttons["new-thread"].tap()
+        app.buttons["new-thread-computer-\(laptop)"].tap()
+        let browse = app.buttons["browse-project-folder"]
+        reveal(browse); browse.tap()
+        let filter = app.textFields["folder-filter"]
+        XCTAssertTrue(filter.waitForExistence(timeout: 5))
+        capture("new-project-folders-light")
+        filter.tap(); filter.typeText("New")
+        capture("new-project-filter-keyboard")
+        filter.typeText("\n")
+        let keyboardDismissed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: app.keyboards.firstMatch)
+        XCTAssertEqual(XCTWaiter.wait(for: [keyboardDismissed], timeout: 5), .completed)
+        let folder = app.buttons["folder-New project"]
+        reveal(folder); XCTAssertTrue(folder.isHittable)
+        XCTAssertFalse(app.buttons["folder-Panel tools"].exists)
+        capture("new-project-filtered-folders")
+        folder.tap()
+        let use = app.buttons["use-project-folder"]
+        XCTAssertTrue(use.waitForExistence(timeout: 5)); XCTAssertTrue(use.isEnabled)
+        capture("new-project-selected-folder-light")
+        use.tap()
+        let open = app.buttons["open-new-thread"]
+        XCTAssertTrue(open.waitForExistence(timeout: 5)); XCTAssertTrue(open.isEnabled)
+        XCTAssertTrue(app.staticTexts["New project"].exists)
+        capture("new-project-thread-options")
+        open.tap()
+        XCTAssertTrue(app.buttons["thread-pane-activity"].waitForExistence(timeout: 5))
+        capture("new-project-conversation")
+    }
+
     func testFocusSearchAndNavigation() {
         XCTAssertTrue(app.tabBars.buttons["Threads"].isSelected)
         XCTAssertFalse(app.tabBars.buttons["Needs you"].exists)

@@ -1,6 +1,6 @@
 # A thread follows its worktree's branch
 
-Note, September 22, 2026: the sentences below that say Sotto "never removes" a checkout and that "settling a thread removes nothing" describe the state before [ADR-0019](0019-a-worktree-has-an-end.md). A thread's own worktree can now be reclaimed on the user's word or under a rule they turned on; the branch stays and the restore path described here puts the folder back on the next send. Everything else in this record stands.
+Note, September 22, 2026: the sentences below that say Sotto "never removes" a checkout and that "settling a thread removes nothing" describe the state before [ADR-0041](0041-a-worktree-has-an-end.md). A thread's own worktree can now be reclaimed on the user's word or under a rule they turned on; the branch stays and the restore path described here puts the folder back on the next send. Everything else in this record stands.
 
 Note, September 24, 2026: the Git interface ([ADR-0027](0027-git-the-way-t3-code-does-it.md)) changed where this record's choices are made, not what they decide.
 

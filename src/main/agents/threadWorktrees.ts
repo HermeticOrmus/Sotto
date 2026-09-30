@@ -78,7 +78,7 @@ export interface WorktreeReclaimOptions {
 const DEPENDENCY_FOLDER = /(^|\/)node_modules\/$/u
 
 /**
- * Creates and inspects checkouts, and reclaims a folder only when asked (ADR-0019): the branch and
+ * Creates and inspects checkouts, and reclaims a folder only when asked (ADR-0041): the branch and
  * the thread are never removed, and `restore` puts the folder back. Allocation is persisted by
  * WorkspaceHost before ensure.
  */
@@ -328,7 +328,7 @@ export class ThreadWorktrees {
   }
 
   /**
-   * Removes this thread's own worktree folder and nothing else (ADR-0019). The branch keeps its
+   * Removes this thread's own worktree folder and nothing else (ADR-0041). The branch keeps its
    * commits, the thread keeps its record, and `restore` puts the folder back on the next send. It
    * refuses a folder that is not the registered checkout, one with no branch to come back on, one
    * holding a link out of itself, and, for a rule acting alone, one with anything but dependencies

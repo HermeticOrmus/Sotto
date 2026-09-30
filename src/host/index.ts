@@ -45,6 +45,9 @@ export { HostLockError } from './lock'
 /** The command line itself was wrong. The message names the fix and is safe to print; the key-file hint would only mislead. */
 export class HostArgumentError extends Error {}
 
+/** Safe startup guidance; credential contents and storage errors must never be printed. */
+export class HostKeyMigrationError extends Error {}
+
 /** Starts the same coordinator and durable workspace as Electron, with no desktop capabilities. */
 export async function startHeadlessHost(options: HeadlessHostOptions) {
   // A second listener must never open the same stores or replace the live descriptor.
@@ -72,7 +75,12 @@ async function startHostRuntime(options: HeadlessHostOptions) {
   const recovery = new RecoveryNoticeCenter()
   const repositories = createStorageRepositories(directory, recovery)
   const settings = new SecureSettings(repositories.settings, credentials)
-  await settings.migrate()
+  if ((await repositories.settings.get()).llmApiKey && !credentials.available()) {
+    throw new HostKeyMigrationError('A key saved by an older version of Sotto needs secure storage. Pass --key-file <file> and start the host again. The saved key has not been changed.')
+  }
+  await settings.migrate(() => options.log?.('openrouter-key-migration-failed')).catch(() => {
+    throw new HostKeyMigrationError('The OpenRouter key could not be stored securely and was removed from settings. Enter it again on the host machine after restoring storage access. Start the host with --key-file <file>.')
+  })
   await repositories.settings.migrateProjectWorkingCopyDefaults(await loadHostIdentity(directory))
   const startup = await settings.get()
   const memory = openRuntimeMemory(join(directory, 'memory.sqlite'), event => options.log?.(event))
@@ -97,7 +105,7 @@ async function startHostRuntime(options: HeadlessHostOptions) {
       missingAttachment: MISSING_REMOTE_ATTACHMENT,
       // The host connects every provider that is installed and signed in here, except the ones turned off (ADR-0036).
       runsAs: 'headless-host',
-      // The host owns its worktrees, so it reclaims them under the rules in its own settings (ADR-0019, ADR-0025).
+      // The host owns its worktrees, so it reclaims them under the rules in its own settings (ADR-0041, ADR-0025).
       worktreeCleanup: { pullRequestMerged: githubPullRequestMerged, log: event => options.log?.(event) },
       claudeSettingsLog: event => options.log?.(event),
     })
@@ -221,7 +229,7 @@ export async function runHeadlessCommandLine(): Promise<void> {
     process.removeListener('SIGTERM', stop)
     process.removeListener('SIGINT', stop)
     console.error('[Sotto] host-start-failed')
-    if (error instanceof HostLockError || error instanceof HostArgumentError) console.error(error.message)
+    if (error instanceof HostLockError || error instanceof HostArgumentError || error instanceof HostKeyMigrationError) console.error(error.message)
     else console.error('Check the data folder and its original key file, then retry with the same --data and --key-file: host/index.js from an extracted archive, out/host/index.js from a checkout.')
     process.exitCode = 1
   }

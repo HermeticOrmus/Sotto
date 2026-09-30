@@ -297,7 +297,7 @@ export class ClaudeStreamJsonHost implements AgentHost {
     }
     if (account.account) this.state.account = account.account
     // Without this the version is only known once a session runs, so an idle provider could not be
-    // compared against what its channel publishes (ADR-0021).
+    // compared against what its channel publishes (ADR-0042).
     this.state.version = await this.client.version(executable) || this.state.version
     this.executable = executable; this.aliases = aliases; this.state.projects = projects
     for (const alias of Object.values(this.aliases)) if (alias.compaction?.status === 'running') alias.compaction = { ...alias.compaction, status: 'uncertain', error: 'Native compaction was interrupted by disconnection. Reconnecting observes its result without retrying.' }
@@ -339,7 +339,7 @@ export class ClaudeStreamJsonHost implements AgentHost {
     this.pollTimer.unref(); this.emit(); return this.view()
   }
   /**
-   * The client on disk was replaced while Sotto stayed connected (ADR-0021). Every thread runs its own CLI, so
+   * The client on disk was replaced while Sotto stayed connected (ADR-0042). Every thread runs its own CLI, so
    * nothing is disconnected: the client is found again (an update may have moved it), its version is read from
    * the binary, and each CLI moves to it as its thread goes idle. An idle CLI stops now the way the reaper stops
    * one, and the thread's next action starts the new client; a busy one finishes on the old client first. No turn
