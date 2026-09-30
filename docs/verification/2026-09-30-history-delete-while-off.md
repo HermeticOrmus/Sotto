@@ -6,16 +6,18 @@ Issue #495 (S-014). The owner's decision is to delete retained dictation transcr
 
 Before the fix, the new Electron regression in `tests/e2e/app.spec.ts` confirmed that Delete closed its dialog and removed the row while `history.json` still held the synthetic transcript. IPC passed `enabled: false` to the repository's delete guard. AppContext ignored the returned false and replaced its cached history with the disabled list's empty result.
 
-Deletion now takes only the retained record's ID, independent of recording history. AppContext honours a false result through its existing history failure path, without reloading an empty list or reporting success. List, search and recording remain gated by the history setting.
+Deletion now takes only the retained record's ID, independent of recording history. AppContext honours a false result through its existing history failure path, without reloading an empty list or reporting success. After a successful delete with history off, it removes only that ID from the cached entries; with history on it reloads the list. List, search and recording remain gated by the history setting.
 
 ## Verified journeys
 
 - The repository preserves another retained record, removes the selected record from the JSON file, and a newly opened repository cannot restore it. Disabled recording still saves nothing and disabled listing stays empty.
 - IPC sends a delete while history is off without imposing the recording setting.
-- AppContext returns false and keeps its cached entries when deletion is refused; a later successful retry removes them.
-- The built Electron app records a synthetic dictation, keeps its cached row after history is turned off, confirms Delete, and has an empty `history.json`. Re-enabling history and reloading the renderer leaves the History page empty.
+- AppContext returns false and keeps both cached entries when deletion is refused. A successful retry removes only the selected entry, and the other entry can then be deleted while history stays off.
+- The built Electron app records two synthetic dictations and keeps both cached rows after history is turned off. The first Delete leaves one visible row and one record in `history.json`; the remaining row can still be expanded and deleted. Re-enabling history and reloading the renderer leaves the History page empty.
 
 The IPC and AppContext regressions failed before the production change. The Electron regression separately failed on the retained on-disk text before the change and passed afterward.
+
+The PR #620 rework extended the AppContext regression to two retained entries. Before the rework it failed because the first successful delete left an empty cache instead of the remaining entry. The extended test passes after filtering the cache while history is off. The redundant artifact ignores were removed because the existing review-directory patterns already cover generated files; the two committed captures below remain tracked.
 
 ## Visual inspection
 

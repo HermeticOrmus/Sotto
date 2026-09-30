@@ -1,7 +1,6 @@
 import { spawn } from 'node:child_process'
-import { readFile } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
-import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test'
@@ -159,19 +158,32 @@ test('keeps history disabled without blocking dictation', async () => {
   }
 })
 
-test('deletes a retained transcript from disk while history is off', async () => {
+test('deletes retained transcripts one at a time from disk while history is off', async () => {
   const testInfo = test.info()
   const launched = await launchSotto()
   try {
     await completeOnboarding(launched.page)
     await dictateWithButton(launched.page)
     await expect(launched.page.getByRole('heading', { name: 'Pasted.' })).toBeVisible()
+    await dictateWithButton(launched.page)
+    await expect(launched.page.getByRole('heading', { name: 'Pasted.' })).toBeVisible()
     await openPage(launched.page, 'History')
-    await expect(launched.page.locator('.history-entry')).toHaveCount(1)
+    await expect(launched.page.locator('.history-entry')).toHaveCount(2)
+    const retained = JSON.parse(await readFile(join(launched.userData, 'history.json'), 'utf8')) as { id: string }[]
     await launched.page.evaluate(async () => window.sotto!.updateSettings({ historyEnabled: false }))
     await expect(launched.page.getByText('History is off. Older transcripts are still here.')).toBeVisible()
-    await launched.page.locator('.history-entry__toggle').click()
+    await launched.page.locator('.history-entry__toggle').first().click()
     await launched.page.screenshot({ path: testInfo.outputPath('retained-history-off.png') })
+    await launched.page.getByRole('button', { name: 'Delete saved transcript' }).click()
+    await launched.page.getByRole('dialog').getByRole('button', { name: 'Delete transcript', exact: true }).click()
+    await expect(launched.page.getByRole('dialog')).toHaveCount(0)
+    await expect(launched.page.locator('.history-entry')).toHaveCount(1)
+    const remaining = JSON.parse(await readFile(join(launched.userData, 'history.json'), 'utf8')) as { id: string }[]
+    expect(remaining).toHaveLength(1)
+    expect(retained.map(entry => entry.id)).toContain(remaining[0]!.id)
+    await expect(launched.page.locator('.history-entry')).toBeVisible()
+    await launched.page.screenshot({ path: testInfo.outputPath('remaining-history-off.png') })
+    await launched.page.locator('.history-entry__toggle').click()
     await launched.page.getByRole('button', { name: 'Delete saved transcript' }).click()
     await launched.page.getByRole('dialog').getByRole('button', { name: 'Delete transcript', exact: true }).click()
     await expect(launched.page.getByRole('dialog')).toHaveCount(0)
