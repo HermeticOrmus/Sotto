@@ -137,7 +137,7 @@ import type { WidgetSnapshot } from '../shared/dictation'
 import { widgetPresentationFor } from '../shared/themeBranding'
 import { resolvePlatform } from '../shared/platform'
 import { defaultSettings, type AppSettings } from '../shared/settings'
-import { enableWasmThreadSupport } from './security'
+import { blockSpellcheckDictionaryDownloads, enableWasmThreadSupport } from './security'
 import {
   beginRuntimeVerification,
   registerLocalAssetProtocols,
@@ -487,6 +487,7 @@ function createBrowserWindow(options: WindowConstructorOptions): BrowserWindowLi
 }
 
 async function createRuntime(): Promise<NativeRuntimeController> {
+  blockSpellcheckDictionaryDownloads(session.defaultSession)
   const userDataPath = app.getPath('userData')
   const memoryStore = openRuntimeMemory(join(userDataPath, 'memory.sqlite'), logOperational)
   const memoryProfile = memoryStore === undefined ? undefined : new MemoryProfile(memoryStore)
