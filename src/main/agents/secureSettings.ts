@@ -8,11 +8,18 @@ const STORED_KEY = STORED_CREDENTIAL_PLACEHOLDER
 export class SecureSettings implements NativeSettingsRepository {
   private mutation: Promise<unknown> = Promise.resolve()
   constructor(private readonly repository: NativeSettingsRepository, private readonly credentials: AgentCredentials) {}
-  async migrate(): Promise<void> {
+  async migrate(onStorageFailure: () => void = () => undefined): Promise<void> {
     const current = await this.repository.get()
     if (current.llmApiKey) {
-      await this.credentials.set('formatting', current.llmApiKey)
-      await this.repository.update({ llmApiKey: '' })
+      try {
+        await this.credentials.set('formatting', current.llmApiKey)
+      } catch (error) {
+        onStorageFailure()
+        throw error
+      } finally {
+        // A failed vault write must never leave a readable key on disk.
+        await this.repository.update({ llmApiKey: '' })
+      }
     }
   }
   private redact(value: AppSettings): AppSettings {
@@ -30,7 +37,7 @@ export class SecureSettings implements NativeSettingsRepository {
     const copy = { ...value }
     return this.mutate(copy.llmApiKey, () => this.repository.save({ ...copy, llmApiKey: '' }))
   }
-  reset(): Promise<AppSettings> { return this.mutate('', () => this.repository.reset()) }
+  reset(): Promise<AppSettings> { return this.mutate(undefined, () => this.repository.reset()) }
   private mutate(key: string | undefined, write: () => Promise<AppSettings>): Promise<AppSettings> {
     const operation = this.mutation.then(async () => {
       const changesKey = key !== undefined && key !== STORED_KEY

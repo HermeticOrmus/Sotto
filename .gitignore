@@ -106,3 +106,9 @@ artifacts/ios-focus/
 
 # Main infrastructure verification captures; retain only the images cited by the note.
 artifacts/main-infra-bundle/
+
+# Generated captures from the Forge hand test; force-add only images cited by the note.
+artifacts/forge-hand-test/
+
+# Native iPhone thread-creation captures; force-add only images cited by the note.
+artifacts/iphone-new-threads/

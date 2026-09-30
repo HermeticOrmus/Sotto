@@ -312,7 +312,7 @@ export interface ProviderClientsOptions {
 /**
  * What each installed client publishes, and the one press that installs it. Nothing here connects,
  * disconnects or decides: the install runs beside whatever is running the old client, and the
- * coordinator tells the adapters afterwards (ADR-0021).
+ * coordinator tells the adapters afterwards (ADR-0042).
  */
 export class ProviderClients {
   private readonly cache = new Map<string, { version: string; expiresAt: number }>()

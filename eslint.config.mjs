@@ -9,6 +9,7 @@ export default tseslint.config(
       'artifacts/codex-restored-replies/**',
       'artifacts/workspace-picker/**',
       'artifacts/ios-focus/**',
+      'artifacts/iphone-new-threads/**',
       'artifacts/review-*/**',
       'artifacts/phase-three-themes/**',
       'artifacts/thread-browser-player/**',

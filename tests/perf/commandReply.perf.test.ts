@@ -99,7 +99,7 @@ describe.skipIf(!PERF_BENCH)('command reply cost', () => {
     const url = 'file:///main.html'
     const main: TrustedIpcSender = { role: 'main', url, webContents: { mainFrame: { parent: null, url }, isDestroyed: () => false, getURL: () => url } }
     const unregister = registerAgentIpc(ipc, router, router, () => [main], 'win32', { status: vi.fn(), download: vi.fn() },
-      { synthesize: vi.fn(), voices: vi.fn(), cancel: vi.fn() }, { synthesize: vi.fn(), cancel: vi.fn() }, { encodeReceipt: new AgentStateBroadcaster().encodeReceipt })
+      { synthesize: vi.fn(), voices: vi.fn(), cancel: vi.fn() }, { synthesize: vi.fn(), cancel: vi.fn() }, { wakeControl: live, encodeReceipt: new AgentStateBroadcaster().encodeReceipt })
     dispose = () => { unregister(); router.dispose() }
     const send = (command: AgentCommand) =>
       listeners.get(AGENT_COMMAND)!({ sender: main.webContents, senderFrame: main.webContents.mainFrame }, command) as Promise<AgentState>

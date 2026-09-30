@@ -1377,3 +1377,18 @@ it('rolls back to a successful explicit numeric return even when its setting val
   expect(input).toHaveValue('300')
   expect(update.mock.calls).toEqual([[{ pasteDelayMs: 300 }], [{ pasteDelayMs: 300 }], [{ pasteDelayMs: 450 }]])
 })
+
+it('explains a failed secure key migration beside the Settings key field until a key is saved', () => {
+  const props = baseProps({ openRouterKeyMigrationFailed: true })
+  const view = render(<SettingsView {...props} />)
+  expect(screen.getByText('The OpenRouter key could not be stored securely. Enter it again.')).toBeInTheDocument()
+  view.rerender(<SettingsView {...props} settings={{ ...DEFAULT_SETTINGS, llmApiKey: 'Saved in your operating system credential store' }} />)
+  expect(screen.queryByText('The OpenRouter key could not be stored securely. Enter it again.')).not.toBeInTheDocument()
+})
+
+it('says reset preserves the saved OpenRouter key before confirmation', async () => {
+  render(<SettingsView {...baseProps()} />)
+  await selectCategory('Application')
+  await userEvent.click(screen.getByRole('button', { name: 'Reset settings' }))
+  expect(screen.getByText('Defaults will be restored and first-run setup will reopen. Your saved OpenRouter key and history are preserved.')).toBeVisible()
+})
