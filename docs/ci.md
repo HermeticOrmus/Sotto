@@ -64,6 +64,42 @@ an npm runner; `tests/unit/release/testDiscovery.test.ts` checks that boundary.
 - **Wall-clock budgets.** See below.
 - **Desktop packaging and all publishing.** Desktop releases are still cut by hand on the Windows PC and the Apple silicon Mac. The Linux host archive is built and verified in its separate job, then published manually.
 
+## Opt-in appearance and theme captures
+
+`npm run test:e2e` builds and runs the ordinary Electron suite with one worker.
+Four appearance and theme capture specs skip unless their evidence variable is
+set. These captures are developer evidence, not part of the ordinary suite or CI.
+Build first with `npm run build`, then enable the spec you want to capture:
+
+```sh
+SOTTO_THEMES_E2E=1 npx playwright test tests/e2e/phase-three-themes.spec.ts
+SOTTO_APPEARANCE_EVIDENCE=1 npx playwright test tests/e2e/appearance-evidence.spec.ts
+SOTTO_THEME_EVIDENCE=1 npx playwright test tests/e2e/theme-palettes-evidence.spec.ts
+SOTTO_THEME_BRANDING_EVIDENCE=1 npx playwright test tests/e2e/phase-three-theme-branding.spec.ts
+```
+
+In PowerShell, set the matching variable before the command and remove it after:
+
+```powershell
+$env:SOTTO_THEMES_E2E = '1'
+try { npx playwright test tests/e2e/phase-three-themes.spec.ts }
+finally { Remove-Item Env:SOTTO_THEMES_E2E }
+```
+
+| Spec | Capture folder |
+| --- | --- |
+| `phase-three-themes.spec.ts` | `artifacts/phase-three-themes/` |
+| `appearance-evidence.spec.ts` | `artifacts/verification/phase-1-appearance/` |
+| `theme-palettes-evidence.spec.ts` | `artifacts/verification/sotto-palettes/` |
+| `phase-three-theme-branding.spec.ts` | `artifacts/phase-three-theme-branding/` |
+
+The appearance spec's optional whole-screen capture additionally needs
+`SOTTO_APPEARANCE_SCREEN_CAPTURE=1` and an otherwise clear desktop. Leave it unset
+for app-window captures. Run Electron captures serially on an interactive desktop;
+inspect their images before claiming visual verification. These commands write
+evidence files, so inspect the working tree afterward and keep only intended
+captures. They do not regenerate the design comparison baselines.
+
 ## Devin native verification
 
 The scripted adapter tests exercise each advertised permission mode in its own fixture. Combining all six sends in one test accumulated six provider processes against one test deadline and intermittently timed out on Windows, including on `main`. Each case still checks the complete advertised mode list, its selected mode and the accepted send; the separate simultaneous-thread test covers concurrency. The normal deadlines remain unchanged.
