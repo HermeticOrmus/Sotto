@@ -152,7 +152,7 @@ it('shows a host key with its fingerprint and trusts it once', async () => {
   expect(prompts).toHaveLength(1)
   expect(prompts[0]).toMatchObject({ kind: 'host-key' })
   expect(prompts[0]!.text).toContain("The authenticity of host 'forge (192.0.2.1)' can't be established.")
-  // Windows' cmd.exe keeps only the first line of the question; the fingerprint comes back from ssh's own debug output.
+  // The helper keeps the fingerprint in OpenSSH's question on both platforms.
   expect(prompts[0]!.text).toMatch(/key fingerprint is SHA256:fixtureKey\./u)
   expect((await spawns())[0]!.args).toContain(process.platform === 'win32' ? 'LogLevel=DEBUG1' : 'LogLevel=INFO')
   await connection.close()

@@ -504,9 +504,9 @@ export class SshHostLauncher {
     return new SshFailure(reason as SshFailureCode)
   }
   /**
-   * A question from the askpass helper. On Windows it arrives as its first line only, so a host-key
-   * question gets its fingerprint back from the same ssh process's debug output. A notice takes no
-   * answer and is not shown. A question ssh stops waiting for is taken off the screen.
+   * A question from the askpass helper. A host-key question missing its fingerprint gets it from the
+   * same ssh process's debug output. A notice takes no answer and is not shown. A question ssh stops
+   * waiting for is taken off the screen.
    */
   private async ask(attempt: Attempt, caller: string, question: AskpassQuestion, withdrawn: AbortSignal): Promise<string | null> {
     if (attempt.closed || withdrawn.aborted) return null
