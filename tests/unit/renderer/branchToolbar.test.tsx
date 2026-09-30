@@ -24,7 +24,7 @@ function state(threads: AgentThread[]): AgentState {
     host: { connected: true, name: 'Codex', version: 'test', capabilities: { projects: true, threads: true, submit: true, observe: true, questions: true, permissions: true, interrupt: true, messageOrigin: true, reconcile: true }, projects: [project], threads, models: [] } } as unknown as AgentState
 }
 function row(current: AgentThread): ThreadRow { return { thread: current, project, provider: 'Codex', providerId: 'codex', connected: true } as unknown as ThreadRow }
-function mount(current: AgentThread, options: { refs?: (request: { query?: string; cursor?: number }) => GitRefsPage; others?: AgentThread[]; command?: (request: AgentCommand) => Promise<AgentState | null>; focused?: boolean; openExternalLink?: ReturnType<typeof vi.fn> } = {}) {
+function mount(current: AgentThread, options: { refs?: (request: { query?: string; cursor?: number }) => GitRefsPage | Promise<GitRefsPage>; others?: AgentThread[]; command?: (request: AgentCommand) => Promise<AgentState | null>; focused?: boolean; openExternalLink?: ReturnType<typeof vi.fn> } = {}) {
   const gitRefs = vi.fn(async (request: { threadId: string; query?: string; cursor?: number; limit?: number; refresh?: boolean }) => options.refs ? options.refs(request) : page([ref('main', { current: true, isDefault: true }), ref('feature'), ref('origin/remote-only', { remote: 'origin' })]))
   vi.stubGlobal('sotto', { agents: { gitRefs }, ...(options.openExternalLink ? { openExternalLink: options.openExternalLink } : {}) })
   const command = vi.fn(options.command ?? (async () => state([current])))
@@ -151,6 +151,67 @@ describe('branch toolbar logic', () => {
 })
 
 describe('BranchToolbar', () => {
+  it('reloads all refs after clearing a search', async () => {
+    const { gitRefs } = mount(thread(), { refs: request => page(request.query ? [ref('feature')] : [ref('main'), ref('release')]) })
+    await openPicker()
+    const input = screen.getByLabelText('Search refs')
+    fireEvent.change(input, { target: { value: 'fe' } })
+    await screen.findByRole('option', { name: 'feature' })
+    fireEvent.change(input, { target: { value: '' } })
+    await screen.findByRole('option', { name: 'release' })
+    expect(gitRefs).toHaveBeenLastCalledWith({ threadId: 'thread-1', limit: 60 })
+  })
+  it('drops a pending Enter when the search changes', async () => {
+    const { command } = mount(thread(), { refs: request => page([ref(request.query === 'main' ? 'main-match' : 'feature')]) })
+    await openPicker()
+    const input = screen.getByLabelText('Search refs')
+    fireEvent.change(input, { target: { value: 'fe' } })
+    await screen.findByRole('option', { name: 'feature' })
+    fireEvent.change(input, { target: { value: '' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    fireEvent.change(input, { target: { value: 'main' } })
+    await screen.findByRole('option', { name: 'main-match' })
+    expect(command).not.toHaveBeenCalled()
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() => expect(command).toHaveBeenCalledWith({ type: 'git-switch-branch', threadId: 'thread-1', ref: 'main-match' }))
+  })
+  it('uses the latest thread state when Enter chooses a loaded ref', async () => {
+    const { command, rerender } = mount(thread(), { refs: () => page([ref('busy', { worktreePath: 'C:/wt/busy' })]) })
+    await openPicker()
+    rerender(thread({ nativeSessionStarted: true }))
+    fireEvent.keyDown(screen.getByLabelText('Search refs'), { key: 'Enter' })
+    expect(await screen.findByRole('alert')).toHaveTextContent('busy is checked out in another worktree. Start a new thread there to work on it.')
+    expect(command).not.toHaveBeenCalled()
+  })
+  it('ignores a search response that arrives after the query changes', async () => {
+    let finish: ((value: GitRefsPage) => void) | undefined
+    const { gitRefs, command } = mount(thread(), { refs: request => request.query === 'fe' ? new Promise(resolve => { finish = resolve }) : page([ref('release')]) })
+    await openPicker()
+    const input = screen.getByLabelText('Search refs')
+    fireEvent.change(input, { target: { value: 'fe' } })
+    await waitFor(() => expect(gitRefs).toHaveBeenLastCalledWith({ threadId: 'thread-1', query: 'fe', limit: 60 }))
+    fireEvent.keyDown(input, { key: 'Enter' })
+    fireEvent.change(input, { target: { value: 'release' } })
+    await act(async () => { finish!(page([ref('feature')])) })
+    expect(screen.queryByRole('option', { name: 'feature' })).toBeNull()
+    await waitFor(() => expect(gitRefs).toHaveBeenLastCalledWith({ threadId: 'thread-1', query: 'release', limit: 60 }))
+    expect(command).not.toHaveBeenCalled()
+  })
+  it('keeps a pending Enter within its thread and still answers a fresh Enter', async () => {
+    let finish: ((value: GitRefsPage) => void) | undefined
+    const { command, gitRefs, rerender } = mount(thread(), { refs: request => request.query === 'fe' ? new Promise(resolve => { finish = resolve }) : page([ref('release')]) })
+    await openPicker()
+    const input = screen.getByLabelText('Search refs')
+    fireEvent.change(input, { target: { value: 'fe' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() => expect(gitRefs).toHaveBeenLastCalledWith({ threadId: 'thread-1', query: 'fe', limit: 60 }))
+    rerender(thread({ id: 'thread-2' }))
+    await act(async () => { finish!(page([ref('feature')])) })
+    expect(command).not.toHaveBeenCalled()
+    await openPicker()
+    fireEvent.keyDown(screen.getByLabelText('Search refs'), { key: 'Enter' })
+    await waitFor(() => expect(command).toHaveBeenCalledWith({ type: 'git-switch-branch', threadId: 'thread-2', ref: 'release' }))
+  })
   it.each([{ isComposing: true }, { keyCode: 229 }])('lets composition finish before choosing a ref: %j', async composition => {
     const { command } = mount(thread(), { refs: () => page([ref('feature')]) })
     await openPicker()

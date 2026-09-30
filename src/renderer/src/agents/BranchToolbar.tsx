@@ -292,6 +292,7 @@ function BranchPicker({ threadId, triggerRef, open, onOpenChange, label, busy, d
   const [loading, setLoading] = useState(false)
   const [failure, setFailure] = useState<string | null>(null)
   const enterPending = useRef(false)
+  const searchEdited = useRef(false)
   const panel = useRef<HTMLDivElement>(null)
   const [position, setPosition] = useState<{ left: number; width: number } | null>(null)
   const search = useRef<HTMLInputElement>(null)
@@ -316,6 +317,7 @@ function BranchPicker({ threadId, triggerRef, open, onOpenChange, label, busy, d
   }, [threadId])
   useEffect(() => {
     if (!open) { generation.current++; enterPending.current = false; return }
+    enterPending.current = false; searchEdited.current = false
     setQuery(''); setRefs([]); setPage(null); setLoadedQuery(null)
     void load('', undefined, true)
     const dismiss = (event: PointerEvent): void => {
@@ -327,8 +329,8 @@ function BranchPicker({ threadId, triggerRef, open, onOpenChange, label, busy, d
     return () => document.removeEventListener('pointerdown', dismiss, true)
   }, [open, load, onOpenChange, triggerRef])
   useEffect(() => {
-    // The open read already answered the empty query; only a typed one asks the host again.
-    if (!open || query === '') return
+    // The open read answers the initial empty query. Every edit, including clearing it, asks again.
+    if (!open || !searchEdited.current) return
     const timer = window.setTimeout(() => { void load(query, undefined, false) }, SEARCH_DELAY_MS)
     return () => window.clearTimeout(timer)
   }, [open, query, load])
@@ -356,8 +358,8 @@ function BranchPicker({ threadId, triggerRef, open, onOpenChange, label, busy, d
     window.addEventListener('resize', update)
     return () => { observer?.disconnect(); window.removeEventListener('resize', update) }
   }, [open, triggerRef])
-  const close = (refocus: boolean): void => { onOpenChange(false); if (refocus) triggerRef.current?.focus() }
-  const choose = async (ref: GitRef): Promise<void> => { close(true); await onPick(ref) }
+  const close = useCallback((refocus: boolean): void => { enterPending.current = false; onOpenChange(false); if (refocus) triggerRef.current?.focus() }, [onOpenChange, triggerRef])
+  const choose = useCallback(async (ref: GitRef): Promise<void> => { close(true); await onPick(ref) }, [close, onPick])
   const createName = createRefName(query)
   const pullRequestReference = parsePullRequestReference(query)
   const checkoutPullRequest = (): void => { if (!pullRequestReference) return; close(false); onCheckoutPullRequest(pullRequestReference) }
@@ -372,8 +374,8 @@ function BranchPicker({ threadId, triggerRef, open, onOpenChange, label, busy, d
     if (first) { void choose(first); return true }
     if (!draftWorktree && offersCreate(query, refs)) { close(true); void onCreate(createRefName(query)); return true }
     return true
-  }, [loadedQuery, query, refs, draftWorktree, pullRequestReference])
-  useEffect(() => { if (enterPending.current && takeEnter()) enterPending.current = false }, [takeEnter])
+  }, [loadedQuery, query, refs, draftWorktree, pullRequestReference, close, choose, onCheckoutPullRequest, onCreate])
+  useEffect(() => { if (open && !disabled && enterPending.current && takeEnter()) enterPending.current = false }, [open, disabled, takeEnter])
   const empty = !loading && answered && refs.length === 0 && !canCreate && !pullRequestReference
   const more = page?.nextCursor ?? null
   return <div className="branch-toolbar__picker"
@@ -387,7 +389,10 @@ function BranchPicker({ threadId, triggerRef, open, onOpenChange, label, busy, d
     {open ? <div ref={panel} id={panelId} className="branch-toolbar__panel" role="group" aria-label="Branches" style={position ?? undefined}>
       <div className="branch-toolbar__search"><Search size={14} aria-hidden="true" />
         <input ref={search} aria-label="Search refs" placeholder="Search refs..." value={query} autoComplete="off" spellCheck={false}
-          onChange={event => setQuery(event.target.value)}
+          onChange={event => {
+            enterPending.current = false; searchEdited.current = true; generation.current++
+            setLoadedQuery(null); setLoading(true); setQuery(event.target.value)
+          }}
           onKeyDown={event => {
             if (isCompositionKey(event.nativeEvent)) return
             if (event.key === 'ArrowDown') { event.preventDefault(); list.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus() }

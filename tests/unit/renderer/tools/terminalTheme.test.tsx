@@ -21,7 +21,7 @@ vi.mock('@xterm/xterm', () => ({
     }
     loadAddon(addon: unknown): void { if (gpu.fail && addon && typeof addon === 'object' && 'onContextLoss' in addon) throw new Error('WebGL unavailable') }
     onData(): void {}
-    key = (_event: KeyboardEvent): boolean => true
+    key: (event: KeyboardEvent) => boolean = () => true
     attachCustomKeyEventHandler(handler: (event: KeyboardEvent) => boolean): void { this.key = handler }
     hasSelection(): boolean { return true }
     getSelection(): string { return 'terminal selection' }

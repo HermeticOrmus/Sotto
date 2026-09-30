@@ -168,6 +168,32 @@ test('shared checkout is the default; independent worktrees are lazy, editable a
     await expect(refs.getByRole('option', { name: /^main/ })).toContainText('current')
     await page.keyboard.type('rel')
     await expect(refs.getByRole('option').first()).toHaveText(/^release/)
+    await refs.getByRole('option', { name: /^release/ }).click({ button: 'right' })
+    // Main's E2E output boundary keeps a private clipboard instead of writing the machine's clipboard.
+    await expect.poll(() => page.evaluate(async () => (await window.sottoE2E!.snapshot()).clipboardText)).toBe('release')
+    const search = page.getByLabel('Search refs')
+    await search.fill('')
+    await expect(refs.getByRole('option', { name: /^main/ })).toBeVisible()
+    await mkdir(SHOTS, { recursive: true })
+    for (const [width, height] of [[1600, 1000], [1280, 800], [820, 560]] as const) {
+      await resize(launched, width, height)
+      for (const appearance of ['dark', 'light'] as const) {
+        await page.evaluate(async appearance => window.sotto!.updateSettings({ appearance, reducedMotion: 'on' }), appearance)
+        await expect(search).toBeInViewport()
+        await expect(refs.getByRole('option', { name: /^main/ })).toBeInViewport()
+        await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+        await page.screenshot({ path: `${SHOTS}/pkg25-branch-${width}x${height}-${appearance}.png`, animations: 'disabled' })
+      }
+    }
+    await page.evaluate(async () => window.sotto!.updateSettings({ appearance: 'dark', reducedMotion: 'system' }))
+    await resize(launched, 1280, 800)
+    await search.fill('rel')
+    await expect(refs.getByRole('option').first()).toHaveText(/^release/)
+    for (const composition of [{ isComposing: true }, { keyCode: 229 }]) {
+      await search.evaluate((element, detail) => element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, ...detail })), composition)
+      await expect(search).toBeVisible()
+      expect(git(repo, 'branch', '--show-current')).toBe('main')
+    }
     await page.keyboard.press('Enter')
     await expect.poll(() => git(repo, 'branch', '--show-current')).toBe('release')
     await expect(toolbar(page).getByRole('combobox', { name: 'Choose branch', exact: true })).toHaveText(/release/)
