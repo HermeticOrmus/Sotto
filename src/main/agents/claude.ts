@@ -8,9 +8,10 @@ import { existingWorkingDirectory } from './threadWorktrees'
 import { NativeUsage } from './nativeUsage'
 import { compactionPending, compactionSchema } from '../../shared/compaction'
 import { randomUUID } from 'node:crypto'
-import { rm, writeFile } from 'node:fs/promises'
+import { readdir, rm, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
 import { z } from 'zod'
 import { agentAttachmentReferenceSchema, agentProjectSchema, agentRuntimeModeSchema, type AgentHostSnapshot, type AgentMessage, type AgentRuntimeMode, type AgentThread } from '../../shared/agents'
 import { AtomicJsonStore } from '../storage/atomicJsonStore'
@@ -288,6 +289,8 @@ export class ClaudeStreamJsonHost implements AgentHost {
   async connect(): Promise<AgentHostSnapshot> {
     this.disconnect(); await this.closed()
     const generation = this.generation
+    await this.removeLeftoverConfigs()
+    if (generation !== this.generation) throw new Error('Claude connection was cancelled.')
     await this.usage.load()
     const [account, executable, aliases, projects] = await Promise.all([this.client.status(), this.client.findExecutable(), this.aliasStore.read(), this.projectStore.read()])
     if (generation !== this.generation) throw new Error('Claude connection was cancelled.')
@@ -869,9 +872,9 @@ export class ClaudeStreamJsonHost implements AgentHost {
         await writeFile(mcpConfig, JSON.stringify({ mcpServers: Object.fromEntries(servers.map(({ server }) => [server.name, {
           type: server.type, url: server.url, headers: Object.fromEntries(server.headers.map(header => [header.name, header.value])),
         }])) }), { mode: 0o600, flag: 'wx' })
-      } catch (error) { await rm(mcpConfig, { force: true }); throw error }
+      } catch (error) { await this.removeConfig(mcpConfig); throw error }
     }
-    if (generation !== this.generation) { if (mcpConfig) await rm(mcpConfig, { force: true }); throw new Error('Claude connection was cancelled.') }
+    if (generation !== this.generation) { if (mcpConfig) await this.removeConfig(mcpConfig); throw new Error('Claude connection was cancelled.') }
     const toolArguments = mcpConfig ? ['--mcp-config', mcpConfig, ...toolAllowance(servers)] : []
     const args = [...(this.options.args ?? []), ...toolArguments, '--print', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
       '--include-partial-messages', '--replay-user-messages', ...permissionArguments(alias.runtimeMode),
@@ -900,9 +903,9 @@ export class ClaudeStreamJsonHost implements AgentHost {
           this.markTurn(id, 'failed', saved?.origins.find(origin => origin.uuid === turn.id)?.messageId, SESSION_ENDED)
         }
         this.emit()
-      }) } } catch (error) { if (mcpConfig) await rm(mcpConfig, { force: true }); throw error }
+      }) } } catch (error) { if (mcpConfig) await this.removeConfig(mcpConfig); throw error }
     this.runtimes.set(id, runtime)
-    this.trackClosure(runtime.protocol.closed.then(async () => { if (mcpConfig) await rm(mcpConfig, { force: true }) }))
+    this.trackClosure(runtime.protocol.closed.then(async () => { if (mcpConfig) await this.removeConfig(mcpConfig) }))
     try {
       const initialized = await runtime.protocol.control({ subtype: 'initialize', hooks: {}, sdkMcpServers: [], promptSuggestions: false, supportedDialogKinds: ['resume_return'] })
       this.threads.get(id)!.manualCompactionSupported = Array.isArray(initialized.commands) && initialized.commands.some(command => object(command)?.name === 'compact')
@@ -915,6 +918,26 @@ export class ClaudeStreamJsonHost implements AgentHost {
     // A change left unconfirmed is shown from the launch that carries it (see `unconfirmedSettings`).
     if (!sameSettings(settingsOf(this.threads.get(id)!), settingsOf(alias))) { this.showSettings(id); this.emit() }
     return runtime
+  }
+  private async removeConfig(path: string): Promise<void> {
+    // Node applies maxRetries only to recursive removal. These are individual files, so
+    // retry transient Windows locks here without allowing recursive removal.
+    for (let attempt = 0; ; attempt++) {
+      try { await rm(path, { force: true, maxRetries: 3 }); return }
+      catch (error) {
+        if (attempt < 3 && ['EBUSY', 'EPERM'].includes((error as NodeJS.ErrnoException).code ?? '')) { await delay(100 * (attempt + 1)); continue }
+        this.options.logEvent?.('claude-mcp-config-cleanup-failed'); return
+      }
+    }
+  }
+  private async removeLeftoverConfigs(): Promise<void> {
+    let names: string[]
+    try { names = await readdir(this.options.userDataPath) }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') this.options.logEvent?.('claude-mcp-config-cleanup-failed')
+      return
+    }
+    await Promise.all(names.filter(name => /^claude-mcp-.*\.json$/.test(name)).map(name => this.removeConfig(join(this.options.userDataPath, name))))
   }
   private frame(id: string, frame: ClaudeFrame): void {
     this.reaper.touch(id)
