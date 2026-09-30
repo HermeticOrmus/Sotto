@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { Duplex } from 'node:stream'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { SocketFrames } from '../../../src/host/socketFrames'
 import { HOST_MAX_FRAME_BYTES } from '../../../src/shared/hostProtocol'
 function harness(client = false) {
@@ -13,9 +13,42 @@ function masked(payload: Buffer, opcode = 1, final = true): Buffer {
   const mask = Buffer.from([1, 2, 3, 4])
   const encoded = Buffer.from(payload)
   for (let i = 0; i < encoded.length; i++) encoded[i] = encoded[i]! ^ mask[i % 4]!
-  return Buffer.concat([Buffer.from([(final ? 128 : 0) | opcode, 128 | payload.length]), mask, encoded])
+  const extended = payload.length < 126 ? 0 : payload.length <= 65535 ? 2 : 8
+  const header = Buffer.alloc(2 + extended)
+  header[0] = (final ? 128 : 0) | opcode
+  header[1] = 128 | (extended === 0 ? payload.length : extended === 2 ? 126 : 127)
+  if (extended === 2) header.writeUInt16BE(payload.length, 2)
+  if (extended === 8) header.writeBigUInt64BE(BigInt(payload.length), 2)
+  return Buffer.concat([header, mask, encoded])
 }
 describe('bounded WebSocket framing', () => {
+  it('assembles a large frame only when all its chunks have arrived', () => {
+    const h = harness(), text = 'a'.repeat(14 * 1024 * 1024), frame = masked(Buffer.from(text))
+    const concat = vi.spyOn(Buffer, 'concat')
+    try {
+      for (let offset = 0; offset < frame.length; offset += 64 * 1024) {
+        h.frames.feed(frame.subarray(offset, offset + 64 * 1024))
+        if (offset + 64 * 1024 < frame.length) {
+          expect(h.messages).toEqual([])
+          expect(concat).not.toHaveBeenCalled()
+        }
+      }
+      expect(h.messages).toEqual([text])
+      const copiedBytes = concat.mock.calls.reduce((total, [chunks]) => total + chunks.reduce((size, chunk) => size + chunk.length, 0), 0)
+      expect(copiedBytes).toBeLessThanOrEqual(frame.length * 2)
+      expect(h.stream.destroyed).toBe(false)
+    } finally { concat.mockRestore(); h.frames.close() }
+  })
+  it.each([0, 125, 126, 65535, 65536])('reads a split header and leaves the following frame queued for a %i-byte payload', size => {
+    const h = harness(), text = 'a'.repeat(size), frame = masked(Buffer.from(text)), next = masked(Buffer.from('next'))
+    for (let offset = 0; offset < Math.min(14, frame.length); offset++) h.frames.feed(frame.subarray(offset, offset + 1))
+    h.frames.feed(Buffer.concat([frame.subarray(Math.min(14, frame.length)), next.subarray(0, 3)]))
+    expect(h.messages).toEqual([text])
+    h.frames.feed(next.subarray(3))
+    expect(h.messages).toEqual([text, 'next'])
+    expect(h.stream.destroyed).toBe(false)
+    h.frames.close()
+  })
   it('accepts fragmented masked text, replies to ping, and rejects an unmasked client', () => {
     const h = harness()
     h.frames.feed(masked(Buffer.from('{"hello":'), 1, false))

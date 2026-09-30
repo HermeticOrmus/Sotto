@@ -4,7 +4,8 @@ import { HOST_MAX_FRAME_BYTES } from '../shared/hostProtocol'
 
 /** The RFC 6455 framing boundary, shared by the Node client and listener. No protocol bodies are logged. */
 export class SocketFrames {
-  private buffer: Buffer = Buffer.alloc(0)
+  private chunks: Buffer[] = []
+  private bufferedBytes = 0
   private fragments: Buffer[] = []
   private fragmentedBytes = 0
   private ended = false
@@ -23,7 +24,7 @@ export class SocketFrames {
   private closed(): void {
     if (this.ended) return
     this.ended = true
-    this.buffer = Buffer.alloc(0); this.fragments = []
+    this.chunks = []; this.bufferedBytes = 0; this.fragments = []
     for (const listener of this.closedListeners) listener()
     this.closedListeners.clear()
   }
@@ -46,27 +47,28 @@ export class SocketFrames {
   }
   private receive(data: Buffer): void {
     if (this.ended) return
-    if (this.buffer.length + data.length > HOST_MAX_FRAME_BYTES + 14) { this.close(); return }
-    this.buffer = Buffer.concat([this.buffer, data])
-    while (this.buffer.length >= 2 && !this.ended) {
-      const first = this.buffer[0]!, second = this.buffer[1]!, opcode = first & 15
+    if (this.bufferedBytes + data.length > HOST_MAX_FRAME_BYTES + 14) { this.close(); return }
+    if (data.length) { this.chunks.push(data); this.bufferedBytes += data.length }
+    while (this.bufferedBytes >= 2 && !this.ended) {
+      const header = this.header()
+      const first = header[0]!, second = header[1]!, opcode = first & 15
       const final = (first & 128) !== 0, masked = (second & 128) !== 0
       if ((first & 112) !== 0 || masked === this.client || ![0, 1, 8, 9, 10].includes(opcode)) { this.close(); return }
       let size = second & 127, offset = 2
-      if (size === 126) { if (this.buffer.length < 4) return; size = this.buffer.readUInt16BE(2); offset = 4 }
+      if (size === 126) { if (this.bufferedBytes < 4) return; size = header.readUInt16BE(2); offset = 4 }
       else if (size === 127) {
-        if (this.buffer.length < 10) return
-        const big = this.buffer.readBigUInt64BE(2)
+        if (this.bufferedBytes < 10) return
+        const big = header.readBigUInt64BE(2)
         if (big > BigInt(HOST_MAX_FRAME_BYTES)) { this.close(); return }
         size = Number(big); offset = 10
       }
       if (size > HOST_MAX_FRAME_BYTES || (opcode >= 8 && (!final || size > 125))) { this.close(); return }
       const maskOffset = offset
       if (masked) offset += 4
-      if (this.buffer.length < offset + size) return
-      const payload = Buffer.from(this.buffer.subarray(offset, offset + size))
-      if (masked) for (let index = 0; index < size; index++) payload[index] = payload[index]! ^ this.buffer[maskOffset + index % 4]!
-      this.buffer = this.buffer.subarray(offset + size)
+      if (this.bufferedBytes < offset + size) return
+      const frame = this.take(offset + size)
+      const payload = Buffer.from(frame.subarray(offset))
+      if (masked) for (let index = 0; index < size; index++) payload[index] = payload[index]! ^ header[maskOffset + index % 4]!
       if (opcode === 8) { this.write(8, payload); this.close(); return }
       if (opcode === 9) { this.write(10, payload); continue }
       if (opcode === 10) continue
@@ -81,5 +83,32 @@ export class SocketFrames {
         this.message(text)
       }
     }
+  }
+  /** Inspect at most the fourteen header bytes without copying an incomplete frame's body. */
+  private header(): Buffer {
+    const size = Math.min(this.bufferedBytes, 14)
+    if (this.chunks[0]!.length >= size) return this.chunks[0]!.subarray(0, size)
+    const header = Buffer.alloc(size)
+    let copied = 0
+    for (const chunk of this.chunks) {
+      copied += chunk.copy(header, copied, 0, Math.min(chunk.length, size - copied))
+      if (copied === size) break
+    }
+    return header
+  }
+  /** Remove one complete frame, joining its chunks once and leaving the next frame queued. */
+  private take(size: number): Buffer {
+    const parts: Buffer[] = []
+    let remaining = size, consumed = 0
+    while (remaining > 0) {
+      const chunk = this.chunks[consumed]!, count = Math.min(chunk.length, remaining)
+      parts.push(chunk.subarray(0, count))
+      remaining -= count
+      if (count === chunk.length) consumed++
+      else this.chunks[consumed] = chunk.subarray(count)
+    }
+    this.chunks.splice(0, consumed)
+    this.bufferedBytes -= size
+    return parts.length === 1 ? parts[0]! : Buffer.concat(parts, size)
   }
 }
