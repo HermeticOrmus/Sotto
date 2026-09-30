@@ -1529,7 +1529,10 @@ export class WorkspaceHost implements AgentHost {
    * back on hands the file over from here, and what was not kept is gone.
    */
   async privacyChanged(): Promise<void> {
-    await this.checkpointHooks?.privacyChanged?.()
+    try { await this.changeHistoryPrivacy() }
+    finally { await this.checkpointHooks?.privacyChanged?.() }
+  }
+  private async changeHistoryPrivacy(): Promise<void> {
     this.activityInputs.clear()
     if (!this.historyEnabled()) {
       this.activityJsonFallbackAllowed = false

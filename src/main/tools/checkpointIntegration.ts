@@ -31,7 +31,7 @@ export function connectCheckpoints(options: { files: FilesService; directory: st
   }
   const pending = async (threadId: string): Promise<boolean> => (await sharedThreads(threadId)).some(thread => thread.status === 'running' || thread.requests.length > 0
     || thread.historyStatus === 'loading' || thread.historyStatus === 'error' || control.hasPendingThreadWork(thread.id))
-  const checkpoints = new CheckpointService({ historyEnabled: options.historyEnabled, files: options.files, directory: join(options.directory, 'checkpoints'),
+  const checkpoints = new CheckpointService({ report: options.report, ...(options.historyEnabled ? { historyEnabled: options.historyEnabled } : {}), files: options.files, directory: join(options.directory, 'checkpoints'),
     resolveThread: async threadId => {
       const snapshot = host.workspaceSnapshot(), thread = snapshot.threads.find(item => item.id === threadId)
       if (!thread?.providerId) return null
@@ -49,14 +49,14 @@ export function connectCheckpoints(options: { files: FilesService; directory: st
     refresh: async threadId => { await host.refreshThread(threadId) },
   })
   const ready = checkpoints.initialize()
-  void ready.catch(() => options.report('Checkpoint recovery storage could not be read. Thread mutations are blocked until it is repaired.'))
+  void ready.catch(error => options.report(error instanceof Error ? error.message : 'Checkpoint storage could not be read. Restore access to local storage and try again.'))
   /** No folder to read yet: a first send before setup allocates one, or a reclaimed worktree the next send puts back (ADR-0041). */
   const unallocated = (threadId: string): boolean => {
     const thread = host.workspaceSnapshot().threads.find(item => item.id === threadId)
     return thread?.worktree?.mode === 'independent' && (thread.nativeSessionStarted === false && !thread.worktree.path || Boolean(thread.worktree.reclaimedAt))
   }
   const blocked = async (threadId: string): Promise<boolean> => {
-    await ready
+    await checkpoints.initialize()
     // A first send has no folder yet. Honor any thread recovery record, then let setup allocate it.
     return unallocated(threadId) ? checkpoints.isBlocked(threadId) : checkpoints.isWorkspaceBlocked(threadId)
   }
@@ -64,7 +64,7 @@ export function connectCheckpoints(options: { files: FilesService; directory: st
     privacyChanged: () => checkpoints.privacyChanged(),
     isBlocked: async threadId => await blocked(threadId) || !unallocated(threadId) && await options.git().isMutating(threadId),
     beforeTurn: async threadId => {
-      await ready
+      await checkpoints.initialize()
       await host.refreshThread(threadId)
       await checkpoints.afterTurn(threadId)
       await checkpoints.beforeTurn(threadId)
@@ -82,7 +82,7 @@ export function connectCheckpoints(options: { files: FilesService; directory: st
       const key = `${thread.lastTurn.id}:${thread.lastTurn.status}:${threadSummaryOf(thread).messageCount}`
       if (completions.get(thread.id) === key) continue
       completions.set(thread.id, key)
-      void ready.then(() => checkpoints.afterTurn(thread.id)).catch(() => options.report('A completed turn checkpoint could not be saved. Check the Changes panel before attempting a revert.'))
+      void checkpoints.initialize().then(() => checkpoints.afterTurn(thread.id)).catch(() => options.report('A completed turn checkpoint could not be saved. Check the Changes panel before attempting a revert.'))
     }
   })
   return { checkpoints,

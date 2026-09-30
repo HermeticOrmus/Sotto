@@ -14,6 +14,7 @@ export interface CheckpointThread {
   unsupportedReason?: string
 }
 export interface CheckpointDependencies {
+  report?: (message: string) => void
   historyEnabled?: () => boolean
   now?: () => number
   maxBytes?: number

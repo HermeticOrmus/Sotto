@@ -18,14 +18,22 @@ it('excludes an unallocated worktree from shared-folder checkpoint guards while 
     await f.host.execute({ type: 'create-thread', commandId: 'pending', threadId: 'pending', projectId: project.id, modelId: model.id, title: 'Pending', workingCopy: 'independent' })
     const files = new FilesService({ resolveBinding: id => resolveFilesBinding(f.host.workspaceSnapshot(), id), copyPath: vi.fn(), reveal: vi.fn() })
     const pending = vi.fn(() => false)
+    const subscribe = vi.fn<AgentControl['subscribe']>(() => () => undefined)
     const hooks = vi.spyOn(f.host, 'setCheckpointHooks')
     integration = connectCheckpoints({ files, directory: f.root, host: f.host, registry: f.registry,
-      control: { subscribe: () => () => undefined, hasPendingThreadWork: pending } as unknown as AgentControl,
+      control: { subscribe, hasPendingThreadWork: pending } as unknown as AgentControl,
       git: () => ({ isMutating: async () => false }) as unknown as GitChangesService, report: vi.fn() })
     await expect(Promise.resolve(hooks.mock.calls[0]![0].isBlocked('pending'))).resolves.toBe(false)
     await expect(integration.canMutate('pending')).resolves.toBe(false)
     await expect(integration.canMutate('ready')).resolves.toBe(true)
     expect(pending).not.toHaveBeenCalledWith('pending')
+    const forgotten = vi.spyOn(integration.checkpoints, 'forgetThread').mockResolvedValue()
+    subscribe.mock.calls[0]![0]({ host: { ...f.host.workspaceSnapshot(), threads: [] } } as unknown as Parameters<Parameters<AgentControl['subscribe']>[0]>[0])
+    expect(forgotten).toHaveBeenCalledWith('ready')
+    expect(forgotten).toHaveBeenCalledWith('pending')
+    const privacy = vi.spyOn(integration.checkpoints, 'privacyChanged').mockResolvedValue()
+    await hooks.mock.calls[0]![0].privacyChanged?.()
+    expect(privacy).toHaveBeenCalledOnce()
     f.adapters.codex.state.threads[0]!.status = 'running'; f.adapters.codex.emit()
     await expect(integration.canMutate('ready')).resolves.toBe(false)
   } finally {
