@@ -10,6 +10,7 @@ import { useOptionalApp } from '../state/AppContext'
 import type { AgentConnection } from './AgentContext'
 import { moveListboxFocus } from './listboxKeys'
 import { writeClipboard } from './richActions'
+import { isCompositionKey } from './composerKeys'
 import { branchLabel, chordClaimed, chordMatches, createRefName, newWorktreeDraft, offersCreate, pickOutcome, pullRequestTitle, refBadges, switchFailure, TOOLBAR_SHORTCUTS, toolbarApplies, workspaceChoice, workspaceLabel, workspaceLocked, workspaceOptionId, workspaceOptions, type ToolbarThread, type WorkspaceChoice } from './branchToolbar.logic'
 import type { ThreadRow } from './threadFacts'
 import { listedHosts } from './HostBadge'
@@ -388,6 +389,7 @@ function BranchPicker({ threadId, triggerRef, open, onOpenChange, label, busy, d
         <input ref={search} aria-label="Search refs" placeholder="Search refs..." value={query} autoComplete="off" spellCheck={false}
           onChange={event => setQuery(event.target.value)}
           onKeyDown={event => {
+            if (isCompositionKey(event.nativeEvent)) return
             if (event.key === 'ArrowDown') { event.preventDefault(); list.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus() }
             if (event.key === 'Enter') {
               event.preventDefault()

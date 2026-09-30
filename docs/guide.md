@@ -21,6 +21,8 @@ The [README](../README.md) says what Sotto is and how to install it. This guide 
 
 ### Starting a thread
 
+When typing with a Japanese or Chinese input method, Enter finishes the current word first. Press Enter again to choose a project or branch, confirm a thread rename, or name a new folder.
+
 New work starts in Unsettled. Pressing **New thread** can reuse an empty thread only if it is still unsettled, its known model, effort and permission choices match the current defaults in Settings, and no setting change is pending. If the saved effort or permission default cannot be resolved from the model catalog, a new thread opens instead. Settled threads and empty threads with older choices stay as they were.
 
 A thread in a project opens at once, named "New thread" and ready for your first message: the pen beside a project row, the empty Threads page's own button, and choosing a project from the sidebar's top **New thread** button (or **Ctrl+Shift+N**, **Cmd+Shift+N** on a Mac) all open one this way. Only the top button and the shortcut with no thread focused ask which project first; the pen and the empty page's button already know it. The shortcut opens a thread in the focused pane's project, or asks which project when none is focused; it does nothing while a dialog is open or a terminal has focus. If the project already has an unused thread that meets those reuse conditions, it takes you back to that one instead of opening another. A creation the provider refuses says why where the sidebar shows other such errors, and nothing else is lost.

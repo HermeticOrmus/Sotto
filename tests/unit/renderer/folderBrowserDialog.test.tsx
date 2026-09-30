@@ -1,5 +1,5 @@
 import React from 'react'
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -59,6 +59,19 @@ describe('browsableHosts', () => {
 })
 
 describe('FolderBrowserDialog', () => {
+  it.each([{ isComposing: true }, { keyCode: 229 }])('finishes composing a folder name before naming it: %j', async composition => {
+    stubBridge()
+    render(<FolderBrowserDialog state={twoHosts()} hostId={FORGE} heading="Choose a folder" onUse={vi.fn()} onClose={vi.fn()} />)
+    await screen.findByRole('button', { name: 'code' })
+    fireEvent.click(screen.getByRole('button', { name: 'New folder' }))
+    const input = screen.getByRole('textbox', { name: 'New folder name' })
+    fireEvent.change(input, { target: { value: 'new-project' } })
+    fireEvent.keyDown(input, { key: 'Enter', ...composition })
+    expect(input).toBeInTheDocument()
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(screen.queryByRole('textbox', { name: 'New folder name' })).toBeNull()
+    expect(screen.getByText(/This folder is new/)).toBeInTheDocument()
+  })
   it('asks for the computer first, with none chosen, then lists that computer\'s home folder', async () => {
     const { hostFolders } = stubBridge()
     const user = userEvent.setup()

@@ -151,6 +151,27 @@ describe('branch toolbar logic', () => {
 })
 
 describe('BranchToolbar', () => {
+  it.each([{ isComposing: true }, { keyCode: 229 }])('lets composition finish before choosing a ref: %j', async composition => {
+    const { command } = mount(thread(), { refs: () => page([ref('feature')]) })
+    await openPicker()
+    const input = screen.getByLabelText('Search refs')
+    fireEvent.keyDown(input, { key: 'Enter', ...composition })
+    expect(command).not.toHaveBeenCalled()
+    expect(screen.getByRole('listbox', { name: 'Refs' })).toBeInTheDocument()
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() => expect(command).toHaveBeenCalledOnce())
+  })
+  it.each([{ isComposing: true }, { keyCode: 229 }])('does not queue a composition Enter while refs load: %j', async composition => {
+    const { command } = mount(thread(), { refs: request => page([ref(request.query ?? 'main')]) })
+    await openPicker()
+    const input = screen.getByLabelText('Search refs')
+    fireEvent.change(input, { target: { value: 'feature' } })
+    fireEvent.keyDown(input, { key: 'Enter', ...composition })
+    await screen.findByRole('option', { name: 'feature' })
+    expect(command).not.toHaveBeenCalled()
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() => expect(command).toHaveBeenCalledOnce())
+  })
   it('shows nothing for a folder that is not a repository', () => {
     mount(thread({ worktree: { mode: 'shared', status: 'ready', path: project.path, git: { ...git, isRepository: false } } }))
     expect(screen.queryByRole('group', { name: 'Branch toolbar' })).toBeNull()
