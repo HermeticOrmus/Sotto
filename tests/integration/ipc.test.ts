@@ -390,6 +390,7 @@ describe('typed preload bridge', () => {
         'onUpdateCheckRequested',
         'onUpdateStatus',
         'onWindowMaximized',
+        'onWindowHidden',
         'openExternalLink',
         'personalChats',
         'phones',

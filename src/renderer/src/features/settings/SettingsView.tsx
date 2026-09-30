@@ -144,7 +144,7 @@ export function SettingsView({
   onInstallUpdate,
 }: SettingsViewProps): ReactNode {
   const [microphones, setMicrophones] = useState<readonly MediaDeviceInfo[]>([])
-  const [microphoneState, setMicrophoneState] = useState<MicrophoneTestState>('idle')
+  const [microphoneState, setMicrophoneState] = useState<MicrophoneTestState | 'closed'>('idle')
   const [microphoneLevel, setMicrophoneLevel] = useState(0)
   const microphoneTestRef = useRef<MicrophoneTestController | null>(null)
   const microphoneTestGeneration = useRef(0)
@@ -222,6 +222,25 @@ export function SettingsView({
     }
   }, [settings.microphoneId])
 
+  const stopMicrophoneTest = useCallback((): void => {
+    ++microphoneTestGeneration.current
+    const controller = microphoneTestRef.current
+    microphoneTestRef.current = null
+    if (controller !== null) void Promise.resolve(controller.stop()).catch(() => undefined)
+    setMicrophoneLevel(0)
+    setMicrophoneState(state => state === 'ready' || state === 'closed' ? 'closed' : 'idle')
+  }, [])
+
+  useEffect(() => {
+    const onVisibilityChange = (): void => { if (document.hidden) stopMicrophoneTest() }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    const unsubscribe = window.sotto?.onWindowHidden?.(stopMicrophoneTest)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+      unsubscribe?.()
+    }
+  }, [stopMicrophoneTest])
+
   /**
    * The same level test onboarding runs. A microphone that reports ready is
    * proof one is set up, so it retires a skip made during setup; any other
@@ -235,7 +254,7 @@ export function SettingsView({
     setMicrophoneLevel(0)
     setMicrophoneState('requesting')
     if (previous !== null) await Promise.resolve(previous.stop()).catch(() => undefined)
-    if (generation !== microphoneTestGeneration.current) return
+    if (generation !== microphoneTestGeneration.current || document.hidden) return
     let controller: MicrophoneTestController
     try { controller = createMicrophoneTest() } catch {
       setMicrophoneState('error')
@@ -338,6 +357,7 @@ export function SettingsView({
   }
 
   const selectSection = (id: SettingsSectionId): void => {
+    if (id !== 'settings-capture') stopMicrophoneTest()
     setActiveSection(id)
   }
 
@@ -406,7 +426,8 @@ export function SettingsView({
                       {/* The wave the widget and the Dictate room show; it listens for as long as the test's stream runs. */}
                       <VoiceWave stage={microphoneState === 'requesting' || microphoneState === 'ready' ? 'listening' : 'idle'} value={microphoneLevel} label="Microphone level" size="deck" />
                       <p role="status">
-                        {microphoneState === 'ready' ? 'Microphone ready.' : null}
+                        {microphoneState === 'ready' ? 'Listening. Say something.' : null}
+                        {microphoneState === 'closed' ? 'Sotto heard you. The microphone is closed.' : null}
                         {microphoneState === 'requesting' ? 'Waiting for microphone permission...' : null}
                         {microphoneState === 'idle' ? (settings.microphoneSkipped ? 'No microphone is set up. Run this test to set one up.' : 'Run a quick input-level test.') : null}
                         {microphoneState === 'denied' ? copy.settingsMicrophoneUnavailable : null}
@@ -414,11 +435,11 @@ export function SettingsView({
                         {microphoneState === 'error' ? 'The microphone test could not start.' : null}
                       </p>
                       <Button
-                        variant={microphoneState === 'ready' ? 'secondary' : 'primary'}
+                        variant={microphoneState === 'closed' ? 'secondary' : 'primary'}
                         disabled={microphoneState === 'requesting'}
-                        onClick={() => void runMicrophoneTest()}
+                        onClick={() => microphoneState === 'ready' ? stopMicrophoneTest() : void runMicrophoneTest()}
                       >
-                        {microphoneState === 'ready' ? 'Retest microphone' : 'Test microphone'}
+                        {microphoneState === 'ready' ? 'Stop test' : microphoneState === 'closed' ? 'Test again' : 'Test microphone'}
                       </Button>
                     </div>
                   </Field>

@@ -365,6 +365,7 @@ export interface SottoBridge {
   toggleMaximizeApp(): Promise<void>
   getWindowMaximized(): Promise<boolean>
   onWindowMaximized(listener: (maximized: boolean) => void): () => void
+  onWindowHidden(listener: () => void): () => void
   quitApp(): Promise<void>
 }
 

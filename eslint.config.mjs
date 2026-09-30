@@ -4,6 +4,7 @@ import tseslint from 'typescript-eslint'
 export default tseslint.config(
   {
     ignores: [
+      'artifacts/pkg-18-e2e/**',
       'artifacts/codex-restored-replies/**',
       'artifacts/workspace-picker/**',
       'artifacts/ios-focus/**',

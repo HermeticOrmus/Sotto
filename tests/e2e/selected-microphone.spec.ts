@@ -2,6 +2,7 @@ import { mkdir } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { expect, test } from '@playwright/test'
 import { closeSotto, launchSotto, resizeWindow } from './support/sottoLaunch'
+import { evidenceDirectory } from './support/evidence'
 
 interface MediaFixture {
   requests: MediaStreamConstraints[]
@@ -15,7 +16,7 @@ test('Settings tests the selected input and clears its result when the choice ch
   test.setTimeout(120_000)
   const launched = await launchSotto()
   const { page } = launched
-  const evidence = resolve('artifacts/review-383')
+  const evidence = evidenceDirectory('artifacts/review-383')
   await mkdir(evidence, { recursive: true })
   try {
     await page.evaluate(async () => {
@@ -55,11 +56,24 @@ test('Settings tests the selected input and clears its result when the choice ch
         await page.evaluate(async appearance => window.sotto!.updateSettings({ appearance }), appearance)
         await expect(page.locator('html')).toHaveAttribute('data-theme', appearance)
         await expect(choice).toBeInViewport()
-        await expect(page.getByRole('button', { name: 'Retest microphone' })).toBeInViewport()
+        await expect(page.getByRole('button', { name: 'Stop test' })).toBeInViewport()
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
         await page.screenshot({ path: resolve(evidence, `microphone-${width}-${appearance}.png`) })
       }
     }
+    await page.getByRole('button', { name: 'Stop test' }).focus()
+    await page.keyboard.press('Enter')
+    await expect(state).toHaveAttribute('data-state', 'closed')
+    await expect(state).toContainText('Sotto heard you. The microphone is closed.')
+    await expect(page.getByRole('button', { name: 'Test again' })).toBeEnabled()
+    await page.screenshot({ path: resolve(evidence, 'microphone-closed.png') })
+    expect(await page.evaluate(() => window.selectedMicrophoneFixture.streams[0]!.getTracks().every(track => track.readyState === 'ended'))).toBe(true)
+    await page.getByRole('button', { name: 'Test again' }).click()
+    await expect(state).toHaveAttribute('data-state', 'ready')
+    await launched.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find(window => window.webContents.getURL().endsWith('/index.html'))!.hide())
+    await expect(state).toHaveAttribute('data-state', 'closed')
+    expect(await page.evaluate(() => window.selectedMicrophoneFixture.streams.every(stream => stream.getTracks().every(track => track.readyState === 'ended')))).toBe(true)
+    await launched.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find(window => window.webContents.getURL().endsWith('/index.html'))!.show())
     await choice.selectOption('desk')
     await expect(state).toHaveAttribute('data-state', 'idle')
     expect(await page.evaluate(() => window.selectedMicrophoneFixture.streams[0]!.getTracks().every(track => track.readyState === 'ended'))).toBe(true)
