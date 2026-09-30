@@ -226,6 +226,8 @@ class GrokRpc {
 
   constructor(private readonly child: ChildProcessWithoutNullStreams, timeoutMs: number, private readonly limit: number) {
     this.closed = new Promise(resolve => child.once('close', () => { this.stopped = true; this.rejectAll(new Error('Grok closed before returning a reasoning response.')); resolve() }))
+    // A descendant may still hold the output handles after this process exits.
+    child.once('exit', () => { child.stdout.destroy(); child.stderr.destroy() })
     this.timeout = setTimeout(() => this.fail(new Error('Grok reasoning timed out. Check its subscription and connection, then try again.')), timeoutMs)
     child.on('error', () => this.fail(new Error('Could not start the native Grok client.')))
     child.stdin.on('error', () => this.fail(new Error('The native Grok connection closed.')))

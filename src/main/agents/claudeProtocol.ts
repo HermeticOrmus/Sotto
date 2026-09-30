@@ -25,6 +25,8 @@ export class ClaudeProtocol {
     onFrame: (frame: ClaudeFrame) => void, onExit: () => void) {
     this.child = spawn(executable, args, { cwd, env: withCliPath(env, executable), windowsHide: true, shell: false, stdio: 'pipe' })
     this.closed = new Promise(resolve => this.child.once('close', () => { this.fail(); resolve(); if (!this.stopping) onExit() }))
+    // A descendant may still hold the output handles after this process exits.
+    this.child.once('exit', () => { this.child.stdout.destroy(); this.child.stderr.destroy() })
     // The unfinished line is kept as fragments with a running byte count, so a large frame arriving in
     // many chunks costs one pass over each chunk and one join, not a rescan of everything so far.
     let fragments: string[] = []; let pendingBytes = 0; let stderrBytes = 0

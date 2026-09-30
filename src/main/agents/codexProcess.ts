@@ -61,6 +61,8 @@ export class CodexProcess {
     this.child = child
     let buffer: string[] = []; let bufferedBytes = 0; let stderrBytes = 0; let queuedBytes = 0
     this.closed = new Promise<void>(resolve => child.once('close', () => { this.fail(); resolve() }))
+    // A descendant may still hold the output handles after this process exits.
+    child.once('exit', () => { child.stdout.destroy(); child.stderr.destroy() })
     child.on('error', () => this.abort())
     child.stdin.on('error', () => this.abort())
     child.stdout.setEncoding('utf8')
