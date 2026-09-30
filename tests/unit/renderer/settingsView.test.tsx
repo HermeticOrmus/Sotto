@@ -1282,6 +1282,19 @@ describe('Project thread defaults in Application settings', () => {
 
 
 describe('Personal dictionary draft acknowledgements', () => {
+  it('announces only pastes cut by the dictionary limit, accounting for the selection', async () => {
+    render(<SettingsView {...baseProps()} />)
+    await selectCategory('Cleanup')
+    const input = screen.getByRole('textbox', { name: 'Personal dictionary' }) as HTMLTextAreaElement
+    fireEvent.change(input, { target: { value: 'a'.repeat(3990) } })
+    input.setSelectionRange(3990, 3990)
+    fireEvent.paste(input, { clipboardData: { getData: () => 'b'.repeat(20) } })
+    expect(screen.getByRole('status')).toHaveTextContent('The pasted text was cut to fit the 4,000-character limit.')
+    input.setSelectionRange(0, 20)
+    fireEvent.paste(input, { clipboardData: { getData: () => 'b'.repeat(20) } })
+    expect(screen.queryByText('The pasted text was cut to fit the 4,000-character limit.')).not.toBeInTheDocument()
+  })
+
   it('limits the dictionary to 4000 characters and explains the limit when reached', async () => {
     render(<SettingsView {...baseProps()} />)
     await selectCategory('Cleanup')

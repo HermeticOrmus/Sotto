@@ -157,6 +157,7 @@ export function SettingsView({
   const hotkeyDraft = useRevisionDraft(canonicalAccelerator(settings.hotkey, platform), formatAccelerator(settings.hotkey, platform, 'editing'))
   const pasteDelayDraft = useRevisionDraft(settings.pasteDelayMs, String(settings.pasteDelayMs), () => setPasteDelayError(undefined))
   const successDurationDraft = useRevisionDraft(settings.successDisplayMs, String(settings.successDisplayMs), () => setSuccessDurationError(undefined))
+  const [dictionaryPasteCut, setDictionaryPasteCut] = useState(false)
   const llmDictionaryDraft = useRevisionDraft(settings.llmDictionary, settings.llmDictionary)
   const [updateBusy, setUpdateBusy] = useState(false)
   const [clearFailure, setClearFailure] = useState<string | null>(null)
@@ -508,11 +509,16 @@ export function SettingsView({
                   <Field label="Formatting quality" description="Low is near-instant; higher tiers format better but add up to a couple seconds."><Select disabled={!settings.llmFormatting} value={settings.llmQuality} onChange={(event) => void save({ llmQuality: event.currentTarget.value as LlmQuality })}><option value="low">Low — fastest (Mercury 2)</option><option value="medium">Medium (Nova 2 Lite)</option><option value="value">Value — cheap, near-High (GLM-5.3 Flash)</option><option value="high">High — best formatting (Claude Haiku 4.5)</option></Select></Field>
                   <div className="settings-input-action">
                     <Field label="Personal dictionary" description={`One word or name per line. Sent as spelling hints with your audio and used during cleanup.${llmDictionaryDraft.value.length >= 4000 ? ' 4,000 characters maximum.' : ''}`}>
-                      <textarea className="tt-input" rows={5} maxLength={4000} value={llmDictionaryDraft.value} onBlur={() => void saveDictionary()} onChange={(event) => {
+                      <textarea className="tt-input" rows={5} maxLength={4000} value={llmDictionaryDraft.value} onPaste={(event) => {
+                        const input = event.currentTarget
+                        const pasted = event.clipboardData.getData('text').replace(/\r\n?/gu, '\n')
+                        setDictionaryPasteCut(input.value.length - (input.selectionEnd - input.selectionStart) + pasted.length > input.maxLength)
+                      }} onBlur={() => void saveDictionary()} onChange={(event) => {
                         const value = event.currentTarget.value
                         llmDictionaryDraft.edit(value)
                       }} />
                     </Field>
+                    {dictionaryPasteCut ? <p className="settings-disclosure" role="status">The pasted text was cut to fit the 4,000-character limit.</p> : null}
 
                   </div>
                   <Toggle label="Generated thread titles" checked={settings.threadTitles} onCheckedChange={(checked) => void save({ threadTitles: checked })} description="Ask a thread's own model to name the thread from its first exchange, and a new worktree branch from its first prompt, only while local history is kept. Names you choose are never replaced." />
