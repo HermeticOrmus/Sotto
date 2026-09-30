@@ -99,6 +99,9 @@ describe('the stacked Git action, the way T3 runs it', () => {
     expect(git(f.repo, 'show', 'HEAD:work.txt')).toBe('staged')
     expect(await readFile(join(f.repo, 'work.txt'), 'utf8')).toBe('staged\nunstaged\n')
     expect(git(f.repo, 'diff', '--cached', '--name-only')).toBe(exclude ? 'skip.txt' : '')
+    expect(git(f.repo, 'diff', '--name-only')).toBe('work.txt')
+    expect(git(f.repo, 'diff', '--', 'work.txt')).toContain('+unstaged')
+    expect(git(f.repo, 'diff', '--cached', '--', 'work.txt')).toBe('')
     if (exclude) expect(git(f.repo, 'show', ':skip.txt')).toBe('excluded')
   })
   it('restores the original index after a refused commit', async () => {
