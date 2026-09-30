@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { lstat, mkdir, readFile, realpath, rename, unlink, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, readFile, readdir, realpath, rename, unlink, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { z } from 'zod'
 import { checkpointInspectionSchema, checkpointRequestSchema, checkpointRevertSchema, type Checkpoint } from '../../shared/checkpoints'
@@ -48,8 +48,31 @@ export class CheckpointService extends ToolOperations {
       }
     }).catch(error => { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error })
   }
-  initialize(): Promise<void> { return this.load() }
-  private async save(): Promise<void> { await this.store.write([...this.records.values()]) }
+  initialize(): Promise<void> { return this.serial(async () => { await this.load(); await this.save() }) }
+  private async save(): Promise<void> {
+    const cutoff = (this.dependencies.now?.() ?? Date.now()) - 30 * 24 * 60 * 60 * 1000
+    for (const record of this.records.values()) if (this.dependencies.historyEnabled?.() === false || Date.parse(record.createdAt) < cutoff) this.records.delete(record.id)
+    const directory = join(this.dependencies.directory, 'blobs')
+    const names = await readdir(directory).catch(error => { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error })
+    const sizes = new Map<string, number>()
+    for (const name of names) sizes.set(name, (await lstat(join(directory, name))).size)
+    const references = (): Set<string> => new Set([...this.records.values()].flatMap(record => [record.before, record.after].flatMap(snapshot => snapshot ? Object.values(snapshot.files).map(file => file.hash) : [])))
+    let referenced = references()
+    const bytes = (): number => [...referenced].reduce((total, hash) => total + (sizes.get(hash) ?? 0), 0)
+    for (const record of [...this.records.values()].sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))) {
+      if (bytes() <= (this.dependencies.maxBytes ?? 500 * 1024 * 1024)) break
+      this.records.delete(record.id); referenced = references()
+    }
+    // Commit references first, so a failed write cannot leave a durable record pointing at a deleted blob.
+    await this.store.write([...this.records.values()])
+    for (const name of names) if (!referenced.has(name)) await unlink(join(directory, name))
+  }
+  async forgetThread(threadId: string): Promise<void> { return this.serial(async () => {
+    await this.load()
+    for (const record of this.records.values()) if (record.threadId === threadId) this.records.delete(record.id)
+    await this.save()
+  }) }
+  async privacyChanged(): Promise<void> { return this.serial(async () => { await this.load(); await this.save() }) }
   private serial<T>(operation: () => Promise<T>): Promise<T> {
     const next = this.tail.then(operation, operation)
     this.tail = next.catch(() => undefined)
@@ -62,6 +85,7 @@ export class CheckpointService extends ToolOperations {
   }
   async isWorkspaceBlocked(threadId: string): Promise<boolean> {
     await this.load()
+    if (this.dependencies.historyEnabled?.() === false) { await this.save(); return }
     if (this.isBlocked(threadId)) return true
     const owner = await workspace(this.dependencies.files, threadId)
     const cwd = await realpath(owner.workingDirectory)
@@ -123,6 +147,7 @@ export class CheckpointService extends ToolOperations {
     await this.afterTurn(threadId)
     return this.serial(async () => {
     await this.load()
+    if (this.dependencies.historyEnabled?.() === false) { await this.save(); return }
     if (this.isBlocked(threadId)) return fail('blocked', 'Resolve the interrupted checkpoint revert before sending more work.')
     const thread = await this.dependencies.resolveThread(threadId)
     if (!thread) return
@@ -140,7 +165,7 @@ export class CheckpointService extends ToolOperations {
     let reason: string | undefined
     try { before = await this.snapshot(owner.workingDirectory) }
     catch (error) { before = { files: {}, index: '', head: '' }; reason = error instanceof Error ? error.message : 'File checkpoint capture was unavailable.' }
-    const record: Record = { id: randomUUID(), threadId, workspaceId: owner.workspaceId, cwd: canonical, providerId: thread.providerId, bindingId: thread.bindingId, beforeUsers: [...thread.userMessageIds], before, status: 'capturing', createdAt: new Date().toISOString() }
+    const record: Record = { id: randomUUID(), threadId, workspaceId: owner.workspaceId, cwd: canonical, providerId: thread.providerId, bindingId: thread.bindingId, beforeUsers: [...thread.userMessageIds], before, status: 'capturing', createdAt: new Date(this.dependencies.now?.() ?? Date.now()).toISOString() }
     if (overlapReason) record.reason = overlapReason
     if (reason) { record.status = 'unavailable'; record.reason = reason.slice(0, 2000) }
     this.records.set(record.id, record); await this.save()

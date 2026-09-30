@@ -95,3 +95,7 @@ The project header reserves space for its actions instead of overlaying them on 
 ## Amendment: preserve staging during commits (September 30, 2026)
 
 The commit action keeps staged hunks in selected files and stages selected files with no staged changes in full. It temporarily excludes staging for files left out, then restores that staging after success. Any failure before the commit completes restores the original index without changing working files. A selected rename includes both paths, and paths are resolved from the checkout root even when the thread works in a subfolder. This departs from resetting and re-adding whole files: the user's staging is work to preserve (#500, #501, #503).
+
+## Amendment: checkpoint retention (September 30, 2026)
+
+Turn checkpoints follow Keep local history. Turning it off or forgetting a thread deletes its checkpoints and file backups that no other checkpoint needs. Checkpoints expire after 30 days; the shared file backups are capped at 500 MiB, removing the oldest checkpoints first. Turning history back on starts fresh checkpoints.

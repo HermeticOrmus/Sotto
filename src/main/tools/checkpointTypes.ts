@@ -14,6 +14,9 @@ export interface CheckpointThread {
   unsupportedReason?: string
 }
 export interface CheckpointDependencies {
+  historyEnabled?: () => boolean
+  now?: () => number
+  maxBytes?: number
   files: FilesService
   directory: string
   resolveThread(threadId: string): Promise<CheckpointThread | null>

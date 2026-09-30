@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { execFileSync } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -41,6 +41,39 @@ async function fixture() {
 }
 
 describe('completed native turn checkpoints', () => {
+  it('deletes forgotten checkpoints and shared blobs only after their last reference goes', async () => {
+    const f = await fixture()
+    await f.complete(); await f.service.beforeTurn('thread-b')
+    await f.service.forgetThread('thread-a')
+    expect(unwrap(await f.service.checkpoints(f.target)).checkpoints).toEqual([])
+    expect((await readdir(join(f.dependencies.directory, 'blobs'))).length).toBeGreaterThan(0)
+    await f.service.forgetThread('thread-b')
+    expect(await readdir(join(f.dependencies.directory, 'blobs'))).toEqual([])
+  })
+  it('erases checkpoints when history is off and writes no new file snapshots', async () => {
+    const f = await fixture(); let enabled = true
+    f.dependencies.historyEnabled = () => enabled
+    await f.complete(); enabled = false; await f.service.privacyChanged()
+    await f.service.beforeTurn('thread-a')
+    expect(unwrap(await f.service.checkpoints(f.target)).checkpoints).toEqual([])
+    expect(await readdir(join(f.dependencies.directory, 'blobs'))).toEqual([])
+    const restarted = new CheckpointService(f.dependencies); await restarted.initialize(); restarted.dispose()
+    expect(await readdir(join(f.dependencies.directory, 'blobs'))).toEqual([])
+  })
+  it('prunes expired records and evicts oldest records to fit the shared blob budget', async () => {
+    const f = await fixture(); let now = Date.now()
+    f.dependencies.now = () => now
+    await f.complete()
+    now += 31 * 24 * 60 * 60 * 1000
+    await f.service.privacyChanged()
+    expect(unwrap(await f.service.checkpoints(f.target)).checkpoints).toEqual([])
+    expect(await readdir(join(f.dependencies.directory, 'blobs'))).toEqual([])
+    await f.service.beforeTurn('thread-a')
+    f.dependencies.maxBytes = 0
+    await f.service.privacyChanged()
+    expect(await readdir(join(f.dependencies.directory, 'blobs'))).toEqual([])
+  })
+
   it('never attributes edits made while Sotto was closed to a turn whose completion snapshot was interrupted', async () => {
     const f = await fixture()
     await f.service.beforeTurn('thread-a')

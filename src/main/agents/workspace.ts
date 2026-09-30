@@ -149,7 +149,7 @@ export class WorkspaceHost implements AgentHost {
   /** In-flight working-copy setup per thread, so a send waits for it instead of starting a second one. */
   private readonly preparations = new Map<string, Promise<void>>()
   private readonly worktrees: ThreadWorktrees
-  private checkpointHooks: { beforeTurn(threadId: string): Promise<void>; isBlocked(threadId: string): boolean | Promise<boolean> } | undefined
+  private checkpointHooks: { privacyChanged?(): Promise<void>; beforeTurn(threadId: string): Promise<void>; isBlocked(threadId: string): boolean | Promise<boolean> } | undefined
   /** One pending worktree re-read per thread, so a busy turn asks for a single read rather than one per record. */
   private readonly worktreeRefreshes = new Map<string, ReturnType<typeof setTimeout>>()
   /** Reads a folder's Git status the way T3 does; without one, records carry no status. */
@@ -721,7 +721,7 @@ export class WorkspaceHost implements AgentHost {
     this.publish()
   }
 
-  setCheckpointHooks(hooks: { beforeTurn(threadId: string): Promise<void>; isBlocked(threadId: string): boolean | Promise<boolean> }): void { this.checkpointHooks = hooks }
+  setCheckpointHooks(hooks: { privacyChanged?(): Promise<void>; beforeTurn(threadId: string): Promise<void>; isBlocked(threadId: string): boolean | Promise<boolean> }): void { this.checkpointHooks = hooks }
   rollbackCapability(threadId: string) { return this.inner.rollbackCapability?.(threadId) ?? { supported: false, reason: 'This provider does not expose verified conversation rewind.' } }
   rollbackThread(threadId: string, removedUserMessages: number, expectedUserMessageIds: readonly string[]): Promise<AgentHostResult> {
     return this.onLane(threadId, async () => {
@@ -1529,6 +1529,7 @@ export class WorkspaceHost implements AgentHost {
    * back on hands the file over from here, and what was not kept is gone.
    */
   async privacyChanged(): Promise<void> {
+    await this.checkpointHooks?.privacyChanged?.()
     this.activityInputs.clear()
     if (!this.historyEnabled()) {
       this.activityJsonFallbackAllowed = false

@@ -9,7 +9,7 @@ import type { FilesService } from '../files/service'
 import { CheckpointService } from './checkpoints'
 import type { GitChangesService } from './gitChanges'
 
-export function connectCheckpoints(options: { files: FilesService; directory: string; host: WorkspaceHost; control: AgentControl; registry: ThreadRegistry | null; git: () => GitChangesService; report: (message: string) => void }) {
+export function connectCheckpoints(options: { files: FilesService; directory: string; host: WorkspaceHost; control: AgentControl; registry: ThreadRegistry | null; historyEnabled?: () => boolean; git: () => GitChangesService; report: (message: string) => void }) {
   const { host, control } = options
   const canonical = async (path: string): Promise<string> => {
     const value = await realpath(path)
@@ -31,7 +31,7 @@ export function connectCheckpoints(options: { files: FilesService; directory: st
   }
   const pending = async (threadId: string): Promise<boolean> => (await sharedThreads(threadId)).some(thread => thread.status === 'running' || thread.requests.length > 0
     || thread.historyStatus === 'loading' || thread.historyStatus === 'error' || control.hasPendingThreadWork(thread.id))
-  const checkpoints = new CheckpointService({ files: options.files, directory: join(options.directory, 'checkpoints'),
+  const checkpoints = new CheckpointService({ historyEnabled: options.historyEnabled, files: options.files, directory: join(options.directory, 'checkpoints'),
     resolveThread: async threadId => {
       const snapshot = host.workspaceSnapshot(), thread = snapshot.threads.find(item => item.id === threadId)
       if (!thread?.providerId) return null
@@ -61,6 +61,7 @@ export function connectCheckpoints(options: { files: FilesService; directory: st
     return unallocated(threadId) ? checkpoints.isBlocked(threadId) : checkpoints.isWorkspaceBlocked(threadId)
   }
   host.setCheckpointHooks({
+    privacyChanged: () => checkpoints.privacyChanged(),
     isBlocked: async threadId => await blocked(threadId) || !unallocated(threadId) && await options.git().isMutating(threadId),
     beforeTurn: async threadId => {
       await ready
@@ -70,7 +71,11 @@ export function connectCheckpoints(options: { files: FilesService; directory: st
     },
   })
   const completions = new Map<string, string>()
+  let threadIds = new Set(host.workspaceSnapshot().threads.map(thread => thread.id))
   const unsubscribe = control.subscribe(state => {
+    const nextIds = new Set(state.host.threads.map(thread => thread.id))
+    for (const id of threadIds) if (!nextIds.has(id)) void checkpoints.forgetThread(id).catch(() => options.report('Thread checkpoints could not be removed. Check access to local storage.'))
+    threadIds = nextIds
     for (const thread of state.host.threads) {
       if (!isThreadProviderConnected(state.host, thread) || thread.status === 'running' || !thread.lastTurn || thread.lastTurn.status === 'running') continue
       // The published state is the shell, so a thread's message count comes from its summary.
