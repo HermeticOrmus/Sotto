@@ -144,7 +144,7 @@ final class AppModelTests: XCTestCase {
         let (_, ref) = try fixture()
         let marker = PendingOperation(hostID: ref.hostID, clientID: "phone", threadID: ref.threadID, requestID: "request", kind: "answer")
         _ = try changeShell(requests: [["id": "request", "kind": "permission", "text": "Read files?", "options": []]])
-        HostConnection.receipt = .object(["status": .string("completed")])
+        HostConnection.receipt = .object(["status": .string("completed"), "answerDelivered": .bool(true)])
         let model = try modelWithMarker(marker)
         model.phase(.active); await model.reconnectAll()
         XCTAssertTrue(model.pending.isEmpty)
@@ -181,7 +181,7 @@ final class AppModelTests: XCTestCase {
         model.phase(.active); await model.reconnectAll()
         let request = try XCTUnwrap(model.thread(ref)?.requests.first)
         let connection = try XCTUnwrap(HostConnection.instances.last)
-        HostConnection.receipt = .object(["status": .string("completed")])
+        HostConnection.receipt = .object(["status": .string("completed"), "answerDelivered": .bool(true)])
         connection.afterReply = { op in
             if op == "command" { connection.push(.shell(try! self.changeShell())) }
         }
@@ -195,7 +195,7 @@ final class AppModelTests: XCTestCase {
         let (_, ref) = try fixture()
         let marker = PendingOperation(hostID: ref.hostID, clientID: "phone", threadID: ref.threadID, requestID: "request", kind: "answer")
         _ = try changeShell(requests: [["id": "request", "kind": "permission", "text": "Read files?", "options": []]])
-        HostConnection.receipt = .object(["status": .string("completed")])
+        HostConnection.receipt = .object(["status": .string("completed"), "answerDelivered": .bool(true)])
         HostConnection.afterGreeting = { connection in
             connection.afterReply = { op in
                 if op == "shell" { connection.push(.shell(try! self.changeShell())) }
@@ -213,7 +213,7 @@ final class AppModelTests: XCTestCase {
         let (_, ref) = try fixture()
         let marker = PendingOperation(hostID: ref.hostID, clientID: "phone", threadID: ref.threadID, requestID: "request", kind: "answer")
         _ = try changeShell(requests: [["id": "request", "kind": "permission", "text": "Read files?", "options": []]])
-        HostConnection.receipt = .object(["status": .string("completed")])
+        HostConnection.receipt = .object(["status": .string("completed"), "answerDelivered": .bool(true)])
         HostConnection.afterGreeting = { connection in connection.push(.shell(try! self.changeShell())) }
         let model = try modelWithMarker(marker)
         model.phase(.active); await model.reconnectAll()
@@ -222,6 +222,31 @@ final class AppModelTests: XCTestCase {
         let connection = try XCTUnwrap(HostConnection.instances.last)
         XCTAssertEqual(connection.operations.filter { $0 == "receipt" }.count, 1)
         XCTAssertEqual(connection.operations.filter { $0 == "command" }.count, 0)
+    }
+    @MainActor func testOlderHostCompletedReceiptDoesNotConfirmAnAnswer() async throws {
+        let (_, ref) = try fixture()
+        let marker = PendingOperation(hostID: ref.hostID, clientID: "phone", threadID: ref.threadID, requestID: "request", kind: "answer")
+        _ = try changeShell(requests: [["id": "request", "kind": "permission", "text": "Read files?", "options": []]])
+        HostConnection.receipt = .object(["status": .string("completed")])
+        let model = try modelWithMarker(marker)
+        model.phase(.active); await model.reconnectAll()
+        XCTAssertEqual(model.pending, [marker])
+        XCTAssertNotEqual(model.feedback, "Answer sent.")
+        try XCTUnwrap(HostConnection.instances.last).push(.shell(try changeShell()))
+        XCTAssertTrue(model.pending.isEmpty)
+        XCTAssertEqual(model.feedback, "That request is no longer waiting.")
+    }
+    @MainActor func testRefusedAnswerReceiptFollowedByDesktopResolutionSettlesNeutrally() async throws {
+        let (_, ref) = try fixture()
+        let marker = PendingOperation(hostID: ref.hostID, clientID: "phone", threadID: ref.threadID, requestID: "request", kind: "answer")
+        _ = try changeShell(requests: [["id": "request", "kind": "permission", "text": "Read files?", "options": []]])
+        HostConnection.receipt = .object(["status": .string("completed"), "answerDelivered": .bool(false), "error": .object(["code": .string("unavailable"), "message": .string("Answer refused")])])
+        let model = try modelWithMarker(marker)
+        model.phase(.active); await model.reconnectAll()
+        XCTAssertEqual(model.pending, [marker])
+        try XCTUnwrap(HostConnection.instances.last).push(.shell(try changeShell()))
+        XCTAssertTrue(model.pending.isEmpty)
+        XCTAssertEqual(model.feedback, "That request is no longer waiting.")
     }
     @MainActor func testCompletedReceiptWithErrorDoesNotConfirmAnAnswer() async throws {
         let (_, ref) = try fixture()

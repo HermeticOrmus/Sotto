@@ -641,7 +641,7 @@ struct Live {
         let noLongerWaiting = item.kind == "answer" && item.requestID != nil && thread != nil
             && thread?.requests.contains(where: { $0.id == item.requestID }) == false
         if item.kind == "answer" {
-            let confirmed = receipt?.status == "completed" && receipt?.error == nil
+            let confirmed = receipt?.confirmsAnswer == true
             guard confirmed || noLongerWaiting else { return }
             try forgetMarker(item.id)
             if feedback == nil || feedbackOperations.contains(item.id) {

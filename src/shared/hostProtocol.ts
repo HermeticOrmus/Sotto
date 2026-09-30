@@ -142,7 +142,11 @@ export interface HostEventPage { events: StoredThreadEvent[]; latestSeq: number;
 export interface HostHello extends HostEventPage { hostId: string; clientId: string; shell: HostClientShell; capabilities: { mayAnswer: boolean }; sottoVersion: string; features: string[] }
 export interface HostSession { v: 1; hostId: string; clientId: string; session: string; expiresAt: string }
 export interface HostPairing { v: 1; hostId: string; clientId: string; token: string }
-export interface HostReceipt { status: 'pending' | 'completed' | 'unknown'; error?: HostProtocolError | undefined }
+export interface HostReceipt {
+  status: 'pending' | 'completed' | 'unknown'; error?: HostProtocolError | undefined
+  /** This answer command's own successful outcome. Older hosts omit it; completion alone proves none. */
+  answerDelivered?: boolean | undefined
+}
 /** Written to host-listener.json and served, with `status`, as /v1/health. */
 export interface HostDescriptor { v: 1; pid: number; hostId: string; port: number; sottoVersion: string; features: string[] }
 export interface HostHealth extends HostDescriptor {
@@ -181,4 +185,4 @@ export const hostPushSchema = z.discriminatedUnion('event', [
   z.object({ v: z.literal(1), event: z.literal('detail-delta'), threadId: id, delta: agentThreadDetailDeltaSchema }),
   z.object({ v: z.literal(1), event: z.literal('error'), threadId: id.optional(), error: hostProtocolErrorSchema }),
 ])
-export const hostReceiptSchema = z.object({ status: z.enum(['pending', 'completed', 'unknown']), error: hostProtocolErrorSchema.optional() })
+export const hostReceiptSchema = z.object({ status: z.enum(['pending', 'completed', 'unknown']), error: hostProtocolErrorSchema.optional(), answerDelivered: z.boolean().optional() })

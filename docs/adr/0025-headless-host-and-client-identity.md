@@ -132,3 +132,11 @@ The phone also accepts the existing v1 `detail-delta` extension. A full observed
 ## September 30 amendment: live answer authority
 
 The optional v1 shell field `clientCapabilities.mayAnswer` reports the policy for the authenticated client receiving that shell. A Can answer change publishes it immediately, on the desktop phone listener and the headless host. The iPhone refreshes its controls only from a newer shell; an older host without the field keeps hello behavior. This grants no authority: dispatch still checks the host policy for the authenticated client, and no answer is sent automatically.
+
+## September 30 amendment: an answer receipt records its own outcome
+
+A completed transport receipt did not establish answer delivery: the coordinator catches a provider failure into its published shared error and still resolves the command. Inspecting that shared error is also unsafe when another thread fails at the same time.
+
+For a socket answer, the coordinator returns the command-local failure as the response's error, separately from the published shell. The socket uses that outcome to add optional `answerDelivered` evidence to the existing v1 receipt. Only a completed receipt with no error and `answerDelivered: true` confirms the phone's answer. Refusal or uncertainty records false with a generic error. The command still answers with the existing shell, and neither a receipt nor its replay sends another answer.
+
+Older hosts omit the field. The iPhone keeps their still-waiting answers unconfirmed and clears a vanished request with neutral copy, never claiming the phone's answer arrived. This adds evidence rather than authority: the user's explicit answer and the host's policy remain the only grants. No additional host, network request or permission is introduced.

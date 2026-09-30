@@ -114,13 +114,75 @@ describe('authenticated host socket', () => {
     expect((await client.connect()).capabilities.mayAnswer).toBe(true)
     native.event({ type: 'permission', threadId: 'workshop', requestId: 'permission-one', text: 'Build?' })
     await expect.poll(() => client.shell().host.threads.find(thread => thread.id === threadId)?.requests.length).toBe(1)
-    expect((await client.command({ type: 'answer', threadId, requestId: 'permission-one', answer: '', approved: true })).error).toBeNull()
+    const answerId = randomUUID()
+    expect((await client.command({ type: 'answer', threadId, requestId: 'permission-one', answer: '', approved: true }, undefined, answerId)).error).toBeNull()
+    expect(await client.receipt(answerId)).toEqual({ status: 'completed', answerDelivered: true })
     expect(host.service.events(0, threadId)).toContainEqual(expect.objectContaining({ event: expect.objectContaining({ kind: 'answer-given', attribution: expect.objectContaining({ clientId: result.clientId, transport: 'socket' }) }) }))
     await policy('deny-answers')
     native.event({ type: 'permission', threadId: 'workshop', requestId: 'permission-two', text: 'Again?' })
     await expect.poll(() => client.shell().host.threads.find(thread => thread.id === threadId)?.requests.some(request => request.id === 'permission-two')).toBe(true)
     await expect(client.command({ type: 'answer', threadId, requestId: 'permission-two', answer: '', approved: true })).rejects.toMatchObject({ code: 'forbidden' })
     expect(host.service.shell().host.threads.find(thread => thread.id === threadId)?.requests).toContainEqual(expect.objectContaining({ id: 'permission-two' }))
+  })
+  it.each([
+    { name: 'refused', result: { accepted: false }, requestLeaves: false },
+    { name: 'uncertain', result: { accepted: true, uncertain: true }, requestLeaves: false },
+    { name: 'uncertain after desktop resolution', result: { accepted: true, uncertain: true }, requestLeaves: true },
+    { name: 'unaccepted and uncertain after desktop resolution', result: { accepted: false, uncertain: true }, requestLeaves: true },
+  ])('records a $name answer receipt from the real coordinator outcome', async ({ result: outcome, requestLeaves }) => {
+    const { client, result } = await pair()
+    await client.command({ type: 'configure', patch: { provider: 'codex', enabledProviders: ['codex'] } })
+    await client.command({ type: 'connect', provider: 'codex' })
+    const threadId = client.shell().host.threads.find(thread => thread.title === 'Workshop')!.id
+    const descriptor = JSON.parse(await readFile(join(root, 'host-listener.json'), 'utf8')) as { adminToken: string }
+    expect((await fetch(url + '/v1/admin/allow-answers', { method: 'POST', headers: { Authorization: 'Bearer ' + descriptor.adminToken, 'Content-Type': 'application/json' }, body: JSON.stringify({ clientId: result.clientId }) })).status).toBe(200)
+    native.event({ type: 'permission', threadId: 'workshop', requestId: 'permission-receipt', text: 'Build?' })
+    await expect.poll(() => client.shell().host.threads.find(thread => thread.id === threadId)?.requests.length).toBe(1)
+    const execute = native.execute.bind(native)
+    const spy = vi.spyOn(native, 'execute').mockImplementation(async command => {
+      if (command.type !== 'answer') return execute(command)
+      // A desktop denial can remove the request without confirming the phone's Allow.
+      if (requestLeaves) await execute({ ...command, approved: false })
+      return outcome
+    })
+    try {
+      const commandId = randomUUID()
+      // Preserve v1's shell response even on coordinator failure; the receipt owns its outcome.
+      await client.command({ type: 'answer', threadId, requestId: 'permission-receipt', answer: '', approved: true }, undefined, commandId)
+      expect(await client.receipt(commandId)).toMatchObject({ status: 'completed', answerDelivered: false, error: { code: 'unavailable' } })
+      expect(host.service.shell().host.threads.find(thread => thread.id === threadId)?.requests).toHaveLength(requestLeaves ? 0 : 1)
+    } finally { spy.mockRestore() }
+  })
+  it('confirms a successful answer receipt despite another command failing while it runs', async () => {
+    const { client, result } = await pair()
+    await client.command({ type: 'configure', patch: { provider: 'codex', enabledProviders: ['codex'] } })
+    await client.command({ type: 'connect', provider: 'codex' })
+    const threadId = client.shell().host.threads.find(thread => thread.title === 'Workshop')!.id
+    const descriptor = JSON.parse(await readFile(join(root, 'host-listener.json'), 'utf8')) as { adminToken: string }
+    expect((await fetch(url + '/v1/admin/allow-answers', { method: 'POST', headers: { Authorization: 'Bearer ' + descriptor.adminToken, 'Content-Type': 'application/json' }, body: JSON.stringify({ clientId: result.clientId }) })).status).toBe(200)
+    native.event({ type: 'permission', threadId: 'workshop', requestId: 'permission-receipt', text: 'Build?' })
+    await expect.poll(() => client.shell().host.threads.find(thread => thread.id === threadId)?.requests.length).toBe(1)
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    let started = false
+    const execute = native.execute.bind(native)
+    const spy = vi.spyOn(native, 'execute').mockImplementation(async command => {
+      if (command.type === 'answer') { started = true; await gate }
+      return execute(command)
+    })
+    let answer: Promise<unknown> | undefined
+    try {
+      const commandId = randomUUID()
+      answer = client.command({ type: 'answer', threadId, requestId: 'permission-receipt', answer: '', approved: true }, undefined, commandId)
+      await expect.poll(() => started).toBe(true)
+      const failed = await client.command({ type: 'configure-thread', threadId: 'missing', runtimeMode: 'approval-required' })
+      expect(failed.error).toBeTruthy()
+      release()
+      await answer
+      // Published shared errors are unchanged; the answer receipt uses its command-local outcome.
+      expect(host.service.shell().error).toBe(failed.error)
+      expect(await client.receipt(commandId)).toEqual({ status: 'completed', answerDelivered: true })
+    } finally { release(); await answer; spy.mockRestore() }
   })
   it('refuses a second listener before it can open or overwrite the running host stores', async () => {
     await expect(startHeadlessHost({ dataDirectory: root, port: 0 })).rejects.toThrow(`Another host (process ${process.pid}) is using this data folder`)

@@ -111,7 +111,11 @@ public struct Health: Decodable, Equatable, Sendable {
     }
 }
 public struct WireFailure: Decodable, Sendable { public let code: String; public let message: String }
-public struct Receipt: Decodable, Sendable { public let status: String; public let error: WireFailure? }
+public struct Receipt: Decodable, Sendable {
+    public let status: String; public let error: WireFailure?; public let answerDelivered: Bool?
+    /// Older hosts record transport completion only; it cannot confirm the phone's answer.
+    public var confirmsAnswer: Bool { status == "completed" && error == nil && answerDelivered == true }
+}
 public struct Hello: Decodable, Sendable {
     public let hostId: String; public let clientId: String; public let shell: Shell; public let capabilities: Capabilities
     public struct Capabilities: Decodable, Sendable { public let mayAnswer: Bool }

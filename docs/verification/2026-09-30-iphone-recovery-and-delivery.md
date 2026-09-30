@@ -22,7 +22,8 @@ only its own policy. Dispatch still checks host policy independently of the shel
 The delivery state study exercised Stop after a lost acknowledgement and late
 reply evidence with the existing labels. It is a logic demonstration, not evidence
 of native execution. Review added the distinction between an answer command's
-own completed, error-free receipt and a request disappearing for another reason.
+own completed, error-free receipt with explicit outcome evidence and a request
+disappearing for another reason.
 The latter clears its marker with "That request is no longer waiting."
 
 The native app-model target now compiles the production `KeychainStore.swift`.
@@ -31,6 +32,13 @@ left in the real store. Regressions distinguish a missing item from a damaged on
 preserve a damaged index, recover readable computer items, name unrecoverable host
 IDs, warn about damaged action markers, and refuse an inaccessible item before any
 index migration write. Settling a marker also preserves unrelated feedback.
+
+The real coordinator/service/socket regression initially failed for both provider
+refusal and uncertainty: each returned only `{ status: "completed" }`. The fix
+carries command-local outcome evidence into the receipt without consulting the
+published shared error. Both regressions pass, as do success with a concurrent
+unrelated failure and the existing explicit-authority journey. Native regressions
+also cover older ambiguous receipts and desktop resolution after a refused answer.
 
 ## Windows verification
 

@@ -239,7 +239,13 @@ export async function startSocketServer(options: SocketServerOptions) {
           peer.selectedProjectId = input.projectId; peer.selectedThreadId = null
         } else if (input.type === 'observe-threads') {
           peer.observed = new Set(input.threadIds); await observe()
-        } else await service.command(input, peer.client)
+        } else {
+          const result = await service.command(input, peer.client)
+          if (input.type === 'answer') {
+            receipt.answerDelivered = result.error == null
+            if (!receipt.answerDelivered) receipt.error = { code: 'unavailable', message: errors.unavailable }
+          }
+        }
         receipt.status = 'completed'
       } catch { receipt.status = 'completed'; receipt.error = { code: 'unavailable', message: errors.unavailable }; throw new Refusal('unavailable') }
     })()
