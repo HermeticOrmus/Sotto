@@ -677,8 +677,9 @@ struct Live {
         // Live evidence can arrive after the acknowledgement timed out. Never resend to settle it.
         // A Keychain write failure is local feedback, not a lost connection to the computer.
         for item in scoped(hostID) {
-            // A solicited shell is followed by a receipt check. Keep its answer marker until then.
-            if item.kind == "answer", !reconcileAnswers || dispatchingAnswers.contains(item.id) || (deliveryChecks[hostID] ?? 0) > 0 { continue }
+            // A connect, dispatch or solicited shell is followed by a receipt check. Keep its
+            // answer markers through intervening pushes until their own receipts are read.
+            if item.kind == "answer", !reconcileAnswers || connecting.contains(hostID) || dispatchingAnswers.contains(item.id) || (deliveryChecks[hostID] ?? 0) > 0 { continue }
             do { try settle(item, shell: next) }
             catch { feedback = error.localizedDescription }
         }

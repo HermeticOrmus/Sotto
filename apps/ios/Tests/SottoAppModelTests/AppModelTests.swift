@@ -209,6 +209,20 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(connection.operations.filter { $0 == "receipt" }.count, 1)
         XCTAssertEqual(connection.operations.filter { $0 == "command" }.count, 0)
     }
+    @MainActor func testReconnectReceiptCheckSurvivesADisappearancePushBeforeHelloReturns() async throws {
+        let (_, ref) = try fixture()
+        let marker = PendingOperation(hostID: ref.hostID, clientID: "phone", threadID: ref.threadID, requestID: "request", kind: "answer")
+        _ = try changeShell(requests: [["id": "request", "kind": "permission", "text": "Read files?", "options": []]])
+        HostConnection.receipt = .object(["status": .string("completed")])
+        HostConnection.afterGreeting = { connection in connection.push(.shell(try! self.changeShell())) }
+        let model = try modelWithMarker(marker)
+        model.phase(.active); await model.reconnectAll()
+        XCTAssertTrue(model.pending.isEmpty)
+        XCTAssertEqual(model.feedback, "Answer sent.")
+        let connection = try XCTUnwrap(HostConnection.instances.last)
+        XCTAssertEqual(connection.operations.filter { $0 == "receipt" }.count, 1)
+        XCTAssertEqual(connection.operations.filter { $0 == "command" }.count, 0)
+    }
     @MainActor func testCompletedReceiptWithErrorDoesNotConfirmAnAnswer() async throws {
         let (_, ref) = try fixture()
         let marker = PendingOperation(hostID: ref.hostID, clientID: "phone", threadID: ref.threadID, requestID: "request", kind: "answer")
