@@ -79,7 +79,7 @@ async function startHostRuntime(options: HeadlessHostOptions) {
     throw new HostKeyMigrationError('A key saved by an older version of Sotto needs secure storage. Pass --key-file <file> and start the host again. The saved key has not been changed.')
   }
   await settings.migrate(() => options.log?.('openrouter-key-migration-failed')).catch(() => {
-    throw new HostKeyMigrationError('The OpenRouter key could not be stored securely and was removed from settings. Enter it again with a paired desktop after restoring storage access. Start the host with --key-file <file>.')
+    throw new HostKeyMigrationError('The OpenRouter key could not be stored securely and was removed from settings. Enter it again on the host machine after restoring storage access. Start the host with --key-file <file>.')
   })
   await repositories.settings.migrateProjectWorkingCopyDefaults(await loadHostIdentity(directory))
   const startup = await settings.get()
