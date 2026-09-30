@@ -5,6 +5,9 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import { HOST_STOP_DRAIN_MS, LAUNCH_SCRIPT_SOURCE, NODE_CHECK_SOURCE, NODE_PROBE_SOURCE, type LaunchOperation } from '../../src/main/hosts/launchScript'
+import { MemoryStore } from '../../src/main/memory/store'
+import { PolicyStore } from '../../src/main/memory/policies'
+import { PairedClients } from '../../src/main/agents/pairing'
 
 const directories: string[] = [], children: ChildProcess[] = [], hosts: number[] = []
 afterEach(async () => {
@@ -68,6 +71,73 @@ it('refuses a request for a different host ID', async () => {
   const configuration = await fixture()
   await launch(configuration)
   expect((await run(configuration, { op: 'pairing-code', hostId: '22222222-2222-4222-8222-222222222222' })).messages.at(-1)).toEqual({ type: 'failed' })
+})
+
+async function desktopPermissionFixture() {
+  const configuration = await fixture()
+  await launch(configuration)
+  const memory = new MemoryStore(join(configuration.dataDirectory, 'memory.sqlite'))
+  memory.open()
+  const policies = new PolicyStore(memory)
+  const pairing = new PairedClients(configuration.dataDirectory)
+  await pairing.load()
+  const { clientId } = await pairing.redeem(pairing.issuePairingCode().code, 'Sotto desktop')
+  return { configuration, memory, policies, clientId, client: { clientId, user: 'Desktop fixture', transport: 'socket' as const },
+    operation: { op: 'desktop-answers', hostId: HOST_ID, clientId } as const }
+}
+
+it('establishes the authenticated SSH desktop policy once, including concurrent setup, without a host upgrade', async () => {
+  const { configuration, memory, policies, client, operation } = await desktopPermissionFixture()
+  try {
+    expect(policies.mayGrant(client).allowed).toBe(false)
+    const results = await Promise.all([run(configuration, operation), run(configuration, operation), run(configuration, operation)])
+    for (const result of results) expect(result.messages.at(-1)).toEqual({ type: 'desktop-answers', hostId: HOST_ID })
+    expect(policies.mayGrant(client).allowed).toBe(true)
+    const records = policies.list({ scope: 'client:' + client.clientId, includeInactive: true })
+    expect(records).toHaveLength(1)
+    expect(records[0]).toMatchObject({ action: 'remote-answer', resource: client.clientId, effect: 'allow', source: 'user' })
+    expect(records[0]!.note).toContain('authenticated SSH session')
+    await run(configuration, operation)
+    expect(policies.list({ scope: 'client:' + client.clientId, includeInactive: true })).toEqual(records)
+  } finally { memory.close() }
+})
+
+it.each(['revoked', 'expired', 'always-confirm'] as const)('preserves an existing %s desktop policy on reconnect', async kind => {
+  const { configuration, memory, policies, client, operation } = await desktopPermissionFixture()
+  try {
+    if (kind === 'always-confirm') policies.grant({ action: 'remote-answer', resource: client.clientId, scope: 'client:' + client.clientId, effect: 'always-confirm', note: 'Fixture boundary' })
+    else {
+      const record = policies.grantRemoteAnswers(client.clientId, 'Fixture decision', kind === 'expired' ? '2000-01-01T00:00:00.000Z' : null)
+      if (kind === 'revoked') policies.revoke(record.id)
+    }
+    const before = policies.list({ scope: 'client:' + client.clientId, includeInactive: true })
+    expect((await run(configuration, operation)).messages.at(-1)).toEqual({ type: 'desktop-answers', hostId: HOST_ID })
+    expect(policies.mayGrant(client).allowed).toBe(false)
+    expect(policies.list({ scope: 'client:' + client.clientId, includeInactive: true })).toEqual(before)
+  } finally { memory.close() }
+})
+
+it('refuses unpaired clients and another host without writing policies', async () => {
+  const { configuration, memory, policies, operation } = await desktopPermissionFixture()
+  try {
+    for (const invalid of [{ ...operation, clientId: 'not-paired' }, { ...operation, hostId: '22222222-2222-4222-8222-222222222222' }]) {
+      expect((await run(configuration, invalid)).messages.at(-1)).toEqual({ type: 'failed' })
+    }
+    expect(policies.list({ includeInactive: true })).toEqual([])
+  } finally { memory.close() }
+})
+
+it('refuses missing or corrupt policy stores without creating or replacing them', async () => {
+  const { configuration, memory, operation } = await desktopPermissionFixture()
+  memory.close()
+  const file = join(configuration.dataDirectory, 'memory.sqlite')
+  await rm(file)
+  expect((await run(configuration, operation)).messages.at(-1)).toEqual({ type: 'failed' })
+  await expect(readFile(file)).rejects.toMatchObject({ code: 'ENOENT' })
+  const original = 'Fixture unreadable policy database'
+  await writeFile(file, original)
+  expect((await run(configuration, operation)).messages.at(-1)).toEqual({ type: 'failed' })
+  expect(await readFile(file, 'utf8')).toBe(original)
 })
 it('finds a host it started earlier, still owned, and stops it on stop-host', async () => {
   const configuration = await fixture()
