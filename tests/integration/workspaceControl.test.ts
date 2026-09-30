@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { randomUUID } from 'node:crypto'
-import { mkdir, readFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { workspaceFixture } from '../fixtures/workspaceFixture'
@@ -155,6 +155,18 @@ describe('workspace controller integration', () => {
     expect((await f.control.command(prompt)).error).toBeNull()
     expect(f.registry.byThread(id)).toEqual(binding)
     expect(f.adapters.codex.commands.map(command => command.type)).toEqual(['create-thread', 'send'])
+  })
+  it('does not recreate a selected existing folder that disappeared before registration', async () => {
+    const f = await fixture()
+    const path = join(f.root, 'selected-folder')
+    await mkdir(path)
+    await rm(path, { recursive: true })
+    const before = f.control.get().host.projects
+    const result = await f.control.command({ type: 'create-project', provider: 'codex', title: 'Selected folder', path, useExisting: true })
+    expect(result.error).toBe('That folder no longer exists. Nothing was added. Choose another folder.')
+    expect(result.host.projects).toEqual(before)
+    await expect(stat(path)).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(f.adapters.codex.commands).toHaveLength(0)
   })
   it('opens existing projects without changing scope, creates multiple manual threads, and keeps coordinator settings independent', async () => {
     const f = await fixture()

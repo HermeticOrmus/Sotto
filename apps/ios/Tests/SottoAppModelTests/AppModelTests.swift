@@ -5,6 +5,8 @@ final class AppModelTests: XCTestCase {
     @MainActor private func fixture() throws -> (AppModel, ThreadRef) {
         HostConnection.instances = []; HostConnection.failDetail = false; HostConnection.holdDetail = false; KeychainStore.items = [:]
         HostConnection.afterGreeting = nil
+        HostConnection.shells = [:]; HostConnection.commandHandler = nil; HostConnection.folderHandler = nil
+        HostConnection.receipts = [:]; HostConnection.mayAnswer = false; HostConnection.features = ["host-folders"]
         let host = "00000000-0000-4000-8000-000000000001"
         let pairing = try JSONDecoder().decode(Pairing.self, from: Data(#"{"v":1,"hostId":"\#(host)","clientId":"phone","token":"fixture"}"#.utf8))
         let saved = SavedComputer(address: "https://laptop.example.ts.net:8443", pairing: pairing, reportedName: "Laptop")

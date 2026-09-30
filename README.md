@@ -44,7 +44,7 @@ Terminal mode keeps closed terminals on its Closed shelf until you quit. Reopen 
 
 You need Windows 10 or 11 (x64), or an Apple silicon Mac with macOS 12 or newer.
 
-**Windows.** Run `Sotto Setup <version>.exe`. At least 1 GB of free space during installation is needed. The desktop shortcut is optional and unchecked by default. The installer isn't code-signed, so Windows may show a SmartScreen warning.
+**Windows.** Run `Sotto Setup <version>.exe`. Connecting an SSH host uses Windows' .NET Framework 4, which Windows 10 and 11 include. At least 1 GB of free space during installation is needed. The desktop shortcut is optional and unchecked by default. The installer isn't code-signed, so Windows may show a SmartScreen warning.
 
 **macOS.** Drag Sotto into Applications. The app isn't notarized, so the first launch is blocked: open **System Settings → Privacy & Security** and press **Open Anyway**, or run:
 
@@ -79,6 +79,8 @@ Dictation history stays on your computer, and you can turn it off. Older dictati
 If thread messages cannot be saved, Sotto keeps them in memory and retries while it is open. The warning stays until they are saved. Restore storage access before quitting; unsaved messages cannot survive a restart.
 
 The iPhone app opens on **Threads**: questions and permissions first, working threads next, then recent threads. Search stays at the top, and a computer selector narrows the list. Confirmed background work and running compaction count as ongoing work, matching desktop. Unsettled threads stay visible; **Settled** expands work put aside on desktop. **Computers** manages pairings, and **Settings** keeps this iPhone's appearance and larger-text choice. The app is in development and talks only to your own Sotto host, through your private Tailscale address. It looks the host's name up through Tailscale's own name service on the phone, pairs with a code the host prints, and never answers a permission unless you have allowed it on the host.
+
+**New thread** on iPhone lets you choose a connected computer, one of its projects or another folder on it, and that computer's model and effort. The thread uses the shared project folder and starts work when you send its first message. Permissions start by asking; a mode that allows actions without asking needs **Can answer** on that computer. Folder names and paths travel over the same private connection, and a creation the computer did not confirm is shown without being sent again.
 
 ## Build from source
 
