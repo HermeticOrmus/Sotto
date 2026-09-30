@@ -98,7 +98,7 @@ export class NaturalSpeechModels {
         }
       }
       // Keep recovery copies until the installed model passes its integrity check.
-      if (await this.verified()) {
+      if (backups.length > 0 && await this.verified()) {
         for (const name of backups) await this.removeTemporary(join(this.parent, name))
       }
     } catch { console.warn('natural-voice-backup-cleanup-failed') }

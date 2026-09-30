@@ -1,9 +1,15 @@
 // @vitest-environment node
 import { createHash } from 'node:crypto'
+import { createReadStream } from 'node:fs'
 import { cp, mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+
+vi.mock('node:fs', async importOriginal => {
+  const original = await importOriginal<typeof import('node:fs')>()
+  return { ...original, createReadStream: vi.fn(original.createReadStream) }
+})
 
 const faults = vi.hoisted(() => ({ rename: false, remove: '' }))
 vi.mock('node:fs/promises', async importOriginal => {
@@ -98,6 +104,15 @@ describe('NaturalSpeechModels', () => {
     expect((await restarted.status()).ready).toBe(true)
     expect(await readdir(join(userRoot, 'onnx-community'))).toEqual(['Supertonic-TTS-ONNX'])
     expect(downloader).toHaveBeenCalledTimes(before)
+  })
+
+  it('does not read installed model contents at startup when no backups need cleanup', async () => {
+    const { manager, userRoot, downloader } = await setup()
+    await manager.download()
+    vi.mocked(createReadStream).mockClear()
+    const restarted = new NaturalSpeechModels(userRoot, { downloader })
+    await restarted.initialize()
+    expect(createReadStream).not.toHaveBeenCalled()
   })
 
   it('continues partial cleanup after a backup permission error and logs only an event name', async () => {
