@@ -195,7 +195,7 @@ import XCTest
             app.terminate()
             app.launchArguments = ["--ui-fixture", "--reset-ui-preferences", "--ui-feedback-" + scenario]
             app.launch()
-            let message = app.staticTexts[words]
+            let message = app.staticTexts.matching(NSPredicate(format: "label == %@", words)).firstMatch
             XCTAssertTrue(message.waitForExistence(timeout: 15))
             reveal(message)
             XCTAssertFalse(app.staticTexts["Answer sent."].exists)
