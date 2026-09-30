@@ -167,6 +167,7 @@ import { CodexSubscriptionClient } from './agents/subscriptionCodex'
 import { registerAgentIpc } from './agents/ipc'
 import { desktopWindowClient } from './agents/hostService'
 import { createAgentRuntime } from './agents/runtime'
+import { loadHostIdentity } from './agents/hostIdentity'
 import { registerFilesIpc } from './files/ipc'
 import { FilesService } from './files/service'
 import { registerToolsIpc } from './tools/ipc'
@@ -517,6 +518,7 @@ async function createRuntime(): Promise<NativeRuntimeController> {
   const kokoroSpeech = new KokoroSpeechService({ credentials, ...(e2eConfiguration === null ? {} : { fetchFn: e2eKokoroSpeechFetch }) })
   const settings = new SecureSettings(plainSettings, credentials)
   await settings.migrate().catch(() => logOperational('secure-key-migration-unavailable'))
+  await plainSettings.migrateProjectWorkingCopyDefaults(await loadHostIdentity(userDataPath))
   const startupSettings = await settings.get()
   let agentHistoryEnabled = startupSettings.historyEnabled
   let workingCopySettings = startupSettings
