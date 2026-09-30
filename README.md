@@ -34,6 +34,8 @@ Thread drafts save automatically while you type, including while other threads a
 
 Claude Code keeps background work running when remembered preferences change. Messages continue with the chat's previous context while that work runs. The first send after it ends refreshes the context.
 
+If a Claude Code answer is unconfirmed, **Check again** reopens the request's choices. It sends nothing; you choose and send the answer again yourself.
+
 New threads open in Unsettled with the defaults saved in Settings → Agents. An existing empty thread is reused only while it is unsettled, its known model, effort and permission choices match those defaults, and no setting change is pending.
 
 In Settings, **Test microphone** checks the same input selected for dictation. Changing the input clears the previous test.

@@ -4,7 +4,7 @@ import { requestQuestionsDigest, type BindRequestDraftDecision } from './request
 import { mkdir, readFile, readdir, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
-import { personalChatSchema, personalDraftInputSchema, personalSendInputSchema, personalAnswerInputSchema, type PersonalChat, type PersonalChatState, type PersonalChatCommand } from '../../shared/personalChats'
+import { personalAnswerHeld, personalChatSchema, personalDraftInputSchema, personalSendInputSchema, personalAnswerInputSchema, type PersonalChat, type PersonalChatState, type PersonalChatCommand } from '../../shared/personalChats'
 import type { AgentHostSnapshot, ProviderId } from '../../shared/agents'
 import { AtomicJsonStore } from '../storage/atomicJsonStore'
 import { CodexAppServerHost } from './codex'
@@ -454,7 +454,7 @@ export class PersonalChatService {
     const chat = this.chat(chatId)
     if (!this.connections.has(chat.providerId)) throw new Error(`Connect ${chat.providerId} before refreshing this conversation.`)
     if (chat.nativeState !== 'unstarted' && chat.nativeState !== 'error') {
-      const host = this.host(chatId), snapshot = await host.refreshThread(chatId); await this.accept(chat.providerId, snapshot, host.personalSnapshot())
+      const host = this.host(chatId), snapshot = await host.refreshThread(chatId, { retryUncertainAnswers: true }); await this.accept(chat.providerId, snapshot, host.personalSnapshot())
     }
     return this.get()
   }
@@ -471,7 +471,7 @@ export class PersonalChatService {
       const chat = this.chat(chatId, saved)
       const request = chat.requests.find(r => r.id === answer.requestId)
       if (!this.connections.has(chat.providerId) || !request) throw new Error('This request is no longer pending in this conversation.')
-      if (chat.decisions?.some(d => d.requestId === answer.requestId && (d.status === 'submitting' || d.status === 'uncertain'))) throw new Error('Answer delivery is uncertain. Refresh without replaying the answer.')
+      if (personalAnswerHeld(chat, answer.requestId)) throw new Error('Answer delivery is uncertain. Refresh without replaying the answer.')
       const decisions = chat.decisions ??= []
       const questions = requestDraftQuestions(request)
       decisions.push({ ...answer, request, ...(questions.length ? { questionsDigest: requestQuestionsDigest(questions) } : {}), id: decisionId, status: 'submitting', createdAt: new Date().toISOString() })

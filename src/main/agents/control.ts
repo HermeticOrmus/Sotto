@@ -1136,7 +1136,14 @@ export class AgentControl {
   async refreshRequestDraft(threadId: string): Promise<void> {
     const thread = this.thread(threadId)
     if (!isThreadProviderConnected(this.state.host, thread)) throw new Error('Reconnect the original provider before checking this answer.')
-    this.acceptSnapshot(await this.readThread(threadId))
+    this.acceptSnapshot(await this.readThread(threadId, undefined, { retryUncertainAnswers: true }))
+    const checked = this.thread(threadId)
+    if (requestDraftProvider(this.state.host, checked, this.state.configuration.provider) === 'claude') {
+      const retryable = new Set(checked.requests.filter(request => request.answerRetryReady).map(request => request.id))
+      // This user check releases only the old answer reservation. It dispatches nothing;
+      // Claude keeps its durable uncertain-answer evidence until the user chooses again.
+      this.outbox = this.outbox.filter(item => item.type !== 'answer' || item.threadId !== threadId || !item.requestId || !retryable.has(item.requestId))
+    }
     await this.persist()
     this.publish()
   }

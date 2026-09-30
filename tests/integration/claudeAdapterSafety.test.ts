@@ -8,6 +8,9 @@ import { claudeAnswer, claudePending } from '../../src/main/agents/claudeRequest
 import { authoredClaudeUser } from '../../src/main/agents/claudeSessionLog'
 import { ClaudeSessionLog } from '../../src/main/agents/claudeSessionLog'
 import { ClaudeProtocol } from '../../src/main/agents/claudeProtocol'
+import { PersonalChatService } from '../../src/main/agents/personalChats'
+import { personalRequestDraftState } from '../../src/main/agents/requestDrafts'
+import { personalAnswerHeld } from '../../src/shared/personalChats'
 import { SottoThreadHost, ThreadRegistry } from '../../src/main/agents/threads'
 import { AtomicJsonStore } from '../../src/main/storage/atomicJsonStore'
 import { AgentControl } from '../../src/main/agents/control'
@@ -283,6 +286,57 @@ describe('Claude recovery and safety', () => {
     expect((await thread()).requests).toEqual([])
     await expect.poll(async () => (await f.driver.requests()).filter(record => f.protocol!.permissionDecision(record) !== undefined).map(record => f.protocol!.permissionDecision(record))).toEqual([true])
     expect(await f.host.execute({ type: 'send', commandId: 'unblocked', messageId: 'unblocked', threadId: id, text: 'Continue' })).toEqual({ accepted: true })
+  })
+  it('reopens a personal answer through Check again without replaying its uncertain decision', async () => {
+    const service = new PersonalChatService({ userDataPath: f.root, hosts: { claude: f.adapter }, configuration: () => ({ reasoning: 'claude', reasoningModel: f.modelId, reasoningEffort: 'high' }) })
+    try {
+      await service.start(); await service.connect()
+      const chat = (await service.create()).chats[0]!
+      await service.saveDraft({ chatId: chat.id, revision: 1, text: 'Hello', skills: [] })
+      await service.send({ chatId: chat.id, revision: 1 }); await service.settled()
+      await f.driver.raisePermission(chat.id, 'Build')
+      await expect.poll(() => service.get().chats[0]!.requests.length).toBe(1)
+      const requestId = service.get().chats[0]!.requests[0]!.id
+      const answer = { chatId: chat.id, requestId, answer: '', approved: false }
+      const failed = vi.spyOn(ClaudeProtocol.prototype, 'write').mockRejectedValueOnce(new Error('Uncertain write'))
+      await service.answer(answer); failed.mockRestore()
+      expect(personalAnswerHeld(service.get().chats[0]!, requestId)).toBe(true)
+      await expect(service.answer(answer)).rejects.toThrow('uncertain')
+      const checked = await service.refresh(chat.id)
+      expect(checked.chats[0]!.decisions![0]!.status).toBe('uncertain')
+      expect(personalAnswerHeld(checked.chats[0]!, requestId)).toBe(false)
+      expect(personalRequestDraftState(checked, { kind: 'personal', ownerId: chat.id, providerId: 'claude' })!.uncertainRequestIds).toEqual([])
+      expect((await f.driver.requests()).filter(record => f.protocol!.permissionDecision(record) !== undefined)).toHaveLength(0)
+      await service.answer({ ...answer, approved: true })
+      expect(service.get().chats[0]!.decisions!.map(decision => decision.status)).toEqual(['uncertain', 'accepted'])
+      expect(personalAnswerHeld(service.get().chats[0]!, requestId)).toBe(false)
+      await expect.poll(async () => (await f.driver.requests()).filter(record => f.protocol!.permissionDecision(record) !== undefined).map(record => f.protocol!.permissionDecision(record))).toEqual([true])
+    } finally { await service.close() }
+  })
+  it('reopens a project answer through the coordinator Check again path', async () => {
+    const credentials = new AgentCredentials(f.root, { isEncryptionAvailable: () => false, encryptString: value => Buffer.from(value), decryptString: value => value.toString() })
+    await credentials.load()
+    const registry = new ThreadRegistry(f.root), wrapped = new SottoThreadHost('claude', f.adapter, registry)
+    const control = new AgentControl({ schedule: immediatePublishScheduler, directory: f.root, host: wrapped, credentials, reasoner: e2eAgentReasoner,
+      membership: { status: async () => ({ status: 'beta', label: 'Test', expiresAt: null }), action: async () => ({ status: 'beta', label: 'Test', expiresAt: null }) } })
+    try {
+      await control.start(); await control.command({ type: 'connect' })
+      const threadId = registry.all().find(binding => binding.sessionId === id)!.threadId
+      await wrapped.refreshThread(threadId)
+      await f.driver.raisePermission(id, 'Build')
+      await expect.poll(async () => (await thread()).requests.length).toBe(1)
+      const requestId = (await thread()).requests[0]!.id
+      const answer = { type: 'answer' as const, threadId, requestId, answer: '', approved: false }
+      const failed = vi.spyOn(ClaudeProtocol.prototype, 'write').mockRejectedValueOnce(new Error('Uncertain write'))
+      await control.command(answer); failed.mockRestore()
+      expect((await thread()).requests[0]!.delivery).toBe('uncertain')
+      await control.refreshRequestDraft(threadId)
+      expect((await thread()).requests[0]!.answerRetryReady).toBe(true)
+      expect((await f.driver.requests()).filter(record => f.protocol!.permissionDecision(record) !== undefined)).toHaveLength(0)
+      const result = await control.command({ ...answer, approved: true })
+      expect(result.error).toBeNull()
+      await expect.poll(async () => (await f.driver.requests()).filter(record => f.protocol!.permissionDecision(record) !== undefined).map(record => f.protocol!.permissionDecision(record))).toEqual([true])
+    } finally { control.dispose(); await registry.flush() }
   })
   it.each(['browser', 'setup'] as const)('cancels a launch superseded during %s tool setup without blocking its next send', async tools => {
     let entered!: () => void, release!: () => void

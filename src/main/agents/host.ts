@@ -61,6 +61,8 @@ export function confirmedSettingsSnapshot(result: AgentHostResult): [Omit<AgentH
  */
 export interface ThreadReadPurpose {
   readonly beforeSend?: boolean
+  /** An explicit Check again may reopen an uncertain Claude answer for a fresh user choice. */
+  readonly retryUncertainAnswers?: boolean
   /**
    * The reader keeps each thread's history from the host's `subscribeEvents` and reads none from what the read
    * hands back, as an activity subscriber that asks for it does. A host that publishes events then hands back
