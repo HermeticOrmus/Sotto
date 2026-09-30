@@ -9,8 +9,8 @@ comment documenting that evidence; no duplicate patch was made.
 
 The app-model tests compile the actual `AppModel.swift` against scripted storage
 and transport on macOS. They cover a locked launch followed by automatic
-connection after unlock, undecodable saved items, a completed receipt with its
-answer still waiting, an unrelated host error, an uncertain request, late pushed
+connection after unlock, undecodable saved items, a completed answer receipt with
+its request still visible, an unrelated host error, an uncertain request, late pushed
 reply acceptance and failure, Stop while a reply is unconfirmed, a marker write
 failure, stale authority updates and both current-host and older-host hello races.
 The tests script lost acknowledgements rather than waiting for a real timeout.
@@ -19,9 +19,18 @@ Raw socket tests exercise Can answer being enabled and revoked without reconnect
 on the desktop phone listener and headless host. Two clients verify that each gets
 only its own policy. Dispatch still checks host policy independently of the shell.
 
-The earlier S-053 state prototype is retained on `prototype/bh-06-delivery`, at
-`9261a92a`. It demonstrates the requested Stop and late-delivery behavior with the
-existing labels; it is not evidence of native execution.
+The delivery state study exercised Stop after a lost acknowledgement and late
+reply evidence with the existing labels. It is a logic demonstration, not evidence
+of native execution. Review added the distinction between an answer command's
+own completed, error-free receipt and a request disappearing for another reason.
+The latter clears its marker with "That request is no longer waiting."
+
+The native app-model target now compiles the production `KeychainStore.swift`.
+Its test seam supplies raw bytes and storage access failures, with JSON decoding
+left in the real store. Regressions distinguish a missing item from a damaged one,
+preserve a damaged index, recover readable computer items, name unrecoverable host
+IDs, warn about damaged action markers, and refuse an inaccessible item before any
+index migration write. Settling a marker also preserves unrelated feedback.
 
 ## Windows verification
 
@@ -40,11 +49,16 @@ no design baseline or committed artifact was replaced.
 Independent standards and specification reviews found no remaining findings.
 Review corrected an older-host hello race and ensured recovery connects newly
 loaded computers even after an earlier Active callback while storage was locked.
+The rework review also found disappearance pushes racing the reconnect shell and
+hello. Both now retain the marker through its own receipt check, with regressions
+asserting one receipt read and no command resubmission.
 
 ## Limits
 
 Windows cannot run SwiftUI or the native package tests. The macOS CI gate runs
-those tests and the existing Focus simulator journeys. Neither scripted transport
+those tests and Focus simulator journeys, including revised feedback in both
+appearances, larger text and reachable dismissal. Native results and inspected
+captures are recorded in the pull request after that gate completes. Neither scripted transport
 nor those journeys establishes physical-device locked Keychain behavior,
 cellular-network compatibility or hands-on VoiceOver. No physical iPhone test was
 performed for this batch.
