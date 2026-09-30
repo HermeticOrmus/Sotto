@@ -173,8 +173,9 @@ export class GitActions {
   /** Keep staged hunks; stage only unstaged selected files and temporarily leave excluded files out. */
   private async stage(cwd: string, filePaths: readonly string[] | undefined): Promise<{ hasChanges: boolean; restore: (committed: boolean) => Promise<void> }> {
     cwd = (await this.git(cwd, ['rev-parse', '--show-toplevel'])).trim()
-    const originalTree = (await this.git(cwd, ['write-tree'])).trim()
     const records = parseChangedRecords(await this.git(cwd, ['status', '--porcelain=v2', '-z', '--untracked-files=all']))
+    if (records.some(record => record.status === 'conflicted')) throw new GitActionRefusal('Resolve the conflicted files before committing here.')
+    const originalTree = (await this.git(cwd, ['write-tree'])).trim()
     const selected = new Set(filePaths ?? records.map(record => record.path))
     for (const record of records) if (record.status === 'renamed' && record.originalPath && selected.has(record.path)) selected.add(record.originalPath)
     const stagedPaths = new Set((await this.git(cwd, ['diff', '--cached', '--name-only', '--no-renames', '-z'])).split('\0').filter(Boolean))

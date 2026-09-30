@@ -47,7 +47,7 @@ async function fixture(options: { remote?: boolean; gh?: GhFixture; commitMessag
 describe('the stacked Git action, the way T3 runs it', () => {
   it.each([false, true])('keeps command arguments constant for thousands of paths (selected files: %s)', async selectedFiles => {
     const f = await fixture({ remote: false })
-    const snapshot = await new GitStatusReader({}).read(f.repo, { remote: false })
+    const snapshot = await new GitStatusReader({ fetchIntervalMs: () => 0 }).read(f.repo, { remote: false })
     const argumentLists: string[][][] = []
     for (const count of [3, 3000]) {
       const paths = Array.from({ length: count }, (_, i) => `scaffold/long-project-file-${i}.txt`)
@@ -103,6 +103,21 @@ describe('the stacked Git action, the way T3 runs it', () => {
     expect(git(f.repo, 'diff', '--', 'work.txt')).toContain('+unstaged')
     expect(git(f.repo, 'diff', '--cached', '--', 'work.txt')).toBe('')
     if (exclude) expect(git(f.repo, 'show', ':skip.txt')).toBe('excluded')
+  })
+  it('refuses a conflicted stash pop before changing the index or working files', async () => {
+    const f = await fixture({ remote: false })
+    await writeFile(join(f.repo, 'work.txt'), 'stashed\n'); git(f.repo, 'stash', 'push', '-qm', 'Stashed edit')
+    await writeFile(join(f.repo, 'work.txt'), 'committed\n'); commit(f.repo, 'Conflicting edit')
+    expect(() => git(f.repo, 'stash', 'pop')).toThrow()
+    const index = git(f.repo, 'ls-files', '--unmerged')
+    const working = await readFile(join(f.repo, 'work.txt'), 'utf8')
+    const head = git(f.repo, 'rev-parse', 'HEAD')
+    expect(index).not.toBe('')
+    await expect(f.actions.runStackedAction({ threadId: 't', cwd: f.repo, action: 'commit', commitMessage: 'Refused' })).rejects.toThrow('Resolve the conflicted files before committing here.')
+    expect(git(f.repo, 'ls-files', '--unmerged')).toBe(index)
+    expect(await readFile(join(f.repo, 'work.txt'), 'utf8')).toBe(working)
+    expect(git(f.repo, 'rev-parse', 'HEAD')).toBe(head)
+    expect(f.calls.some(call => call.includes('write-tree'))).toBe(false)
   })
   it('restores the original index after a refused commit', async () => {
     const f = await fixture({ remote: false })
