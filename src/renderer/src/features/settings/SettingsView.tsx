@@ -263,7 +263,12 @@ export function SettingsView({
     microphoneTestRef.current = controller
     const outcome = await controller.start((level) => {
       if (microphoneTestRef.current === controller) setMicrophoneLevel(level)
-    }, selectedDeviceId).catch(() => 'error' as const)
+    }, selectedDeviceId, () => {
+      if (microphoneTestRef.current !== controller) return
+      microphoneTestRef.current = null
+      setMicrophoneLevel(0)
+      setMicrophoneState('missing')
+    }).catch(() => 'error' as const)
     if (microphoneTestRef.current !== controller) return
     setMicrophoneState(outcome)
     if (outcome !== 'ready') {

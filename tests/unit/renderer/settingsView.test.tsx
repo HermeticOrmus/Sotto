@@ -124,6 +124,23 @@ describe('SettingsView', () => {
     try { expect(document.querySelector('.settings-microphone-test')).toHaveAttribute('data-state', outcome) } finally { vi.restoreAllMocks() }
   })
 
+  it('replaces listening with missing when the running input ends', async () => {
+    let ended!: () => void
+    render(<SettingsView {...baseProps({ createMicrophoneTest: () => ({
+      start: vi.fn(async (_level, _id, onEnded) => { ended = () => onEnded?.('missing'); return 'ready' as const }),
+      stop: vi.fn(async () => undefined),
+    }) })} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Test microphone' }))
+    await screen.findByRole('button', { name: 'Stop test' })
+    act(() => ended())
+    expect(document.querySelector('.settings-microphone-test')).toHaveAttribute('data-state', 'missing')
+    expect(screen.queryByText('Listening. Say something.')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Stop test' })).not.toBeInTheDocument()
+    await selectCategory('Output')
+    await selectCategory('Dictation')
+    expect(document.querySelector('.settings-microphone-test')).toHaveAttribute('data-state', 'missing')
+  })
+
   it('closes a listening microphone with the keyboard Stop test control', async () => {
     const user = userEvent.setup()
     const stop = vi.fn(async () => undefined)
@@ -652,7 +669,7 @@ describe('SettingsView', () => {
       createMicrophoneTest: () => ({ start, stop }) })
     const rendered = render(<SettingsView {...props} />)
     await userEvent.click(screen.getByRole('button', { name: 'Test microphone' }))
-    expect(start).toHaveBeenCalledWith(expect.any(Function), 'headset')
+    expect(start).toHaveBeenCalledWith(expect.any(Function), 'headset', expect.any(Function))
     rendered.rerender(<SettingsView {...props} settings={{ ...props.settings, microphoneId: 'desk' }} />)
     await waitFor(() => expect(stop).toHaveBeenCalledOnce())
     await act(async () => { publishLevel(0.8); outcome.resolve('ready') })
@@ -672,7 +689,7 @@ describe('SettingsView', () => {
     await waitFor(() => expect(stop).toHaveBeenCalledOnce())
     expect(screen.queryByText(/Listening\. Say something\./i)).not.toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'Test microphone' }))
-    expect(start).toHaveBeenLastCalledWith(expect.any(Function), 'desk')
+    expect(start).toHaveBeenLastCalledWith(expect.any(Function), 'desk', expect.any(Function))
     rendered.unmount()
     expect(stop).toHaveBeenCalledTimes(2)
   })
