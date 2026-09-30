@@ -32,6 +32,8 @@ Saved Codex conversations keep both sides after a restart. Opening a thread also
 
 Thread drafts save automatically while you type, including while other threads are working.
 
+Settings → Application sets the working-copy default for new threads. Expand **Project defaults** to choose a different default for one project. Previously saved project choices are kept when Sotto updates.
+
 New threads open in Unsettled with the defaults saved in Settings → Agents. An existing empty thread is reused only while it is unsettled, its known model, effort and permission choices match those defaults, and no setting change is pending.
 
 In Settings, **Test microphone** checks the same input selected for dictation. Changing the input clears the previous test.
@@ -42,7 +44,7 @@ Terminal mode keeps closed terminals on its Closed shelf until you quit. Reopen 
 
 You need Windows 10 or 11 (x64), or an Apple silicon Mac with macOS 12 or newer.
 
-**Windows.** Run `Sotto Setup <version>.exe`. At least 1 GB of free space during installation is needed. The desktop shortcut is optional and unchecked by default. The installer isn't code-signed, so Windows may show a SmartScreen warning.
+**Windows.** Run `Sotto Setup <version>.exe`. Connecting an SSH host uses Windows' .NET Framework 4, which Windows 10 and 11 include. At least 1 GB of free space during installation is needed. The desktop shortcut is optional and unchecked by default. The installer isn't code-signed, so Windows may show a SmartScreen warning.
 
 **macOS.** Drag Sotto into Applications. The app isn't notarized, so the first launch is blocked: open **System Settings → Privacy & Security** and press **Open Anyway**, or run:
 
@@ -72,7 +74,7 @@ Sotto has no account of its own and collects nothing about you: no analytics, no
 - **Updating a host's clients**, when you press **Update** or **Update all** on a host's tiles in Settings → Hosts, runs the client's own installer on that host. For a client mise installed that is `mise upgrade`, which reaches whatever mise is set up to use for that tool: its version lookups and the tool's own downloads, such as GitHub releases or `registry.npmjs.org`. Nothing about you or your threads is sent.
 - **Only if you use them:** `api.openai.com` and `api.x.ai` for optional reasoning and reply voices, `open-vsx.org` (with `openvsxorg.blob.core.windows.net` and `openvsx.eclipsecontent.org`) for themes, `huggingface.co` for the natural voice download, SSH hosts you add, and pages you open in Sotto's browser. When an SSH host you add uses Tailscale SSH and Tailscale asks you to approve the connection, Add host offers to open the `login.tailscale.com` page Tailscale gives for it, in your browser, only when you press it.
 
-Dictation history stays on your computer, and you can turn it off. If completed dictation cannot reach the clipboard, Dictate keeps selectable text with **Copy text** until you dismiss it or close Sotto. With history off, that recovery stays in memory. Screenshots you attach to a thread are kept as files on the computer that runs the thread, only while an unsent draft, a queued message or a recent message's preview needs them and for an hour after; with history off, new ones stay in memory and are not written to disk. Keys are kept in your operating system's credential store.
+Dictation history stays on your computer, and you can turn it off. Older dictation transcripts can still be deleted while history is off. If completed dictation cannot reach the clipboard, Dictate keeps selectable text with **Copy text** until you dismiss it or close Sotto. With history off, that recovery stays in memory. Screenshots you attach to a thread are kept as files on the computer that runs the thread, only while an unsent draft, a queued message or a recent message's preview needs them and for an hour after; with history off, new ones stay in memory and are not written to disk. Keys are kept in your operating system's credential store.
 
 If thread messages cannot be saved, Sotto keeps them in memory and retries while it is open. The warning stays until they are saved. Restore storage access before quitting; unsaved messages cannot survive a restart.
 
