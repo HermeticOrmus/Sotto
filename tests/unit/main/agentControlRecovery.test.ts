@@ -11,6 +11,7 @@ import type { AgentHostCommand, AgentHostResult } from '../../../src/main/agents
 import { E2EAgentHost } from '../../../src/main/e2e/agentEffects'
 import { agentCommandSchema, PROVIDER_LABELS, type AgentCommand, type AgentConfiguration } from '../../../src/shared/agents'
 import { immediatePublishScheduler } from '../../fixtures/publishScheduler'
+import { AtomicJsonStore } from '../../../src/main/storage/atomicJsonStore'
 
 const roots: string[] = []
 const controls: AgentControl[] = []
@@ -547,6 +548,41 @@ describe('the hidden coordinator', () => {
 })
 
 describe('supervision event ordering', () => {
+  it.each([false, true])('keeps management active when shutdown cancels a decision and the final save fails: %s', async saveFails => {
+    const f = await fixture()
+    await f.account()
+    const failure = new Error('Sotto reasoning stopped.')
+    const decide = vi.spyOn(ConfiguredAgentReasoner.prototype, 'decide').mockImplementationOnce(async () => {
+      await decisionGate
+      throw failure
+    })
+    let release!: () => void
+    const decisionGate = new Promise<void>(resolve => { release = resolve })
+    const write = AtomicJsonStore.prototype.write
+    let rejectWrites = false
+    const save = vi.spyOn(AtomicJsonStore.prototype, 'write').mockImplementation(function (this: AtomicJsonStore<unknown>, value: unknown) {
+      if (saveFails && rejectWrites) return decisionGate.then(() => { throw new Error('Synthetic final save failure') })
+      return write.call(this, value)
+    })
+    try {
+      await f.control.command({ type: 'assign', threadId: 'workshop', instruction: 'Keep watching' })
+      rejectWrites = true
+      f.host.event({ type: 'ready', threadId: 'workshop', text: 'Review this result' })
+      await expect.poll(() => decide.mock.calls.length).toBe(1)
+      f.control.dispose()
+      release()
+      await expect.poll(() => decide.mock.settledResults[0]?.type).toBe('rejected')
+      expect(f.control.get().assignments[0]).toMatchObject({ mode: 'managed', paused: false, stopReason: 'none' })
+      expect(f.control.get().queue).toEqual([])
+    } finally { release(); save.mockRestore(); decide.mockRestore() }
+    await f.control.privacyChanged()
+    const saved = JSON.parse(await readFile(join(f.root, 'agents.json'), 'utf8'))
+    expect(saved.assignments[0]).toMatchObject({ mode: 'managed', paused: false, stopReason: 'none' })
+    expect(saved.queue).toEqual([])
+    await f.restart()
+    expect(f.control.get().assignments[0]).toMatchObject({ mode: 'managed', paused: false })
+    expect(f.control.get().queue.some(item => item.text === failure.message)).toBe(false)
+  })
   it.each([1, 2001])('keeps management and context age when %s earlier messages are loaded', async count => {
     const f = await fixture()
     f.host.event({ type: 'history', threadId: 'workshop', text: '', messages: [

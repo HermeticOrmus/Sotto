@@ -2915,7 +2915,10 @@ export class AgentControl {
     this.pumpFollowups()
     this.generateTitles()
     if (!announcedManualControl) this.presentQueue(false)
-    void this.persist().catch(() => { this.state.assignments.forEach(a => { a.paused = true }); this.state.error = 'Agent state could not be saved. Management paused.'; this.publish() })
+    void this.persist().catch(() => {
+      if (this.disposed) return
+      this.state.assignments.forEach(a => { a.paused = true }); this.state.error = 'Agent state could not be saved. Management paused.'; this.publish()
+    })
     this.publish()
   }
   private enqueue(thread: AgentThread, kind: AgentQueueItem['kind'], text: string, requestId?: string): void {
@@ -3018,12 +3021,14 @@ export class AgentControl {
       }
     } catch (error) {
       if (error instanceof SupersededSupervision) { failure = error.message; return }
+      if (this.disposed) return
       assignment.paused = true
       assignment.stopReason = 'error'; assignment.stoppedAt = new Date().toISOString()
       failure = error instanceof Error ? error.message : 'Sotto needs your attention to continue.'
       this.enqueue(thread, 'blocked', failure)
     } finally {
       await this.persist().catch(error => {
+        if (this.disposed) return
         assignment.paused = true
         if (assignment.stopReason === 'none') {
           assignment.stopReason = 'error'; assignment.stoppedAt = new Date().toISOString()
