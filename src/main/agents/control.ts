@@ -89,6 +89,7 @@ const savedSchema = z.object({
   })),
 })
 type Saved = z.infer<typeof savedSchema>
+const MAX_SEEN_MESSAGE_IDS = 2000
 /** A write handed to the store: the state it carries, serialized and by outbox, and its landing. */
 type QueuedWrite = { serialized: string; outbox: Saved['outbox']; written: Promise<void> }
 class SupersededSupervision extends Error {}
@@ -358,6 +359,7 @@ export class AgentControl {
     const cutoff = Date.now() - 7 * 86_400_000
     const historyDisabled = this.dependencies.historyEnabled?.() === false
     for (const assignment of this.state.assignments) {
+      assignment.seenMessageIds = assignment.seenMessageIds.slice(-MAX_SEEN_MESSAGE_IDS)
       if (assignment.contextUpdatedAt < cutoff || historyDisabled) {
         if (assignment.instruction) assignment.paused = true
         assignment.instruction = ''
@@ -2334,7 +2336,7 @@ export class AgentControl {
     this.state.assignments.push({ threadId, mode: 'managed', instruction, followups: 0, paused: false,
       startedAt: new Date().toISOString(), origin: 'unknown', stopReason: 'none', stoppedAt: '',
       contextUpdatedAt: Date.now(),
-      seenMessageIds: thread.messages.map(m => m.id), ownMessageIds: [], handledRequestIds: [], lastFailure: '' })
+      seenMessageIds: thread.messages.slice(-MAX_SEEN_MESSAGE_IDS).map(m => m.id), ownMessageIds: [], handledRequestIds: [], lastFailure: '' })
     if (selectionRevision === this.selectionRevision) {
       this.state.activeThreadId = threadId; this.state.activeProjectId = thread.projectId
       this.restoreManagedDraft(threadId)
@@ -2811,6 +2813,7 @@ export class AgentControl {
     // Sotto's own requests join the provider's before anything below reads the threads, so the attention queue
     // takes and keeps them the same way (ADR-0035).
     const snapshot = this.withSottoRequests(incoming)
+    const previousThreads = new Map(this.state.host.threads.map(thread => [thread.id, thread]))
     this.state.host = snapshot
     this.scheduleProviderReconnects()
     if (this.state.activeProjectId) this.state.activeProjectId = this.dependencies.host.resolveProjectId?.(this.state.activeProjectId) ?? this.state.activeProjectId
@@ -2874,9 +2877,13 @@ export class AgentControl {
     for (const assignment of this.state.assignments) {
       const thread = snapshot.threads.find(t => t.id === assignment.threadId)
       if (!thread || isThreadClosed(thread) || !isThreadProviderConnected(snapshot, thread)) continue
+      const previousMessages = previousThreads.get(thread.id)?.messages ?? []
+      const restoredBoundary = previousMessages.length === 0 ? assignment.seenMessageIds.at(-1) : undefined
       const boundary = this.earlierMessageBoundaries.get(thread.id)
+        ?? (restoredBoundary && thread.messages.some(message => message.id === restoredBoundary) ? restoredBoundary : undefined)
+      const seenMessageIds = new Set([...assignment.seenMessageIds, ...previousMessages.map(message => message.id)])
       const fresh = thread.messages.slice(boundary ? thread.messages.findIndex(message => message.id === boundary) + 1 : 0)
-        .filter(m => !assignment.seenMessageIds.includes(m.id))
+        .filter(m => !seenMessageIds.has(m.id))
       if (fresh.length) assignment.contextUpdatedAt = Date.now()
       if (assignment.contextUpdatedAt < Date.now() - 7 * 86_400_000 && assignment.instruction) {
         assignment.instruction = ''; assignment.paused = true
@@ -2890,7 +2897,8 @@ export class AgentControl {
         assignment.mode = 'manual'
         this.state.queue = this.state.queue.filter(q => q.threadId !== thread.id || q.kind === 'question' || q.kind === 'permission')
       }
-      assignment.seenMessageIds = [...new Set([...assignment.seenMessageIds.slice(-2000), ...thread.messages.map(m => m.id)])]
+      const currentMessageIds = new Set(thread.messages.map(message => message.id))
+      assignment.seenMessageIds = [...assignment.seenMessageIds.filter(id => !currentMessageIds.has(id)), ...currentMessageIds].slice(-MAX_SEEN_MESSAGE_IDS)
       assignment.ownMessageIds = assignment.ownMessageIds.slice(-1000)
       assignment.handledRequestIds = assignment.handledRequestIds.slice(-1000)
       for (const request of thread.requests) {
