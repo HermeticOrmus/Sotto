@@ -30,3 +30,26 @@ Activity captures were inspected in light and dark at the minimum width, includi
 ## Limits
 
 These are scripted-provider checks on Windows. Live Claude background-task ordering and macOS file modes were not checked in this follow-up. The existing permission policy and provider boundaries remain in force; no answer is sent by checking or refreshing.
+
+
+## Second review
+
+The second review found four remaining defects; all were confirmed in the code.
+
+- A stdin deadline now keeps the original write pending. Check again cannot enable another choice until that write fails outright or the client is gone. A late success removes the pending request and confirms the original personal decision or project question receipt. A native callback error or destroyed pipe ends that in-flight write and permits an explicit retry.
+- A queued transcript read runs after the preceding read rejects. Its caller receives its own outcome.
+- Committed memory deletions notify the personal service of every purged supersession-chain ID. A client using one of those IDs restarts on the next send, stopping background work. Ordinary retrieval changes continue to wait for background work. The adapter remembers the running context's IDs separately from the latest retrieved set, so a retrieval miss cannot hide a later deletion.
+- The guide points to Sotto's Check again, activity and Stop, and explains pending writes and late confirmation. The overview, glossary and personal-chat ADR describe the memory deletion exception.
+
+The delayed-stdin regression failed on the previous PR head: two answers reached the fake CLI instead of one. The queued-read regression also failed there, forwarding the first read's error rather than running its own pass. Additional checks cover late personal decision confirmation, an exact project question receipt, a callback failing after the deadline, destroyed stdin, committed deletion and rollback, subscription disposal, and restarting background work after deletion despite an earlier retrieval miss.
+
+The existing recovery flow was checked in a throwaway state prototype on the local `prototype/claude-delayed-answer` branch at `3942a95b`. Its guided cases cover late success, outright failure and Stop; its rendered layout was inspected. The review itself supplies the required behavior. No production UI layout or design baseline changed.
+
+Second-review checks:
+
+- `npm run typecheck`, `npm run lint` and `npm run notices:verify` passed; notices verified 174 components.
+- The final focused Claude safety, request-draft delivery and personal recovery run passed 81 tests. Three late project confirmation cases check the uncertainty banner after no intervening action, a draft save and a newer error.
+- `npm run build` and `npx playwright test tests/e2e/thread-activity.spec.ts tests/e2e/phase-three-personal-requests.spec.ts` passed all five cases. The complete-app request journey covers exact approval, a structured answer, an outright refusal and retained input. The activity cases cover failed-turn feedback, keyboard expansion, minimum-width transcript readability, light/dark themes and reduced motion.
+- [The complete-app capture](../../artifacts/thread-activity/personal-requests-second-review.png) was inspected. It uses the common request form with a scripted Codex provider and establishes retained input after an outright refusal. The delayed Claude write and its receipts are verified by the adapter/service/coordinator regression tests, not by this image. The isolated activity fixture still lacks full sidebar styling, as recorded above; these captures do not establish whole-window minimum-size design quality. Generated activity captures were restored and no design baseline was regenerated.
+- Independent Standards and Spec reviews used gpt-6.1-sol at high reasoning. The Windows read-only sandbox again failed before file access, so both axes were retried with working process access and explicit read-only instructions. Standards found no documented violations; its suggestions to consolidate write state and error-setting were applied. Spec found a stale project uncertainty banner after late confirmation; that regression was observed failing, fixed and extended to preserve newer errors. The final Spec review found no remaining findings. The shared error-setting cleanup then passed the focused 81-test run and typecheck/lint.
+- The first full run overlapped review corrections and was cancelled after it picked up mismatched source/test revisions. The fresh `npm test -- --maxWorkers=2` run passed 6,438 tests with 153 skipped (483 files passed, 39 skipped). Windows CI on the final synchronized pushed head is recorded in the PR.
