@@ -24,3 +24,26 @@ Inspected captures, retained under `artifacts/pkg-18-e2e/`:
 - `dictionary-limit.png`: the limit description associated with a 4,000-character draft.
 
 The standards and spec review retained the existing theme tokens, gates, keyboard order, privacy boundaries and selected-input behavior. No design baselines were regenerated. Physical microphone hardware, an OS indicator check and macOS remain unverified; synthetic-stream track closure is verified in Windows Electron.
+
+## PR #630 review rework
+
+All seven findings were confirmed and addressed in separate commits. Category changes and window hiding preserve denied, missing and error results. An ended input track now releases the audio graph, tracks, frame and event listeners before Settings reports the missing microphone. When other inputs exist, a missing chosen microphone asks the user to plug it in or choose another; an empty input list keeps the no-microphone message.
+
+The test keeps the peak on VoiceWave's 0..1 scale. A peak greater than the named 0.02 threshold retains variant B's heard-and-closed result; a quiet input asks the user to check for mute. Every new test and input change resets the peak. Stop, category navigation, hide and unmount still release the input, and Test again remains available after either stopped result.
+
+A failed closing dictionary save, including a blur save that finishes after navigation, reaches the app's notice region and tells the user to re-enter the edits in Cleanup. The notice persists until dismissed or a successful dictionary save. An older failed submission cannot override a newer closing submission. A native paste cut at 4,000 characters announces the cut beside the field; replacement selections and normalized line endings count correctly. The guide places the shortcut under Dictation and describes the new feedback.
+
+The throwaway state/feedback prototype was inspected and captured on the local branch `prototype/pkg-18-review-feedback`, at `src/renderer/src/features/settings/microphone-review.prototype.html`. It tests the requested state transitions with the existing variant B controls; it introduces no new layout choice and is absent from the implementation branch.
+
+Regression loops failed before their fixes. The final affected unit run passed 151 tests across Settings, the app and the browser microphone controller. The final build and the three Electron specs listed above passed all four tests (31.7 seconds). The heard case feeds a real synthetic oscillator through the browser audio graph and observes a level above the threshold; the silent case supplies a quiet stream. The ended event is scripted on a real MediaStream track. The paste case uses Electron's clipboard and the normal paste shortcut. The failed-save case holds a main IPC response until Settings has been left, then rejects it and verifies the dismissible app alert. These remain synthetic-device checks, not physical microphone verification.
+
+New inspected captures retained under `artifacts/pkg-18-e2e/`:
+
+- `review-383/microphone-silent.png`: quiet test result and Test again at minimum window size.
+- `review-383/microphone-unplugged.png`: disconnected-input message and retry at minimum window size.
+- `settings-index/dictionary-paste-cut.png`: real truncated paste with the status message beside the dictionary.
+- `settings-index/dictionary-save-failure.png`: app-level failure after navigation, including Dismiss.
+
+Independent gpt-6.1-sol reviewers at high reasoning reviewed Standards and Spec separately. Standards found the initially persistent notice could remain after recovery; the follow-up added dismissal, successful-save clearing and an obsolete-submission guard. Both final axes report no remaining findings. Typecheck, lint and notices verification passed after that fix. No design baselines were regenerated; physical hardware and macOS hands-on checks remain unverified.
+
+The full two-worker gate run passed 6,431 tests with 153 skipped across 521 files (880.00 seconds). The final notice follow-up was also covered by the separate 151-test affected run. No deadlines, skips or assertions were weakened.
