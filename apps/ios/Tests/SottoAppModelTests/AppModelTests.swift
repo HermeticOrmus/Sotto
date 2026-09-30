@@ -1,4 +1,5 @@
 import XCTest
+import Combine
 import SottoCore
 
 final class AppModelTests: XCTestCase {
@@ -280,9 +281,17 @@ final class AppModelTests: XCTestCase {
         let model = try modelWithMarker(marker)
         model.phase(.active); await model.reconnectAll()
         model.feedback = "Removed Studio Mac."
+        XCTAssertEqual(model.pending, [marker])
+        // Activation can own the reconnect still finishing its receipt check. Observe the
+        // settlement rather than treating another reconnect's early return as completion.
+        let settled = expectation(description: "The disappeared answer marker settles")
+        let observation = model.$pending.filter { $0.isEmpty }.prefix(1).sink { _ in settled.fulfill() }
+        defer { observation.cancel() }
         try XCTUnwrap(HostConnection.instances.last).push(.shell(try changeShell()))
+        await fulfillment(of: [settled], timeout: 10)
         XCTAssertTrue(model.pending.isEmpty)
         XCTAssertEqual(model.feedback, "Removed Studio Mac.")
+        XCTAssertFalse(HostConnection.instances.flatMap(\.operations).contains("command"))
     }
     @MainActor func testStopRemainsAvailableAfterAReplyAcknowledgementIsLost() async throws {
         let (model, ref) = try fixture()

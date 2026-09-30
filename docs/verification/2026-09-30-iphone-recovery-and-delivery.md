@@ -89,7 +89,11 @@ Main later advanced to `d343d76a`. Its iPhone new-thread flow was merged with
 these fixes; the new creation tests use the same real Keychain decoding seam.
 Independent reviews checked the conflict resolutions, including returned creation
 results, ID-only reconciliation, receipt scripts and feedback ownership. The PR
-records the final merged gates. The captures below show the feedback surfaces
+records the final merged gates. The first later-merge native run compiled and
+executed 122 package tests, with one skip and one assertion failure: an answer
+settlement test checked before the activation-owned reconnect finished. The
+regression now observes actual marker settlement, preserving its feedback and
+no-resend assertions rather than sleeping. The captures below show the feedback surfaces
 before that later merge; main's new-thread design evidence is recorded separately
 in [its verification note](2026-09-30-iphone-new-threads.md).
 
