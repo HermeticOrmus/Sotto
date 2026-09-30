@@ -228,7 +228,7 @@ export function SettingsView({
     microphoneTestRef.current = null
     if (controller !== null) void Promise.resolve(controller.stop()).catch(() => undefined)
     setMicrophoneLevel(0)
-    setMicrophoneState(state => state === 'ready' || state === 'closed' ? 'closed' : 'idle')
+    setMicrophoneState(state => state === 'ready' ? 'closed' : state === 'requesting' ? 'idle' : state)
   }, [])
 
   useEffect(() => {

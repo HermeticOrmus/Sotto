@@ -113,6 +113,17 @@ describe('SettingsView', () => {
     ])
   })
 
+  it.each(['denied', 'missing', 'error'] as const)('keeps a %s test result after category changes and hiding', async outcome => {
+    render(<SettingsView {...baseProps({ createMicrophoneTest: () => ({ start: vi.fn(async () => outcome), stop: vi.fn(async () => undefined) }) })} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Test microphone' }))
+    await waitFor(() => expect(document.querySelector('.settings-microphone-test')).toHaveAttribute('data-state', outcome))
+    await selectCategory('Output')
+    await selectCategory('Dictation')
+    vi.spyOn(document, 'hidden', 'get').mockReturnValue(true)
+    fireEvent(document, new Event('visibilitychange'))
+    try { expect(document.querySelector('.settings-microphone-test')).toHaveAttribute('data-state', outcome) } finally { vi.restoreAllMocks() }
+  })
+
   it('closes a listening microphone with the keyboard Stop test control', async () => {
     const user = userEvent.setup()
     const stop = vi.fn(async () => undefined)
