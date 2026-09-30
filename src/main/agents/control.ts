@@ -216,6 +216,7 @@ export class AgentControl {
   /** Requests Sotto owns, merged into their threads (ADR-0035); absent until main gives the coordinator some. */
   private sottoRequests: SottoThreadRequests | undefined
   private unsubscribeSottoRequests: (() => void) | undefined
+  private visibleCommandError: unknown
   private readonly activeCommands = new Set<Promise<AgentState>>()
   private membershipTimer: ReturnType<typeof setInterval> | null = null
   private privacyCleanupPending = false
@@ -1258,7 +1259,7 @@ export class AgentControl {
       }
       this.state.error = lostImage ? DRAFT_IMAGE_NOT_SAVED : null
       await this.persist().catch(() => { throw new Error('Could not save this thread draft. Keep your text and images and retry when storage is available.') })
-    } catch (error) { this.state.error = error instanceof z.ZodError ? 'Choose valid draft text and images before saving.' : error instanceof Error ? error.message : 'Could not save this thread draft.' }
+    } catch (error) { this.visibleCommandError = error; this.state.error = error instanceof z.ZodError ? 'Choose valid draft text and images before saving.' : error instanceof Error ? error.message : 'Could not save this thread draft.' }
     this.publish()
     // Saving text needs exact revision/durability evidence, not a copy of every loaded history.
     // The desktop router discards those histories anyway; copying them here blocks native input.
@@ -1363,7 +1364,7 @@ export class AgentControl {
           break
         }
       }
-    } catch (error) { this.state.error = error instanceof Error ? error.message : 'The Git command failed.' }
+    } catch (error) { this.visibleCommandError = error; this.state.error = error instanceof Error ? error.message : 'The Git command failed.' }
     this.publish()
     return this.shell()
   }
@@ -1377,7 +1378,7 @@ export class AgentControl {
       if (title !== thread.title) this.acceptSnapshot(await this.dependencies.host.renameThread(command.threadId, title))
       this.state.error = null
       await this.persist().catch(() => { throw new Error('Could not save the new name. Retry when storage is available.') })
-    } catch (error) { this.state.error = error instanceof Error ? error.message : 'Could not rename this thread.' }
+    } catch (error) { this.visibleCommandError = error; this.state.error = error instanceof Error ? error.message : 'Could not rename this thread.' }
     this.publish()
     return this.shell()
   }
@@ -1468,6 +1469,7 @@ export class AgentControl {
     // A draft save is the exception: it keeps the text and drops what is gone (saveThreadDraft), so typing is never lost.
     try { if (command.type !== 'save-thread-draft') this.attachments.verify('attachments' in command ? command.attachments : undefined) }
     catch (error) {
+      this.visibleCommandError = error
       this.state.error = error instanceof Error ? error.message : this.attachments.missing
       if ((command.type === 'manual-send' || command.type === 'steer' || command.type === 'queue-followup') && command.draftId) this.setDelivery(command.threadId, command.draftId, 'failed')
       this.publish()
@@ -1609,6 +1611,7 @@ export class AgentControl {
         await this.execute(command, turn, manualRetryId, selectionRevision, client)
       } catch (error) {
         failure = error instanceof Error ? error.message : 'Sotto could not complete this action.'
+        this.visibleCommandError = error
         this.state.error = failure
         this.say(failure)
       }
@@ -1692,6 +1695,7 @@ export class AgentControl {
       }
       this.syncFollowups(); this.observe(); await this.persist()
     } catch (error) {
+      this.visibleCommandError = error
       this.state.error = error instanceof Error ? error.message : 'Could not save the follow-up queue.'
       if (command.type === 'queue-followup' && !this.followupStore.get().receipts.some(r => r.threadId === command.threadId && r.draftId === command.draftId)) this.setDelivery(command.threadId, command.draftId, 'failed')
     }
@@ -1783,7 +1787,7 @@ export class AgentControl {
       this.publish()
       await this.followupStore.pause(command.threadId, 'The turn was interrupted. Review the thread and resume queued follow-ups when ready.')
       this.syncFollowups(); await this.execute(command, turn); await this.persist()
-    } catch (error) { failure = error instanceof Error ? error.message : 'Could not interrupt this thread.'; this.state.error = failure }
+    } catch (error) { this.visibleCommandError = error; failure = error instanceof Error ? error.message : 'Could not interrupt this thread.'; this.state.error = failure }
     release()
     this.publish(); await this.finishTurn(turn, failure); return this.shell()
   }
@@ -1849,7 +1853,7 @@ export class AgentControl {
     const turn = this.beginTurn({ source: 'command', commandType: command.type, text: '' })
     let failure: string | undefined
     try { this.state.error = null; await this.execute(command, turn); await this.persist() }
-    catch (error) { failure = error instanceof Error ? error.message : 'Provider action failed.'; this.state.error = failure }
+    catch (error) { this.visibleCommandError = error; failure = error instanceof Error ? error.message : 'Provider action failed.'; this.state.error = failure }
     await this.finishTurn(turn, failure); this.publish()
     // Provider commands overlap, so each answers with its own outcome and not a refusal another one met meanwhile.
     const state = this.shell()
@@ -1877,6 +1881,7 @@ export class AgentControl {
       await this.persist()
     } catch (error) {
       failure = error instanceof Error ? error.message : 'Could not select this thread.'
+      this.visibleCommandError = error
       this.state.error = failure
       this.publish()
     }
@@ -2525,16 +2530,20 @@ export class AgentControl {
     }
     if (prompt && draftId) this.setDelivery(prompt.threadId, draftId, result.accepted || result.uncertain ? 'uncertain' : 'failed')
     // An adapter that knows more about what an unconfirmed action cost says it; the intent is kept either way.
+    const uncertaintyError = new Error(result.error ?? PROVIDER_RESULT_UNCONFIRMED)
     if (command.type === 'answer' && result.answerCompletion) {
       void result.answerCompletion.then(async delivered => {
         if (!delivered) return
         if (answerIntent) this.recordAnsweredRequest(answerIntent)
         this.recordAnswerAttribution(command, client)
+        if (this.visibleCommandError === uncertaintyError && this.state.error === uncertaintyError.message) {
+          this.state.error = null; this.visibleCommandError = undefined
+        }
         this.outbox = this.outbox.filter(item => item.id !== command.commandId)
         await this.persist(); this.publish()
       }).catch(() => { this.state.error = 'Answer delivery was confirmed, but could not be saved. Restore local storage access and refresh.'; this.publish() })
     }
-    if (result.uncertain && this.outbox.some(o => o.id === command.commandId)) throw new Error(result.error ?? PROVIDER_RESULT_UNCONFIRMED)
+    if (result.uncertain && this.outbox.some(o => o.id === command.commandId)) throw uncertaintyError
     if ((command.type === 'configure-thread' || prompt) && result.accepted) {
       // A settings change the provider confirmed comes back with the snapshot it produced, which is the
       // reconciliation; the thread is read again only when the adapter has none to give.

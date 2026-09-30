@@ -427,7 +427,7 @@ describe('Claude recovery and safety', () => {
       await expect.poll(async () => (await f.driver.requests()).filter(record => f.protocol!.permissionDecision(record) !== undefined).map(record => f.protocol!.permissionDecision(record))).toEqual([true])
     } finally { await service.close() }
   })
-  it('settles the original project answer receipt when its callback succeeds late', async () => {
+  it.each(['none', 'draft', 'error'] as const)('settles the original project answer after a newer %s', async later => {
     const credentials = new AgentCredentials(f.root, { isEncryptionAvailable: () => false, encryptString: value => Buffer.from(value), decryptString: value => value.toString() })
     await credentials.load()
     const registry = new ThreadRegistry(f.root), wrapped = new SottoThreadHost('claude', f.adapter, registry)
@@ -445,9 +445,17 @@ describe('Claude recovery and safety', () => {
       await control.refreshRequestDraft(threadId)
       expect((await thread()).requests[0]!.answerRetryReady).toBeUndefined()
       expect(control.requestAnswerRecovery(threadId, 'claude').uncertainRequestIds).toEqual([requestId])
+      expect(control.get().error).not.toBeNull()
+      let expectedError: string | null = null
+      if (later === 'draft') await control.command({ type: 'save-thread-draft', threadId, draftId: randomUUID(), text: 'Unsent draft', attachments: [], requestId: null })
+      if (later === 'error') {
+        expectedError = (await control.command({ type: 'answer', threadId: 'missing-thread', requestId: 'missing-request', answer: 'Later' })).error
+        expect(expectedError).not.toBeNull()
+      }
       delayed.release(); delayed.restore()
       await expect.poll(() => control.requestAnswerRecovery(threadId, 'claude').uncertainRequestIds).toEqual([])
       await expect.poll(() => control.requestAnswerRecovery(threadId, 'claude').completed).toMatchObject([{ requestId }])
+      await expect.poll(() => control.get().error).toBe(expectedError)
       await expect.poll(async () => (await thread()).requests).toEqual([])
       await expect.poll(async () => (await f.driver.requests()).filter(record => f.protocol!.permissionDecision(record) !== undefined)
         .map(record => f.protocol!.permissionDecision(record))).toEqual([true])
