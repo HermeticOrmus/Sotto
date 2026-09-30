@@ -21,6 +21,8 @@ import { version as packageVersion } from '../../package.json'
 import { createServer, type Server } from 'node:http'
 import { HOST_BUSY } from '../../src/shared/hostProtocol'
 import { SocketHostService } from '../../src/main/agents/socketHostService'
+import { REMOTE_PERMISSION_DENIED } from '../../src/main/agents/authority'
+import { ensureFixtureDesktopAnswers } from '../fixtures/sshDesktopAnswers'
 let root: string, host: Awaited<ReturnType<typeof startHeadlessHost>>, credentials: AgentCredentials, router: DesktopHostRouter, manager: DesktopHosts
 let reportedHostId: string
 const launchers: FixtureSsh[] = [], failures: Error[] = []
@@ -68,6 +70,7 @@ class FixtureSsh extends SshHostLauncher {
     return { url: tunnelUrl?.() ?? 'http://127.0.0.1:' + host.descriptor!.port, hostId: reportedHostId, owned, route: { hostname: 'forge', identityFiles: [] },
       close: async () => undefined,
       showHostPairingCode: async () => ({ ...host.pairing.issuePairingCode(), hostId: reportedHostId }),
+      ensureDesktopAnswers: clientId => ensureFixtureDesktopAnswers(join(root, 'remote'), reportedHostId, clientId),
       revokeClient: adminRevoke,
       stopHost: async () => { stops.push(reportedHostId); await beforeStopReply(); if (stopResult instanceof Error) throw stopResult; return stopResult },
       updateHost: async operation => updateHost(operation),
@@ -111,6 +114,48 @@ async function add(target = 'forge'): Promise<Connection> {
   return remote
 }
 describe('desktop remote host management over a real socket', () => {
+  it('lets a new SSH desktop change permission modes immediately, leaves phone pairing unprivileged, and preserves revocation on reconnect', async () => {
+    const remote = await add()
+    const local = desktopWindowClient('desktop-test')
+    await router.command({ type: 'configure', patch: { provider: 'codex', enabledProviders: ['codex'] } }, local)
+    await router.command({ type: 'connect', provider: 'codex' }, local)
+    const state = await router.command({ type: 'create-project', provider: 'codex', title: 'Remote', path: root, useExisting: true }, local)
+    const project = state.host.projects.find(item => item.path === root)!
+    const created = await router.command({ type: 'create-thread', projectId: project.id, modelId: state.host.models[0]!.id, title: 'Remote permissions', managed: false }, local)
+    expect(created.error).toBeNull()
+    const threadId = created.host.threads.find(item => item.title === 'Remote permissions')!.id
+    for (const runtimeMode of ['full-access', 'auto', 'auto-accept-edits', 'approval-required'] as const) {
+      const next = await router.command({ type: 'configure-thread', threadId, runtimeMode }, local)
+      expect(next.error).toBeNull()
+      expect(next.host.threads.find(item => item.id === threadId)?.runtimeMode).toBe(runtimeMode)
+    }
+    // A paired client's name supplies no authority, even when it claims to be a desktop.
+    const url = 'http://127.0.0.1:' + host.descriptor!.port
+    const paired = await SocketHostService.pair(url, host.pairing.issuePairingCode().code, 'Sotto desktop')
+    const phone = new SocketHostService({ url, token: paired.token })
+    try { expect((await phone.connect()).capabilities.mayAnswer).toBe(false) } finally { await phone.close() }
+    const descriptor = JSON.parse(await readFile(join(root, 'remote', 'host-listener.json'), 'utf8')) as { adminToken: string }
+    const response = await fetch(url + '/v1/admin/deny-answers', { method: 'POST', headers: { Authorization: 'Bearer ' + descriptor.adminToken, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId: manager.get().hosts[0]!.clientId }) })
+    expect(response.status).toBe(200)
+    await manager.command({ type: 'disconnect', id: remote.id })
+    await manager.command({ type: 'connect', id: remote.id })
+    expect(manager.get().hosts[0]!.phase).toBe('connected')
+    expect((await router.command({ type: 'configure-thread', threadId, runtimeMode: 'full-access' }, local)).error).toBe(REMOTE_PERMISSION_DENIED)
+  })
+
+  it('repairs an existing desktop pairing with no policy on the next connection', async () => {
+    const remote = connection()
+    const paired = await host.pairing.redeem(host.pairing.issuePairingCode().code, 'Sotto desktop')
+    await credentials.set('remote-host:' + remote.id, paired.token)
+    // A saved connection can omit the client ID; setup must use the host's authenticated hello.
+    await relaunch([{ ...remote, hostId: reportedHostId }])
+    await vi.waitFor(() => expect(manager.get().hosts[0]!.phase).toBe('connected'))
+    const probe = new SocketHostService({ url: 'http://127.0.0.1:' + host.descriptor!.port, token: paired.token })
+    try { expect((await probe.connect()).capabilities.mayAnswer).toBe(true) } finally { await probe.close() }
+    expect(host.pairing.list()).toHaveLength(1)
+  })
+
   it('saves, pairs itself, selects, sends only to the remote host and revokes on Forget', async () => {
     const remote = await add()
     expect(manager.get().hosts[0]!.phase).toBe('connected')
