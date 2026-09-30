@@ -12,10 +12,13 @@ struct RootView: View {
 struct MainTabs: View {
     @EnvironmentObject var model: AppModel
     @State private var tab = Tab.threads
+    @State private var threadPath: [ThreadRoute] = []
     enum Tab: Hashable { case threads, computers, settings }
     var body: some View {
         TabView(selection: $tab) {
-            NavigationStack { ThreadsView().threadDestination() }
+            NavigationStack(path: $threadPath) {
+                ThreadsView(openCreated: { ref in threadPath.append(ThreadRoute(ref: ref)) }).threadDestination()
+            }
                 .tabItem { Label("Threads", systemImage: "list.bullet") }
                 .badge(waitingCount)
                 .tag(Tab.threads)

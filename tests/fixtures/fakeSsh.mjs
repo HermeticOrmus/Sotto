@@ -61,16 +61,14 @@ const exit = code => { process.exitCode = code }
 
 /**
  * OpenSSH runs SSH_ASKPASS with the prompt as its one argument, and SSH_ASKPASS_PROMPT=none for a notice
- * that takes no answer. Windows goes through cmd.exe, which keeps only the first line.
+ * that takes no answer.
  */
 function askpass(prompt, hint = '') {
   return new Promise(resolve => {
     const program = process.env.SSH_ASKPASS
     if (process.env.SSH_ASKPASS_REQUIRE !== 'force' || !program) { resolve(null); return }
     const env = { ...process.env, SSH_ASKPASS_PROMPT: hint }
-    const child = process.platform === 'win32'
-      ? spawn(`"${program}" "${prompt.split('\n')[0]}"`, { shell: true, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true, env })
-      : spawn(program, [prompt], { stdio: ['ignore', 'pipe', 'ignore'], env })
+    const child = spawn(program, [prompt], { shell: false, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true, env })
     let output = ''
     child.stdout.setEncoding('utf8'); child.stdout.on('data', chunk => { output += chunk })
     child.on('error', () => resolve(null))
