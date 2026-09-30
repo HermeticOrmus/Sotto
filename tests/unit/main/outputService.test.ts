@@ -63,6 +63,29 @@ function createHarness(
 }
 
 describe('OutputService', () => {
+  it('holds the next clipboard write until a successful paste settles', async () => {
+    vi.useFakeTimers()
+    try {
+      const writes: string[] = []
+      const harness = createHarness({
+        clipboard: { writeText: text => { writes.push(text) } },
+        delay: ms => new Promise(resolve => setTimeout(resolve, ms)),
+      })
+      const paste = harness.service.deliver('dictation', { autoPaste: true, pasteDelayMs: 0 })
+      const copy = harness.service.deliver('history', { autoPaste: false, pasteDelayMs: 0 })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(writes).toEqual(['dictation'])
+      await vi.advanceTimersByTimeAsync(149)
+      expect(writes).toEqual(['dictation'])
+      await vi.advanceTimersByTimeAsync(1)
+      await expect(paste).resolves.toBe('pasted')
+      await expect(copy).resolves.toBe('copied')
+      expect(writes).toEqual(['dictation', 'history'])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it.each(['hide', 'paste'] as const)('keeps a copy queued while dictation waits for %s', async stage => {
     let release!: () => void
     let reached!: () => void
@@ -168,7 +191,7 @@ describe('OutputService', () => {
     await expect(
       harness.service.deliver('dictation', { autoPaste: true, pasteDelayMs: 275 }),
     ).resolves.toBe('pasted')
-    expect(harness.events).toEqual(['clipboard', 'hide', 'delay:275', 'process'])
+    expect(harness.events).toEqual(['clipboard', 'hide', 'delay:275', 'process', 'delay:150'])
   })
 
   it('restores the idle widget after paste when restoreWidget is requested', async () => {
@@ -181,7 +204,7 @@ describe('OutputService', () => {
         restoreWidget: true,
       }),
     ).resolves.toBe('pasted')
-    expect(harness.events).toEqual(['clipboard', 'hide', 'delay:50', 'process', 'show'])
+    expect(harness.events).toEqual(['clipboard', 'hide', 'delay:50', 'process', 'delay:150', 'show'])
   })
 
   it('still restores the idle widget after paste failure when restoreWidget is requested', async () => {

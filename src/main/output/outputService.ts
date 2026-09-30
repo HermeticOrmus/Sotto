@@ -47,6 +47,8 @@ export type SpawnProcess = (
   },
 ) => SpawnedProcessLike
 
+export const PASTE_SETTLE_MS = 150
+
 export const PASTE_PROCESS_TIMEOUT_MS = 5_000
 
 export class OutputClipboardError extends Error {
@@ -144,6 +146,7 @@ export class OutputService {
       const pasted = await this.dependencies.process.run(
         this.dependencies.buildPasteInvocation(),
       )
+      if (pasted) await this.dependencies.delay(PASTE_SETTLE_MS)
       return pasted ? 'pasted' : 'copied'
     } catch {
       return 'copied'

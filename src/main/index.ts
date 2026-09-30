@@ -879,6 +879,10 @@ async function createRuntime(): Promise<NativeRuntimeController> {
     buildPasteInvocation: pasteCommands.oneShot,
   })
 
+  const copyOutput = async (text: string): Promise<void> => {
+    await output.deliver(text, { autoPaste: false, pasteDelayMs: 0 })
+  }
+
   // Local, text-free diagnostics: one JSON line per event, rotated past 256 KB,
   // never sent anywhere. They carry counts and reasons, never words, audio or keys.
   const diagnosticsAppender = (fileName: string) => {
@@ -1103,11 +1107,11 @@ async function createRuntime(): Promise<NativeRuntimeController> {
         }),
     registerIpc: () => {
       const cleanupPersonalChats = registerPersonalChatIpc(ipcMain, personalChats, () => windows.getTrustedRenderers())
-      const cleanupChatPrompts = registerChatPromptIpc(ipcMain, chatPrompts, () => windows.getTrustedRenderers(), text => clipboard.writeText(text))
+      const cleanupChatPrompts = registerChatPromptIpc(ipcMain, chatPrompts, () => windows.getTrustedRenderers(), copyOutput)
       const cleanupRequestDrafts = registerRequestDraftIpc(ipcMain, requestDrafts, () => windows.getTrustedRenderers())
       const files = new FilesService({
         resolveBinding: threadId => agentControl.filesBinding(threadId),
-        copyPath: path => clipboard.writeText(path),
+        copyPath: copyOutput,
         reveal: path => shell.showItemInFolder(path),
       })
       const cleanupFiles = registerFilesIpc(ipcMain, files, () => windows.getTrustedRenderers())
@@ -1117,7 +1121,7 @@ async function createRuntime(): Promise<NativeRuntimeController> {
       agentHost.setMutationGuard(checkpointIntegration.canMutate)
       const gitChanges = new GitChangesService({ files, checkpoints: checkpointIntegration.checkpoints, canMutate: checkpointIntegration.canMutate,
         acted: threadId => { void agentHost.gitActionFinished(threadId).catch(() => undefined) },
-        copyPath: path => clipboard.writeText(path), reveal: path => shell.showItemInFolder(path), emit: event => { windows.sendToMain(GIT_CHANGES_EVENT, event) } })
+        copyPath: copyOutput, reveal: path => shell.showItemInFolder(path), emit: event => { windows.sendToMain(GIT_CHANGES_EVENT, event) } })
       const cleanupTerminals = registerTerminalWorkspaceIpc(ipcMain, new TerminalWorkspaceService({
         projects: () => agentControl.projects(), git: runWorktreeGit,
         worktrees: new ThreadWorktrees(userDataPath, runWorktreeGit, TERMINAL_WORKTREE_HOME),
