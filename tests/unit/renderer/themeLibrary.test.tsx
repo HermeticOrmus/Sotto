@@ -148,6 +148,14 @@ describe('theme library writer', () => {
 })
 
 describe('theme import text', () => {
+  it('accepts VS Code comments and trailing commas from file or pasted text', () => {
+    const text = `{
+      // VS Code writes JSON with comments.
+      "name": "Code Dark",
+      "colors": { "editor.background": "#1e1e1e", /* canvas */ },
+    }`
+    expect(parseImportedThemeText(text)).toEqual(parseImportedThemeText(JSON.stringify({ name: 'Code Dark', colors: { 'editor.background': '#1e1e1e' } })))
+  })
   it('reads T3 theme files and VS Code themes, and explains invalid files', () => {
     const harbor = parseThemeFile({ version: 1, name: 'Harbor', appearance: 'dark', colors: { canvas: '#102a33' } })
     expect(parseImportedThemeText(serializeThemeFile(harbor))).toEqual(harbor)
