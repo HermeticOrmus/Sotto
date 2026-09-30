@@ -194,9 +194,9 @@ export class UpdateService {
     if (this.phase.phase === 'downloading' || this.phase.phase === 'downloaded') {
       return this.status()
     }
-    // A failed download keeps its offer and its reason until the user acts on
-    // it; the poll must not quietly replace that with a fresh, wordless offer.
-    if (trigger === 'automatic' && this.phase.phase === 'available' && this.phase.problem !== null) {
+    // Keep the download offer until the user acts; a background check
+    // must not replace it with a network failure.
+    if (trigger === 'automatic' && this.phase.phase === 'available') {
       return this.status()
     }
     const active = this.checkInFlight

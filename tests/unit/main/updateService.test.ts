@@ -185,6 +185,22 @@ describe('UpdateService', () => {
     expect(updater.calls.check).toBe(0)
   })
 
+  it('keeps an available download offer through automatic polls and permits a manual recheck', async () => {
+    const updater = createFakeUpdater({ check: async send => {
+      if (updater.calls.check === 1) offersUpdate(send)
+      else throw new Error('offline')
+    } })
+    const { service } = createService({ createUpdater: () => updater.adapter })
+    await service.check('manual')
+    const offered = service.status()
+    await service.check('automatic')
+    expect(updater.calls.check).toBe(1)
+    expect(service.status()).toEqual(offered)
+    await service.check('manual')
+    expect(updater.calls.check).toBe(2)
+    expect(service.status().phase.phase).toBe('failed')
+  })
+
   it('checks once shortly after start and then once per interval, and cancels both on dispose', async () => {
     const updater = createFakeUpdater()
     // Properties, not `let`s: TypeScript would otherwise keep narrowing the
