@@ -4,9 +4,11 @@ import tseslint from 'typescript-eslint'
 export default tseslint.config(
   {
     ignores: [
+      'artifacts/windows-askpass/**',
       'artifacts/codex-restored-replies/**',
       'artifacts/workspace-picker/**',
       'artifacts/ios-focus/**',
+      'artifacts/iphone-new-threads/**',
       'artifacts/review-*/**',
       'artifacts/phase-three-themes/**',
       'artifacts/thread-browser-player/**',
