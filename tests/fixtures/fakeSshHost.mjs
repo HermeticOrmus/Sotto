@@ -5,6 +5,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import http from 'node:http'
 import console from 'node:console'
+import { setTimeout as delay } from 'node:timers/promises'
 const args = process.argv.slice(2)
 const data = args[args.indexOf('--data') + 1]
 const descriptorPath = path.join(data, 'host-listener.json')
@@ -19,6 +20,20 @@ async function lock() {
     await fs.rm(lockPath, { force: true })
   }
   return false
+}
+async function publishDescriptor(descriptor) {
+  const temporary = descriptorPath + '.tmp'
+  await fs.writeFile(temporary, JSON.stringify(descriptor))
+  // The launcher's reads can briefly deny atomic replacement on Windows. Keep the old file intact.
+  const retries = [10, 20, 40, 80, 160]
+  for (let attempt = 0; ; attempt++) {
+    try { await fs.rename(temporary, descriptorPath); return }
+    catch (error) {
+      const wait = retries[attempt]
+      if (process.platform !== 'win32' || wait === undefined || !['EPERM', 'EBUSY'].includes(error.code)) throw error
+      await delay(wait)
+    }
+  }
 }
 async function main() {
   if (args.includes('--pairing-code')) {
@@ -36,7 +51,7 @@ async function main() {
   // `entry` says which installed version is running, for the host update tests; the launch script ignores it.
   const descriptor = { v: 1, hostId, pid: process.pid, port: server.address().port, adminToken: 'remote-only-secret', entry: process.argv[1],
     ...(process.env.SOTTO_HOST_STARTED_BY === 'launch-script' ? { startedBy: 'launch-script' } : {}) }
-  await fs.writeFile(descriptorPath + '.tmp', JSON.stringify(descriptor)); await fs.rename(descriptorPath + '.tmp', descriptorPath)
+  await publishDescriptor(descriptor)
   process.on('SIGTERM', () => server.close(async () => { await fs.rm(lockPath, { force: true }); process.exit(0) }))
 }
 main().catch(() => { process.exitCode = 1 })
