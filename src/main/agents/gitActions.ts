@@ -7,7 +7,7 @@ import type { GitStatus } from '../../shared/gitStatus'
 import { diffExcerpt } from '../llm/diffExcerpt'
 import { COMMIT_DIFF_MAX_CHARACTERS, COMMIT_SUBJECT_MAX_CHARACTERS, type CommitMaterial } from '../llm/commitMessage'
 import type { PullRequestMaterial, PullRequestText } from '../llm/pullRequestText'
-import { runGitStatusCommand, type GitStatusSource, type RunGitCommand } from './gitStatus'
+import { parseChangedRecords, runGitStatusCommand, type GitStatusSource, type RunGitCommand } from './gitStatus'
 
 /** What the host tells the client as a stacked action runs, in T3's shape. */
 export type GitActionEvent =
@@ -169,6 +169,12 @@ export class GitActions {
   /** `git reset` then `git add -A`, or only the chosen paths, the way T3 stages; true when something is staged. */
   private async stage(cwd: string, filePaths: readonly string[] | undefined): Promise<boolean> {
     cwd = (await this.git(cwd, ['rev-parse', '--show-toplevel'])).trim()
+    if (filePaths) {
+      const selected = new Set(filePaths)
+      const records = parseChangedRecords(await this.git(cwd, ['status', '--porcelain=v2', '-z', '--untracked-files=all']))
+      for (const record of records) if (record.status === 'renamed' && record.originalPath && selected.has(record.path)) selected.add(record.originalPath)
+      filePaths = [...selected]
+    }
     await this.git(cwd, ['reset', '-q']).catch(() => undefined)
     if (filePaths) await this.git(cwd, ['--literal-pathspecs', 'add', '-A', '--', ...filePaths])
     else await this.git(cwd, ['add', '-A'])

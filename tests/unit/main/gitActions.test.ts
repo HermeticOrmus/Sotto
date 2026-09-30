@@ -45,6 +45,14 @@ async function fixture(options: { remote?: boolean; gh?: GhFixture; commitMessag
 }
 
 describe('the stacked Git action, the way T3 runs it', () => {
+  it('commits both ends of a selected rename and leaves an excluded file alone', async () => {
+    const f = await fixture({ remote: false })
+    git(f.repo, 'mv', 'work.txt', 'renamed.txt')
+    await writeFile(join(f.repo, 'skip.txt'), 'excluded\n')
+    await f.actions.runStackedAction({ threadId: 't', cwd: f.repo, action: 'commit', filePaths: ['renamed.txt'], commitMessage: 'Rename work' })
+    expect(git(f.repo, 'ls-tree', '--name-only', 'HEAD')).toBe('renamed.txt')
+    expect(git(f.repo, 'status', '--porcelain')).toBe('?? skip.txt')
+  })
   it('commits repository-relative selected paths and counts new files from a project subfolder', async () => {
     const f = await fixture({ remote: false })
     const sub = join(f.repo, 'sub'); await mkdir(sub)
