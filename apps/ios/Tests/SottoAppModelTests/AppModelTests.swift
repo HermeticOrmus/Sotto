@@ -3,32 +3,32 @@ import SottoCore
 
 final class AppModelTests: XCTestCase {
     @MainActor private func fixture() throws -> (AppModel, ThreadRef) {
-        HostConnection.instances = []; HostConnection.failDetail = false; HostConnection.holdDetail = false; KeychainStore.items = [:]
+        HostConnection.instances = []; HostConnection.failDetail = false; HostConnection.holdDetail = false; TestKeychain.items = [:]
         HostConnection.afterGreeting = nil
-        KeychainStore.locked = false
+        TestKeychain.locked = false; TestKeychain.unreadableAccount = nil
         HostConnection.mayAnswer = false; HostConnection.receipt = .object(["status": .string("unknown")])
         HostConnection.loseAcknowledgement = false
         let host = "00000000-0000-4000-8000-000000000001"
         let pairing = try JSONDecoder().decode(Pairing.self, from: Data(#"{"v":1,"hostId":"\#(host)","clientId":"phone","token":"fixture"}"#.utf8))
         let saved = SavedComputer(address: "https://laptop.example.ts.net:8443", pairing: pairing, reportedName: "Laptop")
-        let store = KeychainStore()
+        let store = TestKeychain.store
         try store.write([host], account: ComputerStore.indexAccount)
         try store.write(saved, account: ComputerStore.account(host))
         HostConnection.shell = try JSONDecoder().decode(JSONValue.self, from: Data(#"{"hostId":"\#(host)","host":{"hostId":"\#(host)","name":"Laptop","threads":[{"id":"t","projectId":"p","title":"Thread","status":"idle","requests":[]}],"projects":[],"capabilities":{"submit":true,"interrupt":true,"questions":true,"permissions":true}}}"#.utf8))
         HostConnection.detail = try JSONDecoder().decode(JSONValue.self, from: Data(#"{"threadId":"t","revision":1,"messages":[{"id":"m","role":"assistant","text":"Ready"}]}"#.utf8))
-        return (AppModel(), ThreadRef(hostID: host, threadID: "t"))
+        return (AppModel(keychain: TestKeychain.store), ThreadRef(hostID: host, threadID: "t"))
     }
     @MainActor func testLockedLaunchLoadsComputersAndMarkersWhenActiveAfterUnlock() async throws {
         let (_, ref) = try fixture()
         let marker = PendingOperation(hostID: ref.hostID, clientID: "phone", threadID: ref.threadID, draftID: "draft", kind: "reply")
-        try KeychainStore().write([marker], account: ComputerStore.pendingAccount)
-        KeychainStore.locked = true
-        let model = AppModel()
+        try TestKeychain.store.write([marker], account: ComputerStore.pendingAccount)
+        TestKeychain.locked = true
+        let model = AppModel(keychain: TestKeychain.store)
         XCTAssertFalse(model.storageReady)
         XCTAssertTrue(model.computers.isEmpty)
         model.phase(.active)
         XCTAssertFalse(model.storageReady)
-        KeychainStore.locked = false
+        TestKeychain.locked = false
         let reconnected = expectation(description: "Recovered computers connect when storage becomes readable")
         HostConnection.afterGreeting = { _ in reconnected.fulfill() }
         model.phase(.active)
@@ -40,19 +40,91 @@ final class AppModelTests: XCTestCase {
         await fulfillment(of: [reconnected], timeout: 10)
         XCTAssertTrue(model.online(ref.hostID))
     }
-    @MainActor func testUndecodableStorageItemsDoNotLockLaunch() throws {
-        for account in [ComputerStore.indexAccount, ComputerStore.pendingAccount, ComputerStore.legacyAccount] {
-            _ = try fixture()
-            KeychainStore.items[account] = Data("incompatible item".utf8)
-            let model = AppModel()
-            XCTAssertTrue(model.storageReady, account)
-            XCTAssertNil(model.feedback, account)
+    @MainActor func testRealKeychainDecodingDistinguishesMissingDamagedAndInaccessibleItems() throws {
+        _ = try fixture()
+        XCTAssertNil(try TestKeychain.store.read([String].self, account: "missing"))
+        TestKeychain.items["damaged"] = Data("incompatible item".utf8)
+        XCTAssertThrowsError(try TestKeychain.store.read([String].self, account: "damaged")) { error in
+            XCTAssertEqual((error as? KeychainStore.UndecodableItem)?.account, "damaged")
         }
+        TestKeychain.locked = true
+        XCTAssertThrowsError(try TestKeychain.store.read([String].self, account: "damaged")) { error in
+            XCTAssertEqual(error as? ClientError, KeychainStore.failure)
+        }
+        TestKeychain.locked = false
+    }
+    @MainActor func testDamagedIndexRecoversComputersAndMarkersWithoutReplacingOriginal() throws {
         let (_, ref) = try fixture()
-        KeychainStore.items[ComputerStore.account(ref.hostID)] = Data("incompatible computer".utf8)
-        let model = AppModel()
+        let bytes = Data("incompatible index".utf8)
+        let marker = PendingOperation(hostID: ref.hostID, clientID: "phone", threadID: ref.threadID, draftID: "draft", kind: "reply")
+        try TestKeychain.store.write([marker], account: ComputerStore.pendingAccount)
+        TestKeychain.items[ComputerStore.indexAccount] = bytes
+        let model = AppModel(keychain: TestKeychain.store)
+        XCTAssertTrue(model.storageReady)
+        XCTAssertEqual(model.computers.map(\.hostID), [ref.hostID])
+        XCTAssertEqual(model.pending, [marker])
+        XCTAssertEqual(TestKeychain.items[ComputerStore.indexAccount], bytes)
+        XCTAssertEqual(try TestKeychain.store.read([String].self, account: ComputerStore.recoveredIndexAccount), [ref.hostID])
+        XCTAssertEqual(model.feedback, "Recovered the saved computer list.")
+        XCTAssertEqual(AppModel(keychain: TestKeychain.store).computers, model.computers)
+    }
+    @MainActor func testRecoveryPreservesADamagedRecoveredIndexToo() throws {
+        let (_, ref) = try fixture()
+        let bytes = Data("incompatible index".utf8)
+        TestKeychain.items[ComputerStore.indexAccount] = bytes
+        TestKeychain.items[ComputerStore.recoveredIndexAccount] = bytes
+        let model = AppModel(keychain: TestKeychain.store)
+        XCTAssertTrue(model.storageReady)
+        XCTAssertEqual(model.computers.map(\.hostID), [ref.hostID])
+        XCTAssertEqual(TestKeychain.items[ComputerStore.indexAccount], bytes)
+        XCTAssertEqual(TestKeychain.items[ComputerStore.recoveredIndexAccount], bytes)
+    }
+    @MainActor func testDamagedIndexNamesUnrecoverableComputerAndKeepsItsItem() throws {
+        let (_, ref) = try fixture()
+        let damagedID = "00000000-0000-4000-8000-000000000002"
+        let bytes = Data("incompatible computer".utf8)
+        TestKeychain.items[ComputerStore.indexAccount] = Data("incompatible index".utf8)
+        TestKeychain.items[ComputerStore.account(damagedID)] = bytes
+        let model = AppModel(keychain: TestKeychain.store)
+        XCTAssertTrue(model.storageReady)
+        XCTAssertEqual(model.computers.map(\.hostID), [ref.hostID])
+        XCTAssertTrue(model.feedback?.contains("Pair computer \(damagedID) again.") == true)
+        XCTAssertEqual(TestKeychain.items[ComputerStore.account(damagedID)], bytes)
+    }
+    @MainActor func testDamagedMarkersAndLegacyPairingExplainWhatCouldNotBeRead() throws {
+        for (account, expected) in [(ComputerStore.pendingAccount, "Saved unconfirmed actions could not be read."),
+                                    (ComputerStore.legacyAccount, "The computer saved by an earlier version needs pairing again.")] {
+            let (_, ref) = try fixture()
+            let bytes = Data("incompatible item".utf8)
+            TestKeychain.items[account] = bytes
+            let model = AppModel(keychain: TestKeychain.store)
+            XCTAssertTrue(model.storageReady)
+            XCTAssertEqual(model.computers.map(\.hostID), [ref.hostID])
+            XCTAssertTrue(model.feedback?.contains(expected) == true)
+            XCTAssertEqual(model.feedback, model.pairFeedback)
+            XCTAssertEqual(TestKeychain.items[account], bytes)
+        }
+    }
+    @MainActor func testDamagedComputerInReadableIndexExplainsPairingAgain() throws {
+        let (_, ref) = try fixture()
+        TestKeychain.items[ComputerStore.account(ref.hostID)] = Data("incompatible computer".utf8)
+        let model = AppModel(keychain: TestKeychain.store)
         XCTAssertTrue(model.storageReady)
         XCTAssertTrue(model.computers.isEmpty)
+        XCTAssertTrue(model.feedback?.contains("Pair computer \(ref.hostID) again.") == true)
+    }
+    @MainActor func testRecoveryRefusesInaccessibleItemsWithoutWritingAnIndex() throws {
+        let (_, ref) = try fixture()
+        let bytes = Data("incompatible index".utf8)
+        TestKeychain.items[ComputerStore.indexAccount] = bytes
+        TestKeychain.unreadableAccount = ComputerStore.account(ref.hostID)
+        let model = AppModel(keychain: TestKeychain.store)
+        XCTAssertFalse(model.storageReady)
+        XCTAssertTrue(model.computers.isEmpty)
+        XCTAssertEqual(TestKeychain.items[ComputerStore.indexAccount], bytes)
+        XCTAssertNil(TestKeychain.items[ComputerStore.recoveredIndexAccount])
+        XCTAssertEqual(model.feedback, "Secure connection details could not be read. Unlock this iPhone and return to Sotto.")
+        TestKeychain.unreadableAccount = nil
     }
     @MainActor private func changeShell(status: String = "idle", requests: [[String: Any]] = [], error: String? = nil, deliveries: [[String: Any]] = []) throws -> Shell {
         var shell = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(HostConnection.shell)) as? [String: Any])
@@ -65,8 +137,8 @@ final class AppModelTests: XCTestCase {
         return try HostConnection.shell.decode(Shell.self)
     }
     @MainActor private func modelWithMarker(_ marker: PendingOperation) throws -> AppModel {
-        try KeychainStore().write([marker], account: ComputerStore.pendingAccount)
-        return AppModel()
+        try TestKeychain.store.write([marker], account: ComputerStore.pendingAccount)
+        return AppModel(keychain: TestKeychain.store)
     }
     @MainActor func testCompletedReceiptDoesNotClaimAnAnswerWithItsRequestStillWaiting() async throws {
         let (_, ref) = try fixture()
@@ -132,7 +204,7 @@ final class AppModelTests: XCTestCase {
         XCTAssertTrue(model.canSend(ref))
         XCTAssertEqual(connection.operations.filter { $0 == "command" }.count, 1)
         XCTAssertEqual(connection.operations.filter { $0 == "receipt" }.count, 0)
-        XCTAssertEqual(try KeychainStore().read([PendingOperation].self, account: ComputerStore.pendingAccount), [])
+        XCTAssertEqual(try TestKeychain.store.read([PendingOperation].self, account: ComputerStore.pendingAccount), [])
     }
     @MainActor func testLiveShellSettlesAnAnswerAndRestoresAFailedReply() async throws {
         let (_, ref) = try fixture()
@@ -161,9 +233,9 @@ final class AppModelTests: XCTestCase {
         let model = try modelWithMarker(marker)
         model.phase(.active); await model.reconnectAll()
         let connection = try XCTUnwrap(HostConnection.instances.last)
-        KeychainStore.locked = true
+        TestKeychain.locked = true
         connection.push(.shell(try changeShell(deliveries: [["threadId": ref.threadID, "draftId": "draft", "status": "accepted"]])))
-        KeychainStore.locked = false
+        TestKeychain.locked = false
         XCTAssertEqual(model.pending, [marker])
         XCTAssertTrue(model.online(ref.hostID))
         XCTAssertEqual(connection.disconnects, 0)

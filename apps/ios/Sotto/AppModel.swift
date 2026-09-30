@@ -47,7 +47,8 @@ struct Live {
     @Published var show = ComputerFilter.all
     @Published private var openDetail: ThreadDetail?
     @Published private(set) var detailProblem: String?
-    private let keychain = KeychainStore()
+    private let keychain: KeychainStore
+    private var computerIndexAccount: String? = ComputerStore.indexAccount
     /// Finds and pairs computers; each paired computer gets its own connection.
     private let finder = HostConnection()
     private var connections: [String: HostConnection] = [:]
@@ -170,7 +171,8 @@ struct Live {
 
     // MARK: Starting and stopping
 
-    init() {
+    init(keychain: KeychainStore = KeychainStore()) {
+        self.keychain = keychain
         #if DEBUG && os(iOS)
         if ProcessInfo.processInfo.arguments.contains("--ui-fixture") {
             loadUIFixture()
@@ -182,41 +184,67 @@ struct Live {
     /// Secure storage may be locked during a prewarmed launch. Publish nothing until all reads succeed.
     private func loadComputers() {
         guard !storageReady else { return }
-        let storageProblem = "Secure connection details could not be read. Unlock this iPhone and try again."
+        let storageProblem = "Secure connection details could not be read. Unlock this iPhone and return to Sotto."
         do {
-            let index = try keychain.read([String].self, account: ComputerStore.indexAccount)
-            let legacy = try readComputer(ComputerStore.legacyAccount)
+            var warnings: [String] = []
+            var index: [String]?
+            var indexAccount: String? = ComputerStore.indexAccount
+            var recoveredIndex = false
+            do { index = try keychain.read([String].self, account: ComputerStore.indexAccount) }
+            catch is KeychainStore.UndecodableItem {
+                // Preserve the original bytes. A separate index keeps the recovered order on later
+                // launches and is the one pairing and removal may update from now on.
+                recoveredIndex = true; indexAccount = ComputerStore.recoveredIndexAccount
+                do { index = try keychain.read([String].self, account: ComputerStore.recoveredIndexAccount) }
+                catch is KeychainStore.UndecodableItem { index = nil; indexAccount = nil }
+                let accounts = try keychain.accounts()
+                let discovered = accounts.filter { $0.hasPrefix("computer.") }.map { String($0.dropFirst("computer.".count)) }.sorted()
+                index = (index ?? []) + discovered
+            }
+            var legacy: SavedComputer?
+            do { legacy = try readComputer(ComputerStore.legacyAccount) }
+            catch is KeychainStore.UndecodableItem { warnings.append("The computer saved by an earlier version needs pairing again.") }
             let plan = ComputerStore.plan(index: index, legacy: legacy)
-            // The single pairing from before many computers becomes the first computer: its own item
-            // first, then the index naming it, then the old item goes.
-            if let adopt = plan.adopt { try keychain.write(adopt, account: ComputerStore.account(adopt.hostID)) }
-            if plan.index != index { try keychain.write(plan.index, account: ComputerStore.indexAccount) }
-            if plan.removeLegacy { try keychain.remove(account: ComputerStore.legacyAccount) }
             var kept: [SavedComputer] = []
             for hostID in plan.index {
-                if let computer = try readComputer(ComputerStore.account(hostID)), computer.hostID == hostID { kept.append(computer) }
+                do {
+                    let computer = try plan.adopt.flatMap { $0.hostID == hostID ? $0 : nil }
+                        ?? readComputer(ComputerStore.account(hostID))
+                    if let computer, computer.hostID == hostID { kept.append(computer) }
+                    else { warnings.append("Pair computer \(hostID) again. Its saved connection details could not be read.") }
+                } catch is KeychainStore.UndecodableItem {
+                    warnings.append("Pair computer \(hostID) again. Its saved connection details could not be read.")
+                }
             }
-            let markers = try keychain.read([PendingOperation].self, account: ComputerStore.pendingAccount) ?? []
+            var markers: [PendingOperation] = []
+            do { markers = try keychain.read([PendingOperation].self, account: ComputerStore.pendingAccount) ?? [] }
+            catch is KeychainStore.UndecodableItem {
+                warnings.append("Saved unconfirmed actions could not be read. Check your threads before sending again. Nothing was resent.")
+            }
+            // All reads must succeed before migration writes: a locked item never looks missing.
+            if let adopt = plan.adopt { try keychain.write(adopt, account: ComputerStore.account(adopt.hostID)) }
+            if let indexAccount, recoveredIndex || plan.index != index { try keychain.write(plan.index, account: indexAccount) }
+            if plan.removeLegacy { try keychain.remove(account: ComputerStore.legacyAccount) }
             pending = markers.filter { marker in kept.contains { marker.matches(hostID: $0.hostID, clientID: $0.pairing.clientId) } }
-            computers = kept
+            computers = kept; computerIndexAccount = indexAccount
             for computer in kept { live[computer.hostID] = Live() }
             storageReady = true
-            if feedback == storageProblem { feedback = nil }
-            if pairFeedback == storageProblem { pairFeedback = nil }
+            if recoveredIndex { warnings.insert(kept.isEmpty ? "The saved computer list could not be recovered." : "Recovered the saved computer list.", at: 0) }
+            if !warnings.isEmpty { feedback = warnings.joined(separator: " "); pairFeedback = feedback }
+            else {
+                if feedback == storageProblem { feedback = nil }
+                if pairFeedback == storageProblem { pairFeedback = nil }
+            }
         } catch {
             feedback = storageProblem
             pairFeedback = feedback
         }
     }
-    /// A computer's item, or nil when it is missing or can't be read as one. Secure storage that can't
-    /// be opened still throws, so a locked iPhone isn't mistaken for one with nothing paired.
+    /// Invalid records need pairing again. A Keychain access failure still refuses the entire load.
     private func readComputer(_ account: String) throws -> SavedComputer? {
-        do {
-            guard let computer = try keychain.read(SavedComputer.self, account: account) else { return nil }
-            try computer.validate()
-            return computer
-        } catch let error as ClientError where error == KeychainStore.failure { throw error }
-        catch { return nil }
+        guard let computer = try keychain.read(SavedComputer.self, account: account) else { return nil }
+        do { try computer.validate(); return computer }
+        catch { throw KeychainStore.UndecodableItem(account: account) }
     }
     func phase(_ phase: ScenePhase) {
         #if DEBUG && os(iOS)
@@ -344,7 +372,7 @@ struct Live {
             let pairing = try await finder.pair(endpoint: found.endpoint, expectedHostID: found.health.hostId, code: code)
             let computer = SavedComputer(address: found.endpoint.url.absoluteString, pairing: pairing, reportedName: found.health.computerName)
             try keychain.write(computer, account: ComputerStore.account(computer.hostID))
-            try keychain.write(computers.map(\.hostID).filter { $0 != computer.hostID } + [computer.hostID], account: ComputerStore.indexAccount)
+            if let computerIndexAccount { try keychain.write(computers.map(\.hostID).filter { $0 != computer.hostID } + [computer.hostID], account: computerIndexAccount) }
             // Markers from an earlier pairing with this computer must never attach to the new client.
             let markers = pending.filter { $0.hostID != computer.hostID }
             try keychain.write(markers, account: ComputerStore.pendingAccount)
@@ -390,7 +418,7 @@ struct Live {
         do { try keychain.remove(account: ComputerStore.account(hostID)) } catch { feedback = error.localizedDescription; return }
         let rest = computers.filter { $0.hostID != hostID }
         let markers = pending.filter { $0.hostID != hostID }
-        try? keychain.write(rest.map(\.hostID), account: ComputerStore.indexAccount)
+        if let computerIndexAccount { try? keychain.write(rest.map(\.hostID), account: computerIndexAccount) }
         try? keychain.write(markers, account: ComputerStore.pendingAccount)
         generations[hostID] = UUID(); connecting.remove(hostID)
         connections[hostID]?.close(); connections[hostID] = nil

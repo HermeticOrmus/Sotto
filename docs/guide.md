@@ -265,6 +265,8 @@ Each thread names its computer. A computer the iPhone can't reach says so withou
 
 Pairing lets the iPhone read threads and reply. It answers questions and permissions on a computer only after you turn on **Can answer** for the iPhone in that computer's **Settings › Phones**, or run `--allow-answers` with its client ID on a host; until then the request says so. Changing Can answer updates a connected iPhone without reconnecting; an older computer may require reconnecting. A reply the computer didn't confirm is marked and never sent again on its own. An answer is confirmed when its request stops waiting; an error from another thread does not decide its delivery. Live updates confirm marked replies and answers without another check. A working turn still offers Stop while its reply is unconfirmed. New threads, terminals, files, voice and notifications are not part of the first version.
 
+If secure storage is locked at launch, unlock the iPhone and return to Sotto. A damaged saved-computers list is rebuilt from readable saved pairings without replacing the damaged index. The app tells you which computers need pairing again, using the host ID when their names cannot be recovered. If saved unconfirmed actions cannot be read, it asks you to check your threads before sending again; nothing is resent.
+
 ## Phones
 
 *Development feature.*

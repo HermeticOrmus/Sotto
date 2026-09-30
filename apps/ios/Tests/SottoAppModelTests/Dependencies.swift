@@ -2,20 +2,25 @@ import Foundation
 import SottoCore
 
 /// Scripted dependencies for the real AppModel.swift, compiled into this test target only.
-@MainActor final class KeychainStore {
-    static let failure = ClientError.rejected("Secure storage unavailable")
+@MainActor enum TestKeychain {
     static var items: [String: Data] = [:]
     static var locked = false
-    func read<T: Decodable>(_ type: T.Type, account: String) throws -> T? {
-        if Self.locked { throw Self.failure }
-        guard let data = Self.items[account] else { return nil }
-        return try? JSONDecoder().decode(type, from: data)
+    static var unreadableAccount: String?
+    static var store: KeychainStore {
+        KeychainStore(readData: { account in
+            if locked || account == unreadableAccount { throw KeychainStore.failure }
+            return items[account]
+        }, writeData: { data, account in
+            if locked { throw KeychainStore.failure }
+            items[account] = data
+        }, removeItem: { account in
+            if locked { throw KeychainStore.failure }
+            items[account] = nil
+        }, listAccounts: {
+            if locked { throw KeychainStore.failure }
+            return Array(items.keys)
+        })
     }
-    func write<T: Encodable>(_ value: T, account: String) throws {
-        if Self.locked { throw Self.failure }
-        Self.items[account] = try JSONEncoder().encode(value)
-    }
-    func remove(account: String) throws { Self.items[account] = nil }
 }
 
 struct HostRefusal: Error { let failure: WireFailure }
