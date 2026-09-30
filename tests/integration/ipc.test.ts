@@ -1152,6 +1152,16 @@ describe('IPC validation and lifecycle', () => {
     expect(harness.history.list).toHaveBeenCalledWith({ enabled: false })
   })
 
+  it('allows deleting retained history when recording history is disabled', async () => {
+    const harness = createIpcHarness()
+    harness.settings.get.mockResolvedValue({ ...DEFAULT_SETTINGS, historyEnabled: false })
+    harness.history.delete.mockResolvedValue(true)
+
+    await expect(harness.ipc.invoke(HISTORY_DELETE, 'retained')).resolves.toBe(true)
+
+    expect(harness.history.delete).toHaveBeenCalledWith('retained')
+  })
+
   it('validates a settings patch before persistence and strips no fields silently', async () => {
     const { ipc, settings } = createIpcHarness()
 

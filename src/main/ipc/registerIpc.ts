@@ -219,7 +219,7 @@ export interface HistoryIpcService {
     options: { readonly enabled: boolean; readonly retention: number | 'unlimited' },
   ): Promise<HistoryEntry[]>
   search(query: string, options: { readonly enabled: boolean }): Promise<HistoryEntry[]>
-  delete(id: string, options: { readonly enabled: boolean }): Promise<boolean>
+  delete(id: string): Promise<boolean>
   clear(): Promise<void>
 }
 
@@ -473,10 +473,7 @@ export function registerIpc(
       const settings = await dependencies.settings.get()
       return dependencies.history.search(query, { enabled: settings.historyEnabled })
     })
-    register(HISTORY_DELETE, historyIdSchema, 1, async (id) => {
-      const settings = await dependencies.settings.get()
-      return dependencies.history.delete(id, { enabled: settings.historyEnabled })
-    })
+    register(HISTORY_DELETE, historyIdSchema, 1, (id) => dependencies.history.delete(id))
     register(HISTORY_CLEAR, noPayloadSchema, 0, () => dependencies.history.clear())
 
     register(HOTKEY_GET, noPayloadSchema, 0, () => dependencies.hotkeys.current())

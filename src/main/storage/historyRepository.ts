@@ -123,11 +123,7 @@ export class HistoryRepository {
     )
   }
 
-  delete(
-    id: string,
-    options: { readonly enabled: boolean } = { enabled: true },
-  ): Promise<boolean> {
-    if (!options.enabled) return Promise.resolve(false)
+  delete(id: string): Promise<boolean> {
     return this.enqueueMutation(async () => {
       const current = await this.readSorted()
       const remaining = current.filter((entry) => entry.id !== id)
