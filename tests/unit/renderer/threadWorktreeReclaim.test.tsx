@@ -41,20 +41,22 @@ describe('reclaiming a thread worktree', () => {
     fireEvent.click(remove)
     await waitFor(() => expect(command).toHaveBeenLastCalledWith({ type: 'reclaim-thread-worktree', threadId: thread.id, withUncommittedChanges: false, confirmedIgnored: ['.env', 'out/capture.png'], confirmedItems: [{ path: '.env', fileCount: 1 }, { path: 'out/capture.png', fileCount: 1 }], confirmedRepositories: [] }))
   })
-  it('names nested work in plain words and requires the tick', async () => {
+  it.each([['worktree', 1, 'worktree’s'], ['repository', 1, 'repository’s'], ['worktree', 2, 'worktrees’'], ['repository', 2, 'repositories’'], ['mixed', 2, 'repositories and worktrees’']] as const)('names nested work in plain words (%s, %s)', async (kind, count, suffix) => {
     const result = ok()
     const preview = result.worktreeReclaimPreview!
     preview.ignored = ['.worktrees/n/']
-    preview.repositories = [{ path: '.worktrees/n/', changeCount: 3, kind: 'worktree' }]
+    preview.repositories = Array.from({ length: count }, (_, index) => ({ path: `.worktrees/${index}/`, changeCount: 3, kind: kind === 'mixed' ? (index === 0 ? 'repository' : 'worktree') : kind, ...(kind === 'repository' || (kind === 'mixed' && index === 0) ? { unpushedCommitCount: 2 } : {}) }))
+    preview.ignored = preview.repositories.map(item => item.path)
     const command = vi.fn<(request: AgentCommand) => Promise<AgentState>>(async () => result)
     render(<ThreadWorkingCopy thread={thread} project={project} command={command} />)
     fireEvent.click(screen.getByRole('button', { name: /Working copy:/ }))
     fireEvent.click(screen.getByRole('button', { name: 'Remove worktree folder, keeping its branch' }))
-    expect(await screen.findByText('Nested worktree · 3 uncommitted changes')).toBeVisible()
+    const row = kind === 'worktree' ? 'Nested worktree · 3 uncommitted changes' : 'Nested repository · 3 uncommitted changes · 2 commits not on any remote'
+    expect((await screen.findAllByText(row))[0]).toBeVisible()
     expect(screen.queryByText('?? unsaved.txt')).toBeNull()
     const remove = screen.getByRole('button', { name: 'Remove with these files' })
     expect(remove).toBeDisabled()
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Delete this 1 ignored item with the folder, including the nested worktree’s uncommitted work' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: `${count === 1 ? 'Delete this 1 ignored item' : `Delete these ${count} ignored items`} with the folder, including the nested ${suffix} uncommitted work` }))
     expect(remove).toBeEnabled()
     fireEvent.keyDown(document, { key: 'Escape' })
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())

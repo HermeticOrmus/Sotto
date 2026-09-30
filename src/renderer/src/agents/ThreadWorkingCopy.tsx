@@ -189,6 +189,8 @@ export function ReclaimWorktreeDialog({ facts, dirty, title, threadId, command, 
   }, [command, threadId])
   const hasChanges = dirty || preview?.dirty === true
   const blocked = Boolean(preview?.outsideLink || (preview && !preview.branch))
+  const nestedKinds = preview ? [...new Set(preview.repositories.map(item => item.kind))] : []
+  const nestedName = nestedKinds.length === 1 ? (preview!.repositories.length === 1 ? `${nestedKinds[0]}’s` : `${nestedKinds[0] === 'repository' ? 'repositories' : 'worktrees'}’`) : 'repositories and worktrees’'
   const listedPaths = preview ? [...new Set([...preview.ignored, ...preview.repositories.map(repository => repository.path)])] : []
   return <ConfirmationDialog title={title ?? 'Remove this worktree?'} danger
     confirmDisabled={!preview || blocked || (preview.ignored.length > 0 && !acknowledged)}
@@ -203,9 +205,9 @@ export function ReclaimWorktreeDialog({ facts, dirty, title, threadId, command, 
           const repository = preview.repositories.find(item => item.path === path)
           const item = preview.items.find(item => item.path === path)
           const size = item ? `${Math.max(1, Math.ceil(item.bytes / 1024)).toLocaleString()} KB${path.endsWith('/') ? `, ${item.fileCount} ${item.fileCount === 1 ? 'file' : 'files'}` : ''}, ignored` : 'Ignored'
-          return <li key={path}><span className="working-copy__path">{path}</span><span className={repository ? 'working-copy__nested-note' : 'working-copy__file-note'}>{repository ? `Nested ${repository.kind} · ${repository.changeCount} uncommitted ${repository.changeCount === 1 ? 'change' : 'changes'}` : size}</span></li>
+          return <li key={path}><span className="working-copy__path">{path}</span><span className={repository ? 'working-copy__nested-note' : 'working-copy__file-note'}>{repository ? `Nested ${repository.kind} · ${repository.changeCount} uncommitted ${repository.changeCount === 1 ? 'change' : 'changes'}${repository.kind === 'repository' ? ` · ${repository.unpushedCommitCount ?? 0} ${(repository.unpushedCommitCount ?? 0) === 1 ? 'commit' : 'commits'} not on any remote` : ''}` : size}</span></li>
         })}</ul>
-        {!blocked ? <label className="working-copy__acknowledge"><input type="checkbox" checked={acknowledged} onChange={event => setAcknowledged(event.target.checked)} />{listedPaths.length === 1 ? 'Delete this 1 ignored item' : `Delete these ${listedPaths.length} ignored items`} with the folder{preview.repositories.length ? ', including the nested worktree’s uncommitted work' : ''}</label> : null}
+        {!blocked ? <label className="working-copy__acknowledge"><input type="checkbox" checked={acknowledged} onChange={event => setAcknowledged(event.target.checked)} />{listedPaths.length === 1 ? 'Delete this 1 ignored item' : `Delete these ${listedPaths.length} ignored items`} with the folder{preview.repositories.length ? `, including the nested ${nestedName} uncommitted work` : ''}</label> : null}
       </> : null}
       {preview && !preview.branch ? <p role="alert">This folder has no branch checked out. Switch it to a branch before removing it. Nothing was changed.</p> : null}
       {preview?.outsideLink ? <p role="alert">Remove the link to another folder ({preview.outsideLink}) before removing this folder. Nothing was changed.</p> : null}

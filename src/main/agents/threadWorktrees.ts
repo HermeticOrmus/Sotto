@@ -66,7 +66,7 @@ function pathKey(path: string): string { const key = resolve(path); return proce
 const registryOperations = new Map<string, Promise<void>>()
 interface RegistryIdentity { readonly common: string; readonly key: string }
 interface InspectionReads { readonly root: string; readonly common?: string; readonly listing?: string }
-async function coordinateRegistry(identity: RegistryIdentity, run: () => Promise<string>): Promise<string> {
+async function coordinateRegistry<T>(identity: RegistryIdentity, run: () => Promise<T>): Promise<T> {
   const previous = registryOperations.get(identity.key) ?? Promise.resolve()
   const operation = previous.then(run)
   // A rejected command keeps its original error but cannot poison the next operation.
@@ -100,7 +100,7 @@ export interface WorktreeReclaimFacts {
   /** Ignored paths other than installed dependencies: build output, captures, anything a rule may not discard unasked. */
   readonly ignored: readonly string[]
   readonly items: readonly { path: string; bytes: number; fileCount: number }[]
-  readonly repositories: readonly { path: string; changeCount: number; kind: 'worktree' | 'repository' }[]
+  readonly repositories: readonly { path: string; changeCount: number; unpushedCommitCount?: number | undefined; kind: 'worktree' | 'repository' }[]
   readonly untracked: readonly string[]
   /** A link inside the folder that leads out of it. Removing the folder could follow it, so nothing is removed while one is there. */
   readonly outsideLink: string | undefined
@@ -109,7 +109,7 @@ export interface WorktreeReclaimOptions {
   /** The exact ignored paths displayed in the user's confirmation. */
   readonly confirmedIgnored?: readonly string[]
   readonly confirmedItems?: readonly { path: string; fileCount: number }[]
-  readonly confirmedRepositories?: readonly { path: string; changeCount: number; kind: 'worktree' | 'repository' }[]
+  readonly confirmedRepositories?: readonly { path: string; changeCount: number; unpushedCommitCount?: number | undefined; kind: 'worktree' | 'repository' }[]
   /** The user's answer to the uncommitted-changes confirmation. */
   readonly withUncommittedChanges?: boolean
   /** A rule acting on its own: a folder with anything but dependencies in its ignored files is left alone. */
@@ -434,7 +434,7 @@ export class ThreadWorktrees {
     return (await this.reclaimFactsWithin(metadata)).facts
   }
 
-  private async reclaimFactsWithin(metadata: AgentWorktree, identityInLane?: RegistryIdentity): Promise<{ facts: WorktreeReclaimFacts; identity?: RegistryIdentity; submodules: string[] }> {
+  private async reclaimFactsWithin(metadata: AgentWorktree, identityInLane?: RegistryIdentity): Promise<{ facts: WorktreeReclaimFacts; identity?: RegistryIdentity; submodules: string[]; nestedWorktrees: { path: string; commonDirectory: string }[] }> {
     const observed = identityInLane ? { root: (await this.git(metadata.path!, ['rev-parse', '--show-toplevel'])).trim(), listing: await this.git(metadata.repositoryRoot!, ['worktree', 'list', '--porcelain', '-z']) } : undefined
     const { worktree: inspected, identity } = await this.inspectWithin(metadata, identityInLane, observed, true)
     const path = inspected.path!
@@ -445,8 +445,9 @@ export class ThreadWorktrees {
     const ignored = listing.split('\0').filter(entry => entry && !DEPENDENCY_FOLDER.test(entry)).sort()
 
     const items: Array<{ path: string; bytes: number; fileCount: number }> = []
-    const repositories: Array<{ path: string; changeCount: number; kind: 'worktree' | 'repository' }> = []
+    const repositories: Array<{ path: string; changeCount: number; unpushedCommitCount?: number | undefined; kind: 'worktree' | 'repository' }> = []
     const submodules: string[] = []
+    const nestedWorktrees: { path: string; commonDirectory: string }[] = []
     const canonicalRoot = await realpath(path)
     let outsideLink: string | undefined
     const visit = async (directory: string, row?: { path: string; bytes: number; fileCount: number }, gitMetadata = false, indexRoot = path): Promise<void> => {
@@ -477,13 +478,22 @@ export class ThreadWorktrees {
             const status = bare ? '' : await this.git(full, ['status', '--porcelain', '--untracked-files=all', '-z'])
             const ignoredModule = submodule ? (await this.git(full, ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z'])).split('\0').filter(item => item && !DEPENDENCY_FOLDER.test(item)) : []
             if (submodule) submodules.push(local)
+            if (!submodule && gitMarker?.isFile()) {
+              const commonDirectory = (await this.git(full, ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim()
+              const delta = relative(canonicalRoot, commonDirectory)
+              // A repository inside the removed folder loses its own registry with it.
+              if (isAbsolute(delta) || delta === '..' || delta.startsWith(`..${sep}`)) nestedWorktrees.push({ path: full, commonDirectory })
+            }
             if (!submodule || status.length || ignoredModule.length) {
               const records = status.split('\0').filter(Boolean)
               // Porcelain -z gives a second path for renames, not a second change.
               let changeCount = 0
               for (let i = 0; i < records.length; i++) { changeCount++; if (/^[RC]|^.[RC]/u.test(records[i]!)) i++ }
               const repositoryPath = local + '/'
-              repositories.push({ path: repositoryPath, changeCount, kind: gitMarker?.isFile() ? 'worktree' : 'repository' })
+              const kind = gitMarker?.isFile() ? 'worktree' : 'repository'
+              const head = kind === 'repository' ? await this.git(full, ['rev-parse', '--verify', '--quiet', 'HEAD']).catch(() => '') : ''
+              const history = kind === 'repository' ? { unpushedCommitCount: head ? Number((await this.git(full, ['rev-list', '--count', 'HEAD', '--not', '--remotes'])).trim()) : 0 } : {}
+              repositories.push({ path: repositoryPath, changeCount, ...history, kind })
               if (!ignored.includes(repositoryPath)) { ignored.push(repositoryPath); items.push({ path: repositoryPath, bytes: 0, fileCount: 0 }) }
             }
           }
@@ -494,7 +504,7 @@ export class ThreadWorktrees {
     await visit(path)
     ignored.sort()
     repositories.sort((a, b) => a.path.localeCompare(b.path))
-    return { ...(identity ? { identity } : {}), submodules, facts: { path, branch: inspected.branch, dirty: inspected.dirty === true, ignored, items, repositories, untracked: untrackedListing.split('\0').filter(Boolean).sort(), outsideLink } }
+    return { ...(identity ? { identity } : {}), submodules, nestedWorktrees, facts: { path, branch: inspected.branch, dirty: inspected.dirty === true, ignored, items, repositories, untracked: untrackedListing.split('\0').filter(Boolean).sort(), outsideLink } }
   }
 
   /**
@@ -520,8 +530,8 @@ export class ThreadWorktrees {
     // A linked worktree's .git is a file; a directory there is a repository of its own and is never removed.
     if (!(await lstat(join(facts.path, '.git'))).isFile()) throw new Error('This folder is a repository of its own, not a worktree. Nothing was changed.')
     // Take the last observation inside the registry lane, immediately before the destructive command.
-    await coordinateRegistry(identity!, async () => {
-      const { facts: latest, submodules } = await this.reclaimFactsWithin(metadata, identity)
+    const nestedWorktrees = await coordinateRegistry(identity!, async () => {
+      const { facts: latest, submodules, nestedWorktrees } = await this.reclaimFactsWithin(metadata, identity)
       const counts = (items: readonly { path: string; fileCount: number }[]) => JSON.stringify(items.map(({ path, fileCount }) => ({ path, fileCount })).sort((a, b) => a.path.localeCompare(b.path)))
       if (!options.automatic && counts(options.confirmedItems ?? []) !== counts(latest.items)) throw new Error('The folder changed. Nothing was removed. Choose Remove worktree again to see the new list.')
       if (latest.outsideLink || latest.branch !== facts.branch || latest.dirty !== facts.dirty ||
@@ -538,8 +548,13 @@ export class ThreadWorktrees {
         JSON.stringify(untrackedNow.split('\0').filter(Boolean).sort()) !== JSON.stringify(facts.untracked) ||
         Boolean(statusNow.length) !== facts.dirty) throw new Error('The files changed. Nothing was removed. Choose Remove worktree again to review them.')
       // Git's ordinary clean check refuses initialized submodules. Our final check covered their contents.
-      return this.git(metadata.repositoryRoot!, ['worktree', 'remove', ...(facts.dirty || facts.repositories.length || submodules.length ? ['--force'] : []), '--', facts.path])
+      await this.git(metadata.repositoryRoot!, ['worktree', 'remove', ...(facts.dirty || facts.repositories.length || submodules.length ? ['--force'] : []), '--', facts.path])
+      return nestedWorktrees
     })
+    for (const nested of nestedWorktrees) {
+      try { await this.registry(nested.commonDirectory, ['worktree', 'remove', '--force', '--', nested.path]) }
+      catch (error) { throw new Error('The folder was removed, but Git could not clear a nested worktree registration. Run git worktree prune in that repository before using its branch again.', { cause: error }) }
+    }
     return { ...metadata, branch: facts.branch, status: 'ready', error: undefined, dirty: undefined, reclaimedAt: new Date().toISOString() }
   }
 
