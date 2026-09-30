@@ -1165,7 +1165,11 @@ describe('Project thread defaults in Application settings', () => {
     const state = withProjects('11111111-1111-4111-8111-111111111111')
     state.host.models = [{ id: 'codex:model', name: 'Model', provider: 'Codex', providerId: 'codex', ready: true }]
     let settings: SettingsViewProps['settings'] = { ...DEFAULT_SETTINGS, projectThreadWorkingCopyDefaults: { missing: 'shared' } }
-    const onUpdateSettings = vi.fn<SettingsViewProps['onUpdateSettings']>(async patch => { settings = { ...settings, ...patch }; return true })
+    const onUpdateSettings = vi.fn<SettingsViewProps['onUpdateSettings']>(async patch => {
+      const { worktreeCleanup, ...fields } = patch
+      settings = { ...settings, ...fields, worktreeCleanup: { ...settings.worktreeCleanup, ...worktreeCleanup } }
+      return true
+    })
     vi.stubGlobal('sotto', { getSettings: async () => settings })
     try {
       const { rerender } = render(<SettingsView {...baseProps({ settings, onUpdateSettings })} />)
