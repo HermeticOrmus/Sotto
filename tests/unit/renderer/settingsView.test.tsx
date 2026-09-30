@@ -1175,6 +1175,37 @@ describe('Project thread defaults in Application settings', () => {
 
 
 describe('Personal dictionary draft acknowledgements', () => {
+  it('limits the dictionary to 4000 characters and explains the limit when reached', async () => {
+    render(<SettingsView {...baseProps()} />)
+    await selectCategory('Cleanup')
+    const input = screen.getByRole('textbox', { name: 'Personal dictionary' })
+    expect(input).toHaveAttribute('maxlength', '4000')
+    fireEvent.change(input, { target: { value: 'a'.repeat(4000) } })
+    expect(input).toHaveAccessibleDescription(/4,000 characters maximum\./u)
+  })
+
+  it('flushes a changed dictionary draft on unmount without a blur', async () => {
+    const update = vi.fn(async () => true)
+    const view = render(<SettingsView {...baseProps({ onUpdateSettings: update })} />)
+    await selectCategory('Cleanup')
+    fireEvent.change(screen.getByRole('textbox', { name: 'Personal dictionary' }), { target: { value: 'Sotto\nZach' } })
+    view.unmount()
+    expect(update).toHaveBeenCalledExactlyOnceWith({ llmDictionary: 'Sotto\nZach' })
+  })
+
+  it('does not duplicate an in-flight dictionary blur save on unmount', async () => {
+    const pending = deferred<boolean>()
+    const update = vi.fn(() => pending.promise)
+    const view = render(<SettingsView {...baseProps({ onUpdateSettings: update })} />)
+    await selectCategory('Cleanup')
+    const input = screen.getByRole('textbox', { name: 'Personal dictionary' })
+    fireEvent.change(input, { target: { value: 'Sotto' } })
+    fireEvent.blur(input)
+    view.unmount()
+    expect(update).toHaveBeenCalledExactlyOnceWith({ llmDictionary: 'Sotto' })
+    await act(async () => { pending.resolve(true) })
+  })
+
   async function dictionary() {
     const answers: Array<ReturnType<typeof deferred<boolean>>> = []
     const update = vi.fn<SettingsViewProps['onUpdateSettings']>(() => { const answer = deferred<boolean>(); answers.push(answer); return answer.promise })

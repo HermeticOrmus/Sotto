@@ -275,13 +275,23 @@ export function SettingsView({
     if (settingsRef.current.microphoneSkipped) await onUpdateSettings({ microphoneSkipped: false }).catch(() => false)
   }
 
-  const saveDictionary = async (): Promise<void> => {
+  const saveDictionary = async (announce = true): Promise<void> => {
     const value = llmDictionaryDraft.read()
+    if (value.length > 4000) {
+      if (announce) setNotice({ text: 'The dictionary could not be saved. Keep it within 4,000 characters.', error: true })
+      return
+    }
     const submission = llmDictionaryDraft.begin(value, true)
     if (submission === null) return
-    const saved = await save({ llmDictionary: value }, 'Dictionary saved.')
+    const saved = announce
+      ? await save({ llmDictionary: value }, 'Dictionary saved.')
+      : await onUpdateSettings({ llmDictionary: value }).catch(() => false)
     llmDictionaryDraft.settle(submission, saved, false)
   }
+
+  const saveDictionaryRef = useRef(saveDictionary)
+  saveDictionaryRef.current = saveDictionary
+  useEffect(() => () => { void saveDictionaryRef.current(false) }, [])
 
   const savePasteDelay = async (): Promise<void> => {
     const value = parseBoundedInteger(pasteDelayDraft.read(), 50, 1_000)
@@ -478,8 +488,8 @@ export function SettingsView({
                   <Toggle label="AI formatting" checked={settings.llmFormatting} onCheckedChange={(checked) => void save({ llmFormatting: checked })} description="Send transcript text to OpenRouter for cleanup. Falls back to the raw transcript if the network is slow or offline." />
                   <Field label="Formatting quality" description="Low is near-instant; higher tiers format better but add up to a couple seconds."><Select disabled={!settings.llmFormatting} value={settings.llmQuality} onChange={(event) => void save({ llmQuality: event.currentTarget.value as LlmQuality })}><option value="low">Low — fastest (Mercury 2)</option><option value="medium">Medium (Nova 2 Lite)</option><option value="value">Value — cheap, near-High (GLM-5.3 Flash)</option><option value="high">High — best formatting (Claude Haiku 4.5)</option></Select></Field>
                   <div className="settings-input-action">
-                    <Field label="Personal dictionary" description="One word or name per line. Sent as spelling hints with your audio and used during cleanup.">
-                      <textarea className="tt-input" rows={5} value={llmDictionaryDraft.value} onBlur={() => void saveDictionary()} onChange={(event) => {
+                    <Field label="Personal dictionary" description={`One word or name per line. Sent as spelling hints with your audio and used during cleanup.${llmDictionaryDraft.value.length >= 4000 ? ' 4,000 characters maximum.' : ''}`}>
+                      <textarea className="tt-input" rows={5} maxLength={4000} value={llmDictionaryDraft.value} onBlur={() => void saveDictionary()} onChange={(event) => {
                         const value = event.currentTarget.value
                         llmDictionaryDraft.edit(value)
                       }} />

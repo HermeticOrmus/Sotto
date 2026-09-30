@@ -36,6 +36,8 @@ New threads open in Unsettled with the defaults saved in Settings → Agents. An
 
 In Settings, **Test microphone** checks the same input selected for dictation. **Stop test**, hiding the window, or leaving Dictation closes the microphone. Changing the input clears the previous test.
 
+The personal dictionary holds up to 4,000 characters. It saves when you leave the field or Settings.
+
 Terminal mode keeps closed terminals on its Closed shelf until you quit. Reopen starts the same command with fresh output; Stop keeps the output readable.
 
 ## Install
