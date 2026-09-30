@@ -297,6 +297,14 @@ The job retains `Sotto-host-*-linux-x64.tar.gz` and its checksum sidecar as a wo
 
 Run `npm run package:host` locally for the same extraction and startup check. The filename records the actual platform. `npm run host:verify -- <extracted-directory>` verifies an existing extracted archive against its manifest and provenance; `node scripts/smoke-host-archive.mjs <extracted-directory>` additionally starts and stops it. On Windows only, smoke shutdown exercises the signal handler through IPC, since Windows cannot deliver a graceful POSIX SIGTERM. The Linux CI run and a real Forge SSH connection remain separate evidence from a local Windows pass.
 
+The host build and package scripts anchor their source and output paths to the
+checkout that contains the script. Calling `node <checkout>/scripts/build-host.mjs`
+or `node <checkout>/scripts/package-host.mjs` from another folder still writes to
+that checkout's `out/host` and `release`. Packaging passes tar a relative archive
+filename from `release`, so GNU tar cannot mistake a Windows drive letter for a
+remote host. `tests/integration/hostBuildScripts.test.ts` runs both scripts from an
+owned scratch folder and checks the archive round trip with local archive names.
+
 The real OpenSSH journey is skipped unless `SOTTO_REAL_SSHD=1` is set, so the Windows gates and a plain `npm test` report it as skipped. To run it on a Linux or macOS machine with openssh-server and Node 24, use `SOTTO_REAL_SSHD=1 npx vitest run tests/integration/realSshd.test.ts --maxWorkers=1`. Without `SOTTO_REAL_SSHD_INSTALL` it builds and stages the host itself; `SOTTO_SSHD` names an sshd other than `/usr/sbin/sshd`. It uses its own keys, client configuration and known_hosts file and never touches the account's `~/.ssh`. It proves the transport on this machine's OpenSSH; Windows' own ssh.exe and a real remote host are still proved by hand.
 
 ## Browser provider and desktop verification

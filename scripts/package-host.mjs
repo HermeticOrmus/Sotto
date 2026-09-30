@@ -41,9 +41,10 @@ export async function packageHost() {
     const release = join(root, 'release'); await mkdir(release, { recursive: true })
     const name = `Sotto-host-${pkg.version}-${process.platform}-${process.arch}.tar.gz`
     const archive = join(release, name)
-    execFileSync('tar', ['-czf', archive, '-C', stage, '.'], { windowsHide: true })
+    // GNU tar treats a drive-letter archive path as a remote host. Use a local name from release instead.
+    execFileSync('tar', ['-czf', name, '-C', stage, '.'], { cwd: release, windowsHide: true })
     // Verify the archive's bytes after a real round trip, outside the checkout's node_modules.
-    execFileSync('tar', ['-xzf', archive, '-C', unpacked], { windowsHide: true })
+    execFileSync('tar', ['-xzf', name, '-C', unpacked], { cwd: release, windowsHide: true })
     await verifyHostArchive(unpacked)
     await smokeHostArchive(unpacked)
     await writeFile(archive + '.sha256', sha256(await readFile(archive)) + '  ' + name + '\n')
