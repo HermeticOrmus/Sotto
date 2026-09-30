@@ -32,7 +32,9 @@ struct Live {
     /// The computer being removed, while its pairing is revoked.
     @Published private(set) var removing: String?
     /// What just happened on the tabs.
-    @Published var feedback: String?
+    @Published var feedback: String? { didSet { feedbackOperations = [] } }
+    private var feedbackOperations: Set<String> = []
+    private var dispatchingAnswers: Set<String> = []
     /// What went wrong while finding or pairing a computer.
     @Published var pairFeedback: String?
     /// Unsent replies, by `ThreadRef.id`.
@@ -296,7 +298,7 @@ struct Live {
             guard let endpoint = saved.endpoint else { throw ClientError.invalidHost }
             let greeting = try await connection(hostID).connect(endpoint: endpoint, pairing: saved.pairing)
             guard generations[hostID] == current else { return }
-            try applyShell(greeting.value.shell, from: hostID, sequence: greeting.sequence)
+            try applyShell(greeting.value.shell, from: hostID, sequence: greeting.sequence, reconcileAnswers: false)
             update(hostID) {
                 $0.status = .online
                 // An older host can push a newer shell before hello finishes, without this field.
@@ -574,13 +576,15 @@ struct Live {
     }
     private func dispatch(_ command: JSONValue, operation: PendingOperation) async {
         let hostID = operation.hostID, current = generations[hostID]
-        guard let connection = connections[hostID] else { feedback = ClientError.uncertain.localizedDescription; return }
+        if operation.kind == "answer" { dispatchingAnswers.insert(operation.id) }
+        defer { dispatchingAnswers.remove(operation.id) }
+        guard let connection = connections[hostID] else { operationFeedback(ClientError.uncertain.localizedDescription, operations: [operation.id]); return }
         do {
             let result = try await connection.callReceived(["op": .string("command"), "command": command], id: operation.id)
             guard generations[hostID] == current else { return }
             let next = try await Wire.readValue(result.value, as: Shell.self)
             guard generations[hostID] == current else { return }
-            try applyShell(next, from: hostID, sequence: result.sequence)
+            try applyShell(next, from: hostID, sequence: result.sequence, reconcileAnswers: false)
             await checkDelivery(hostID)
         } catch let error as HostRefusal {
             guard generations[hostID] == current else { return }
@@ -592,7 +596,7 @@ struct Live {
             if error.failure.code == "forbidden" { update(hostID) { $0.mayAnswer = false } }
             if error.failure.code == "unauthenticated" { update(hostID) { $0.status = .unreachable; $0.problem = error.localizedDescription } }
             feedback = error.localizedDescription
-        } catch { if generations[hostID] == current { feedback = "Delivery is unconfirmed. Reconnect and check the thread before sending again." } }
+        } catch { if generations[hostID] == current { operationFeedback("Delivery is unconfirmed. Reconnect and check the thread before sending again.", operations: [operation.id]) } }
     }
     func checkDelivery(_ hostID: String) async {
         guard online(hostID), !scoped(hostID).isEmpty, let connection = connections[hostID] else { return }
@@ -602,32 +606,42 @@ struct Live {
             guard generations[hostID] == current else { return }
             let next = try await Wire.readValue(fresh.value, as: Shell.self)
             guard generations[hostID] == current else { return }
-            try applyShell(next, from: hostID, sequence: fresh.sequence)
+            try applyShell(next, from: hostID, sequence: fresh.sequence, reconcileAnswers: false)
             for item in scoped(hostID) {
                 let receipt = try await connection.call(["op": .string("receipt"), "commandId": .string(item.id)]).decode(Receipt.self)
                 guard generations[hostID] == current else { return }
                 guard scoped(hostID).contains(where: { $0.id == item.id }) else { continue }
                 try settle(item, receipt: receipt, shell: live[hostID]?.shell)
             }
-        } catch { if generations[hostID] == current { feedback = "Delivery to \(name(hostID)) could not be checked. Nothing was resent. Reconnect to try again." } }
+        } catch { if generations[hostID] == current { operationFeedback("Delivery to \(name(hostID)) could not be checked. Nothing was resent. Reconnect to try again.", operations: Set(scoped(hostID).map(\.id))) } }
+    }
+    private func operationFeedback(_ words: String, operations: Set<String>) {
+        feedback = words; feedbackOperations = operations
     }
     private func settle(_ item: PendingOperation, receipt: Receipt? = nil, shell: Shell?) throws {
         let delivery = shell?.deliveries?.first { $0.threadId == item.threadID && $0.draftId == item.draftID }
         let delivered = shell?.deliveredDrafts?.contains { $0.threadId == item.threadID && $0.draftId == item.draftID } == true
         let accepted = delivered || delivery?.status == "accepted"
         let thread = shell?.host.threads.first { $0.id == item.threadID }
-        // A completed transport receipt can still carry a provider refusal in the shared shell.
-        // Only this answer's request disappearing establishes that it no longer needs an answer.
-        let answered = item.kind == "answer" && item.requestID != nil && thread != nil
+        // Only this command's own receipt confirms the phone's answer. A request can also leave
+        // after a desktop answer, a stopped turn or provider cancellation.
+        let noLongerWaiting = item.kind == "answer" && item.requestID != nil && thread != nil
             && thread?.requests.contains(where: { $0.id == item.requestID }) == false
-        if delivery?.status == "failed" {
+        if item.kind == "answer" {
+            let confirmed = receipt?.status == "completed" && receipt?.error == nil
+            guard confirmed || noLongerWaiting else { return }
+            try forgetMarker(item.id)
+            if feedback == nil || feedbackOperations.contains(item.id) {
+                feedback = confirmed ? "Answer sent." : "That request is no longer waiting."
+            }
+        } else if delivery?.status == "failed" {
             try rejectOperation(item)
             // Named, because the thread open now may be another one, on another computer.
             let title = thread.map { "“\($0.title)”" } ?? "a thread"
             feedback = "Your reply to \(title) on \(name(item.hostID)) wasn’t sent. Its text is back in that thread."
-        } else if accepted || answered || (item.kind != "answer" && receipt.map { item.reconciled(receipt: $0, deliveries: shell?.deliveries ?? []) } == true) {
+        } else if accepted || receipt.map({ item.reconciled(receipt: $0, deliveries: shell?.deliveries ?? []) }) == true {
             try forgetMarker(item.id)
-            feedback = item.kind == "answer" ? "Answer sent." : nil
+            if feedbackOperations.remove(item.id) != nil, feedbackOperations.isEmpty { feedback = nil }
         }
     }
     private func rejectOperation(_ operation: PendingOperation) throws {
@@ -647,7 +661,7 @@ struct Live {
 
     // MARK: Updates from a computer
 
-    private func applyShell(_ next: Shell, from hostID: String, sequence: Int) throws {
+    private func applyShell(_ next: Shell, from hostID: String, sequence: Int, reconcileAnswers: Bool = true) throws {
         guard computer(hostID) != nil else { throw ClientError.invalidIdentity }
         try next.validate(hostID: hostID)
         guard sequence > (shellSequences[hostID] ?? 0) else { return }
@@ -659,6 +673,8 @@ struct Live {
         // Live evidence can arrive after the acknowledgement timed out. Never resend to settle it.
         // A Keychain write failure is local feedback, not a lost connection to the computer.
         for item in scoped(hostID) {
+            // A solicited shell is followed by a receipt check. Keep its answer marker until then.
+            if item.kind == "answer", !reconcileAnswers || dispatchingAnswers.contains(item.id) { continue }
             do { try settle(item, shell: next) }
             catch { feedback = error.localizedDescription }
         }

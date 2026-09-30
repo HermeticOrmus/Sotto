@@ -140,17 +140,17 @@ final class AppModelTests: XCTestCase {
         try TestKeychain.store.write([marker], account: ComputerStore.pendingAccount)
         return AppModel(keychain: TestKeychain.store)
     }
-    @MainActor func testCompletedReceiptDoesNotClaimAnAnswerWithItsRequestStillWaiting() async throws {
+    @MainActor func testOwnCompletedReceiptConfirmsAnAnswerEvenWhileItsRequestStillAppears() async throws {
         let (_, ref) = try fixture()
         let marker = PendingOperation(hostID: ref.hostID, clientID: "phone", threadID: ref.threadID, requestID: "request", kind: "answer")
         _ = try changeShell(requests: [["id": "request", "kind": "permission", "text": "Read files?", "options": []]])
         HostConnection.receipt = .object(["status": .string("completed")])
         let model = try modelWithMarker(marker)
         model.phase(.active); await model.reconnectAll()
-        XCTAssertEqual(model.pending, [marker])
-        XCTAssertNotEqual(model.feedback, "Answer sent.")
+        XCTAssertTrue(model.pending.isEmpty)
+        XCTAssertEqual(model.feedback, "Answer sent.")
     }
-    @MainActor func testAnsweredRequestSettlesDespiteAnUnrelatedComputerError() async throws {
+    @MainActor func testUnknownReceiptAndDisappearedRequestSettleNeutrallyDespiteUnrelatedShellError() async throws {
         let (_, ref) = try fixture()
         let marker = PendingOperation(hostID: ref.hostID, clientID: "phone", threadID: ref.threadID, requestID: "old", kind: "answer")
         _ = try changeShell(requests: [["id": "next", "kind": "permission", "text": "Read files?", "options": []]], error: "Another thread failed")
@@ -158,14 +158,14 @@ final class AppModelTests: XCTestCase {
         let model = try modelWithMarker(marker)
         model.phase(.active); await model.reconnectAll()
         XCTAssertTrue(model.pending.isEmpty)
-        XCTAssertEqual(model.feedback, "Answer sent.")
+        XCTAssertEqual(model.feedback, "That request is no longer waiting.")
         XCTAssertTrue(model.canAnswer(try XCTUnwrap(model.thread(ref)?.requests.first), in: ref))
     }
     @MainActor func testUncertainOrMissingRequestThreadDoesNotConfirmAnAnswer() async throws {
         let (_, ref) = try fixture()
         let marker = PendingOperation(hostID: ref.hostID, clientID: "phone", threadID: ref.threadID, requestID: "request", kind: "answer")
         _ = try changeShell(requests: [["id": "request", "kind": "permission", "text": "Read files?", "options": [], "delivery": "uncertain"]])
-        HostConnection.receipt = .object(["status": .string("completed")])
+        HostConnection.receipt = .object(["status": .string("unknown")])
         let model = try modelWithMarker(marker)
         model.phase(.active); await model.reconnectAll()
         XCTAssertEqual(model.pending, [marker])
@@ -173,6 +173,57 @@ final class AppModelTests: XCTestCase {
         let missingModel = try modelWithMarker(missing)
         missingModel.phase(.active); await missingModel.reconnectAll()
         XCTAssertEqual(missingModel.pending, [missing])
+    }
+    @MainActor func testOwnCompletedReceiptConfirmsAnswerAfterPushBeforeCommandReply() async throws {
+        let (model, ref) = try fixture()
+        HostConnection.mayAnswer = true
+        _ = try changeShell(requests: [["id": "request", "kind": "permission", "text": "Read files?", "options": []]])
+        model.phase(.active); await model.reconnectAll()
+        let request = try XCTUnwrap(model.thread(ref)?.requests.first)
+        let connection = try XCTUnwrap(HostConnection.instances.last)
+        HostConnection.receipt = .object(["status": .string("completed")])
+        connection.afterReply = { op in
+            if op == "command" { connection.push(.shell(try! self.changeShell())) }
+        }
+        await model.answer(request, in: ref, choice: "allow")
+        XCTAssertTrue(model.pending.isEmpty)
+        XCTAssertEqual(model.feedback, "Answer sent.")
+        XCTAssertEqual(connection.operations.filter { $0 == "command" }.count, 1)
+        XCTAssertEqual(connection.operations.filter { $0 == "receipt" }.count, 1)
+    }
+    @MainActor func testCompletedReceiptWithErrorDoesNotConfirmAnAnswer() async throws {
+        let (_, ref) = try fixture()
+        let marker = PendingOperation(hostID: ref.hostID, clientID: "phone", threadID: ref.threadID, requestID: "request", kind: "answer")
+        _ = try changeShell(requests: [["id": "request", "kind": "permission", "text": "Read files?", "options": []]])
+        HostConnection.receipt = .object(["status": .string("completed"), "error": .object(["code": .string("unavailable"), "message": .string("Answer refused")])])
+        let model = try modelWithMarker(marker)
+        model.phase(.active); await model.reconnectAll()
+        XCTAssertEqual(model.pending, [marker])
+        XCTAssertNotEqual(model.feedback, "Answer sent.")
+    }
+    @MainActor func testLiveReplySettlementPreservesUnrelatedFeedback() async throws {
+        let (model, ref) = try fixture()
+        model.phase(.active); await model.reconnectAll()
+        let connection = try XCTUnwrap(HostConnection.instances.last)
+        HostConnection.loseAcknowledgement = true
+        model.drafts[ref.id] = "Continue"
+        await model.send(ref)
+        let marker = try XCTUnwrap(model.pending.first)
+        model.feedback = "Studio Mac could not be reached."
+        connection.push(.shell(try changeShell(deliveries: [["threadId": ref.threadID, "draftId": try XCTUnwrap(marker.draftID), "status": "accepted"]])))
+        XCTAssertTrue(model.pending.isEmpty)
+        XCTAssertEqual(model.feedback, "Studio Mac could not be reached.")
+    }
+    @MainActor func testLiveAnswerSettlementPreservesUnrelatedFeedback() async throws {
+        let (_, ref) = try fixture()
+        let marker = PendingOperation(hostID: ref.hostID, clientID: "phone", threadID: ref.threadID, requestID: "request", kind: "answer")
+        _ = try changeShell(requests: [["id": "request", "kind": "permission", "text": "Read files?", "options": []]])
+        let model = try modelWithMarker(marker)
+        model.phase(.active); await model.reconnectAll()
+        model.feedback = "Removed Studio Mac."
+        try XCTUnwrap(HostConnection.instances.last).push(.shell(try changeShell()))
+        XCTAssertTrue(model.pending.isEmpty)
+        XCTAssertEqual(model.feedback, "Removed Studio Mac.")
     }
     @MainActor func testStopRemainsAvailableAfterAReplyAcknowledgementIsLost() async throws {
         let (model, ref) = try fixture()
@@ -202,6 +253,7 @@ final class AppModelTests: XCTestCase {
         connection.push(.shell(accepted))
         XCTAssertTrue(model.pending.isEmpty)
         XCTAssertTrue(model.canSend(ref))
+        XCTAssertNil(model.feedback, "Only this marker's delivery message is cleared")
         XCTAssertEqual(connection.operations.filter { $0 == "command" }.count, 1)
         XCTAssertEqual(connection.operations.filter { $0 == "receipt" }.count, 0)
         XCTAssertEqual(try TestKeychain.store.read([PendingOperation].self, account: ComputerStore.pendingAccount), [])
@@ -215,7 +267,7 @@ final class AppModelTests: XCTestCase {
         let connection = try XCTUnwrap(HostConnection.instances.last)
         connection.push(.shell(try changeShell()))
         XCTAssertTrue(model.pending.isEmpty)
-        XCTAssertEqual(model.feedback, "Answer sent.")
+        XCTAssertEqual(model.feedback, "That request is no longer waiting.")
         HostConnection.loseAcknowledgement = true
         model.drafts[ref.id] = "Keep this reply"
         await model.send(ref)
