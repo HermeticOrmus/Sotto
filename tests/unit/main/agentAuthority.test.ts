@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -136,6 +136,34 @@ describe('risky action classification', () => {
 })
 
 describe('authority at dispatch', () => {
+  it.each([false, true])('records one attribution for an uncertain answer with accepted %s', async accepted => {
+    const f = await fixture()
+    const recordAnswer = vi.fn()
+    Object.assign(f.host, { recordAnswer })
+    f.permission()
+    const execute = vi.spyOn(f.host, 'execute').mockResolvedValueOnce({ accepted, uncertain: true })
+    expect((await f.answer('Allow')).error).toBeTruthy()
+    expect(recordAnswer).toHaveBeenCalledExactlyOnceWith('workshop', expect.objectContaining({
+      kind: 'answer-given', requestId: 'permission', approved: true,
+      attribution: expect.objectContaining({ clientId: 'desktop-window', transport: 'ipc' }),
+    }))
+    expect(JSON.parse(await readFile(join(f.root, 'agents.json'), 'utf8')).outbox).toContainEqual(expect.objectContaining({
+      type: 'answer', threadId: 'workshop', requestId: 'permission',
+    }))
+    await f.answer('Allow')
+    expect(recordAnswer).toHaveBeenCalledOnce()
+    expect(execute).toHaveBeenCalledOnce()
+  })
+
+  it('leaves a definitively refused answer without attribution', async () => {
+    const f = await fixture()
+    const recordAnswer = vi.fn()
+    Object.assign(f.host, { recordAnswer })
+    f.permission()
+    vi.spyOn(f.host, 'execute').mockResolvedValueOnce({ accepted: false })
+    expect((await f.answer('Allow')).error).toBeTruthy()
+    expect(recordAnswer).not.toHaveBeenCalled()
+  })
   it.each([false, true])('preserves command client context when permitted is %s', async allowed => {
     const client: ClientIdentity = { clientId: 'fixture-client', user: 'Fixture client', transport: 'socket' }
     const f = await fixture({ authorizes: () => ({ allowed: false, reason: 'no-policy' }),

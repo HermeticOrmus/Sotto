@@ -2524,6 +2524,10 @@ export class AgentControl {
       return
     }
     if (prompt && draftId) this.setDelivery(prompt.threadId, draftId, result.accepted || result.uncertain ? 'uncertain' : 'failed')
+    if (command.type === 'answer' && (result.accepted || result.uncertain)) {
+      // The user gave this answer whether or not the provider confirmed taking it, so who gave it is recorded either way.
+      this.recordAnswerAttribution(command, client)
+    }
     // An adapter that knows more about what an unconfirmed action cost says it; the intent is kept either way.
     if (result.uncertain && this.outbox.some(o => o.id === command.commandId)) throw new Error(result.error ?? PROVIDER_RESULT_UNCONFIRMED)
     if ((command.type === 'configure-thread' || prompt) && result.accepted) {
@@ -2543,8 +2547,6 @@ export class AgentControl {
     }
     if (command.type === 'answer' && result.accepted) {
       if (!result.uncertain && answerIntent) this.recordAnsweredRequest(answerIntent)
-      // The user gave this answer whether or not the provider confirmed taking it, so who gave it is recorded either way.
-      this.recordAnswerAttribution(command, client)
     }
     this.outbox = this.outbox.filter(o => o.id !== command.commandId)
     await this.persist()
