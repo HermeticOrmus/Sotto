@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { createReadStream } from 'node:fs'
-import { lstat, mkdir, readdir, realpath, rm } from 'node:fs/promises'
+import { lstat, mkdir, readdir, realpath, rename, rm } from 'node:fs/promises'
 import { dirname, join, resolve, sep } from 'node:path'
 
 import { createHttpsDownloader, replaceDirectoryAtomic, type LockedFile, type ModelDownloader } from '../models/modelDownload'
@@ -78,7 +78,26 @@ export class NaturalSpeechModels {
     try {
       await this.assertDirectory(this.userRoot)
       await this.assertDirectory(this.parent)
-      for (const name of await readdir(this.parent)) {
+      const names = (await readdir(this.parent)).sort()
+      const backups = names.filter(name => /^Supertonic-TTS-ONNX\.backup-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(name))
+      const installed = await lstat(this.root).then(() => true, (error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return false
+        throw error
+      })
+      if (!installed) {
+        for (const name of backups) {
+          const backup = join(this.parent, name)
+          try { await this.assertDirectory(backup) } catch { continue }
+          await rename(backup, this.root)
+          break
+        }
+      }
+      // Never discard the last installed copy until a destination exists safely.
+      const destinationSafe = await this.assertDirectory(this.root).then(() => true, () => false)
+      if (destinationSafe) {
+        for (const name of backups) await this.removeTemporary(join(this.parent, name))
+      }
+      for (const name of names) {
         if (/^\.Supertonic-TTS-ONNX\.partial-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(name)) {
           await this.removeTemporary(join(this.parent, name))
         }
@@ -268,7 +287,7 @@ export class NaturalSpeechModels {
 
   private async removeTemporary(path: string): Promise<void> {
     try {
-      if (dirname(path) !== this.parent || !path.startsWith(join(this.parent, '.Supertonic-TTS-ONNX.partial-'))) return
+      if (dirname(path) !== this.parent || !/^\.?Supertonic-TTS-ONNX\.(?:partial|backup)-[0-9a-f-]{36}$/i.test(path.slice(this.parent.length + 1))) return
       await this.assertDirectory(this.userRoot)
       await this.assertDirectory(this.parent)
       await this.assertDirectory(path)

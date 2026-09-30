@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { createHash } from 'node:crypto'
-import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -67,6 +67,37 @@ describe('NaturalSpeechModels', () => {
     await manager.download()
     await manager.initialize()
     expect((await manager.status()).ready).toBe(true)
+  })
+
+  it.each([false, true])('recovers interrupted replacement when installed exists: %s', async installedExists => {
+    const { manager, userRoot, installed, downloader } = await setup()
+    await manager.download()
+    const backup = `${installed}.backup-12345678-1234-1234-1234-123456789abc`
+    await rename(installed, backup)
+    if (installedExists) {
+      const fresh = new NaturalSpeechModels(userRoot, { downloader })
+      await fresh.download()
+    }
+    const restarted = new NaturalSpeechModels(userRoot, { downloader })
+    const before = downloader.mock.calls.length
+    await restarted.initialize()
+    expect((await restarted.status()).ready).toBe(true)
+    expect(await readdir(join(userRoot, 'onnx-community'))).toEqual(['Supertonic-TTS-ONNX'])
+    expect(downloader).toHaveBeenCalledTimes(before)
+  })
+
+  it('does not restore or remove a backup directory link', async () => {
+    const { manager, userRoot, root } = await setup()
+    const parent = join(userRoot, 'onnx-community')
+    const outside = join(root, 'outside')
+    await mkdir(parent, { recursive: true })
+    await mkdir(outside)
+    await writeFile(join(outside, 'keep'), 'safe')
+    const backup = 'Supertonic-TTS-ONNX.backup-12345678-1234-1234-1234-123456789abc'
+    await symlink(outside, join(parent, backup), 'junction')
+    await manager.initialize()
+    expect(await readdir(parent)).toEqual([backup])
+    expect(await readFile(join(outside, 'keep'), 'utf8')).toBe('safe')
   })
 
   it('does not download on status or protocol lookup, then publishes all verified files only after explicit download', async () => {
