@@ -462,9 +462,11 @@ export class GitActions {
       let output = ''
       try { output = await this.gh(cwd, args, { timeoutMs: 120_000 }) }
       catch (error) {
-        // A reply that never came back is settled by the remote gh adds when it succeeds.
+        // Creating origin settles repository creation alone; a requested push must have reached this commit too.
         const origin = (await this.git(cwd, ['remote', 'get-url', 'origin']).catch(() => '')).trim()
-        if (!origin) throw new GitActionRefusal(`Publish failed. ${safeRemote(error instanceof Error ? error.message : '').slice(-400)}`.trim())
+        const pushed = hasCommit && status.branch ? (await this.git(cwd, ['rev-parse', '--verify', '-q', `refs/remotes/origin/${status.branch}`]).catch(() => '')).trim() : ''
+        const head = hasCommit ? (await this.git(cwd, ['rev-parse', 'HEAD'])).trim() : ''
+        if (!origin || (hasCommit && pushed !== head)) throw new GitActionRefusal(`Publish failed. ${safeRemote(error instanceof Error ? error.message : '').slice(-400)}`.trim())
       }
       const url = /https:\/\/\S+/u.exec(output)?.[0] ?? `https://github.com/${options.repository}`
       return { url }

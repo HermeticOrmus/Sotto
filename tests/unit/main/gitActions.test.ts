@@ -366,6 +366,36 @@ describe('the stacked Git action, the way T3 runs it', () => {
 })
 
 describe('pull, switch, init and publish', () => {
+  it('reports a failed publish push even after gh has added origin', async () => {
+    const f = await fixture({ remote: false, gh: async args => {
+      if (args[0] === 'repo' && args[1] === 'create') { git(f.repo, 'remote', 'add', 'origin', f.remote); throw new Error('push rejected') }
+      return ''
+    } })
+    await expect(f.actions.publish(f.repo, { repository: 'o/r', visibility: 'private' })).rejects.toThrow('Publish failed. push rejected')
+    expect(git(f.repo, 'remote', 'get-url', 'origin')).toBe(f.remote)
+  })
+  it('settles a lost publish reply only when the current commit reached origin', async () => {
+    const f = await fixture({ remote: false, gh: async args => {
+      if (args[0] === 'repo' && args[1] === 'create') {
+        git(f.root, 'init', '--bare', '-q', '-b', 'main', f.remote); git(f.repo, 'remote', 'add', 'origin', f.remote)
+        git(f.repo, 'push', '-q', '-u', 'origin', 'main'); throw new Error('reply lost')
+      }
+      return ''
+    } })
+    expect(await f.actions.publish(f.repo, { repository: 'o/r', visibility: 'private' })).toEqual({ url: 'https://github.com/o/r' })
+    expect(git(f.remote, 'rev-parse', 'main')).toBe(git(f.repo, 'rev-parse', 'HEAD'))
+  })
+  it('does not mistake an older origin branch for a successful publish push', async () => {
+    const f = await fixture({ remote: false, gh: async args => {
+      if (args[0] === 'repo' && args[1] === 'create') {
+        git(f.repo, 'remote', 'add', 'origin', f.remote)
+        git(f.repo, 'update-ref', 'refs/remotes/origin/main', 'HEAD~1'); throw new Error('push rejected')
+      }
+      return ''
+    } })
+    await writeFile(join(f.repo, 'work.txt'), 'second\n'); commit(f.repo, 'Second')
+    await expect(f.actions.publish(f.repo, { repository: 'o/r', visibility: 'private' })).rejects.toThrow('Publish failed. push rejected')
+  })
   it('pulls only a fast-forward, refuses a diverged branch in T3\'s words, and says when it is already current', async () => {
     const f = await fixture()
     expect(await f.actions.pull(f.repo)).toEqual({ status: 'skipped_up_to_date', branch: 'main', upstream: 'origin/main' })
