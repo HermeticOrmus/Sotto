@@ -22,6 +22,12 @@ export interface OutputServiceDependencies {
   readonly buildPasteInvocation: () => PasteInvocation
 }
 
+interface DeliveryOptions {
+  readonly autoPaste: boolean
+  readonly pasteDelayMs: number
+  readonly restoreWidget?: boolean
+}
+
 export interface SpawnedProcessLike {
   once(event: 'error', listener: (error: Error) => void): SpawnedProcessLike
   once(
@@ -95,20 +101,28 @@ export function createSpawnProcessAdapter(spawn: SpawnProcess): PasteProcessAdap
 }
 
 export class OutputService {
+  private deliveryTail: Promise<void> = Promise.resolve()
+
   constructor(private readonly dependencies: OutputServiceDependencies) {}
 
   async deliver(
     text: string,
-    options: {
-      readonly autoPaste: boolean
-      readonly pasteDelayMs: number
-      readonly restoreWidget?: boolean
-    },
+    options: DeliveryOptions,
   ): Promise<OutputOutcome> {
     if (text.trim().length === 0) {
       return 'empty'
     }
 
+    const snapshot = { ...options }
+    const delivery = this.deliveryTail.then(() => this.deliverImmediately(text, snapshot))
+    this.deliveryTail = delivery.then(() => undefined, () => undefined)
+    return delivery
+  }
+
+  private async deliverImmediately(
+    text: string,
+    options: DeliveryOptions,
+  ): Promise<OutputOutcome> {
     try {
       this.dependencies.clipboard.writeText(text)
     } catch {
