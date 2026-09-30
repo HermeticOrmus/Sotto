@@ -32,6 +32,8 @@ Saved Codex conversations keep both sides after a restart. Opening a thread also
 
 Thread drafts save automatically while you type, including while other threads are working.
 
+Settings → Application sets the working-copy default for new threads. Expand **Project defaults** to choose a different default for one project. Previously saved project choices are kept when Sotto updates.
+
 New threads open in Unsettled with the defaults saved in Settings → Agents. An existing empty thread is reused only while it is unsettled, its known model, effort and permission choices match those defaults, and no setting change is pending.
 
 In Settings, **Test microphone** checks the same input selected for dictation. Changing the input clears the previous test.
