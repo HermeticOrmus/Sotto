@@ -190,6 +190,7 @@ async function control(script) {
     say({ type: 'ready', ...health(), owned: mode !== 'discovered' })
   }
   if (operation === 'pairing-code') { record({ type: 'pairing-requested' }); say({ type: 'pairing-code', hostId, code: 'ABC123', expiresAt: new Date(Date.now() + 60_000).toISOString() }) }
+  if (operation === 'desktop-answers') { record({ type: 'desktop-answers-requested' }); say({ type: 'desktop-answers', hostId }) }
   if (operation === 'revoke-client') { record({ type: 'revoke-requested' }); say({ type: 'revoked', hostId, revoked: true }) }
   if (operation === 'stop-host') { record({ type: 'host-stopped', owned: mode !== 'discovered' }); say({ type: 'host-stopped', stopped: mode !== 'discovered', hostId }) }
 }

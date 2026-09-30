@@ -325,6 +325,10 @@ export const agentThreadSchema = z.object({
   messages: z.array(agentMessageSchema), requests: z.array(agentRequestSchema),
   /** Present on the shell stream, where `messages` is empty; absent when the messages themselves are here. */
   summary: agentThreadSummarySchema.optional(),
+  /** The newest message of the user's the provider's adapter has recorded, whether or not `messages` still
+   * holds it. A send names it back so the adapter can refuse one that raced the user's own input; a window
+   * the adapter put away and took back up carries none of the older messages, so it cannot say. */
+  lastUserMessageId: z.string().optional(),
   /** True when the thread store holds messages older than the window `messages` carries (issue #119). */
   earlierAvailable: z.boolean().optional(),
   activities: z.array(agentActivitySchema).max(MAX_AGENT_ACTIVITIES).optional(),
@@ -786,6 +790,11 @@ export function providerWritesShortText(providerId: ProviderId | undefined): boo
 /** The same facts, from the summary the shell carries or from the history a full state holds. */
 export function threadSummaryOf(thread: Pick<AgentThread, 'messages' | 'activities' | 'summary'>): AgentThreadSummary {
   return thread.summary ?? summarizeThread(thread)
+}
+/** The user's newest message as the adapter recorded it, which a send names for the stale-reply check. A
+ * host that does not say yet (an older remote host) leaves the window's newest user message to stand in. */
+export function lastUserMessageIdOf(thread: Pick<AgentThread, 'messages' | 'lastUserMessageId'>): string | null {
+  return thread.lastUserMessageId ?? thread.messages.findLast(message => message.role === 'user')?.id ?? null
 }
 /** One thread as the shell stream carries it: the sidebar's facts, none of its history. */
 function threadShell(thread: AgentThread): AgentThread {
