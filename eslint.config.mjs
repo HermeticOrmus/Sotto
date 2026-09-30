@@ -5,9 +5,11 @@ export default tseslint.config(
   {
     ignores: [
       'artifacts/pkg-18-e2e/**',
+      'artifacts/windows-askpass/**',
       'artifacts/codex-restored-replies/**',
       'artifacts/workspace-picker/**',
       'artifacts/ios-focus/**',
+      'artifacts/iphone-new-threads/**',
       'artifacts/review-*/**',
       'artifacts/phase-three-themes/**',
       'artifacts/thread-browser-player/**',

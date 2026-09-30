@@ -3,6 +3,7 @@ out/
 dist/
 dist-electron/
 /release/
+artifacts/windows-askpass/
 coverage/
 playwright-report/
 test-results/
@@ -105,3 +106,5 @@ artifacts/ios-focus/
 
 # Settings fixes: retain only the captures cited by the verification note.
 artifacts/pkg-18-e2e/
+# Native iPhone thread-creation captures; force-add only images cited by the note.
+artifacts/iphone-new-threads/
