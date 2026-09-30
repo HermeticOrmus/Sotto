@@ -77,6 +77,13 @@ describe('agent command IPC authorization', () => {
     { type: 'check-reasoning', provider: 'codex' },
     { type: 'preview-voice' },
     { type: 'observe-threads', threadIds: ['workshop', 'docs'] },
+    { type: 'update-client', provider: 'codex' },
+    { type: 'git-pull', threadId: 'workshop' },
+    { type: 'create-project', title: 'Workshop' },
+    { type: 'reclaim-thread-worktree', threadId: 'workshop' },
+    { type: 'git-publish', threadId: 'workshop', repository: 'owner/workshop', visibility: 'private' },
+    { type: 'git-pull-request-action', threadId: 'workshop', url: 'https://github.com/owner/workshop/pull/1', action: 'merge' },
+    { type: 'git-action', threadId: 'workshop', actionId: '11111111-1111-4111-8111-111111111111', action: 'commit' },
   ])('keeps privileged command %j main-only', async command => {
     const f = fixture()
     await expect(f.invoke(AGENT_COMMAND, command, f.widget)).rejects.toThrow('AGENT_MAIN_WINDOW_REQUIRED')
@@ -94,6 +101,20 @@ describe('agent command IPC authorization', () => {
     f.widget.webContents.getURL = () => 'https://untrusted.example/'
     await expect(f.invoke(AGENT_COMMAND, command, f.widget)).rejects.toThrow('AGENT_SENDER_REJECTED')
     expect(f.control.command).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    { type: 'compose', text: 'Continue' }, { type: 'send' },
+    { type: 'answer', threadId: 'workshop', requestId: 'request', answer: 'Yes' },
+    { type: 'steer', threadId: 'workshop', draftId: '11111111-1111-4111-8111-111111111111', text: 'Continue' },
+    { type: 'queue-followup', threadId: 'workshop', draftId: '11111111-1111-4111-8111-111111111111', text: 'Continue' },
+    { type: 'assign', threadId: 'workshop' }, { type: 'resume', threadId: 'workshop' },
+    { type: 'select-thread', threadId: 'workshop' }, { type: 'next' }, { type: 'later' },
+    { type: 'cancel-draft' }, { type: 'resume-draft', threadId: 'workshop' },
+  ])('preserves widget command %j', async command => {
+    const f = fixture()
+    await expect(f.invoke(AGENT_COMMAND, command, f.widget)).resolves.toEqual(f.reply)
+    expect(f.control.command).toHaveBeenCalledExactlyOnceWith(command)
   })
 
   it.each(['mute', 'unmute'])('preserves widget microphone %s commands', async action => {
