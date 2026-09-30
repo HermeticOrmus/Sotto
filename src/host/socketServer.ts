@@ -217,7 +217,14 @@ export async function startSocketServer(options: SocketServerOptions) {
       return shell(peer)
     }
     const input = request.command
+    const state = service.shell()
+    const savedDraft = !state.composing && !state.draft.trim() && !state.draftAttachments?.length
+      ? state.threadDrafts?.find(draft => draft.threadId === state.activeThreadId) : undefined
+    const draftRequestId = state.composing || input.type === 'send' ? state.draftRequestId
+      : savedDraft ? savedDraft.requestId
+        : state.queue.find(item => item.threadId === state.activeThreadId && item.kind === 'question' && item.requestId)?.requestId
     const refusal = remoteCommandRefusal(input, { mayAnswer: options.mayAnswer?.(peer.client) ?? false, askingProviderModes: askingProviderModes(input),
+      draftRequestId: input.type === 'send' || input.type === 'compose' ? draftRequestId : undefined,
       clientUpdates: options.clientUpdates === true })
     if (refusal) throw new Refusal(refusal)
     if (input.type === 'preview-reclaim-thread-worktree') {
