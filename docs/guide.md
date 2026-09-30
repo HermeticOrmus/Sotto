@@ -31,7 +31,7 @@ A new thread starts on **New threads start with** in **Settings → Agents**: a 
 
 Personal chats are project-free conversations with the provider chosen for personal chats and the coordinator in Settings → Agents. A started chat stays with its original provider when you change that default.
 
-If remembered preferences change for a Claude Code chat while background work runs, messages continue on the same client with its previous context. You can still ask Claude to stop the work. The first send after the work ends starts the client again with the latest context.
+If remembered preferences change for a Claude Code chat while background work runs, messages continue on the same client with its previous context. You can still ask Claude to stop the work. The first send after the work ends starts the client again with the latest context. If you delete a memory the running client is using, the next send restarts it even while background work runs. That restart stops the background work.
 
 ### Providers and models
 

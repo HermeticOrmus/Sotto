@@ -266,6 +266,34 @@ describe('Claude recovery and safety', () => {
       await expect.poll(() => joinedDone).toBe(true)
     } finally { releases.forEach(release => release()); await Promise.all([first, joined, later]); poll.mockRestore() }
   })
+  it('restarts personal background work after a memory in its running context is deleted', async () => {
+    let deleted!: (ids: readonly string[]) => void
+    const unsubscribe = vi.fn()
+    const service = new PersonalChatService({ userDataPath: f.root, hosts: { claude: f.adapter }, configuration: () => ({ reasoning: 'claude', reasoningModel: f.modelId, reasoningEffort: 'high' }),
+      preferences: { retrieve: () => [], subscribeDeleted: listener => { deleted = listener; return unsubscribe } } })
+    await service.start(); await service.connect()
+    try {
+      const personal = randomUUID(), memories = [{ id: 'deleted-memory', content: 'Use short replies.' }]
+      await f.adapter.createPersonalConversation({ commandId: 'personal', threadId: personal, title: 'Personal', modelId: f.modelId, workingDirectory: f.root }, memories)
+      await f.driver.backgroundWork!.completeLeaving(personal, 'Still working.', 'Build')
+      await expect.poll(() => f.adapter.personalSnapshot().find(thread => thread.id === personal)?.backgroundWork?.length).toBe(1)
+      const process = (await f.liveSettings.effective(personal)).process
+      // A retrieval miss is not a deletion; keep the work and its original context.
+      const command = { type: 'send' as const, commandId: 'miss', messageId: 'miss', threadId: personal, text: 'Continue' }
+      expect(await f.adapter.sendPersonalConversation(command, [])).toEqual({ accepted: true })
+      expect((await f.liveSettings.effective(personal)).process).toBe(process)
+      await f.driver.completeTurn(personal, 'Finished the follow-up.')
+      await expect.poll(() => f.adapter.personalSnapshot().find(thread => thread.id === personal)?.status).toBe('idle')
+      deleted(['unrelated-memory']); expect(await f.sessions!.starts(personal)).toBe(1)
+      deleted(['deleted-memory'])
+      expect(await f.adapter.sendPersonalConversation({ ...command, commandId: 'fresh', messageId: 'fresh' }, [])).toEqual({ accepted: true })
+      expect(await f.sessions!.starts(personal)).toBe(2)
+      expect((await f.liveSettings.effective(personal)).process).not.toBe(process)
+      expect(f.adapter.personalSnapshot().find(thread => thread.id === personal)?.backgroundWork ?? []).toEqual([])
+      const launch = (await f.driver.requests()).filter(record => record.method === 'resume').at(-1)!
+      expect((launch.params!.frame as { args: string[] }).args.join(' ')).not.toContain(memories[0]!.content)
+    } finally { await service.close(); expect(unsubscribe).toHaveBeenCalledOnce() }
+  })
   it('waits for personal background work before restarting for changed memories', async () => {
     const personal = randomUUID()
     await f.adapter.createPersonalConversation({ commandId: 'personal', threadId: personal, title: 'Personal', modelId: f.modelId, workingDirectory: f.root })

@@ -32,7 +32,7 @@ Saved Codex conversations keep both sides after a restart. Opening a thread also
 
 Thread drafts save automatically while you type, including while other threads are working.
 
-Claude Code keeps background work running when remembered preferences change. Messages continue with the chat's previous context while that work runs. The first send after it ends refreshes the context.
+Claude Code keeps background work running when remembered preferences change. Messages continue with the chat's previous context while that work runs. The first send after it ends refreshes the context. Deleting a memory the client is using forces a restart on the next send and stops that background work.
 
 If a Claude Code answer is unconfirmed, **Check again** reopens the request's choices. It sends nothing; you choose and send the answer again yourself.
 

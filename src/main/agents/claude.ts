@@ -149,7 +149,7 @@ export interface ClaudeStreamJsonHostOptions {
   logEvent?: (event: ClaudeAdapterEvent) => void
 }
 /** `client` is the client generation the CLI was launched from: see `clientUpdated`. */
-type Runtime = { protocol: ClaudeProtocol; requests: Map<string, ClaudePending>; answered: Set<string>; retryableAnswers: Set<string>; writingAnswers: Set<string>; clientRevision: number }
+type Runtime = { protocol: ClaudeProtocol; requests: Map<string, ClaudePending>; answered: Set<string>; retryableAnswers: Set<string>; writingAnswers: Set<string>; contextMemoryIds: Set<string>; clientRevision: number }
 
 /** One native coding CLI per thread. Credentials and transcript persistence remain native. */
 export class ClaudeStreamJsonHost implements AgentHost {
@@ -163,6 +163,8 @@ export class ClaudeStreamJsonHost implements AgentHost {
   private readonly client: ClaudeSubscriptionClient
   private aliases: Record<string, Alias> = {}
   private readonly threads = new Map<string, NativeConversation>()
+  private readonly personalMemories = new Map<string, readonly PersonalMemory[]>()
+  private readonly revokedContexts = new Set<string>()
   private readonly personalContexts = new Map<string, string>()
   private readonly runtimes = new Map<string, Runtime>()
   private readonly starting = new Map<string, Promise<Runtime>>()
@@ -553,6 +555,7 @@ export class ClaudeStreamJsonHost implements AgentHost {
       .map(thread => this.messageLog.publishedThread(thread)))
   }
   async createPersonalConversation(command: PersonalCreateCommand, memories: readonly PersonalMemory[] = []): Promise<AgentHostResult> {
+    this.personalMemories.set(command.threadId, [...memories])
     this.personalContexts.set(command.threadId, personalContext(memories))
     return this.executeNative({ ...command, type: 'create-personal' })
   }
@@ -560,8 +563,20 @@ export class ClaudeStreamJsonHost implements AgentHost {
     if (this.aliases[command.threadId]?.kind !== 'personal') throw new Error('This is not an owned personal conversation.')
     const context = personalContext(memories)
     if (this.personalContexts.get(command.threadId) !== context) this.staleContexts.add(command.threadId)
+    this.personalMemories.set(command.threadId, [...memories])
     this.personalContexts.set(command.threadId, context)
     return this.execute(command)
+  }
+  /** Deletion is a user action, distinct from preferences falling out of retrieval. */
+  forgetPersonalMemories(ids: readonly string[]): void {
+    const deleted = new Set(ids)
+    for (const [id, memories] of this.personalMemories) {
+      const remaining = memories.filter(memory => !deleted.has(memory.id))
+      if (remaining.length !== memories.length) {
+        this.personalMemories.set(id, remaining); this.personalContexts.set(id, personalContext(remaining)); this.staleContexts.add(id)
+      }
+      if ([...(this.runtimes.get(id)?.contextMemoryIds ?? [])].some(memoryId => deleted.has(memoryId))) this.revokedContexts.add(id)
+    }
   }
   async execute(command: AgentHostCommand): Promise<AgentHostResult> { return this.executeNative(command) }
   private async executeNative(command: AgentHostCommand | (PersonalCreateCommand & { type: 'create-personal' })): Promise<AgentHostResult> {
@@ -630,10 +645,10 @@ export class ClaudeStreamJsonHost implements AgentHost {
       if (thread.requests.length) throw new Error('Answer the pending Claude request before sending another prompt.')
       this.dispatching.add(id)
       try {
-        if (this.staleContexts.has(id) && !thread.backgroundWork?.length) {
-          this.staleContexts.delete(id)
+        if (this.revokedContexts.has(id) || this.staleContexts.has(id) && !thread.backgroundWork?.length) {
           const stale = this.runtimes.get(id)
           if (stale) { await this.denyPending(id, stale); await this.stopRuntime(id, stale) }
+          this.staleContexts.delete(id); this.revokedContexts.delete(id)
         }
         const runtime = await this.start(id)
         verifyFileMentions(command.text, command.files)
@@ -934,7 +949,7 @@ export class ClaudeStreamJsonHost implements AgentHost {
       ...(alias.kind === 'personal' ? ['--append-system-prompt', this.personalContexts.get(id) ?? personalContext()] : []),
       resume ? '--resume' : '--session-id', alias.sessionId, '--model', alias.modelId, ...(alias.reasoningEffort ? ['--effort', alias.reasoningEffort] : [])]
     let runtime: Runtime
-    try { runtime = { requests: new Map(), answered: new Set(), retryableAnswers: new Set(), writingAnswers: new Set(), clientRevision: this.clientRevision, protocol: new ClaudeProtocol(this.executable, args, alias.cwd, { ...this.client.environment(), ...(setup ? { MCP_TOOL_TIMEOUT: '600000' } : browser ? { MCP_TOOL_TIMEOUT: '360000' } : {}) }, this.options.requestTimeoutMs ?? 15000,
+    try { runtime = { requests: new Map(), answered: new Set(), retryableAnswers: new Set(), writingAnswers: new Set(), contextMemoryIds: new Set(this.personalMemories.get(id)?.map(memory => memory.id)), clientRevision: this.clientRevision, protocol: new ClaudeProtocol(this.executable, args, alias.cwd, { ...this.client.environment(), ...(setup ? { MCP_TOOL_TIMEOUT: '600000' } : browser ? { MCP_TOOL_TIMEOUT: '360000' } : {}) }, this.options.requestTimeoutMs ?? 15000,
       frame => { if (this.runtimes.get(id) === runtime) this.frame(id, frame) }, () => {
         if (this.runtimes.get(id) !== runtime) return
         // Each thread has its own CLI, so one ending is this thread's failure, not the provider's: the others

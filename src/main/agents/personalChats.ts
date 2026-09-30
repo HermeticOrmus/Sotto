@@ -81,14 +81,14 @@ function definedFields<T extends object>(value: T): { [K in keyof T]: Exclude<T[
 const uncertainAnswer = 'Answer delivery is uncertain. Refresh the conversation; the answer will not be replayed.'
 export type PersonalConversationHost = Pick<CodexAppServerHost, 'closed' | 'connect' | 'createPersonalConversation' | 'disconnect' | 'execute' | 'listThreadSkills' | 'personalSnapshot' | 'refreshThread' | 'sendPersonalConversation' | 'subscribe'>
   /** Told that a new client is on disk, so each process moves to it as it goes idle (ADR-0021). */
-  & { clientUpdated?(): Promise<void> }
+  & { clientUpdated?(): Promise<void>; forgetPersonalMemories?(ids: readonly string[]): void }
 export interface PersonalChatOptions {
   userDataPath: string
   configuration: () => { reasoning: string; reasoningModel: string; reasoningEffort: string }
   host?: PersonalConversationHost
   claudeHistoryModulePath?: string
   hosts?: Partial<Record<PersonalChat['providerId'], PersonalConversationHost>>
-  preferences?: Pick<MemoryProfile, 'retrieve'>
+  preferences?: Pick<MemoryProfile, 'retrieve'> & Partial<Pick<MemoryProfile, 'subscribeDeleted'>>
   bindRequestDraftDecision?: BindRequestDraftDecision
   historyEnabled?: () => boolean
 }
@@ -174,6 +174,7 @@ export class PersonalChatService {
       this.emit(); return
     }
     await this.mutate(() => undefined)
+    if (this.options.preferences?.subscribeDeleted) this.unsubscribers.push(this.options.preferences.subscribeDeleted(ids => this.hosts.claude.forgetPersonalMemories?.(ids)))
     for (const provider of ['codex', 'claude', 'grok'] as const) this.unsubscribers.push(this.hosts[provider].subscribe(snapshot => {
       const conversations = this.hosts[provider].personalSnapshot()
       const wasConnected = this.observeConnection(provider, snapshot.connected)
