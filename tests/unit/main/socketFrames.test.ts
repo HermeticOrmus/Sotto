@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { Duplex } from 'node:stream'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { SocketFrames } from '../../../src/host/socketFrames'
 import { HOST_MAX_FRAME_BYTES } from '../../../src/shared/hostProtocol'
 function harness(client = false) {
@@ -13,9 +13,42 @@ function masked(payload: Buffer, opcode = 1, final = true): Buffer {
   const mask = Buffer.from([1, 2, 3, 4])
   const encoded = Buffer.from(payload)
   for (let i = 0; i < encoded.length; i++) encoded[i] = encoded[i]! ^ mask[i % 4]!
-  return Buffer.concat([Buffer.from([(final ? 128 : 0) | opcode, 128 | payload.length]), mask, encoded])
+  const extended = payload.length < 126 ? 0 : payload.length <= 65535 ? 2 : 8
+  const header = Buffer.alloc(2 + extended)
+  header[0] = (final ? 128 : 0) | opcode
+  header[1] = 128 | (extended === 0 ? payload.length : extended === 2 ? 126 : 127)
+  if (extended === 2) header.writeUInt16BE(payload.length, 2)
+  if (extended === 8) header.writeBigUInt64BE(BigInt(payload.length), 2)
+  return Buffer.concat([header, mask, encoded])
 }
 describe('bounded WebSocket framing', () => {
+  it('assembles a large frame only when all its chunks have arrived', () => {
+    const h = harness(), text = 'a'.repeat(14 * 1024 * 1024), frame = masked(Buffer.from(text))
+    const concat = vi.spyOn(Buffer, 'concat')
+    try {
+      for (let offset = 0; offset < frame.length; offset += 64 * 1024) {
+        h.frames.feed(frame.subarray(offset, offset + 64 * 1024))
+        if (offset + 64 * 1024 < frame.length) {
+          expect(h.messages).toEqual([])
+          expect(concat).not.toHaveBeenCalled()
+        }
+      }
+      expect(h.messages).toEqual([text])
+      const copiedBytes = concat.mock.calls.reduce((total, [chunks]) => total + chunks.reduce((size, chunk) => size + chunk.length, 0), 0)
+      expect(copiedBytes).toBeLessThanOrEqual(frame.length * 2)
+      expect(h.stream.destroyed).toBe(false)
+    } finally { concat.mockRestore(); h.frames.close() }
+  })
+  it.each([0, 125, 126, 65535, 65536])('reads a split header and leaves the following frame queued for a %i-byte payload', size => {
+    const h = harness(), text = 'a'.repeat(size), frame = masked(Buffer.from(text)), next = masked(Buffer.from('next'))
+    for (let offset = 0; offset < Math.min(14, frame.length); offset++) h.frames.feed(frame.subarray(offset, offset + 1))
+    h.frames.feed(Buffer.concat([frame.subarray(Math.min(14, frame.length)), next.subarray(0, 3)]))
+    expect(h.messages).toEqual([text])
+    h.frames.feed(next.subarray(3))
+    expect(h.messages).toEqual([text, 'next'])
+    expect(h.stream.destroyed).toBe(false)
+    h.frames.close()
+  })
   it('accepts fragmented masked text, replies to ping, and rejects an unmasked client', () => {
     const h = harness()
     h.frames.feed(masked(Buffer.from('{"hello":'), 1, false))
@@ -31,6 +64,25 @@ describe('bounded WebSocket framing', () => {
     header[0] = 129; header[1] = 255; header.writeBigUInt64BE(BigInt(HOST_MAX_FRAME_BYTES + 1), 2)
     h.frames.feed(header)
     expect(h.stream.destroyed).toBe(true); expect(h.messages).toEqual([])
+  })
+  it.each([false, true])('applies the cap to each frame when following bytes share a receive (partial: %s)', partial => {
+    const h = harness(), text = 'a'.repeat(HOST_MAX_FRAME_BYTES), frame = masked(Buffer.from(text))
+    const next = masked(Buffer.from('next frame'))
+    h.frames.feed(frame.subarray(0, 14))
+    h.frames.feed(Buffer.concat([frame.subarray(14), partial ? next.subarray(0, 5) : next]))
+    expect(h.stream.destroyed).toBe(false)
+    expect(h.messages).toEqual(partial ? [text] : [text, 'next frame'])
+    if (partial) h.frames.feed(next.subarray(5))
+    expect(h.messages).toEqual([text, 'next frame'])
+    h.frames.close()
+  })
+  it('still caps the whole fragmented message across individually legal frames', () => {
+    const h = harness()
+    h.frames.feed(masked(Buffer.alloc(HOST_MAX_FRAME_BYTES, 97), 1, false))
+    expect(h.stream.destroyed).toBe(false)
+    h.frames.feed(masked(Buffer.from('a'), 0))
+    expect(h.stream.destroyed).toBe(true)
+    expect(h.messages).toEqual([])
   })
   it('rejects malformed UTF8 and unexpected continuation frames', () => {
     const invalid = harness(); invalid.frames.feed(masked(Buffer.from([0xff])))
@@ -51,5 +103,30 @@ describe('bounded WebSocket framing', () => {
     Object.defineProperty(h.stream, 'writableLength', { value: HOST_MAX_FRAME_BYTES * 2 })
     expect(h.frames.send({ text: 'bounded' })).toBe(false)
     expect(h.stream.destroyed).toBe(true)
+  })
+  it('flushes the Close echo before ending even when its write is still pending', async () => {
+    const writes: Buffer[] = [], messages: string[] = []
+    let finishWrite: (() => void) | undefined
+    const stream = new Duplex({ read() {}, write(chunk, _encoding, callback) { writes.push(Buffer.from(chunk)); finishWrite = callback } })
+    const frames = new SocketFrames(stream, false, text => messages.push(text)), closed = vi.fn()
+    frames.onClose(closed)
+    const payload = Buffer.from([3, 232])
+    frames.feed(Buffer.concat([masked(payload, 8), masked(Buffer.from('ignored'))]))
+    expect(writes).toEqual([Buffer.from([136, 2, 3, 232])])
+    expect(stream.writableEnded).toBe(true)
+    expect(stream.writableFinished).toBe(false)
+    expect(stream.destroyed).toBe(false)
+    expect(closed).toHaveBeenCalledTimes(1)
+    expect(frames.sendText('after close')).toBe(false)
+    frames.feed(masked(Buffer.from('also ignored')))
+    stream.emit('end')
+    expect(stream.destroyed).toBe(false)
+    const finished = new Promise<void>(resolve => stream.once('finish', resolve))
+    finishWrite!()
+    await finished
+    expect(stream.writableFinished).toBe(true)
+    stream.destroy()
+    expect(messages).toEqual([])
+    expect(closed).toHaveBeenCalledTimes(1)
   })
 })
