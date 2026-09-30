@@ -20,11 +20,14 @@ export function shellForProtocolV1(state: AgentState) {
     configuration: { ...state.configuration, membershipEndpoint: '' } }
 }
 /** Older hosts carry retired fields; strip them before the strict domain schemas read them. */
-const protocolAgentStateSchema = z.preprocess(value => {
+export const protocolAgentStateSchema = z.preprocess(value => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return value
-  const { membership: _membership, configuration, ...state } = value as Record<string, unknown>
+  const state = { ...value } as Record<string, unknown>
+  delete state.membership
+  const configuration = state.configuration
   if (!configuration || typeof configuration !== 'object' || Array.isArray(configuration)) return state
-  const { membershipEndpoint: _endpoint, ...current } = configuration as Record<string, unknown>
+  const current = { ...configuration } as Record<string, unknown>
+  delete current.membershipEndpoint
   return { ...state, configuration: current }
 }, agentStateSchema)
 /**

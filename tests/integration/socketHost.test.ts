@@ -47,6 +47,9 @@ describe('authenticated host socket', () => {
   it('pairs once, negotiates a shell and revokes a live session immediately', async () => {
     const { client, result } = await pair()
     expect(client.shell().hostId).toBe(result.hostId)
+    const shell = await client.readShell()
+    expect(shell).not.toHaveProperty('membership')
+    expect(shell.configuration).not.toHaveProperty('membershipEndpoint')
     expect((await client.connect()).capabilities.mayAnswer).toBe(false)
     await client.revokePairing()
     expect(host.pairing.verifyToken(result.token)).toBeUndefined()
