@@ -271,7 +271,7 @@ Pairing lets the iPhone read threads and reply. It answers questions and permiss
 
 **Settings > Phones** lets Sotto on your iPhone reach the threads this computer runs, over your own tailnet. It needs Tailscale installed and signed in on both, and the local host running (**Settings > Hosts**); with the local host off, the page says so and offers **Go to Hosts**. Each computer shares only its own threads: a phone paired with this computer sees what this window's local host runs, and not your remote hosts.
 
-Turn on **Let phones connect**. Sotto then works down a checklist, and each row says whether its step worked, failed, or is still to come:
+Turn on **Let phones connect**. Sotto saves its phone access record before setup; if it cannot, phone access stays stopped and the page asks you to check access to its data folder and try again. Sotto then works down a checklist, and each row says whether its step worked, failed, or is still to come:
 
 1. **Tailscale is running.** Sotto asks the `tailscale` command on this computer (on the PATH, or where the Windows installer or the macOS app puts it) whether Tailscale is signed in, and shows this computer's name on your tailnet. If it is not running, the row says so, nothing is changed, and Sotto looks again every half minute; **Try again** looks now.
 2. **Tailscale Serve on port 8443.** Sotto opens a listener on this computer's loopback address only and asks Tailscale Serve to carry HTTPS on port 8443, on your tailnet, to it. It never uses Funnel, and it leaves port 443 to other apps. If another app already has something on 8443, Sotto leaves it alone and says so. If your tailnet has not turned Serve on, the row says so and **Turn on Serve in Tailscale** opens the page Tailscale gave for it.

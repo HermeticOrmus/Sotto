@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { HostService } from '../../../src/main/agents/hostService'
 import { PhoneAccess, type PhoneAccessOptions, type PhoneAccessTailscale } from '../../../src/main/phones/phoneAccess'
+import { AtomicJsonStore } from '../../../src/main/storage/atomicJsonStore'
 import { serveTarget, type ServeConfig, type ServeResult, type TailscaleStatus } from '../../../src/main/phones/tailscale'
 
 let root: string
@@ -259,4 +260,29 @@ it('keeps the listener until process exit when quit cleanup is unfinished', asyn
   expect(access.get().phase).toBe('cleanup-failed')
   expect(server.started[0]!.closed).toBe(false)
   expect(await record()).toMatchObject({ mapped: true })
+})
+
+
+it('requires a saved phone access record before setup and recovers on retry', async () => {
+  const fake = fakeTailscale(), server = fakeServer()
+  const { access } = create({ tailscale: fake.tailscale, startServer: server.startServer })
+  const originalWrite = AtomicJsonStore.prototype.write
+  let refuse = true
+  const write = vi.spyOn(AtomicJsonStore.prototype, 'write').mockImplementation(function (this: AtomicJsonStore<unknown>, value: unknown) {
+    if (refuse && typeof value === 'object' && value !== null && 'mapped' in value) {
+      refuse = false
+      return Promise.reject(new Error('unavailable'))
+    }
+    return originalWrite.call(this, value)
+  })
+  try {
+    await access.start()
+    expect(access.get()).toMatchObject({ phase: 'failed', serve: { status: 'failed', reason: 'record' }, address: null })
+    expect(fake.tailscale.serve).not.toHaveBeenCalled()
+    expect(server.started[0]!.closed).toBe(true)
+    expect(fake.tailscale.unserve).not.toHaveBeenCalled()
+    await access.command({ type: 'retry' })
+    expect(access.get().phase).toBe('on')
+    expect(await record()).toMatchObject({ mapped: true })
+  } finally { write.mockRestore(); await access.close() }
 })

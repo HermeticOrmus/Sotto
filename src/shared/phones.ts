@@ -24,7 +24,7 @@ export type ServeCheck =
        * `not-enabled`: the tailnet has not turned Serve on; `canOpenSetup` says whether Sotto has the page that turns it on.
        * `listener`: Sotto could not open its own loopback listener. `failed`: the serve command failed some other way.
        */
-      readonly reason: 'port-taken' | 'not-enabled' | 'listener' | 'failed' | 'cleanup'
+      readonly reason: 'port-taken' | 'not-enabled' | 'listener' | 'failed' | 'cleanup' | 'record'
       readonly canOpenSetup?: boolean
     }
 

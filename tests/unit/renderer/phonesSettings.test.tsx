@@ -160,3 +160,9 @@ it('shows unfinished cleanup and offers a retry while the setting is off', async
   await userEvent.setup().click(screen.getByRole('button', { name: 'Try again' }))
   expect(command).toHaveBeenCalledWith({ type: 'retry' })
 })
+
+
+it('explains when phone access settings could not be saved', async () => {
+  show({ ...OFF, enabled: true, phase: 'failed', serve: { status: 'failed', reason: 'record' } })
+  expect(await screen.findByText(/Phone access wasn’t started/)).toBeTruthy()
+})

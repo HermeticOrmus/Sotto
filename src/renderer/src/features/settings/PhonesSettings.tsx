@@ -24,6 +24,7 @@ export function phonesFailure(state: PhonesState): string | null {
     case 'port-taken': return `Another app already uses port ${PHONE_ACCESS_SERVE_PORT} in Tailscale Serve on this computer. Sotto left that setting alone, and nothing was changed. Stop the other app using port ${PHONE_ACCESS_SERVE_PORT}, then press Try again.`
     case 'not-enabled': return 'Tailscale Serve isn’t turned on for your tailnet. Nothing was changed. Turn it on in Tailscale, then press Try again.'
     case 'listener': return 'Sotto couldn’t open its listener for phones on this computer. Nothing was changed. Press Try again, or restart Sotto.'
+    case 'record': return 'Sotto couldn’t save its phone access settings. Phone access wasn’t started. Check that Sotto can write to its data folder, then press Try again.'
     case 'cleanup': return null
     case 'failed': return `Tailscale Serve couldn’t be set up on port ${PHONE_ACCESS_SERVE_PORT}. Nothing was changed. Check Tailscale on this computer, then press Try again.`
   }

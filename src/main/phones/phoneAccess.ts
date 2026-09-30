@@ -245,7 +245,7 @@ export class PhoneAccess {
       catch { this.options.log?.('phone-access-listener-failed'); await this.failServe('listener'); return }
     }
     const port = this.listener.descriptor.port
-    await this.save({ port, mapped: true })
+    if (!await this.save({ port, mapped: true })) { await this.failServe('record'); return }
     let result: ServeResult
     try { result = await this.options.tailscale.serve(PHONE_ACCESS_SERVE_PORT, port) } catch { result = { ok: false, reason: 'failed' } }
     if (!result.ok) {
@@ -267,7 +267,7 @@ export class PhoneAccess {
     this.phase = phase; this.tailscaleCheck = WAITING; this.serveCheck = WAITING; this.address = null; this.enableUrl = undefined
   }
 
-  private async failServe(reason: 'port-taken' | 'not-enabled' | 'listener' | 'failed'): Promise<void> {
+  private async failServe(reason: 'port-taken' | 'not-enabled' | 'listener' | 'failed' | 'record'): Promise<void> {
     this.serveCheck = { status: 'failed', reason, ...(this.enableUrl ? { canOpenSetup: true } : {}) }
     await this.fail()
   }
@@ -342,10 +342,11 @@ export class PhoneAccess {
     return [...new Set([...this.formerPorts, this.record.port, this.listener?.descriptor.port].filter((port): port is number => typeof port === 'number'))]
   }
 
-  private async save(record: PhoneAccessRecord): Promise<void> {
+  private async save(record: PhoneAccessRecord): Promise<boolean> {
+    try { await this.store.write(record) } catch { this.options.log?.('phone-access-record-write-failed'); return false }
     if (this.record.port !== null && this.record.port !== record.port) this.formerPorts.add(this.record.port)
     this.record = record
-    try { await this.store.write(record) } catch { this.options.log?.('phone-access-record-write-failed') }
+    return true
   }
 
   private cancelCode(): void {
