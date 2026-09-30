@@ -64,6 +64,7 @@ import {
 import { historyEntrySchema, type HistoryEntry } from '../../shared/history'
 import {
   settingsSchema,
+  worktreeCleanupRulesSchema,
   type AppSettings,
   type SettingsPatch,
 } from '../../shared/settings'
@@ -139,7 +140,7 @@ const looseSettingsPatchSchema = settingsSchema
   .partial()
   // The retired accent is still accepted from older callers and never copied
   // into the patch below (ADR-0011).
-  .extend({ accent: z.string().max(32).optional() })
+  .extend({ accent: z.string().max(32).optional(), worktreeCleanup: worktreeCleanupRulesSchema.partial().optional() })
   .strict()
   .superRefine((patch, context) => {
     if (Object.values(patch).some((value) => value === undefined)) {

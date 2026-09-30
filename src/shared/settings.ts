@@ -233,8 +233,10 @@ export interface AppSettings {
 }
 
 export type SettingsPatch = Partial<
-  Omit<AppSettings, 'hotkey' | 'launchAtStartup'>
+  Omit<AppSettings, 'hotkey' | 'launchAtStartup' | 'worktreeCleanup'>
 > & {
+  /** Merge only the supplied cleanup rules with the latest saved settings. */
+  worktreeCleanup?: Partial<WorktreeCleanupRules>
   /**
    * @deprecated The accent was replaced by themes (ADR-0011). A patch that
    * still carries it is accepted and the value ignored, so an older caller

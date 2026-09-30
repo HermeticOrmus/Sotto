@@ -80,6 +80,18 @@ async function selectCategory(name: string): Promise<void> {
 }
 
 describe('SettingsView', () => {
+  it('preserves quick cleanup changes before their settings publications arrive', async () => {
+    const update = vi.fn(async () => true)
+    render(<SettingsView {...baseProps({ onUpdateSettings: update })} />)
+    await selectCategory('Application')
+    await userEvent.click(screen.getByRole('switch', { name: 'Remove a worktree when its thread is settled' }))
+    await userEvent.click(screen.getByRole('switch', { name: 'Remove a worktree when its pull request is merged' }))
+    expect(update.mock.calls).toEqual([
+      [{ worktreeCleanup: { onSettle: true } }],
+      [{ worktreeCleanup: { merged: true } }],
+    ])
+  })
+
   it('closes a listening microphone with the keyboard Stop test control', async () => {
     const user = userEvent.setup()
     const stop = vi.fn(async () => undefined)

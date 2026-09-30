@@ -561,6 +561,14 @@ describe('typed preload bridge', () => {
     ])).toBeNull()
   })
 
+  it('accepts a single cleanup rule patch and rejects an invalid rule', async () => {
+    const { ipc, settings } = createIpcHarness()
+    await ipc.invoke(SETTINGS_UPDATE, { worktreeCleanup: { onSettle: true } })
+    expect(settings.update).toHaveBeenCalledWith({ worktreeCleanup: { onSettle: true } })
+    await expect(ipc.invoke(SETTINGS_UPDATE, { worktreeCleanup: { afterDays: 3 } })).rejects.toThrow('Invalid IPC payload')
+    expect(settings.update).toHaveBeenCalledOnce()
+  })
+
   it('accepts only one immutable main-created platform argument and otherwise reports win32', () => {
     expect(parsePlatformArgument(['electron', '--sotto-platform=darwin'])).toBe('darwin')
     expect(parsePlatformArgument(['electron', '--sotto-platform=win32'])).toBe('win32')
