@@ -511,6 +511,7 @@ async function createRuntime(): Promise<NativeRuntimeController> {
     Date.now,
     platformDefaults,
   )
+  await history.initialize()
   const credentials = new AgentCredentials(userDataPath, safeStorage)
   await credentials.load()
   const grokSpeech = new GrokSpeechService({ credentials, ...(e2eConfiguration === null ? {} : { fetchFn: e2eGrokSpeechFetch }) })

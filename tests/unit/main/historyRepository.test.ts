@@ -41,6 +41,33 @@ afterEach(async () => {
 })
 
 describe('HistoryRepository', () => {
+  it('removes crashed-write transcripts at startup without changing saved history or backups', async () => {
+    const { filePath, repository } = await createRepository()
+    const saved = createEntry('saved', 1)
+    await writeFile(filePath, JSON.stringify([saved]), 'utf8')
+    await writeFile(`${filePath}.tmp-123-crashed`, JSON.stringify([createEntry('orphan', 2)]), 'utf8')
+    await writeFile(`${filePath}.corrupt-backup`, 'backup', 'utf8')
+
+    await repository.initialize()
+
+    expect((await readdir(dirname(filePath))).sort()).toEqual(['history.json', 'history.json.corrupt-backup'])
+    expect(await repository.list()).toEqual([saved])
+  })
+
+  it.each([true, false])('clears crashed-write transcripts with active history present: %s', async present => {
+    const { filePath, repository } = await createRepository()
+    if (present) await repository.add(createEntry('saved', 1), { enabled: true, retention: 'unlimited' })
+    await writeFile(`${filePath}.tmp-123-crashed`, JSON.stringify([createEntry('orphan', 2)]), 'utf8')
+    await writeFile(join(dirname(filePath), 'settings.json.tmp-123-crashed'), 'unrelated', 'utf8')
+
+    await repository.clear()
+
+    expect((await readdir(dirname(filePath))).sort()).toEqual([
+      ...(present ? ['history.json'] : []), 'settings.json.tmp-123-crashed',
+    ])
+    expect(await repository.list()).toEqual([])
+  })
+
   it('keeps only the newest entry when retention is one', async () => {
     const { repository } = await createRepository()
     await repository.add(createEntry('1', 1, 'one'), { enabled: true, retention: 1 })
@@ -292,7 +319,7 @@ describe('HistoryRepository', () => {
     const unrelatedFiles = [
       'history.json.corrupt',
       'history.json.corrupted-1725000000015',
-      'history.json.tmp-user-note',
+      'history.json.tmp',
       'other-history.json.corrupt-1725000000015-id',
     ]
     await Promise.all(

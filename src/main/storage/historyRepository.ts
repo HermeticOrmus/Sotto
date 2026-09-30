@@ -83,6 +83,10 @@ export class HistoryRepository {
       )
   }
 
+  initialize(): Promise<void> {
+    return this.enqueueMutation(() => this.removeSiblings(false))
+  }
+
   async list(options: { readonly enabled: boolean } = { enabled: true }): Promise<HistoryEntry[]> {
     if (!options.enabled) return []
     await this.mutationTail
@@ -144,7 +148,7 @@ export class HistoryRepository {
         await this.store.write([])
       }
 
-      await this.removeRecoverySiblings()
+      await this.removeSiblings(true)
     })
   }
 
@@ -157,9 +161,10 @@ export class HistoryRepository {
     return sortEntries(await this.store.read())
   }
 
-  private async removeRecoverySiblings(): Promise<void> {
+  private async removeSiblings(includeRecovery: boolean): Promise<void> {
     const directory = dirname(this.filePath)
     const recoveryPrefix = `${basename(this.filePath)}.corrupt-`
+    const temporaryPrefix = `${basename(this.filePath)}.tmp-`
     let siblingNames: string[]
 
     try {
@@ -174,7 +179,8 @@ export class HistoryRepository {
 
     await Promise.all(
       siblingNames
-        .filter((name) => name.startsWith(recoveryPrefix))
+        .filter((name) => name.startsWith(temporaryPrefix)
+          || (includeRecovery && name.startsWith(recoveryPrefix)))
         .map(async (name) => {
           try {
             await unlink(join(directory, name))

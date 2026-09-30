@@ -329,6 +329,8 @@ Settings:
 
 Turning **Keep local history** off stops saving new dictation transcripts. Older dictation transcripts stay on disk until you delete them or clear history. **Delete** removes a retained transcript from this computer even while history is off; turning history back on does not restore it.
 
+**Clear history** also removes dictation history backups and temporary files left by an interrupted save. Sotto removes those temporary files when it starts, without changing saved history.
+
 Automatic paste is best effort. Windows blocks synthetic input into elevated applications, password fields, protected desktops, and some custom editors. macOS blocks it in secure input fields and until both the Automation and Accessibility grants exist. When paste is rejected, Sotto shows **Copied — paste manually** and leaves the complete text in the clipboard. If a Windows target app is running as administrator, either paste manually or run both apps at the same integrity level.
 
 ## Updates
