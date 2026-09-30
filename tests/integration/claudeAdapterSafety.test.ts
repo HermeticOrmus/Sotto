@@ -204,6 +204,7 @@ describe('Claude recovery and safety', () => {
   })
   it('reads appended transcript lines before an overlapping caller returns', async () => {
     clearInterval((f.adapter as unknown as { pollTimer: NodeJS.Timeout }).pollTimer)
+    await f.adapter.pollSessionLogs()
     const calls = vi.spyOn(f.adapter, 'pollSessionLogs')
     let release!: () => void
     const gate = new Promise<void>(resolve => { release = resolve })
@@ -239,6 +240,7 @@ describe('Claude recovery and safety', () => {
   })
   it('runs a queued read after the preceding read fails', async () => {
     clearInterval((f.adapter as unknown as { pollTimer: NodeJS.Timeout }).pollTimer)
+    await f.adapter.pollSessionLogs()
     let fail!: (error: Error) => void
     const gate = new Promise<void>((_, reject) => { fail = reject })
     const poll = vi.spyOn(ClaudeSessionLog.prototype, 'poll').mockImplementationOnce(() => gate).mockResolvedValueOnce(undefined)
@@ -251,6 +253,8 @@ describe('Claude recovery and safety', () => {
   })
   it('finishes joined reads without waiting for later poll arrivals', async () => {
     clearInterval((f.adapter as unknown as { pollTimer: NodeJS.Timeout }).pollTimer)
+    // Stopping the timer leaves its active read in flight. Drain it before holding our own passes.
+    await f.adapter.pollSessionLogs()
     const releases: (() => void)[] = []
     const gates = Array.from({ length: 3 }, () => new Promise<void>(resolve => { releases.push(resolve) }))
     let index = 0
