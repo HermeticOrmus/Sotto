@@ -104,7 +104,7 @@ describe('authenticated host socket', () => {
     await expect(client.command({ type: 'answer', threadId, requestId: 'permission-two', answer: '', approved: true })).rejects.toMatchObject({ code: 'forbidden' })
     expect(host.service.shell().host.threads.find(thread => thread.id === threadId)?.requests).toContainEqual(expect.objectContaining({ id: 'permission-two' }))
   })
-  it.each(['shell', 'question', 'saved'] as const)('preserves command admission context for composition: %s', async source => {
+  it.each(['shell', 'question', 'saved', 'queue'] as const)('preserves command admission context for composition: %s', async source => {
     const { client } = await pair()
     await client.command({ type: 'configure', patch: { provider: 'codex', enabledProviders: ['codex'] } })
     await client.command({ type: 'connect', provider: 'codex' })
@@ -113,17 +113,24 @@ describe('authenticated host socket', () => {
     await host.service.command({ type: 'assign', threadId, instruction: 'Keep watching' }, desktopWindowClient())
     native.event({ type: 'question', threadId: 'workshop', requestId: 'question-one', text: 'Choose a name' })
     await expect.poll(() => host.service.shell().queue.some(item => item.requestId === 'question-one')).toBe(true)
-    if (source !== 'question') {
+    if (source !== 'question' && source !== 'queue') {
       await host.service.command({ type: 'compose', text: 'Original draft' }, desktopWindowClient())
       if (source === 'saved') {
         await host.service.command({ type: 'pause-draft' }, desktopWindowClient())
         await host.service.command({ type: 'select-thread', threadId }, desktopWindowClient())
       }
     }
-    const before = host.service.shell()
-    await expect(client.command({ type: 'compose', text: 'Changed draft' })).rejects.toMatchObject({ code: 'forbidden' })
-    expect(host.service.shell().threadDrafts).toEqual(before.threadDrafts)
-    expect(host.service.shell().draft).toBe(before.draft)
+    const originalShell = host.service.shell.bind(host.service)
+    const shell = source === 'queue' ? vi.spyOn(host.service, 'shell').mockImplementation(() => {
+      const state = originalShell()
+      return { ...state, queue: [{ ...state.queue[0]!, id: 'queue-note', requestId: undefined }, ...state.queue] }
+    }) : undefined
+    try {
+      const before = host.service.shell()
+      await expect(client.command({ type: 'compose', text: 'Changed draft' })).rejects.toMatchObject({ code: 'forbidden' })
+      expect(host.service.shell().threadDrafts).toEqual(before.threadDrafts)
+      expect(host.service.shell().draft).toBe(before.draft)
+    } finally { shell?.mockRestore() }
   })
   it.each(['composing', 'saved'] as const)('keeps ordinary composition available with its existing binding: %s', async source => {
     const { client } = await pair()
