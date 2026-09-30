@@ -5,6 +5,7 @@ import type { GitRefsPage, GitRefsRequest } from '../../shared/gitRefs'
 import type { GitChangedFiles, GitChangedFilesRequest } from '../../shared/gitChangedFiles'
 import type { GitPullRequestDetail, GitPullRequestRequest } from '../../shared/gitPullRequests'
 import type { HostFoldersClientRequest, HostFoldersRequest, HostFoldersResult } from '../../shared/hostFolders'
+import { HostConnectionError } from '../agents/socketHostService'
 
 export interface DesktopHostConnection {
   hostId: string
@@ -244,6 +245,12 @@ export class DesktopHostRouter {
     try {
       const result = await connection.service.command(command as AgentCommand, client)
       if (result.error) this.notice = this.refusal(connection, result.error)
+    } catch (error) {
+      // The host refused this action before dispatch. Return its account through the same state error
+      // as a coordinator refusal, so a permission chip does not mistake it for a lost provider answer.
+      // A dropped connection is still uncertain and must keep the renderer's recovery path.
+      if (connection.kind !== 'remote' || !(error instanceof HostConnectionError) || error.code !== 'forbidden') throw error
+      this.notice = this.refusal(connection, error.message)
     } finally {
       if (SELECTING_COMMANDS.has(command.type) && selections === this.selections) this.follow(connection, { activeThreadId, activeProjectId })
     }
