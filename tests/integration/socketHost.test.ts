@@ -125,6 +125,25 @@ describe('authenticated host socket', () => {
     expect(host.service.shell().threadDrafts).toEqual(before.threadDrafts)
     expect(host.service.shell().draft).toBe(before.draft)
   })
+  it.each(['composing', 'saved'] as const)('keeps ordinary composition available with its existing binding: %s', async source => {
+    const { client } = await pair()
+    await client.command({ type: 'configure', patch: { provider: 'codex', enabledProviders: ['codex'] } })
+    await client.command({ type: 'connect', provider: 'codex' })
+    const threadId = client.shell().host.threads.find(thread => thread.title === 'Workshop')!.id
+    await host.service.command({ type: 'assign', threadId, instruction: 'Keep watching' }, desktopWindowClient())
+    await host.service.command({ type: 'compose', text: 'Ordinary draft' }, desktopWindowClient())
+    if (source === 'saved') {
+      await host.service.command({ type: 'pause-draft' }, desktopWindowClient())
+      await host.service.command({ type: 'select-thread', threadId }, desktopWindowClient())
+    }
+    native.event({ type: 'question', threadId: 'workshop', requestId: 'question-one', text: 'Choose a name' })
+    await expect.poll(() => host.service.shell().queue.some(item => item.requestId === 'question-one')).toBe(true)
+    expect(host.service.shell().draftRequestId).toBeNull()
+    await client.command({ type: 'compose', text: 'Revised ordinary draft' })
+    expect(host.service.shell().error).toBeNull()
+    expect(host.service.shell().draftRequestId).toBeNull()
+    expect(host.service.shell().threadDrafts?.find(draft => draft.threadId === threadId)).toMatchObject({ text: 'Revised ordinary draft', requestId: null })
+  })
   it('preserves command admission context for a submitted draft', async () => {
     const { client } = await pair()
     await client.command({ type: 'configure', patch: { provider: 'codex', enabledProviders: ['codex'] } })

@@ -218,11 +218,11 @@ export async function startSocketServer(options: SocketServerOptions) {
     }
     const input = request.command
     const state = service.shell()
-    const draftThreadId = state.composing ? state.draftThreadId : state.activeThreadId
-    const draftRequestId = state.draftRequestId ?? (input.type === 'compose'
-      ? state.threadDrafts?.find(draft => draft.threadId === draftThreadId)?.requestId
-        ?? state.host.threads.find(thread => thread.id === draftThreadId)?.requests.find(item => item.kind === 'question')?.id
-      : undefined)
+    const savedDraft = !state.composing && !state.draft.trim() && !state.draftAttachments?.length
+      ? state.threadDrafts?.find(draft => draft.threadId === state.activeThreadId) : undefined
+    const draftRequestId = state.composing || input.type === 'send' ? state.draftRequestId
+      : savedDraft ? savedDraft.requestId
+        : state.queue.find(item => item.threadId === state.activeThreadId && item.kind === 'question')?.requestId
     const refusal = remoteCommandRefusal(input, { mayAnswer: options.mayAnswer?.(peer.client) ?? false, askingProviderModes: askingProviderModes(input),
       draftRequestId: input.type === 'send' || input.type === 'compose' ? draftRequestId : undefined,
       clientUpdates: options.clientUpdates === true })
