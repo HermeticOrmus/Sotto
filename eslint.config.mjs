@@ -8,7 +8,6 @@ export default tseslint.config(
       'artifacts/workspace-picker/**',
       'artifacts/ios-focus/**',
       'artifacts/review-*/**',
-      'artifacts/review-history-delete/**',
       'artifacts/phase-three-themes/**',
       'artifacts/thread-browser-player/**',
       'artifacts/new-thread-defaults/**',

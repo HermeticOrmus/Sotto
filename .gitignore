@@ -95,7 +95,6 @@ artifacts/screenshot-resize-run/
 artifacts/workflow-agent-rows-run/
 
 artifacts/review-*/
-artifacts/review-history-delete/
 
 # Workspace menu layout verification
 artifacts/workspace-picker/
