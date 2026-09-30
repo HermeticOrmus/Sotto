@@ -78,6 +78,26 @@ final class NewThreadModelTests: XCTestCase {
         XCTAssertTrue(HostConnection.instances.filter { $0.hostID == laptop }.flatMap(\.commands).isEmpty)
         XCTAssertTrue(model.pending(for: ref).isEmpty)
     }
+    @MainActor func testAFailedFirstMessageKeepsItsReturnTextExplanation() async throws {
+        let model = try await fixture()
+        let created = await create(model)
+        let ref = try XCTUnwrap(created)
+        let accepted = HostConnection.commandHandler!
+        HostConnection.commandHandler = { host, command, id in
+            guard command["type"] == .string("manual-send"),
+                  case .object(var shell) = HostConnection.shells[host]! else { return try await accepted(host, command, id) }
+            shell["error"] = .string("The provider refused the message.")
+            shell["deliveries"] = .array([.object(["threadId": command["threadId"], "draftId": command["draftId"], "status": .string("failed")])])
+            HostConnection.shells[host] = .object(shell)
+            return .object(shell)
+        }
+        model.drafts[ref.id] = "Start this project"
+        await model.send(ref)
+        XCTAssertTrue(model.feedback?.contains("wasn’t sent. Its text is back in that thread.") == true)
+        model.restoreReply(ref)
+        XCTAssertEqual(model.drafts[ref.id], "Start this project")
+        XCTAssertTrue(model.pending(for: ref).isEmpty)
+    }
     @MainActor func testAnUnavailableProjectDoesNotSendACreationCommand() async throws {
         let model = try await fixture(projects: false)
         let result = await create(model)

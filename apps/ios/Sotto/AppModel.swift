@@ -553,7 +553,6 @@ struct Live {
             await checkDelivery(hostID)
             guard generations[hostID] == current else { return nil }
             if let error = next.error {
-                feedback = error
                 if operation.kind.hasPrefix("create-") { creationFeedback = error }
                 return nil
             }
