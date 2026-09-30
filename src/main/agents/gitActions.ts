@@ -168,6 +168,7 @@ export class GitActions {
 
   /** `git reset` then `git add -A`, or only the chosen paths, the way T3 stages; true when something is staged. */
   private async stage(cwd: string, filePaths: readonly string[] | undefined): Promise<boolean> {
+    cwd = (await this.git(cwd, ['rev-parse', '--show-toplevel'])).trim()
     await this.git(cwd, ['reset', '-q']).catch(() => undefined)
     if (filePaths) await this.git(cwd, ['--literal-pathspecs', 'add', '-A', '--', ...filePaths])
     else await this.git(cwd, ['add', '-A'])

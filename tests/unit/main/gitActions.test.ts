@@ -45,6 +45,18 @@ async function fixture(options: { remote?: boolean; gh?: GhFixture; commitMessag
 }
 
 describe('the stacked Git action, the way T3 runs it', () => {
+  it('commits repository-relative selected paths and counts new files from a project subfolder', async () => {
+    const f = await fixture({ remote: false })
+    const sub = join(f.repo, 'sub'); await mkdir(sub)
+    await writeFile(join(sub, 'chosen.txt'), 'one\ntwo\n')
+    await writeFile(join(f.repo, 'work.txt'), 'excluded\n')
+    const reader = new GitStatusReader({ fetchIntervalMs: () => 0 })
+    expect((await reader.listChangedFiles(sub)).files.find(file => file.path === 'sub/chosen.txt')).toMatchObject({ insertions: 2, deletions: 0 })
+    const result = await f.actions.runStackedAction({ threadId: 't', cwd: sub, action: 'commit', filePaths: ['sub/chosen.txt'], commitMessage: 'Add chosen file' })
+    expect(result.commit.status).toBe('created')
+    expect(git(f.repo, 'show', '--pretty=', '--name-only', 'HEAD')).toBe('sub/chosen.txt')
+    expect(git(f.repo, 'status', '--porcelain')).toContain('work.txt')
+  })
   it('commits everything with the message given, and offers Push', async () => {
     const f = await fixture()
     await writeFile(join(f.repo, 'work.txt'), 'second\n'); await writeFile(join(f.repo, 'new.txt'), 'new\n')
