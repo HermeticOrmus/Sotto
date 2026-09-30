@@ -250,6 +250,8 @@ Answering a question or permission request and creating a project are also part 
 
 ## Personal conversations
 
+A Claude Code personal chat refreshes changed retrieved preferences by starting its client again. While background work is running, the send waits and keeps the old session and work intact; it can be retried once that work ends.
+
 **Personal chat.** A saved, project-free conversation with Sotto's configured coordinator, distinct from a project-bound thread. A started personal chat stays with its original provider; changing coordinator defaults affects new chats only. Every provider with a saved chat, plus the coordinator's own provider, connects at launch without the user pressing Connect; a drop the user did not ask for reconnects by itself after five seconds, then after longer waits, and after five failed tries the error waits for Connect. Pressing Disconnect holds every provider off until Connect or a restart. Avoid: "project thread", "global project".
 
 **Personal chat ID.** The durable Sotto-owned identity of one personal chat, independent of its provider session and of every project thread. Selecting or resuming it grants no management, delegation or project-creation authority.

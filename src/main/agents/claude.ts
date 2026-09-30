@@ -219,7 +219,12 @@ export class ClaudeStreamJsonHost implements AgentHost {
   private readonly outdated = new Set<string>()
   private outdatedTimer: ReturnType<typeof setImmediate> | undefined
   private pollTimer: ReturnType<typeof setInterval> | undefined
-  private closures: Promise<void>[] = []
+  private polling: Promise<void> | undefined
+  private readonly closures = new Set<Promise<void>>()
+  private trackClosure(work: Promise<void>): void {
+    this.closures.add(work)
+    void work.then(() => this.closures.delete(work), () => this.closures.delete(work))
+  }
   private state: AgentHostSnapshot = { connected: false, name: 'Claude Code', version: '', models: [], projects: [], threads: [],
     capabilities: { projects: true, threads: true, submit: true, observe: true, questions: true, permissions: true, interrupt: true, messageOrigin: true, reconcile: true, configureThread: true, skills: true, compact: true } }
   constructor(private readonly options: ClaudeStreamJsonHostOptions) {
@@ -278,7 +283,7 @@ export class ClaudeStreamJsonHost implements AgentHost {
   private flushCursors(): void {
     if (!this.cursorTimer) return
     clearTimeout(this.cursorTimer); this.cursorTimer = undefined
-    this.closures.push(this.persist().catch(() => undefined))
+    this.trackClosure(this.persist().catch(() => undefined))
   }
   async connect(): Promise<AgentHostSnapshot> {
     this.disconnect(); await this.closed()
@@ -612,7 +617,9 @@ export class ClaudeStreamJsonHost implements AgentHost {
       if (thread.requests.length) throw new Error('Answer the pending Claude request before sending another prompt.')
       this.dispatching.add(id)
       try {
-        if (this.staleContexts.delete(id)) {
+        if (this.staleContexts.has(id)) {
+          if (thread.backgroundWork?.length) throw new Error(backgroundWorkRunning(thread.backgroundWork, 'refreshing its context'))
+          this.staleContexts.delete(id)
           const stale = this.runtimes.get(id)
           if (stale) { await this.denyPending(id, stale); await this.stopRuntime(id, stale) }
         }
@@ -789,7 +796,12 @@ export class ClaudeStreamJsonHost implements AgentHost {
     this.options.logEvent?.('claude-settings-applied-restart')
     return { accepted: true, snapshot: this.view(command.historyFromEvents) }
   }
-  async pollSessionLogs(): Promise<void> { for (const [id, log] of this.logs) { await log.poll(); await this.readSubagentModels(id, log) } }
+  async pollSessionLogs(): Promise<void> {
+    if (this.polling) return this.polling
+    const work = this.readSessionLogs(); this.polling = work
+    try { await work } finally { if (this.polling === work) this.polling = undefined }
+  }
+  private async readSessionLogs(): Promise<void> { for (const [id, log] of this.logs) { await log.poll(); await this.readSubagentModels(id, log) } }
   /**
    * A subagent's model from its own transcript, for the workflow and background agents the stream never
    * named one for. Read on the transcript's cadence, bounded per thread, and only until each row has one.
@@ -822,11 +834,11 @@ export class ClaudeStreamJsonHost implements AgentHost {
     this.flushCursors()
     for (const [id, runtime] of this.runtimes) {
       const closure = this.denyPending(id, runtime).catch(() => undefined).then(() => { runtime.protocol.stop(); return runtime.protocol.closed })
-      this.closures.push(closure)
+      this.trackClosure(closure)
     }
     this.runtimes.clear(); this.starting.clear(); this.outdated.clear(); this.emit()
   }
-  async closed(): Promise<void> { await Promise.all(this.closures); this.closures = []; await this.usage.flushed() }
+  async closed(): Promise<void> { while (this.closures.size) await Promise.all(this.closures); await this.usage.flushed() }
   private async start(id: string): Promise<Runtime> {
     this.reaper.touch(id)
     const pending = this.starting.get(id); if (pending) return pending
@@ -878,7 +890,7 @@ export class ClaudeStreamJsonHost implements AgentHost {
         this.runtimes.delete(id); this.selfTurns.delete(id); this.queries.delete(id); this.interrupting.delete(id); this.reaper.forget(id); this.messageLog.dropEmpty(id); this.messageLog.release(id); this.streaming.delete(id); this.flushCursors(); thread.requests = []
         if (saved?.compaction?.status === 'running') {
           saved.compaction = { ...saved.compaction, status: 'uncertain', error: 'Native compaction was interrupted when Claude Code stopped. Its result is read from the native session; it will not be retried.' }
-          thread.compaction = saved.compaction; this.closures.push(this.persist().catch(() => undefined))
+          thread.compaction = saved.compaction; this.trackClosure(this.persist().catch(() => undefined))
         }
         if (cut) thread.status = 'error'
         if (turn?.status === 'running') {
@@ -890,7 +902,7 @@ export class ClaudeStreamJsonHost implements AgentHost {
         this.emit()
       }) } } catch (error) { if (mcpConfig) await rm(mcpConfig, { force: true }); throw error }
     this.runtimes.set(id, runtime)
-    this.closures.push(runtime.protocol.closed.then(async () => { if (mcpConfig) await rm(mcpConfig, { force: true }) }))
+    this.trackClosure(runtime.protocol.closed.then(async () => { if (mcpConfig) await rm(mcpConfig, { force: true }) }))
     try {
       const initialized = await runtime.protocol.control({ subtype: 'initialize', hooks: {}, sdkMcpServers: [], promptSuggestions: false, supportedDialogKinds: ['resume_return'] })
       this.threads.get(id)!.manualCompactionSupported = Array.isArray(initialized.commands) && initialized.commands.some(command => object(command)?.name === 'compact')
