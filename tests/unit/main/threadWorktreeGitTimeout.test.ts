@@ -1,21 +1,66 @@
 // @vitest-environment node
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { execFile } from 'node:child_process'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { dirname, join, resolve } from 'node:path'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { runWorktreeGitProcess } from '../../../src/main/agents/threadWorktrees'
 
-const { exec } = vi.hoisted(() => ({ exec: vi.fn((_file: string, _args: string[], _options: { timeout: number }, callback: (error: Error | null, stdout: string, stderr: string) => void) => { if (typeof callback === 'function') callback(null, '', ''); return {} }) }))
-vi.mock('node:child_process', async importOriginal => ({ ...await importOriginal<typeof import('node:child_process')>(), execFile: exec }))
-vi.mock('../../../src/main/agents/subscriptionCodex', () => ({ nativeEnvironment: () => ({ ...process.env }) }))
-import { runWorktreeGit } from '../../../src/main/agents/threadWorktrees'
-
-beforeEach(() => exec.mockClear())
+const roots: string[] = []
+afterEach(async () => {
+  vi.restoreAllMocks()
+  for (const root of roots.splice(0)) {
+    if (dirname(resolve(root)) !== resolve(tmpdir()) || !root.includes('sotto-git-timeout-')) throw new Error('Unsafe fixture cleanup')
+    await rm(root, { recursive: true, force: true })
+  }
+})
 describe('worktree Git process deadlines', () => {
-  it('gives a large checkout five minutes while keeping ordinary Git commands bounded', async () => {
-    await runWorktreeGit('.', ['worktree', 'add', '--', 'folder', 'branch'])
-    expect(exec.mock.calls[0]![2].timeout).toBe(300_000)
-    await runWorktreeGit('.', ['status', '--porcelain'])
-    expect(exec.mock.calls[1]![2].timeout).toBe(30_000)
+  it('gives a checkout five minutes and ordinary commands thirty seconds', async () => {
+    const timer = vi.spyOn(globalThis, 'setTimeout')
+    await runWorktreeGitProcess('.', ['worktree', 'add'], { executable: process.execPath, prefix: ['-e', 'process.exit(0)', '--'] })
+    expect(timer.mock.calls.some(call => call[1] === 300_000)).toBe(true)
+    await runWorktreeGitProcess('.', ['status'], { executable: process.execPath, prefix: ['-e', 'process.exit(0)', '--'] })
+    expect(timer.mock.calls.some(call => call[1] === 30_000)).toBe(true)
   })
-  it('marks a deadline kill so setup can clean up its own incomplete checkout', async () => {
-    exec.mockImplementationOnce((_file, _args, _options, callback) => { callback(Object.assign(new Error('Killed'), { killed: true, signal: 'SIGTERM' }), '', ''); return {} })
-    await expect(runWorktreeGit('.', ['worktree', 'add', '--', 'folder', 'branch'])).rejects.toMatchObject({ timedOut: true })
+  it('stops a fake Git launcher and its writing grandchild before returning a timeout', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sotto-git-timeout-')); roots.push(root)
+    const pidFile = join(root, 'writer.pid'), checkout = join(root, 'checkout')
+    const childPidFile = join(root, 'child.pid')
+    const writer = join(root, 'writer.cjs'), child = join(root, 'child.cjs'), launcher = join(root, 'git.cjs')
+    await writeFile(writer, `const fs = require('node:fs'); const folder = ${JSON.stringify(checkout)}; function write() { fs.mkdirSync(folder, {recursive:true}); fs.writeFileSync(folder + '/still-writing.txt', String(Date.now())); } write(); fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setInterval(write, 10);`)
+    await writeFile(child, `require('node:fs').writeFileSync(${JSON.stringify(childPidFile)}, String(process.pid)); require('node:child_process').spawn(process.execPath, [${JSON.stringify(writer)}], {stdio:'ignore', detached:process.platform === 'win32'}); setInterval(() => {}, 1000);`)
+    await writeFile(launcher, `require('node:child_process').spawn(process.execPath, [${JSON.stringify(child)}], {stdio:'ignore', detached:process.platform === 'win32'}); setInterval(() => {}, 1000);`)
+    let deadline: (() => void) | undefined
+    const realTimer = globalThis.setTimeout
+    vi.spyOn(globalThis, 'setTimeout').mockImplementation(((callback: () => void, delay?: number, ...args: unknown[]) => {
+      if (delay === 300_000) deadline = callback
+      return realTimer(callback, delay, ...args)
+    }) as typeof setTimeout)
+    const result = runWorktreeGitProcess(root, ['worktree', 'add'], { executable: process.execPath, prefix: [launcher] })
+    const outcome = result.catch(error => error as Error)
+    let pid: number | undefined
+    try {
+      await expect.poll(async () => readFile(pidFile, 'utf8').catch(() => '')).not.toBe('')
+      pid = Number(await readFile(pidFile, 'utf8'))
+      expect(deadline).toBeTypeOf('function')
+      deadline!()
+      expect(await outcome).toMatchObject({ timedOut: true })
+      // If only the launcher died, this writer is still alive and can recreate the removed folder.
+      expect(() => process.kill(pid!, 0)).toThrow()
+      await rm(checkout, { recursive: true })
+      await expect(readFile(join(checkout, 'still-writing.txt'))).rejects.toMatchObject({ code: 'ENOENT' })
+    } finally {
+      for (const cleanupPid of [pid, Number(await readFile(childPidFile, 'utf8').catch(() => '0'))]) {
+        if (!cleanupPid) continue
+        try {
+          process.kill(cleanupPid, 0)
+          if (process.platform === 'win32') await new Promise<void>(done => execFile('taskkill', ['/pid', String(cleanupPid), '/T', '/F'], { windowsHide: true }, () => done()))
+          else process.kill(cleanupPid, 'SIGKILL')
+        } catch { /* The regression already stopped it. */ }
+      }
+    }
+  })
+  it('reports unavailable executables without marking them as timed-out checkouts', async () => {
+    await expect(runWorktreeGitProcess('.', [], { executable: 'sotto-no-such-git-executable' })).rejects.toMatchObject({ timedOut: false, message: expect.stringContaining('Git is unavailable') })
   })
 })

@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { lstat, mkdir, opendir, readlink, realpath, stat } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -6,15 +6,48 @@ import { RECLAIM_WORKTREE_NEEDS_CONFIRMATION, type AgentWorkingCopyOptions, type
 import { nativeEnvironment } from './subscriptionCodex'
 
 export type RunGit = (cwd: string, args: string[]) => Promise<string>
-export const runWorktreeGit: RunGit = (cwd, args) => new Promise((accept, reject) => {
-  execFile('git', ['-c', 'core.quotePath=false', ...args], {
-    cwd, windowsHide: true, shell: false, timeout: args[0] === 'worktree' && args[1] === 'add' ? 300_000 : 30_000, maxBuffer: 2_000_000,
-    env: { ...nativeEnvironment(), LC_ALL: 'C', GIT_TERMINAL_PROMPT: '0' },
-  }, (error, stdout, stderr) => {
-    if (error) reject(Object.assign(new Error(error.code === 'ENOENT' ? 'Git is unavailable. Install Git or explicitly choose a shared working copy.' : stderr.trim() || error.message), { code: error.code, timedOut: error.killed === true && error.signal === 'SIGTERM' }))
-    else accept(stdout)
+export const runWorktreeGit: RunGit = (cwd, args) => runWorktreeGitProcess(cwd, args)
+
+/** The executable and deadline seam lets a real launcher/checkout tree exercise timeout recovery. */
+export function runWorktreeGitProcess(cwd: string, args: string[], options: { executable?: string; prefix?: string[]; timeout?: number } = {}): Promise<string> {
+  return new Promise((accept, reject) => {
+    const child = spawn(options.executable ?? 'git', [...(options.prefix ?? ['-c', 'core.quotePath=false']), ...args], {
+      cwd, windowsHide: true, shell: false, detached: process.platform !== 'win32',
+      env: { ...nativeEnvironment(), LC_ALL: 'C', GIT_TERMINAL_PROMPT: '0' },
+    })
+    let timedOut = false
+    let processError: Error | undefined
+    let stopping: Promise<void> = Promise.resolve()
+    const output: Buffer[] = [], errors: Buffer[] = []
+    let bytes = 0
+    const stop = (): void => {
+      if (!child.pid) return
+      stopping = process.platform === 'win32'
+        ? new Promise<void>((done, fail) => { execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }, error => error ? fail(error) : done()) })
+        : new Promise<void>((done, fail) => { try { process.kill(-child.pid!, 'SIGKILL'); done() } catch (error) { fail(error) } })
+      void stopping.catch(() => undefined)
+    }
+    const collect = (target: Buffer[], chunk: Buffer): void => {
+      bytes += chunk.length
+      if (bytes <= 2_000_000) target.push(chunk)
+      else if (!processError) { processError = new Error('Git returned too much output. Nothing was removed.'); clearTimeout(timer); stop() }
+    }
+    child.stdout.on('data', (chunk: Buffer) => collect(output, chunk))
+    child.stderr.on('data', (chunk: Buffer) => collect(errors, chunk))
+    child.on('error', error => { processError = error })
+    const timer = setTimeout(() => { timedOut = true; stop() }, options.timeout ?? (args[0] === 'worktree' && args[1] === 'add' ? 300_000 : 30_000))
+    // close follows exit and closed pipes; the tree termination command must finish before cleanup can start.
+    child.on('close', code => {
+      clearTimeout(timer)
+      void stopping.then(() => {
+        if (timedOut || processError || code !== 0) {
+          const unavailable = (processError as NodeJS.ErrnoException | undefined)?.code === 'ENOENT'
+          reject(Object.assign(new Error(unavailable ? 'Git is unavailable. Install Git or explicitly choose a shared working copy.' : timedOut ? 'Git took too long.' : Buffer.concat(errors).toString('utf8').trim() || processError?.message || 'Git could not finish this action.'), { code: (processError as NodeJS.ErrnoException | undefined)?.code ?? code, timedOut }))
+        } else accept(Buffer.concat(output).toString('utf8'))
+      }, () => reject(new Error('Git took too long and its checkout processes could not be stopped. The folder was kept.')))
+    })
   })
-})
+}
 
 export async function existingWorkingDirectory(path: string): Promise<string> {
   if (!isAbsolute(path)) throw new Error('The working folder must be an absolute path.')
