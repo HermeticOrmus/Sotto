@@ -170,7 +170,7 @@ export interface AgentHost {
   configureThreadWorkingCopy?(threadId: string, selection: AgentWorkingCopySelection): Promise<AgentHostSnapshot>
   updateThreadWorktree?(threadId: string, retry: boolean): Promise<AgentHostSnapshot>
   restoreThreadBranch?(threadId: string, withUncommittedChanges: boolean): Promise<AgentHostSnapshot>
-  /** Remove the thread's own worktree folder and keep its branch (ADR-0019). */
+  /** Remove the thread's own worktree folder and keep its branch (ADR-0041). */
   previewThreadWorktreeReclaim?(threadId: string): Promise<WorktreeReclaimPreview>
   reclaimThreadWorktree?(threadId: string, options?: { withUncommittedChanges?: boolean; automatic?: boolean; confirmedIgnored?: readonly string[]; confirmedItems?: readonly { path: string; fileCount: number }[]; confirmedRepositories?: WorktreeReclaimPreview['repositories'] }): Promise<AgentHostSnapshot>
   threadWorkingDirectory?(threadId: string): Promise<string>
@@ -226,7 +226,7 @@ export interface AgentHost {
   observeThreads?(threadIds: readonly string[]): void
   disconnect(provider?: ProviderId): void
   /**
-   * A new client for `provider` is on disk (ADR-0021). The adapter finds it again, reads its version, stops each
+   * A new client for `provider` is on disk (ADR-0042). The adapter finds it again, reads its version, stops each
    * idle process now the way the reaper does, and each working one once it goes idle, so the next process a thread
    * starts runs the new client. It never disconnects, cancels a turn or answers a request, and does nothing for a
    * provider that is not connected. Absent on a host with no local client.

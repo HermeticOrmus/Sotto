@@ -604,7 +604,7 @@ export class WorkspaceHost implements AgentHost {
   }
   /**
    * Removes this thread's own worktree folder because the user asked, or a rule the user turned on did
-   * (ADR-0019). The thread keeps its record and its branch keeps its commits; the next send puts the
+   * (ADR-0041). The thread keeps its record and its branch keeps its commits; the next send puts the
    * folder back. Refused while the thread is running, waiting on an answer, sharing the folder with
    * another thread, or has a terminal open in it. `withUncommittedChanges` is the user's answer to the
    * confirmation; a rule never gives it.

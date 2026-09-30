@@ -282,7 +282,7 @@ export const agentWorktreeSchema = z.object({
    * and for a detached HEAD. The pane compares it with `branch` to show the branch-changed notice. */
   sentBranch: z.string().optional(),
   /** When Sotto reclaimed this worktree's folder. The branch and the thread stay; the next send puts
-   * the folder back on that branch (ADR-0019). Absent while the folder is there. */
+   * the folder back on that branch (ADR-0041). Absent while the folder is there. */
   reclaimedAt: z.string().optional(),
   /** The worktree checks `branch` out as it stands instead of cutting a new branch from the base: a pull request
    * checked out into a worktree of its own, whose branch the first send puts in the new folder. */
@@ -444,7 +444,7 @@ export type ClientUpdateRun = z.infer<typeof clientUpdateRunSchema>
 /** One connected host's catalog, as the desktop keeps it apart from the others when it combines threads. */
 export const agentClientHostSchema = z.object({ hostId: z.uuid(), connected: z.boolean(), models: z.array(agentModelSchema),
   capabilities: agentCapabilitiesSchema, providers: z.array(agentProviderStatusSchema).optional(),
-  /** The host's client updates and its update line, sent only from a host that offers `client-updates` (ADR-0021). */
+  /** The host's client updates and its update line, sent only from a host that offers `client-updates` (ADR-0042). */
   clientUpdates: z.array(providerClientUpdateSchema).max(4).optional(), clientUpdateRun: clientUpdateRunSchema.optional() })
 export type AgentClientHost = z.infer<typeof agentClientHostSchema>
 
@@ -872,7 +872,7 @@ export const agentCommandSchema = z.discriminatedUnion('type', [
   /** Switch the thread's worktree back to the branch of its last send. `withUncommittedChanges` is the
    * user's answer to the confirmation; without it a worktree with uncommitted work is left alone. */
   z.object({ type: z.literal('restore-thread-branch'), threadId: id, withUncommittedChanges: z.boolean().optional() }).strict(),
-  /** Remove the thread's own worktree folder and keep its branch (ADR-0019). `withUncommittedChanges`
+  /** Remove the thread's own worktree folder and keep its branch (ADR-0041). `withUncommittedChanges`
    * is the user's answer to the confirmation; without it a folder with uncommitted work is left alone. */
   z.object({ type: z.literal('preview-reclaim-thread-worktree'), threadId: id }).strict(),
   z.object({ type: z.literal('reclaim-thread-worktree'), threadId: id, withUncommittedChanges: z.boolean().optional(), confirmedIgnored: z.array(z.string()).optional(), confirmedItems: z.array(z.object({ path: z.string(), fileCount: z.number().int().nonnegative() }).strict()).optional(), confirmedRepositories: z.array(z.object({ path: z.string(), changeCount: z.number().int().nonnegative(), unpushedCommitCount: z.number().int().nonnegative().optional(), kind: z.enum(['worktree', 'repository']) }).strict()).optional() }).strict(),
