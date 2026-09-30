@@ -201,7 +201,9 @@ import { registerMemoryIpc } from './memory/ipc'
 import { MEMORY_CHANGED } from '../shared/memory'
 import { probeMemoryStore } from './memory/probe'
 
-const memoryProbeMode = process.env.SOTTO_MEMORY_PROBE === '1'
+export { probeMemoryStore }
+
+const memoryProbeMode = !app.isPackaged && process.env.SOTTO_MEMORY_PROBE === '1'
 const e2eConfiguration = resolveE2EConfiguration(app.isPackaged, process.env)
 if (memoryProbeMode) {
   const directory = process.env.SOTTO_MEMORY_PROBE_USER_DATA
