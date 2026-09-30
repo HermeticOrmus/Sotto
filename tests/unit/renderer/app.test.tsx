@@ -320,6 +320,7 @@ describe('Sotto application onboarding integration', () => {
       listRecoveryNotices: vi.fn(async () => [
         { code: 'SETTINGS_RECOVERED' as const },
         { code: 'HISTORY_RECOVERED' as const },
+        { code: 'CREDENTIALS_RECOVERED' as const },
       ]),
       onRecoveryNotice: vi.fn((listener) => {
         recoveryListener = listener
@@ -332,9 +333,10 @@ describe('Sotto application onboarding integration', () => {
 
     await waitFor(() => expect(screen.getAllByRole('status').filter((node) =>
       node.classList.contains('tt-toast'),
-    )).toHaveLength(2))
+    )).toHaveLength(3))
     expect(screen.getByText(/restored default settings/i)).toBeVisible()
     expect(screen.getByText(/started with an empty history/i)).toBeVisible()
+    expect(screen.getByText(/Add your keys again in Settings/)).toBeVisible()
     expect(document.body).not.toHaveTextContent('C:\\private\\settings.json')
     expect(document.body).not.toHaveTextContent('private transcript content')
     expect(screen.getByRole('heading', { level: 1, name: /ready when you are/i })).toBeVisible()

@@ -472,6 +472,8 @@ Builds are ad-hoc signed and not notarized, so anyone installing the disk image 
 
 ## Troubleshooting
 
+If Sotto cannot read its saved keys, it preserves the encrypted file and shows a notice. Add your keys again in Settings.
+
 ### Either platform
 
 - **Codex shows only your messages after a restart:** Open the thread while Codex is connected. Sotto reconciles repeated saved prompts without removing the original replies. **Show earlier messages** also reaches replies outside the newest ten turns.

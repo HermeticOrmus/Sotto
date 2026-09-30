@@ -515,7 +515,7 @@ async function createRuntime(): Promise<NativeRuntimeController> {
     Date.now,
     platformDefaults,
   )
-  const credentials = new AgentCredentials(userDataPath, safeStorage)
+  const credentials = new AgentCredentials(userDataPath, safeStorage, notice => recoveryNotices.publish(notice))
   await credentials.load()
   const grokSpeech = new GrokSpeechService({ credentials, ...(e2eConfiguration === null ? {} : { fetchFn: e2eGrokSpeechFetch }) })
   const kokoroSpeech = new KokoroSpeechService({ credentials, ...(e2eConfiguration === null ? {} : { fetchFn: e2eKokoroSpeechFetch }) })
