@@ -9,6 +9,7 @@ import { toolsPanelStore } from '../tools/toolsPanelStore'
 import { useOptionalApp } from '../state/AppContext'
 import type { AgentConnection } from './AgentContext'
 import { moveListboxFocus } from './listboxKeys'
+import { writeClipboard } from './richActions'
 import { branchLabel, chordClaimed, chordMatches, createRefName, newWorktreeDraft, offersCreate, pickOutcome, pullRequestTitle, refBadges, switchFailure, TOOLBAR_SHORTCUTS, toolbarApplies, workspaceChoice, workspaceLabel, workspaceLocked, workspaceOptionId, workspaceOptions, type ToolbarThread, type WorkspaceChoice } from './branchToolbar.logic'
 import type { ThreadRow } from './threadFacts'
 import { listedHosts } from './HostBadge'
@@ -102,7 +103,7 @@ export function BranchToolbar({ row, state, command, focused = true, onExplained
     await run('branch', { type: 'configure-thread-working-copy', threadId: thread.id, workingCopy: 'independent', startFromOrigin, ...(worktree?.baseBranch ? { baseBranch: worktree.baseBranch } : {}) }, error => error ?? 'Could not change where the worktree starts from.')
   }
   const copyName = async (name: string): Promise<void> => {
-    try { await navigator.clipboard.writeText(name); setNotice({ text: `Copied ${name}.`, tone: 'status' }) }
+    try { await writeClipboard(name); setNotice({ text: `Copied ${name}.`, tone: 'status' }) }
     catch { setNotice({ text: 'Could not copy the branch name.', tone: 'error' }) }
   }
 

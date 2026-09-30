@@ -3,6 +3,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
 import '@xterm/xterm/css/xterm.css'
 import type { TerminalViewHandlers, TerminalViewLike } from './terminalStore'
+import { writeClipboard } from '../agents/richActions'
 
 /** ANSI colours per appearance, tuned to stay readable on the panel field in each mode. */
 const ANSI_DARK = {
@@ -167,7 +168,7 @@ export const createXtermView = (handlers: TerminalViewHandlers, { resolveColor =
     }
     if (ctrl && !event.shiftKey && (event.key === 'c' || event.key === 'C')) {
       if (terminal.hasSelection()) {
-        void navigator.clipboard?.writeText(terminal.getSelection()).catch(() => undefined)
+        void writeClipboard(terminal.getSelection()).catch(() => undefined)
         terminal.clearSelection()
         return false
       }

@@ -6,6 +6,7 @@ import { Button } from '../../components/Button'
 import { ConfirmationDialog } from '../../components/ConfirmationDialog'
 import { Field } from '../../components/Field'
 import { Toggle } from '../../components/Toggle'
+import { writeClipboard } from '../../agents/richActions'
 import './hosts.css'
 import './phones.css'
 
@@ -133,7 +134,7 @@ export function PhonesSettings({ phoneAccess, phoneAccessName, onUpdateSettings,
     catch (failure) { setError(failure instanceof Error ? failure.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/u, '') : 'Phone access could not be changed. Nothing was changed. Try again.'); return false }
   }
   const copyAddress = async (address: string): Promise<void> => {
-    try { await navigator.clipboard.writeText(address); setCopied(true); setTimeout(() => setCopied(false), 1500) }
+    try { await writeClipboard(address); setCopied(true); setTimeout(() => setCopied(false), 1500) }
     catch { setError('The address could not be copied. Select it and copy it instead.') }
   }
 

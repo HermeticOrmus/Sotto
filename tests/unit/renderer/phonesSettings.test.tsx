@@ -5,7 +5,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { PhonesSettings } from '../../../src/renderer/src/features/settings/PhonesSettings'
 import type { PairedPhone, PhonesBridge, PhonesCommand, PhonesState } from '../../../src/shared/phones'
 
-afterEach(cleanup)
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks() })
 const DNS = 'laptop-russh2j5.tail5728ca.ts.net'
 const OFF: PhonesState = {
   enabled: false, localHostRunning: true, phase: 'off', tailscale: { status: 'waiting' }, serve: { status: 'waiting' }, address: null,
@@ -29,6 +29,18 @@ function show(state: PhonesState, options: { answer?: (command: PhonesCommand, s
   return { command, push, update, openHosts }
 }
 const step = (name: string) => screen.getByText(name, { selector: 'b' }).closest('li')!
+
+it('copies the phone address through main when browser clipboard access is denied', async () => {
+  const user = userEvent.setup()
+  const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockRejectedValue(new Error('Permission denied'))
+  const deliverOutput = vi.fn(async () => 'copied')
+  vi.stubGlobal('sotto', { deliverOutput })
+  show(READY)
+  await user.click(await screen.findByRole('button', { name: 'Copy address' }))
+  expect(deliverOutput).toHaveBeenCalledWith({ text: READY.address, autoPaste: false, pasteDelayMs: 50 })
+  expect(writeText).not.toHaveBeenCalled()
+  expect(await screen.findByRole('button', { name: 'Copied' })).toBeTruthy()
+})
 
 it('off: every step waits, and no code can be shown yet', async () => {
   const { update } = show(OFF)

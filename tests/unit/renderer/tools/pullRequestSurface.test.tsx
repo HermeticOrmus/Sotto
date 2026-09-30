@@ -59,6 +59,18 @@ async function menu(label: string) {
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.mocked(useOptionalApp).mockReset().mockReturnValue(null) })
 
+it('copies the pull request link through main when browser clipboard access is denied', async () => {
+  const { writeText, onStatus } = mount()
+  writeText.mockRejectedValue(new Error('Permission denied'))
+  const deliverOutput = vi.fn(async () => 'copied')
+  vi.stubGlobal('sotto', { ...window.sotto, deliverOutput })
+  await opened()
+  await menu('Copy link')
+  await waitFor(() => expect(deliverOutput).toHaveBeenCalledWith({ text: URL, autoPaste: false, pasteDelayMs: 50 }))
+  expect(writeText).not.toHaveBeenCalled()
+  expect(onStatus).toHaveBeenCalledWith('Link copied')
+})
+
 describe('the merge checklist, read from the pull request', () => {
   const read = (change: Partial<GitPullRequestDetail>) => checklist(detail(change)).map(line => [line.label, line.tone, line.why, line.fix?.kind ?? null])
   it('lists five lines in the order a merge meets them, each done for a pull request ready to merge', () => {

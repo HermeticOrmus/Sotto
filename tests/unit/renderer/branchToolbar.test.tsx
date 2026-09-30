@@ -262,6 +262,17 @@ describe('BranchToolbar', () => {
     await waitFor(() => expect(writeText).toHaveBeenCalledWith('later'))
     expect(await screen.findByRole('status')).toHaveTextContent('Copied later.')
   })
+  it('copies the branch through main when browser clipboard access is denied', async () => {
+    mount(thread())
+    const deliverOutput = vi.fn(async () => 'copied')
+    const writeText = vi.fn(async () => { throw new Error('Permission denied') })
+    vi.stubGlobal('sotto', { ...window.sotto, deliverOutput })
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
+    fireEvent.contextMenu(screen.getByRole('combobox', { name: 'Choose branch' }))
+    await waitFor(() => expect(deliverOutput).toHaveBeenCalledWith({ text: 'main', autoPaste: false, pasteDelayMs: 50 }))
+    expect(writeText).not.toHaveBeenCalled()
+    expect(screen.getByRole('status')).toHaveTextContent('Copied main.')
+  })
   it('shows the pull request badge with its title and opens the Pull request surface in Tools', () => {
     toolsPanelStore.setOpen(false)
     mount(thread({ worktree: { mode: 'shared', status: 'ready', path: project.path, branch: 'feat/x', git: { ...git, branch: 'feat/x', pullRequest: { number: 12, title: 'Ship it', url: 'https://github.com/o/r/pull/12', state: 'open', draft: false } } } }))

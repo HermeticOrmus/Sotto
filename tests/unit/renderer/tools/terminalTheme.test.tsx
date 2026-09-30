@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-const xterm = vi.hoisted(() => ({ instances: [] as { options: Record<string, unknown>; themes: unknown[] }[] }))
+const xterm = vi.hoisted(() => ({ instances: [] as { options: Record<string, unknown>; themes: unknown[]; key: (event: KeyboardEvent) => boolean; clearSelection: ReturnType<typeof vi.fn> }[] }))
 const gpu = vi.hoisted(() => ({ fail: false, instances: [] as { dispose: ReturnType<typeof vi.fn>; lose(): void }[] }))
 vi.mock('@xterm/addon-webgl', () => ({ WebglAddon: class {
   readonly dispose = vi.fn()
@@ -21,7 +21,11 @@ vi.mock('@xterm/xterm', () => ({
     }
     loadAddon(addon: unknown): void { if (gpu.fail && addon && typeof addon === 'object' && 'onContextLoss' in addon) throw new Error('WebGL unavailable') }
     onData(): void {}
-    attachCustomKeyEventHandler(): void {}
+    key = (_event: KeyboardEvent): boolean => true
+    attachCustomKeyEventHandler(handler: (event: KeyboardEvent) => boolean): void { this.key = handler }
+    hasSelection(): boolean { return true }
+    getSelection(): string { return 'terminal selection' }
+    readonly clearSelection = vi.fn()
     open(): void {}
     dispose(): void {}
   },
@@ -30,6 +34,23 @@ vi.mock('@xterm/addon-fit', () => ({ FitAddon: class { proposeDimensions(): unde
 vi.mock('@xterm/xterm/css/xterm.css', () => ({}))
 
 const { createXtermView, terminalTheme } = await import('../../../../src/renderer/src/tools/terminalView')
+
+it('copies a terminal selection through main when browser clipboard access is denied', async () => {
+  vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} }))
+  const deliverOutput = vi.fn(async () => 'copied')
+  const writeText = vi.fn(async () => { throw new Error('Permission denied') })
+  vi.stubGlobal('sotto', { deliverOutput })
+  vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
+  const view = createXtermView({ onInput() {}, onInterrupt() {} }, { resolveColor: value => value })
+  const terminal = xterm.instances[0]!
+  expect(terminal.key(new KeyboardEvent('keydown', { key: 'c', ctrlKey: true }))).toBe(false)
+  await Promise.resolve()
+  expect(deliverOutput).toHaveBeenCalledWith({ text: 'terminal selection', autoPaste: false, pasteDelayMs: 50 })
+  expect(writeText).not.toHaveBeenCalled()
+  expect(terminal.clearSelection).toHaveBeenCalledOnce()
+  view.dispose()
+  vi.unstubAllGlobals()
+})
 
 /** Stands in for the page's colour engine: the named CSS values the tests use, as the sRGB a canvas reads back. */
 const PAINTED: Record<string, string> = {
@@ -68,6 +89,7 @@ function paint(root: HTMLElement, values: Record<string, string>): void {
 }
 
 afterEach(() => {
+  vi.unstubAllGlobals()
   document.documentElement.removeAttribute('style')
   for (const name of Object.keys(document.documentElement.dataset)) delete document.documentElement.dataset[name]
   xterm.instances.length = 0
