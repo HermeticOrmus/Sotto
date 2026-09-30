@@ -9,6 +9,7 @@ import { AgentCredentials } from '../../src/main/agents/credentials'
 import type { AgentState } from '../../src/shared/agents'
 import { immediatePublishScheduler } from '../fixtures/publishScheduler'
 import { FollowupStore } from '../../src/main/agents/followups'
+import { TurnRecorder } from '../../src/main/agents/turns'
 import { AtomicJsonStore } from '../../src/main/storage/atomicJsonStore'
 
 const cleanup: Array<() => Promise<void>> = []
@@ -18,7 +19,8 @@ async function fixture(root?: string) {
   const credentials = new AgentCredentials(join(f.root, 'vault'), { isEncryptionAvailable: () => false, encryptString: value => Buffer.from(value), decryptString: value => value.toString() })
   await credentials.load()
   const opened: string[] = []
-  const control = new AgentControl({ schedule: immediatePublishScheduler, directory: f.root, host: f.host, credentials,
+  const recorder = new TurnRecorder({ directory: f.root, historyEnabled: () => true, resolveSession: id => f.registry.byThread(id) })
+  const control = new AgentControl({ schedule: immediatePublishScheduler, directory: f.root, host: f.host, credentials, turns: recorder,
     openThreadFolder: async path => { opened.push(path) },
     reasoner: { intent: async () => ({ type: 'clarify', text: 'Choose a thread' }), decide: async () => ({ decision: 'human', text: 'Review' }) },
     membership: { status: async () => ({ status: 'beta', label: 'Test', expiresAt: null }), action: async () => ({ status: 'beta', label: 'Test', expiresAt: null }) } })
@@ -26,7 +28,7 @@ async function fixture(root?: string) {
   const close = () => closing ??= (async () => { control.dispose(); await control.privacyChanged(); await f.stop() })()
   cleanup.push(async () => { await close(); await f.remove() })
   await control.start(); await control.command({ type: 'connect' })
-  return { ...f, control, opened, close }
+  return { ...f, control, opened, recorder, close }
 }
 function thread(state: AgentState) { return state.host.threads.find(thread => thread.id === state.activeThreadId)! }
 
@@ -40,7 +42,29 @@ describe('workspace controller integration', () => {
       const result = await f.control.command({ type: 'interrupt', threadId })
       expect(f.adapters.codex.commands.filter(command => command.type === 'interrupt')).toHaveLength(1)
       expect(result.assignments.find(item => item.threadId === threadId)?.paused).toBe(true)
-      expect(result.error).toBe('Stop was sent, but the queue pause could not be saved. Your queued messages are still saved. Review the thread before resuming queued follow-ups.')
+      expect((await f.recorder.recent(20)).find(turn => turn.commandType === 'interrupt')).toMatchObject({ outcome: 'completed', error: '' })
+      expect(result.error).toBe('Stop was sent, but the queue pause could not be saved. Your queued messages are still saved. Check them before sending another message.')
+    } finally { pause.mockRestore() }
+  })
+
+  it.each(['closed', 'unsupported'] as const)('leaves management and queued messages unchanged when Stop is refused: %s', async refusal => {
+    const f = await fixture()
+    const threadId = f.control.get().host.threads.find(thread => thread.providerId === 'codex')!.id
+    await f.control.command({ type: 'assign', threadId, instruction: 'Keep watching' })
+    const native = f.adapters.codex.state.threads.find(thread => thread.id === f.registry.byThread(threadId)!.sessionId)!
+    if (refusal === 'closed') native.archivedAt = new Date().toISOString()
+    else f.adapters.codex.state.capabilities.interrupt = false
+    f.adapters.codex.emit()
+    await f.control.command({ type: 'refresh' })
+    const before = f.control.get()
+    const pause = vi.spyOn(FollowupStore.prototype, 'pause')
+    try {
+      const result = await f.control.command({ type: 'interrupt', threadId })
+      expect(result.error).toBe(refusal === 'closed' ? 'This thread is settled or archived. There is no open work to stop.' : 'This connection cannot stop agent work.')
+      expect(result.assignments).toEqual(before.assignments)
+      expect(result.followups).toEqual(before.followups)
+      expect(pause).not.toHaveBeenCalled()
+      expect(f.adapters.codex.commands.filter(command => command.type === 'interrupt')).toEqual([])
     } finally { pause.mockRestore() }
   })
 

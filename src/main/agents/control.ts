@@ -1775,15 +1775,23 @@ export class AgentControl {
     try {
       this.state.error = null
       this.publish()
+      this.validateInterrupt(command.threadId)
       const assignment = this.state.assignments.find(item => item.threadId === command.threadId)
       if (assignment) assignment.paused = true
+      let pauseFailure: string | undefined
       try { await this.followupStore.pause(command.threadId, 'The turn was interrupted. Review the thread and resume queued follow-ups when ready.') }
-      catch { failure = 'Stop was sent, but the queue pause could not be saved. Your queued messages are still saved. Review the thread before resuming queued follow-ups.' }
+      catch { pauseFailure = 'Stop was sent, but the queue pause could not be saved. Your queued messages are still saved. Check them before sending another message.' }
       this.syncFollowups(); await this.execute(command, turn); await this.persist()
-      if (failure) this.state.error = failure
+      if (pauseFailure) this.state.error = pauseFailure
     } catch (error) { failure = error instanceof Error ? error.message : 'Could not interrupt this thread.'; this.state.error = failure }
     release()
     this.publish(); await this.finishTurn(turn, failure); return this.shell()
+  }
+  private validateInterrupt(threadId: string): void {
+    this.canAct(undefined, false)
+    const thread = this.thread(threadId)
+    if (!capabilitiesForThread(this.state.host, thread).interrupt) throw new Error('This connection cannot stop agent work.')
+    if (isThreadClosed(thread)) throw new Error('This thread is settled or archived. There is no open work to stop.')
   }
   private async steerFollowup(command: Extract<AgentCommand, { type: 'steer-followup' }>, turn?: ActiveTurn): Promise<void> {
     const queued = this.followupStore.get().items.find(item => item.threadId === command.threadId && item.id === command.itemId)
@@ -2255,11 +2263,7 @@ export class AgentControl {
       }
       case 'pause': this.assignment(command.threadId).paused = true; this.say(`Paused management of ${this.thread(command.threadId).title}. Provider work continues.`); return
       case 'interrupt': {
-        const validate = (): void => {
-          this.canAct(undefined, false)
-          if (!capabilitiesForThread(this.state.host, this.thread(command.threadId)).interrupt) throw new Error('This connection cannot stop agent work.')
-          if (isThreadClosed(this.thread(command.threadId))) throw new Error('This thread is settled or archived. There is no open work to stop.')
-        }
+        const validate = (): void => this.validateInterrupt(command.threadId)
         validate()
         const assignment = this.state.assignments.find(item => item.threadId === command.threadId)
         if (assignment) assignment.paused = true
