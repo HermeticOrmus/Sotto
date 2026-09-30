@@ -610,7 +610,8 @@ describe('independent working-copy allocation', () => {
     await expect(service.reclaim(a, { confirmedIgnored: preview.ignored, confirmedRepositories: preview.repositories })).rejects.toThrow('files changed')
     expect(await readFile(join(a.path!, kind === 'ignored' ? 'new.env' : 'unsaved.txt'), 'utf8')).toBe('keep me')
   })
-  it.each([false, true])('allows automatic removal of clean initialized submodules (recursive: %s)', async recursive => {
+  it.each(['clean', 'recursive', 'dirty-hidden'])('reclaims initialized submodules safely (%s)', async mode => {
+    const recursive = mode === 'recursive'
     const f = await fixture()
     const module = join(f.root, 'module'); await mkdir(module)
     await git(module, ['init'])
@@ -630,6 +631,16 @@ describe('independent working-copy allocation', () => {
     await git(f.project, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-am', 'Add submodule'])
     const a = await f.service.ensure(await f.service.allocate(f.project, 'independent'))
     await git(a.path!, ['-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', '--recursive'])
+    if (mode === 'dirty-hidden') {
+      await git(a.path!, ['config', 'submodule.module.ignore', 'all'])
+      await writeFile(join(a.path!, 'module', 'module.txt'), 'uncommitted module work')
+      const facts = await f.service.reclaimFacts(a)
+      expect(facts.dirty).toBe(true)
+      expect(facts.repositories).toEqual([{ path: 'module/', changeCount: 1, kind: 'worktree' }])
+      await expect(f.service.reclaim(a, { automatic: true })).rejects.toThrow('besides installed dependencies')
+      expect((await f.service.reclaim(a, { withUncommittedChanges: true, confirmedIgnored: facts.ignored, confirmedRepositories: facts.repositories })).reclaimedAt).toBeTruthy()
+      return
+    }
     expect((await f.service.reclaimFacts(a)).repositories).toEqual([])
     expect((await f.service.reclaim(a, { automatic: true })).reclaimedAt).toBeTruthy()
   })

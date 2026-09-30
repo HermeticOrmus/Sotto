@@ -435,7 +435,7 @@ export class ThreadWorktrees {
 
   private async reclaimFactsWithin(metadata: AgentWorktree, identityInLane?: RegistryIdentity): Promise<{ facts: WorktreeReclaimFacts; identity?: RegistryIdentity; submodules: string[] }> {
     const observed = identityInLane ? { root: (await this.git(metadata.path!, ['rev-parse', '--show-toplevel'])).trim(), listing: await this.git(metadata.repositoryRoot!, ['worktree', 'list', '--porcelain', '-z']) } : undefined
-    const { worktree: inspected, identity } = await this.inspectWithin(metadata, identityInLane, observed)
+    const { worktree: inspected, identity } = await this.inspectWithin(metadata, identityInLane, observed, true)
     const path = inspected.path!
     const [listing, untrackedListing] = await Promise.all([
       this.git(path, ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z']),
@@ -469,11 +469,10 @@ export class ThreadWorktrees {
           const gitMarker = await lstat(join(full, '.git')).catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return undefined; throw error })
           const bareCandidate = !gitMarker && entry.name !== '.git' && !gitMetadata && await lstat(join(full, 'HEAD')).then(info => info.isFile(), () => false) && await lstat(join(full, 'objects')).then(info => info.isDirectory(), () => false)
           const bare = bareCandidate && (await this.git(full, ['rev-parse', '--is-bare-repository'])).trim() === 'true'
-          let submodule = false
           if (!gitMetadata && entry.name !== '.git' && (gitMarker || bare)) {
             const indexedPath = relative(indexRoot, full).split(sep).join('/')
             const indexEntry = await this.git(indexRoot, ['--literal-pathspecs', 'ls-files', '--stage', '-z', '--', indexedPath])
-            submodule = indexEntry.split('\0').some(record => record.startsWith('160000 ') && record.slice(record.indexOf('\t') + 1) === indexedPath)
+            const submodule = indexEntry.split('\0').some(record => record.startsWith('160000 ') && record.slice(record.indexOf('\t') + 1) === indexedPath)
             const status = bare ? '' : await this.git(full, ['status', '--porcelain', '--untracked-files=all', '-z'])
             const ignoredModule = submodule ? (await this.git(full, ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z'])).split('\0').filter(item => item && !DEPENDENCY_FOLDER.test(item)) : []
             if (submodule) submodules.push(local)
@@ -589,7 +588,7 @@ export class ThreadWorktrees {
     return (await this.inspectWithin(metadata)).worktree
   }
 
-  private async inspectWithin(metadata: AgentWorktree, identity?: RegistryIdentity, observed?: InspectionReads): Promise<{ worktree: AgentWorktree; identity?: RegistryIdentity }> {
+  private async inspectWithin(metadata: AgentWorktree, identity?: RegistryIdentity, observed?: InspectionReads, reclaiming = false): Promise<{ worktree: AgentWorktree; identity?: RegistryIdentity }> {
     if (!metadata.path) throw new Error('The working folder is not allocated. Retry setup.')
     const path = await existingWorkingDirectory(metadata.path)
     if (metadata.mode === 'shared') {
@@ -626,6 +625,6 @@ export class ThreadWorktrees {
     if (pathKey(root.trim()) !== pathKey(path) || pathKey(common.trim()) !== pathKey(identity.common)) throw new Error('The working folder no longer belongs to the original repository.')
     await this.workingDirectory(metadata)
     // A folder that is there was not reclaimed, whatever the record last said.
-    return { identity, worktree: { ...metadata, branch, ...(metadata.temporaryBranch && branch !== metadata.branch ? { temporaryBranch: false } : {}), status: 'ready', error: undefined, reclaimedAt: undefined, dirty: (await this.git(path, ['status', '--porcelain', '--untracked-files=normal'])).length > 0 } }
+    return { identity, worktree: { ...metadata, branch, ...(metadata.temporaryBranch && branch !== metadata.branch ? { temporaryBranch: false } : {}), status: 'ready', error: undefined, reclaimedAt: undefined, dirty: (await this.git(path, ['status', '--porcelain', '--untracked-files=normal', ...(reclaiming ? ['--ignore-submodules=none'] : [])])).length > 0 } }
   }
 }
