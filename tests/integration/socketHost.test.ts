@@ -568,11 +568,47 @@ describe('staged images over the socket (ADR-0031)', () => {
 describe('host version and features', () => {
   it('advertises the Sotto version and features in health, the listener file and the hello reply', async () => {
     const health = await (await fetch(url + '/v1/health')).json() as Record<string, unknown>
-    expect(health).toMatchObject({ v: 1, status: 'ready', sottoVersion: packageVersion, features: ['message-aliases', 'detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders', 'provider-sign-in'] })
+    expect(health).toMatchObject({ v: 1, status: 'ready', sottoVersion: packageVersion, features: ['message-aliases', 'detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders', 'provider-sign-in', 'client-updates'] })
     const listener = JSON.parse(await readFile(join(root, 'host-listener.json'), 'utf8')) as Record<string, unknown>
-    expect(listener).toMatchObject({ v: 1, sottoVersion: packageVersion, features: ['message-aliases', 'detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders', 'provider-sign-in'] })
+    expect(listener).toMatchObject({ v: 1, sottoVersion: packageVersion, features: ['message-aliases', 'detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders', 'provider-sign-in', 'client-updates'] })
     const { client } = await pair()
-    expect(await client.connect()).toMatchObject({ sottoVersion: packageVersion, features: ['message-aliases', 'detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders', 'provider-sign-in'], capabilities: { mayAnswer: false } })
+    expect(await client.connect()).toMatchObject({ sottoVersion: packageVersion, features: ['message-aliases', 'detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders', 'provider-sign-in', 'client-updates'], capabilities: { mayAnswer: false } })
+  })
+
+  it('runs client updates only where it offers them: the headless host does, the phone listener does not (#480)', async () => {
+    const { client } = await pair()
+    expect(client.offersClientUpdates()).toBe(true)
+    // The command reaches the host, which refuses it in words: nothing has been checked here yet.
+    expect((await client.command({ type: 'queue-client-updates', providers: ['codex'] })).error).toBe('Sotto has not checked Codex yet. Check again, then update it.')
+    const phone = await startSocketServer({ service: host.service, pairing: host.pairing })
+    try {
+      expect(phone.descriptor.features).not.toContain('client-updates')
+      const paired = await host.pairing.redeem(host.pairing.issuePairingCode().code, 'iPhone')
+      const other = new SocketHostService({ url: 'http://127.0.0.1:' + phone.descriptor.port, token: paired.token }); clients.push(other)
+      await other.connect()
+      expect(other.offersClientUpdates()).toBe(false)
+      await expect(other.command({ type: 'queue-client-updates', providers: ['codex'] })).rejects.toMatchObject({ code: 'forbidden' })
+      await expect(other.command({ type: 'cancel-client-updates', providers: ['codex'] })).rejects.toMatchObject({ code: 'forbidden' })
+    } finally { await phone.close() }
+  })
+
+  it('sends the mise channel and the waiting state only to a client that accepts client-updates, and the rest as it knew them (#480)', async () => {
+    const reading = { id: 'codex' as const, installed: '0.155.1', published: '0.158.0', behind: true, channel: 'mise' as const, command: 'mise upgrade codex',
+      canInstall: true, checkedAt: '2026-09-29T12:00:00.000Z', state: 'queued' as const }
+    const service: HostService = {
+      shell: () => ({ ...host.service.shell(), clientUpdates: [reading] }), state: () => host.service.state(), threadDetail: id => host.service.threadDetail(id),
+      command: (command, identity) => host.service.command(command, identity), events: () => [], subscribe: () => () => undefined,
+    }
+    // A client accepts client-updates in its hello when the host lists it; one from before #480, or the iPhone client, never does.
+    for (const [offered, expected] of [[true, { channel: 'mise', state: 'queued' }], [false, { channel: 'unknown', state: 'idle' }]] as const) {
+      const server = await startSocketServer({ service, pairing: host.pairing, clientUpdates: offered })
+      try {
+        const paired = await host.pairing.redeem(host.pairing.issuePairingCode().code, offered ? 'Desktop' : 'Older desktop')
+        const client = new SocketHostService({ url: 'http://127.0.0.1:' + server.descriptor.port, token: paired.token }); clients.push(client)
+        await client.connect()
+        expect(client.shell().clientUpdates, String(offered)).toEqual([expect.objectContaining(expected)])
+      } finally { await server.close() }
+    }
   })
 
   it('keeps the version sentence for an unreadable push from a host of another version when a thread once too large arrives', async () => {

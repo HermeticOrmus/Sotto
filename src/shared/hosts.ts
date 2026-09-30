@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import type { HostDeviceList, TailscaleConnectOutcome, TailscaleSummary } from './hostDevices'
 import { providerIdSchema } from './agents'
-import type { HostProviderAction, HostProviderActionResult, HostProviderJobState, HostSignInRequest, ProviderSignInView } from './hostProviders'
+import type { HostClientUpdateRequest, HostProviderAction, HostProviderActionResult, HostProviderJobState, HostSignInRequest, ProviderSignInView } from './hostProviders'
 import { hostUpdateCommandSchema, type HostUpdateState } from './hostUpdates'
 
 export const HOSTS_GET = 'hosts:get'
@@ -181,6 +181,8 @@ export interface HostsBridge {
   openTailscaleDownload(): Promise<void>
   /** The host's own connect, disconnect or refresh for one of its providers (ADR-0037). */
   providerAction(action: HostProviderAction): Promise<HostProviderActionResult>
+  /** Update one or more of a connected host's clients on that host, one at a time (#480). */
+  updateClients(request: HostClientUpdateRequest): Promise<HostProviderActionResult>
   /** A provider's sign-in on a connected host: start, read, hand in a pasted code, cancel, or open its page (ADR-0037). */
   signIn(request: HostSignInRequest): Promise<ProviderSignInView | null>
 }

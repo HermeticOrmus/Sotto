@@ -1,6 +1,6 @@
-import React, { useEffect, useId, useRef, useState, type ReactNode } from 'react'
+import React, { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { Check, Copy } from 'lucide-react'
-import { PROVIDER_LABELS, type AgentProviderStatus, type ProviderId } from '../../../../shared/agents'
+import { PROVIDER_LABELS, type AgentProviderStatus, type ClientUpdateRun, type ProviderClientUpdate, type ProviderId } from '../../../../shared/agents'
 import type { HostSetupChoice, HostsBridge, HostStatus } from '../../../../shared/hosts'
 import { DEVIN_SIGN_IN_COMMAND, HOST_PROVIDER_JOB_WORDS, hostProviderJobCase, PROVIDER_SIGN_IN_SHAPES, type HostProviderAction, type HostProviderJobCase, type HostProviderJobState } from '../../../../shared/hostProviders'
 import { Button } from '../../components/Button'
@@ -9,6 +9,8 @@ import { useOptionalAgents } from '../../agents/AgentContext'
 import { useOptionalApp } from '../../state/AppContext'
 import { HostProviderSignIn } from './HostProviderSignIn'
 import { HostProviderAgent } from './HostProviderAgent'
+import { HostClientUpdatesChip, tileUpdateParts, useHostClientUpdates, waitingForOf, type SendClientUpdate } from './HostClientUpdates'
+import type { HostClientUpdatesView } from './hostClientUpdateWords'
 import './hostProviders.css'
 
 /** The order the tiles are in: the providers the prototype drew, in its order (ADR-0037). */
@@ -82,10 +84,18 @@ function jobNote(job: HostProviderJobState | undefined, kind: HostProviderTileKi
   return ''
 }
 
-function ProviderTile({ host, provider, status, bridge, job, onSignIn, onAgent }: {
+/** What a tile needs of its host's client updates (#480). */
+interface TileUpdates {
+  readonly view: HostClientUpdatesView; readonly run: ClientUpdateRun | undefined; readonly send: SendClientUpdate; readonly busy: boolean
+  readonly refusal: { readonly providers: readonly ProviderId[]; readonly text: string } | undefined
+}
+
+function ProviderTile({ host, provider, status, bridge, job, onSignIn, onAgent, updates }: {
   readonly host: HostStatus; readonly provider: ProviderId; readonly status: AgentProviderStatus | undefined
   readonly bridge: HostsBridge; readonly job: HostProviderJobState | undefined
   readonly onSignIn: (provider: ProviderId) => void; readonly onAgent: (provider: ProviderId, jobCase: HostProviderJobCase) => void
+  /** The host's client updates, when it offers them: this tile shows its own client's. */
+  readonly updates?: TileUpdates | undefined
 }): ReactNode {
   const name = PROVIDER_LABELS[provider]
   const working = job && running(job) ? job : undefined
@@ -99,6 +109,12 @@ function ProviderTile({ host, provider, status, bridge, job, onSignIn, onAgent }
   const [note, setNote] = useState<{ readonly text: string; readonly kind: HostProviderTileKind } | null>(null)
   const titleId = useId()
   const actions = useRef<HTMLDivElement>(null)
+  // A connected client that is behind, waiting, updating or did not update says so under its version (#480).
+  const update = tile.kind === 'connected' && updates ? updates.view.shown.find(item => item.id === provider) : undefined
+  const parts = tileUpdateParts({ update, phase: update ? updates!.view.phases.get(provider)! : 'current', host: host.name,
+    waitingFor: updates ? waitingForOf(updates.view, provider, updates.run, HOST_PROVIDER_ORDER) : undefined, busy: updates?.busy ?? false,
+    send: updates?.send ?? (async () => undefined) })
+  const refused = updates?.refusal?.providers.includes(provider) ? updates.refusal.text : undefined
   // A new settled state from the host says more than the last press's note; passing through Connecting does not.
   useEffect(() => { if (tile.kind !== 'connecting') setNote(current => current && current.kind !== tile.kind ? null : current) }, [tile.kind])
   /** The control in this tile's actions that last held focus, while it holds it or was taken away holding it. */
@@ -114,7 +130,21 @@ function ProviderTile({ host, provider, status, bridge, job, onSignIn, onAgent }
     const focused = document.activeElement
     if ((focused === null || focused === document.body || !focused.isConnected) && !document.querySelector('[role="dialog"]')) actions.current?.querySelector<HTMLElement>('button:not(:disabled)')?.focus()
   }, [tile.kind])
-  const focusIn = (event: React.FocusEvent<HTMLDivElement>): void => { if (event.target instanceof HTMLElement) held.current = event.target }
+  // Update, Try again and Cancel update go as the host takes them. Focus moves to the host's chip, which follows the
+  // update, and never to Disconnect, where a second Enter would disconnect the client being updated (#480).
+  useEffect(() => {
+    const gone = held.current
+    if (!gone || gone.isConnected) return
+    const focused = document.activeElement
+    if (focused !== null && focused !== document.body && focused.isConnected) return
+    const chip = document.querySelector<HTMLElement>(`[data-host-providers="${CSS.escape(host.id)}"] .host-client-updates__chip`)
+    const target = actions.current?.querySelector<HTMLElement>('[data-update-action]:not(:disabled)') ?? chip
+    // Nothing of the update to go to: the control that went is left for the effect above, as before.
+    if (!target) return
+    held.current = null
+    target.focus()
+  }, [parts.phase, host.id])
+  const focusIn =(event: React.FocusEvent<HTMLDivElement>): void => { if (event.target instanceof HTMLElement) held.current = event.target }
   // Focus leaving for somewhere else lets go. A control removed or disabled while focused (Stop turning into Stopping…)
   // lost focus to the app rather than to the user, so it stays held for the effect above to replace.
   const focusOut = (event: React.FocusEvent<HTMLDivElement>): void => {
@@ -149,7 +179,7 @@ function ProviderTile({ host, provider, status, bridge, job, onSignIn, onAgent }
     catch (failure) { setNote({ text: failure instanceof Error ? failure.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/u, '') : 'The agent could not be stopped. Try again.', kind: 'working' }) }
     finally { setStopping(false) }
   }
-  const shownNote = note && note.kind === tile.kind ? note.text : jobNote(job, tile.kind)
+  const shownNote = refused ?? (note && note.kind === tile.kind ? note.text : jobNote(job, tile.kind) || parts.note || '')
   const jobCase = hostProviderJobCase(status)
   const action = (): ReactNode => {
     // Keys keep a pressed control from turning into another one in place: Stop must not become Check again under focus.
@@ -157,7 +187,11 @@ function ProviderTile({ host, provider, status, bridge, job, onSignIn, onAgent }
       <Button key="show" variant="secondary" disabled={!working.threadId} aria-label={`Show thread ${working.threadTitle}`} onClick={showThread}>Show thread</Button>
       <Button key="stop" variant="ghost" disabled={stopping} aria-label={`Stop the agent working on ${name} on ${host.name}`} onClick={() => void stop()}>{stopping ? 'Stopping…' : 'Stop'}</Button>
     </div>
-    if (tile.kind === 'connected') return <Button variant="ghost" disabled={pending !== null} aria-label={`Disconnect ${name} on ${host.name}`} onClick={() => void act('disconnect')}>{pending ? PENDING_LABEL[pending] : 'Disconnect'}</Button>
+    if (tile.kind === 'connected') {
+      const disconnect = <Button key="disconnect" variant="ghost" disabled={pending !== null} aria-label={`Disconnect ${name} on ${host.name}`} onClick={() => void act('disconnect')}>{pending ? PENDING_LABEL[pending] : 'Disconnect'}</Button>
+      // Update beside Disconnect, as the pick drew it: the tile's own update, run on this host.
+      return parts.action ? <div className="host-provider__actions">{parts.action}{disconnect}</div> : disconnect
+    }
     if (tile.kind === 'off') return <Button variant="secondary" disabled={pending !== null} aria-label={`Connect ${name} on ${host.name}`} onClick={() => void act('connect')}>{pending ? PENDING_LABEL[pending] : 'Connect'}</Button>
     if (tile.kind === 'signed-out') {
       if (!PROVIDER_SIGN_IN_SHAPES[provider]) return <SignInCommand host={host.name} />
@@ -172,7 +206,7 @@ function ProviderTile({ host, provider, status, bridge, job, onSignIn, onAgent }
     }
     return null
   }
-  return <li className="host-provider" data-kind={tile.kind} data-provider={provider} aria-labelledby={titleId}>
+  return <li className="host-provider" data-kind={tile.kind} data-provider={provider} data-update={parts.phase === 'current' ? undefined : parts.phase} aria-labelledby={titleId}>
     <div className="host-provider__top">
       <span className="host-provider__mark" aria-hidden="true"><ProviderMark provider={provider} name={name} size={16} /></span>
       <h5 id={titleId}>{name}</h5>
@@ -180,6 +214,7 @@ function ProviderTile({ host, provider, status, bridge, job, onSignIn, onAgent }
     <p className="host-provider__state"><span className="host-provider__dot" aria-hidden="true" />{tile.state}</p>
     {working ? <p className="host-provider__detail">In the thread <b>{working.threadTitle}</b> on this computer.</p>
       : tile.detail ? <p className="host-provider__detail">{tile.detail}</p> : null}
+    {parts.line}{parts.below ? <div className="host-client-update__below">{parts.below}</div> : null}
     <div ref={actions} className="host-provider__act" onFocus={focusIn} onBlur={focusOut}>{action()}</div>
     <p className="host-provider__note" role="status">{shownNote}</p>
   </li>
@@ -191,8 +226,11 @@ function ProviderTile({ host, provider, status, bridge, job, onSignIn, onAgent }
  * that runs the provider's own sign-in on the host and finishes it in this computer's browser. A provider the host cannot
  * use offers an agent to install, update or fix it (ADR-0035), and its tile follows that agent while it works.
  */
-export function HostProviders({ host, providers, bridge, job, choice }: {
+export function HostProviders({ host, providers, bridge, job, choice, updates, run }: {
   readonly host: HostStatus; readonly providers: readonly AgentProviderStatus[]; readonly bridge: HostsBridge
+  /** The host's client updates and its update line, only from a host that offers them (#480). */
+  readonly updates?: readonly ProviderClientUpdate[] | undefined
+  readonly run?: ClientUpdateRun | undefined
   /** The provider job running or last ended, whichever host it is for; each tile shows it only when it is its own. */
   readonly job?: HostProviderJobState | undefined
   /** The models an agent can run on, shared with Have my agent set this up. */
@@ -204,6 +242,23 @@ export function HostProviders({ host, providers, bridge, job, choice }: {
   const gridId = useId()
   const grid = useRef<HTMLUListElement>(null)
   const own = job?.hostId === host.id ? job : undefined
+  const view = useHostClientUpdates(host.id, updates, HOST_PROVIDER_ORDER)
+  const [sending, setSending] = useState(false)
+  const [refusal, setRefusal] = useState<TileUpdates['refusal']>()
+  /** Update, Update all, Try again and Cancel update: each asks the host, which answers at once and runs its line. */
+  const send = useCallback<SendClientUpdate>(async (action, ids) => {
+    setSending(true); setRefusal(undefined)
+    try {
+      const result = await bridge.updateClients({ id: host.id, action, providers: [...ids] })
+      if (result.error) setRefusal({ providers: ids, text: result.error })
+      return result.error
+    } catch (failure) {
+      const text = failure instanceof Error ? failure.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/u, '') : `${host.name} did not answer. Nothing was changed. Try again.`
+      setRefusal({ providers: ids, text })
+      return text
+    } finally { setSending(false) }
+  }, [bridge, host.id, host.name])
+  const tileUpdates: TileUpdates | undefined = updates ? { view, run, send, busy: sending, refusal } : undefined
   /**
    * The dialog closes onto its tile. Escape gives focus back to the button that opened it; Start removes that button, so
    * focus goes to the working tile's first action instead of being dropped.
@@ -216,16 +271,19 @@ export function HostProviders({ host, providers, bridge, job, choice }: {
       if (provider && (focused === null || focused === document.body || !focused.isConnected)) grid.current?.querySelector<HTMLElement>(`[data-provider="${provider}"] .host-provider__act button:not(:disabled)`)?.focus()
     }, 0)
   }
-  return <div className="host-providers">
-    <Button variant="ghost" className="host-providers__toggle" aria-expanded={open} aria-controls={open ? gridId : undefined}
-      aria-label={`${open ? 'Hide' : 'Show'} providers on ${host.name}`} onClick={() => setOpen(value => !value)}>
-      {open ? 'Hide providers' : 'Show providers'}
-    </Button>
+  return <div className="host-providers" data-host-providers={host.id}>
+    <div className="host-providers__bar">
+      <Button variant="ghost" className="host-providers__toggle" aria-expanded={open} aria-controls={open ? gridId : undefined}
+        aria-label={`${open ? 'Hide' : 'Show'} providers on ${host.name}`} onClick={() => setOpen(value => !value)}>
+        {open ? 'Hide providers' : 'Show providers'}
+      </Button>
+      {updates ? <HostClientUpdatesChip host={host.name} hostId={host.id} view={view} run={run} busy={sending} refusal={refusal?.text} send={send} /> : null}
+    </div>
     {open ? <div id={gridId} className="host-providers__panel">
       <ul ref={grid} className="host-providers__grid" aria-label={`Providers on ${host.name}`}>
         {HOST_PROVIDER_ORDER.map(provider => <ProviderTile key={provider} host={host} provider={provider} bridge={bridge}
           status={providers.find(item => item.id === provider)} job={own?.provider === provider ? own : undefined}
-          onSignIn={setSigningIn} onAgent={(id, jobCase) => setAgent({ provider: id, jobCase })} />)}
+          onSignIn={setSigningIn} onAgent={(id, jobCase) => setAgent({ provider: id, jobCase })} updates={tileUpdates} />)}
       </ul>
       <p className="host-providers__foot">{host.name} connects each provider that is signed in when its host starts. A provider you disconnect stays off.</p>
     </div> : null}

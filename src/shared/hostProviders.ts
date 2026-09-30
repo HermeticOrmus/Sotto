@@ -145,5 +145,16 @@ export interface HostProviderJobState {
   readonly error?: string | undefined
 }
 
+/**
+ * Update from a provider tile, or Update all from the host's client updates (#480): `update` puts the clients in that
+ * host's own one-at-a-time update line, and `cancel` takes one that is still waiting out of it. The host's shell says
+ * how each goes. `id` is the saved host's.
+ */
+export const hostClientUpdateRequestSchema = z.object({
+  id: z.uuid(), action: z.enum(['update', 'cancel']), providers: z.array(providerIdSchema).min(1).max(4),
+}).strict()
+export type HostClientUpdateRequest = z.infer<typeof hostClientUpdateRequestSchema>
+
 export const HOSTS_PROVIDER_ACTION = 'hosts:provider-action'
+export const HOSTS_UPDATE_CLIENTS = 'hosts:update-clients'
 export const HOSTS_SIGN_IN = 'hosts:sign-in'
