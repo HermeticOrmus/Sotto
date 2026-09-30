@@ -1000,7 +1000,7 @@ export class ClaudeStreamJsonHost implements AgentHost {
       this.assistantErrors.delete(id)
       // A prompt of Sotto's that Claude Code held behind its own turn starts next, so the thread goes straight on to it.
       const held = alias.origins.some(value => this.acknowledgements.has(value.uuid))
-      thread.status = failure !== null ? 'error' : held ? 'running' : 'idle'; runtime.requests.clear(); thread.requests = []
+      thread.status = failure !== null ? 'error' : held ? 'running' : 'idle'
       if (frame.is_error === true) this.clearMonitoring(id)
       if (failure !== null) { this.turnFailures.set(id, failure); this.state.error = failure }
       else if (frame.is_error !== true) this.clearTurnFailure(id)

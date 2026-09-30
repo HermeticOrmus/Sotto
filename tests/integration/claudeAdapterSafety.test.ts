@@ -156,6 +156,27 @@ describe('Claude recovery and safety', () => {
     await expect.poll(async () => JSON.stringify(await f.driver.requests())).toContain('"behavior":"deny"')
     expect((await thread()).requests).toEqual([])
   })
+  it.each(['answer', 'interrupt', 'cancel'] as const)('keeps a pending request after a turn result until %s', async end => {
+    await f.action(id, { type: 'raw', frame: { type: 'control_request', request_id: 'pending-after-result',
+      request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'npm run build' } } } })
+    await expect.poll(async () => (await thread()).requests.map(request => request.id)).toEqual(['pending-after-result'])
+    await f.driver.backgroundWork!.completeLeaving(id, 'The agent is still working.', 'Build')
+    await expect.poll(async () => (await thread()).messages.at(-1)?.text).toBe('The agent is still working.')
+    expect((await thread()).requests.map(request => request.id)).toEqual(['pending-after-result'])
+    if (end === 'cancel') {
+      await f.action(id, { type: 'raw', frame: { type: 'control_cancel_request', request_id: 'pending-after-result' } })
+    } else {
+      const result = end === 'answer'
+        ? await f.host.execute({ type: 'answer', commandId: 'answer', threadId: id, requestId: 'pending-after-result', answer: '', approved: false })
+        : await f.host.execute({ type: 'interrupt', commandId: 'stop', threadId: id })
+      expect(result.accepted).toBe(true)
+      await expect.poll(async () => (await f.driver.requests()).some(record => {
+        const frame = record.params?.frame as { response?: { request_id?: string; response?: { behavior?: string } } }
+        return frame.response?.request_id === 'pending-after-result' && frame.response.response?.behavior === 'deny'
+      })).toBe(true)
+    }
+    await expect.poll(async () => (await thread()).requests).toEqual([])
+  })
   it('resumes the native context after CLI takeover before another prompt', async () => {
     await f.driver.typeInProvider(id, 'Typed outside Sotto')
     await f.host.execute({ type: 'send', commandId: 'next', messageId: 'next', threadId: id, text: 'Continue' })
