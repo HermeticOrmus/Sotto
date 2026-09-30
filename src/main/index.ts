@@ -654,7 +654,7 @@ async function createRuntime(): Promise<NativeRuntimeController> {
   let browserService: BrowserService | undefined
   const browserAgentServer = createBrowserAgentServer(() => browserService)
   agentHost.useBrowserTools(browserAgentServer)
-  // The runtime builds the worktree cleanup (ADR-0019). Only the local host has worktrees on this
+  // The runtime builds the worktree cleanup (ADR-0041). Only the local host has worktrees on this
   // computer; with it off the inactive host's cleanup does nothing, and no terminal check is wired.
   const worktreeCleanup = startupSettings.localHostEnabled ? localRuntime.worktreeCleanup : null
   const hostRouter = new DesktopHostRouter(() => emptyDesktopState(agentControl.get().hostId))
@@ -787,7 +787,7 @@ async function createRuntime(): Promise<NativeRuntimeController> {
   registerQuitDrain(app, async () => {
     unsubscribePersonalChats(); unsubscribeAgents(); unsubscribeAgentDetail()
     agentStatePublisher.dispose(); agentDetailPublisher.dispose()
-    // Closing the local runtime drains a worktree cleanup sweep in progress before its host closes (ADR-0019).
+    // Closing the local runtime drains a worktree cleanup sweep in progress before its host closes (ADR-0041).
     // Phones go first: the listener closes and Sotto's Serve setting is removed before the host it serves closes.
     await phoneAccess.close().catch(() => logOperational('phone-access-close-failed'))
     // A setup running now ends as Stop setup would, before the hosts it checks and adds close.

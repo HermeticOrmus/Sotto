@@ -291,7 +291,7 @@ export class AgentControl {
     locateClient?: (provider: ProviderId) => Promise<string | undefined>
     /**
      * Anything else in this process running a client, told once an install has put a new one on disk so it
-     * moves its processes to it as they go idle (ADR-0021). Personal chats hold their own copy of each client.
+     * moves its processes to it as they go idle (ADR-0042). Personal chats hold their own copy of each client.
      */
     clientUpdated?: (provider: ProviderId) => Promise<void>
     /** The sentence a send is refused with when an image it names is no longer kept; a headless host names itself. */
@@ -1054,7 +1054,7 @@ export class AgentControl {
     await done
   }
   /**
-   * Replace one client while everything keeps running, the way T3 Code does (ADR-0021). The installer puts the
+   * Replace one client while everything keeps running, the way T3 Code does (ADR-0042). The installer puts the
    * new client beside the one in use: Windows lets a running executable's folder be renamed, and every channel
    * Sotto drives does that or replaces the file for itself. Nothing disconnects and no turn is stopped. After a
    * good install each host is told, and moves each thread to the new client as it goes idle; a failed install
@@ -1108,7 +1108,7 @@ export class AgentControl {
         throw new Error(`The installer finished, but ${label} still reports ${record.installed}. Nothing was lost and your threads kept working. ${record.command ? `Run ${record.command} in a terminal to see what the installer says.` : `Check how ${label} was installed, then try again.`}`)
       }
       // Threads still working finish on the client they have and move over when idle; that is true without
-      // being said, so the notice says only what changed (the user's pick, ADR-0021).
+      // being said, so the notice says only what changed (the user's pick, ADR-0042).
       this.say(`${label} updated.`)
     } finally { this.updatingClient = null }
   }
@@ -1984,7 +1984,7 @@ export class AgentControl {
         this.acceptSnapshot(await this.dependencies.host.snapshot(command.provider)); return
       case 'check-reasoning': await this.checkReasoning(command.provider); return
       case 'check-client-updates': await this.checkClientUpdates(true); return
-      // `force` is still accepted and means nothing: an update no longer stops a working thread (ADR-0021).
+      // `force` is still accepted and means nothing: an update no longer stops a working thread (ADR-0042).
       case 'update-client': await this.updateClient(command.provider); return
       case 'queue-client-updates': this.queueClientUpdates(command.providers); return
       case 'cancel-client-updates': this.cancelClientUpdates(command.providers); return
