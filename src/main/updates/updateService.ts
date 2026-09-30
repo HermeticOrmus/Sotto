@@ -142,6 +142,7 @@ export class UpdateService {
   private adapter: UpdaterAdapter | null = null
   private adapterResolved = false
   private phase: UpdatePhase = { phase: 'idle' }
+  private previousOffer: Extract<UpdatePhase, { phase: 'available' }> | null = null
   private checkedAt: number | null = null
   private checkInFlight: Promise<UpdateStatus> | null = null
   /** True from a `quitAndInstall` call until the installer refuses or the process quits. */
@@ -192,11 +193,6 @@ export class UpdateService {
     }
     if (trigger === 'automatic' && !(await this.automaticChecksEnabled())) return this.status()
     if (this.phase.phase === 'downloading' || this.phase.phase === 'downloaded') {
-      return this.status()
-    }
-    // Keep the download offer until the user acts; a background check
-    // must not replace it with a network failure.
-    if (trigger === 'automatic' && this.phase.phase === 'available') {
       return this.status()
     }
     const active = this.checkInFlight
@@ -307,17 +303,23 @@ export class UpdateService {
   }
 
   private async runCheck(adapter: UpdaterAdapter): Promise<UpdateStatus> {
+    this.previousOffer = this.phase.phase === 'available' ? this.phase : null
     this.checkedAt = this.now()
     this.setPhase({ phase: 'checking' })
     try {
       await adapter.check()
     } catch (error) {
-      if (this.currentPhase() === 'checking') this.setPhase({ phase: 'failed', problem: describeProblem(error) })
+      if (this.currentPhase() === 'checking' || this.currentPhase() === 'failed') this.recordCheckFailure(describeProblem(error))
       return this.status()
     }
     // A check that completed without offering a version found nothing newer.
     if (this.currentPhase() === 'checking') this.setPhase({ phase: 'up-to-date' })
+    this.previousOffer = null
     return this.status()
+  }
+
+  private recordCheckFailure(problem: string | null): void {
+    this.setPhase(this.previousOffer === null ? { phase: 'failed', problem } : { ...this.previousOffer, problem })
   }
 
   private ensureAdapter(): UpdaterAdapter | null {
@@ -383,7 +385,7 @@ export class UpdateService {
           this.installing = false
           this.installRefusal = { problem }
           this.recordInstallRefusal(problem)
-        } else if (current.phase === 'checking') this.setPhase({ phase: 'failed', problem })
+        } else if (current.phase === 'checking') this.recordCheckFailure(problem)
         else if (current.phase === 'downloading') {
           this.setPhase({ phase: 'available', version: current.version, problem })
         }
