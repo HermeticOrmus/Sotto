@@ -117,7 +117,7 @@ it('closes every phone’s socket when phone access turns off', async () => {
 })
 
 
-it('disconnects phones and reserves the port while turn-off cleanup retries', async () => {
+it.each(['turn-off', 'quit'])('disconnects phones and reserves the port while %s cleanup retries', async action => {
   const changes: boolean[] = []
   const { client } = await pairPhone('Phone', connected => changes.push(connected))
   await client.connect()
@@ -126,8 +126,8 @@ it('disconnects phones and reserves the port while turn-off cleanup retries', as
   const status = vi.spyOn(tailscale, 'serveStatus').mockResolvedValue({ TCP: { 8443: { HTTPS: true } }, Web: { 'studio.tail5728ca.ts.net:8443': { Handlers: { '/': { Proxy: base } } } } })
   const remove = vi.spyOn(tailscale, 'unserve').mockResolvedValue(false)
   try {
-    settings.phoneAccess = false
-    access.settingsChanged()
+    if (action === 'quit') await access.close()
+    else { settings.phoneAccess = false; access.settingsChanged() }
     await expect.poll(() => access.get().phase).toBe('cleanup-failed')
     await expect.poll(() => changes.includes(false)).toBe(true)
     expect(access.get().phones[0]!.connected).toBe(false)

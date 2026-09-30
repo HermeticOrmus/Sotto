@@ -202,8 +202,8 @@ export class PhoneAccess {
     let timer: ReturnType<typeof setTimeout> | undefined
     await Promise.race([this.queue, new Promise<void>(resolve => { timer = setTimeout(resolve, limit); timer.unref?.() })])
     clearTimeout(timer)
-    await this.closeListener()
-    await this.releasePort()
+    await this.reservePort()
+    if (!this.record.mapped) { await this.closeListener(); await this.releasePort() }
   }
 
   private defaultName(): string {
@@ -354,6 +354,7 @@ export class PhoneAccess {
         server.once('error', reject)
         server.listen(this.record.port!, '127.0.0.1', () => { server.removeListener('error', reject); resolve() })
       })
+      server.unref()
       this.reservation = { close: () => new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())) }
     } catch { this.options.log?.('phone-access-listener-failed') }
   }

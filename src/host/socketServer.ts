@@ -438,6 +438,7 @@ export async function startSocketServer(options: SocketServerOptions) {
     server.removeAllListeners('upgrade')
     server.removeAllListeners('connection')
     server.on('connection', socket => socket.destroy())
+    server.unref()
     for (const peer of peers) peer.frames.close()
     server.closeAllConnections()
   }
