@@ -60,6 +60,21 @@ final class NewThreadModelTests: XCTestCase {
         XCTAssertEqual(command["projectId"], .string("p")); XCTAssertEqual(command["threadId"], .string(ref.threadID))
         XCTAssertEqual(command["runtimeMode"], .string("approval-required")); XCTAssertEqual(command["managed"], .bool(false))
     }
+    @MainActor func testTheFirstMessageRunsOnTheComputerThatCreatedTheThread() async throws {
+        let model = try await fixture(twoComputers: true)
+        let created = await create(model, host: forge)
+        let ref = try XCTUnwrap(created)
+        await model.select(ref)
+        XCTAssertEqual(model.detail(for: ref)?.threadId, ref.threadID)
+        XCTAssertTrue(model.canSend(ref))
+        model.drafts[ref.id] = "Start the project"
+        await model.send(ref)
+        let commands = HostConnection.instances.filter { $0.hostID == forge }.flatMap(\.commands)
+        XCTAssertEqual(commands.map { $0["type"].string }, ["create-thread", "manual-send"])
+        XCTAssertEqual(commands.last?["threadId"], .string(ref.threadID))
+        XCTAssertTrue(HostConnection.instances.filter { $0.hostID == laptop }.flatMap(\.commands).isEmpty)
+        XCTAssertTrue(model.pending(for: ref).isEmpty)
+    }
     @MainActor func testAnUnavailableProjectDoesNotSendACreationCommand() async throws {
         let model = try await fixture(projects: false)
         let result = await create(model)
