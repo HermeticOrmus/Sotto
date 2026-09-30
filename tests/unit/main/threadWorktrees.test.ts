@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { execFileSync } from 'node:child_process'
-import { lstat, mkdir, mkdtemp, readFile, rm, symlink, unlink, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, mkdtemp, readFile, rename, rm, symlink, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -640,6 +640,20 @@ describe('independent working-copy allocation', () => {
     await git(repository, ['worktree', 'add', '--', replacement, 'nested'])
     expect((await lstat(replacement)).isDirectory()).toBe(true)
   })
+  it('preserves a nested worktree locked after its preview', async () => {
+    const f = await fixture(); const a = await f.service.ensure(await f.service.allocate(f.project, 'independent'))
+    const nested = join(a.path!, 'nested')
+    await git(f.project, ['worktree', 'add', '-b', 'nested', '--', nested, 'HEAD'])
+    const preview = await f.service.reclaimFacts(a)
+    await git(f.project, ['worktree', 'lock', '--', nested])
+    await expect(f.service.reclaim(a, { withUncommittedChanges: true, confirmedItems: preview.items, confirmedIgnored: preview.ignored, confirmedRepositories: preview.repositories })).rejects.toThrow('A nested worktree is locked. Nothing was removed.')
+    expect((await lstat(nested)).isDirectory()).toBe(true)
+    expect(await git(f.project, ['worktree', 'list', '--porcelain'])).toContain('refs/heads/nested')
+    await git(f.project, ['worktree', 'unlock', '--', nested])
+    const refreshed = await f.service.reclaimFacts(a)
+    expect((await f.service.reclaim(a, { withUncommittedChanges: true, confirmedItems: refreshed.items, confirmedIgnored: refreshed.ignored, confirmedRepositories: refreshed.repositories })).reclaimedAt).toBeTruthy()
+    expect(await git(f.project, ['worktree', 'list', '--porcelain'])).not.toContain('refs/heads/nested')
+  })
   it('refuses an unseen ignored file inside a confirmed nested repository row', async () => {
     const f = await fixture(); const a = await f.service.ensure(await f.service.allocate(f.project, 'independent'))
     const nested = join(a.path!, 'nested'); await mkdir(nested); await git(nested, ['init'])
@@ -651,6 +665,28 @@ describe('independent working-copy allocation', () => {
     expect(latest.repositories).toEqual(preview.repositories)
     await expect(f.service.reclaim(a, { withUncommittedChanges: true, confirmedItems: preview.items, confirmedIgnored: preview.ignored, confirmedRepositories: preview.repositories })).rejects.toThrow('The folder changed')
     expect(await readFile(join(nested, 'unseen.secret'), 'utf8')).toBe('keep this')
+  })
+  it.each(['branch', 'tag', 'bare'])('counts unpublished nested history outside HEAD (%s)', async reference => {
+    const f = await fixture(); const a = await f.service.ensure(await f.service.allocate(f.project, 'independent'))
+    const nested = join(a.path!, 'nested')
+    await git(a.path!, ['clone', '--', f.project, nested])
+    await git(nested, ['checkout', '-b', 'private'])
+    await writeFile(join(nested, 'private.txt'), 'unpublished history')
+    await git(nested, ['add', '.'])
+    await git(nested, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'Private'])
+    if (reference === 'tag') await git(nested, ['tag', 'private-save'])
+    await git(nested, ['checkout', '-'])
+    if (reference === 'tag') await git(nested, ['branch', '-D', 'private'])
+    if (reference === 'bare') {
+      const bare = join(f.root, 'bare')
+      await git(f.root, ['clone', '--bare', '--', nested, bare])
+      await removeTestCheckout(f.root, nested)
+      await rename(bare, nested)
+      await git(nested, ['update-ref', 'refs/remotes/origin/main', (await git(f.project, ['rev-parse', 'HEAD'])).trim()])
+      await git(nested, ['symbolic-ref', 'HEAD', 'refs/heads/unborn'])
+    }
+    const preview = await f.service.reclaimFacts(a)
+    expect(preview.repositories.find(item => item.kind === 'repository')?.unpushedCommitCount).toBe(1)
   })
   it.each(['none', 'some', 'all'])('counts nested repository commits not on a remote (%s published)', async published => {
     const f = await fixture(); const a = await f.service.ensure(await f.service.allocate(f.project, 'independent'))

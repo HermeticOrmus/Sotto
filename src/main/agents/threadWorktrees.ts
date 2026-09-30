@@ -480,6 +480,8 @@ export class ThreadWorktrees {
             if (submodule) submodules.push(local)
             if (!submodule && gitMarker?.isFile()) {
               const commonDirectory = (await this.git(full, ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim()
+              const registration = registeredWorktrees(await this.git(commonDirectory, ['worktree', 'list', '--porcelain', '-z'])).find(item => pathKey(item.path) === pathKey(full))
+              if (registration?.locked) throw new Error('A nested worktree is locked. Nothing was removed. Unlock it in its own repository, then choose Remove worktree again.')
               const delta = relative(canonicalRoot, commonDirectory)
               // A repository inside the removed folder loses its own registry with it.
               if (isAbsolute(delta) || delta === '..' || delta.startsWith(`..${sep}`)) nestedWorktrees.push({ path: full, commonDirectory })
@@ -491,8 +493,7 @@ export class ThreadWorktrees {
               for (let i = 0; i < records.length; i++) { changeCount++; if (/^[RC]|^.[RC]/u.test(records[i]!)) i++ }
               const repositoryPath = local + '/'
               const kind = gitMarker?.isFile() ? 'worktree' : 'repository'
-              const head = kind === 'repository' ? await this.git(full, ['rev-parse', '--verify', '--quiet', 'HEAD']).catch(() => '') : ''
-              const history = kind === 'repository' ? { unpushedCommitCount: head ? Number((await this.git(full, ['rev-list', '--count', 'HEAD', '--not', '--remotes'])).trim()) : 0 } : {}
+              const history = kind === 'repository' ? { unpushedCommitCount: Number((await this.git(full, ['rev-list', '--count', '--all', '--not', '--remotes'])).trim()) } : {}
               repositories.push({ path: repositoryPath, changeCount, ...history, kind })
               if (!ignored.includes(repositoryPath)) { ignored.push(repositoryPath); items.push({ path: repositoryPath, bytes: 0, fileCount: 0 }) }
             }

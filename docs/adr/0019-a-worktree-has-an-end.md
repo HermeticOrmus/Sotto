@@ -62,6 +62,6 @@ Main compares the confirmed folder rows and nested-change counts with disk. It c
 
 A clean initialized submodule is part of the parent index (mode 160000), not another user-created worktree. Git’s ordinary clean check refuses removal while submodules are initialized. After the same final checks, Sotto uses Git’s force removal for the parent, without changing shared repository configuration. A submodule holding uncommitted or nondependency ignored files is flagged and needs the same explicit acknowledgement. Links outside the folder still block removal.
 
-After removal, each nested linked worktree’s own repository clears that folder’s registration without pruning other missing checkouts. The nested branch remains available to check out elsewhere.
+After removal, each nested linked worktree’s own repository clears that folder’s registration without pruning other missing checkouts. The nested branch remains available to check out elsewhere. A locked nested worktree refuses removal before anything is deleted; unlock it in its own repository and ask again.
 
 The preview is only the requesting command’s result. It is neither saved nor broadcast to other windows or phones. Older hosts that cannot preview tell the user to update the host; no removal proceeds without a preview.
