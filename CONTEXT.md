@@ -336,7 +336,7 @@ Answering a question or permission request and creating a project are also part 
 
 **Memory (hidden).** The Memory page and its link, the questionnaire that greets the Agents room, and the preferences a turn would retrieve from the store are all hidden for the beta behind `memoryEnabled` in settings, which defaults to false; the renderer asks `useMemoryEnabled()` and the main process reads the setting once at start and hands neither the agent control nor the personal chats a preferences source. The store still opens and its IPC stays registered, and nothing is deleted (ADR-0013).
 
-**Memory store probe.** The check that proves the shipped build can use the store: the packaged executable is launched in an isolated profile and its debugger invokes the bundled probe, which opens the real memory store in a temporary user-data folder, migrates, inserts, answers a full-text query and returns its evidence. The environment probe mode is available only in unpackaged builds. The packaged-resource verifier fails the build without it. A direct Node-only probe (`scripts/probe-memory-store.mjs`) exists for the Mac runtime check.
+**Memory store probe.** The check that proves the shipped build can use the store: the packaged executable is launched in an isolated profile and its debugger invokes the bundled probe, which opens the real memory store in a temporary user-data folder, migrates, inserts, answers a full-text query and returns its evidence. The unused environment probe launch mode has been removed. The packaged-resource verifier fails the build without it. A direct Node-only probe (`scripts/probe-memory-store.mjs`) exists for the Mac runtime check.
 
 ## Authority
 
