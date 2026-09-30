@@ -8,13 +8,18 @@ type Fields<T extends CommandType> = readonly Exclude<keyof Extract<AgentCommand
  * closed: a command type or field added to `agentCommandSchema` is refused remotely until it is added
  * here on purpose, because a paired device is not the user at this computer (ADR-0004). Anything
  * absent is host-local: credentials, membership, the voice commands and voice engine, reasoning checks,
- * opening a folder on the host machine and installing provider client updates.
+ * opening a folder on the host machine, and `update-client`, which holds the request open for as long as the installer
+ * runs. A headless host that lists the `client-updates` feature takes `queue-client-updates` instead: it puts clients in
+ * the host's own one-at-a-time update line and answers at once (#480). Updating a client answers no permission request
+ * and replaces nothing the user made, so pairing is enough, as it is for `connect`.
  */
 export const REMOTE_COMMANDS: { readonly [T in CommandType]?: Fields<T> } = {
   configure: ['patch'],
   connect: ['provider'], disconnect: ['provider'], refresh: ['provider'],
   'refresh-thread-skills': ['threadId', 'forceReload'],
   'check-client-updates': [], 'dismiss-client-updates': [],
+  // The two update-line commands, only on a listener that offers `client-updates`: see remoteCommandRefusal.
+  'queue-client-updates': ['providers'], 'cancel-client-updates': ['providers'],
   compose: ['text', 'attachments'],
   'save-thread-draft': ['threadId', 'draftId', 'text', 'attachments', 'skills', 'files', 'requestId', 'composer'],
   'recover-draft': ['threadId'], send: [],
@@ -90,9 +95,12 @@ export function remoteCommandNeedsAnswerPolicy(command: AgentCommand, askingProv
 }
 
 /** Why a paired client may not send this command, or null when it may. */
-export function remoteCommandRefusal(command: AgentCommand, context: { readonly mayAnswer: boolean; readonly askingProviderModes?: readonly string[] | undefined }): 'forbidden' | null {
+export function remoteCommandRefusal(command: AgentCommand, context: { readonly mayAnswer: boolean; readonly askingProviderModes?: readonly string[] | undefined
+  /** Whether this listener offers `client-updates`: the headless host does, the desktop's phone listener does not. */
+  readonly clientUpdates?: boolean | undefined }): 'forbidden' | null {
   const fields = REMOTE_COMMANDS[command.type] as readonly string[] | undefined
   if (!fields) return 'forbidden'
+  if ((command.type === 'queue-client-updates' || command.type === 'cancel-client-updates') && context.clientUpdates !== true) return 'forbidden'
   if (Object.keys(command).some(key => key !== 'type' && !fields.includes(key))) return 'forbidden'
   if (command.type === 'configure' && Object.keys(command.patch).some(key => !(REMOTE_CONFIGURATION_FIELDS as readonly string[]).includes(key))) return 'forbidden'
   if (!context.mayAnswer && remoteCommandNeedsAnswerPolicy(command, context.askingProviderModes ?? [])) return 'forbidden'

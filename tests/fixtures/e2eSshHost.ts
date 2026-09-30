@@ -7,6 +7,8 @@ import { parseHostArguments, runHeadlessCommandLine, startHeadlessHost } from '.
 import { E2EAgentHost, e2eAgentReasoner } from '../../src/main/e2e/agentEffects'
 import type { AgentHostSnapshot } from '../../src/shared/agents'
 import { fakeSignInCommand, signInProviders } from './signInProviders'
+import { clientUpdateHost } from './clientUpdateProviders'
+import { homedir } from 'node:os'
 
 /** A provider installed on the host but not signed in there: its connect fails, as Claude Code's did on forge (#459). */
 class SignedOut extends E2EAgentHost {
@@ -34,6 +36,14 @@ async function main(): Promise<void> {
   const signInDirectory = process.env.SOTTO_E2E_SIGN_IN_DIR, signInScript = process.env.SOTTO_E2E_SIGN_IN_SCRIPT
   if (signInDirectory && signInScript) {
     const host = await startHeadlessHost({ ...options, ...installedVersion(), providers: signInProviders(signInDirectory), reasoner: e2eAgentReasoner, signInCommand: fakeSignInCommand(signInDirectory, signInScript) })
+    keepRunning(() => host.close())
+    return
+  }
+  // With SOTTO_E2E_CLIENT_UPDATES_DIR, forge's mise-installed clients on September 29, all behind (#480).
+  const updates = process.env.SOTTO_E2E_CLIENT_UPDATES_DIR
+  if (updates) {
+    const { clients, locateClient, providers } = clientUpdateHost(updates, homedir())
+    const host = await startHeadlessHost({ ...options, ...installedVersion(), providers, clients, locateClient, reasoner: e2eAgentReasoner })
     keepRunning(() => host.close())
     return
   }

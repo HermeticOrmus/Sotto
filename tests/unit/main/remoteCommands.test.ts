@@ -37,6 +37,13 @@ describe('remote command allow-list', () => {
     const ops = (hostRequestSchema.options as unknown as { shape: { op: { value: string } } }[]).map(option => option.shape.op.value)
     expect(ops.sort()).toEqual([...decided].sort())
   })
+  it('takes the client update line only on a listener that offers client-updates, and the waiting update-client nowhere (#480)', () => {
+    for (const command of [{ type: 'queue-client-updates', providers: ['codex', 'grok'] }, { type: 'cancel-client-updates', providers: ['codex'] }] as AgentCommand[]) {
+      expect(refuse(command, true), command.type).toBe('forbidden')
+      expect(remoteCommandRefusal(command, { mayAnswer: false, clientUpdates: true }), command.type).toBeNull()
+    }
+    expect(remoteCommandRefusal({ type: 'update-client', provider: 'codex' }, { mayAnswer: true, clientUpdates: true })).toBe('forbidden')
+  })
   it('refuses host-local commands and fields outside the list', () => {
     for (const command of [
       { type: 'credential', slot: 'reasoning', value: 'not-a-real-key' }, { type: 'membership', action: 'signin' },

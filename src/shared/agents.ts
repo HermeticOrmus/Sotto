@@ -382,9 +382,58 @@ export const RESTORE_BRANCH_NEEDS_CONFIRMATION = 'This folder has uncommitted ch
 /** What main answers when reclaiming a worktree would discard uncommitted work; the pane opens its confirmation on this exact sentence. */
 export const RECLAIM_WORKTREE_NEEDS_CONFIRMATION = 'This folder has uncommitted changes. Removing it loses them, so confirm it first.'
 
+/**
+ * What Sotto knows about one installed client: the version it connected to, the version its own
+ * install channel publishes, and what a press would run. `canInstall` is false when the channel
+ * is one Sotto names but will not drive, so the card shows the command instead of a button.
+ */
+export const clientChannelSchema = z.enum(['npm', 'self-update', 'mise', 'devin-app', 'unknown'])
+export type ClientChannel = z.infer<typeof clientChannelSchema>
+/**
+ * Why an update did not finish, as a code the tile words for itself: `download` when the installer could not fetch the
+ * new version, `install-step` when mise installed Grok Build but its package's own install step did not finish, and
+ * `installer` for anything else the installer refused.
+ */
+export const clientUpdateFailureSchema = z.enum(['download', 'install-step', 'installer'])
+export type ClientUpdateFailure = z.infer<typeof clientUpdateFailureSchema>
+export const providerClientUpdateSchema = z.object({
+  id: providerIdSchema,
+  installed: z.string().max(64),
+  published: z.string().max(64).optional(),
+  behind: z.boolean(),
+  channel: clientChannelSchema,
+  command: z.string().max(300).optional(),
+  canInstall: z.boolean(),
+  checkedAt: z.string(),
+  /** `queued` waits in the machine's one-at-a-time line behind the update that is running. */
+  state: z.enum(['idle', 'queued', 'updating', 'updated', 'unchanged', 'failed']).default('idle'),
+  error: z.string().max(600).optional(),
+  /** When the last update of this client finished, so a press that ran is told from one refused before it did. */
+  ranAt: z.string().max(64).optional(),
+  /** How many steps a press runs: two for Grok Build under mise, the upgrade and then its package's install step. */
+  steps: z.number().int().min(1).max(4).optional(),
+  /** The step running while `updating`, or the one that did not finish when `failed`, counted from 1. */
+  step: z.number().int().min(1).max(4).optional(),
+  failure: clientUpdateFailureSchema.optional(),
+  /** The command to run on the machine by hand, a line each: for a failed update, and for a channel Sotto will not drive. */
+  byHand: z.array(z.string().min(1).max(300)).max(4).optional(),
+  /** The last lines the installer printed when it failed, with home folders taken out. */
+  printed: z.string().max(1200).optional(),
+})
+export type ProviderClientUpdate = z.infer<typeof providerClientUpdateSchema>
+/**
+ * The client updates a machine is running one at a time: how many were asked for since its line was last empty, and
+ * how many of those have finished. Absent while the line is empty.
+ */
+export const clientUpdateRunSchema = z.object({ total: z.number().int().min(1).max(64), done: z.number().int().min(0).max(64),
+  /** The clients still waiting, in the order they will run, after the one running. */
+  line: z.array(providerIdSchema).max(8).optional() })
+export type ClientUpdateRun = z.infer<typeof clientUpdateRunSchema>
 /** One connected host's catalog, as the desktop keeps it apart from the others when it combines threads. */
 export const agentClientHostSchema = z.object({ hostId: z.uuid(), connected: z.boolean(), models: z.array(agentModelSchema),
-  capabilities: agentCapabilitiesSchema, providers: z.array(agentProviderStatusSchema).optional() })
+  capabilities: agentCapabilitiesSchema, providers: z.array(agentProviderStatusSchema).optional(),
+  /** The host's client updates and its update line, sent only from a host that offers `client-updates` (ADR-0021). */
+  clientUpdates: z.array(providerClientUpdateSchema).max(4).optional(), clientUpdateRun: clientUpdateRunSchema.optional() })
 export type AgentClientHost = z.infer<typeof agentClientHostSchema>
 
 export const agentHostSnapshotSchema = z.object({
@@ -538,28 +587,6 @@ export const agentDeliverySchema = z.object({
 export type AgentDelivery = z.infer<typeof agentDeliverySchema>
 export const agentDeliveryReceiptsSchema = z.array(z.object({ threadId: id, draftId: z.uuid() })).max(MAX_DELIVERED_DRAFTS)
 export const providerUpgradeSchema = z.object({ recoveryPath: z.string(), migratedAt: z.number() })
-/**
- * What Sotto knows about one installed client: the version it connected to, the version its own
- * install channel publishes, and what a press would run. `canInstall` is false when the channel
- * is one Sotto names but will not drive, so the card shows the command instead of a button.
- */
-export const clientChannelSchema = z.enum(['npm', 'self-update', 'devin-app', 'unknown'])
-export type ClientChannel = z.infer<typeof clientChannelSchema>
-export const providerClientUpdateSchema = z.object({
-  id: providerIdSchema,
-  installed: z.string().max(64),
-  published: z.string().max(64).optional(),
-  behind: z.boolean(),
-  channel: clientChannelSchema,
-  command: z.string().max(300).optional(),
-  canInstall: z.boolean(),
-  checkedAt: z.string(),
-  state: z.enum(['idle', 'updating', 'updated', 'unchanged', 'failed']).default('idle'),
-  error: z.string().max(600).optional(),
-  /** When the last update of this client finished, so a press that ran is told from one refused before it did. */
-  ranAt: z.string().max(64).optional(),
-})
-export type ProviderClientUpdate = z.infer<typeof providerClientUpdateSchema>
 export const agentStateSchema = z.object({
   clientScoped: z.boolean().optional(),
   connections: z.array(z.object({ hostId: z.uuid(), name: z.string(), kind: z.enum(['local', 'remote']), connected: z.boolean() })).optional(),
@@ -568,6 +595,7 @@ export const agentStateSchema = z.object({
   skillCatalogs: z.array(agentSkillCatalogSchema).optional(),
   providerUpgrade: providerUpgradeSchema.nullable().optional(),
   clientUpdates: z.array(providerClientUpdateSchema).max(4).optional(),
+  clientUpdateRun: clientUpdateRunSchema.optional(),
   /** The card stays down until the next check finds something else. */
   clientUpdatesDismissedAt: z.string().optional(),
   connection: z.enum(['disconnected', 'connecting', 'connected', 'error']),
@@ -778,6 +806,10 @@ export const agentCommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('check-reasoning'), provider: subscriptionProviderSchema }).strict(),
   z.object({ type: z.literal('check-client-updates') }).strict(),
   z.object({ type: z.literal('update-client'), provider: providerIdSchema, force: z.boolean().optional() }).strict(),
+  /** Puts clients in the machine's one-at-a-time update line and answers at once; each client's reading says how it went. */
+  z.object({ type: z.literal('queue-client-updates'), providers: z.array(providerIdSchema).min(1).max(4) }).strict(),
+  /** Takes clients that are still waiting out of the update line. One already running is left to finish. */
+  z.object({ type: z.literal('cancel-client-updates'), providers: z.array(providerIdSchema).min(1).max(4) }).strict(),
   z.object({ type: z.literal('dismiss-client-updates') }).strict(),
   z.object({ type: z.literal('preview-voice') }).strict(),
   z.object({ type: z.literal('utterance'), text, voiceTiming: agentVoiceTimingSchema.optional() }).strict(),

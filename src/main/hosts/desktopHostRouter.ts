@@ -21,6 +21,8 @@ export interface DesktopHostConnection {
   gitChangedFiles?(request: GitChangedFilesRequest): Promise<GitChangedFiles>
   gitPullRequest?(request: GitPullRequestRequest): Promise<GitPullRequestDetail | null>
   hostFolders?(request: HostFoldersRequest): Promise<HostFoldersResult>
+  /** Whether this host lists `client-updates`: only then do its client updates reach the window (#480). */
+  offersClientUpdates?(): boolean
   observe?(threadIds: string[]): Promise<unknown>
   subscribeDetail?(listener: (detail: AgentThreadDetailUpdate) => void): () => void
   available?: () => boolean
@@ -32,6 +34,13 @@ export interface DesktopHostConnection {
  * or a project is the window's own and is handled on its own.
  */
 const SELECTING_COMMANDS: ReadonlySet<AgentCommand['type']> = new Set(['later', 'next', 'create-thread', 'create-project', 'select-attention', 'resume-draft', 'utterance'])
+
+/** A state without its client updates, which belong to the machine that runs those clients. */
+function withoutClientUpdates(state: AgentState): AgentState {
+  const { clientUpdates: _updates, clientUpdateRun: _run, clientUpdatesDismissedAt: _dismissed, ...rest } = state
+  void _updates; void _run; void _dismissed
+  return rest
+}
 
 /** Routing happens in main, before host-local IDs or privileged command schemas are decoded. */
 export class DesktopHostRouter {
@@ -111,7 +120,10 @@ export class DesktopHostRouter {
       return { connection, original, state: clientAgentState(original) }
     })
     const selected = entries.find(item => item.connection.hostId === this.selectedHostId)
-    const base = selected ? this.named(selected.connection, selected.state) : this.empty()
+    const named = selected ? this.named(selected.connection, selected.state) : this.empty()
+    // The corner card and Settings > Providers are this computer's own clients. A remote host's client updates reach the
+    // window only through its `clientHosts` entry, for its tiles in Settings > Hosts (#480).
+    const base = selected?.connection.kind === 'remote' ? withoutClientUpdates(named) : named
     const multiple = entries.length > 1
     const threads = entries.flatMap(({ connection, original, state }) => state.host.threads.map((thread, index) => {
       const available = connection.available?.() !== false
@@ -132,6 +144,8 @@ export class DesktopHostRouter {
           connected: connection.available?.() !== false && original.host.connected,
           models: state.host.models, capabilities: original.host.capabilities,
           ...(original.host.providers ? { providers: original.host.providers } : {}),
+          ...(connection.offersClientUpdates?.() && original.clientUpdates ? { clientUpdates: original.clientUpdates } : {}),
+          ...(connection.offersClientUpdates?.() && original.clientUpdateRun ? { clientUpdateRun: original.clientUpdateRun } : {}),
         })),
       },
       assignments: entries.flatMap(item => item.state.assignments), queue: entries.flatMap(item => item.state.queue),

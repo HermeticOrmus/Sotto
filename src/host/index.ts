@@ -35,6 +35,9 @@ export interface HeadlessHostOptions {
   signInCommand?: ProviderSignInOptions['command']
   /** Tests stand in for a host of another Sotto version; the host advertises its own. */
   sottoVersion?: string
+  /** Tests stand in for the registry, the installers and where each client is; the host finds and runs the real ones. */
+  clients?: AgentRuntimeOptions['clients']
+  locateClient?: AgentRuntimeOptions['locateClient']
 }
 
 export { HostLockError } from './lock'
@@ -83,6 +86,8 @@ async function startHostRuntime(options: HeadlessHostOptions) {
       ...(memory && startup.memoryEnabled ? { preferences: new MemoryProfile(memory) } : {}),
       ...(options.providers ? { providers: options.providers } : {}),
       ...(options.reasoner ? { reasoner: options.reasoner } : {}),
+      ...(options.clients ? { clients: options.clients } : {}),
+      ...(options.locateClient ? { locateClient: options.locateClient } : {}),
       openExternal: async () => { throw new Error('Open account settings on the host machine to continue.') },
       openThreadFolder: async () => { throw new Error('This folder is on the host machine. Open it there to continue.') },
       logFailure: code => options.log?.(code),
@@ -107,7 +112,7 @@ async function startHostRuntime(options: HeadlessHostOptions) {
     try {
       await pairing.load()
       if (options.port !== undefined) {
-        listener = await startSocketServer({ service: runtime.hostService, pairing, port: options.port, signIns,
+        listener = await startSocketServer({ service: runtime.hostService, pairing, port: options.port, signIns, clientUpdates: true,
           ...(options.origins ? { origins: options.origins } : {}), ...(options.sottoVersion ? { sottoVersion: options.sottoVersion } : {}),
           mayAnswer: client => policy?.mayGrant(client).allowed ?? false,
           setAnswers: (clientId, allowed) => {

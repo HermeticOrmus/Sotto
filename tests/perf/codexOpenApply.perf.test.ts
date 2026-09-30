@@ -13,7 +13,7 @@
  * - `applying`: `applyItem` for every item, which records the messages (`recording`) and the activity.
  * - `activity`: the activity projection's `item`, `anchor` and `turn`; the first two run inside `applying`, `turn`
  *   inside `rest`.
- * - `ordering`: `orderMessages`, wherever the read calls it, and how many times it did.
+ * - `ordering`: `reconcileMessages`, wherever the read calls it, and how many times it did.
  * - `rest`: the rest of `applyThread` and `settleRead`. `persist`, inside the read, is reported on its own.
  *
  * Each open is timed on a fresh connection, so the adapter holds nothing for the thread and the read is the one an
@@ -35,7 +35,7 @@ const SIZES = [50, 500, 2000] as const
 const TRANSCRIPT_CHARS = 32_000
 /** The members the benchmark wraps, by the class that owns them. */
 const WRAPPED = {
-  adapter: ['rpc', 'applyThread', 'reconcileTurn', 'applyItem', 'addMessage', 'orderMessages', 'settleRead', 'persist'],
+  adapter: ['rpc', 'applyThread', 'reconcileTurn', 'applyItem', 'addMessage', 'reconcileMessages', 'settleRead', 'persist'],
   activity: ['item', 'anchor', 'turn'],
 } as const
 const PHASES = ['open', 'read', 'sending', 'parsing', 'json', 'applyThread', 'reconciling', 'applying', 'recording', 'activity', 'ordering', 'settleRead', 'persist'] as const
@@ -76,7 +76,7 @@ function instrument(): void {
   // Parts of applying and of the rest: recording a message in the thread's log, and the thread's activity.
   timed('adapter', 'addMessage', 'recording', inRead)
   for (const name of WRAPPED.activity) timed('activity', name, 'activity', inRead)
-  timed('adapter', 'orderMessages', 'ordering', inRead, () => { orderings++ })
+  timed('adapter', 'reconcileMessages', 'ordering', inRead, () => { orderings++ })
   timed('adapter', 'settleRead', 'settleRead', inRead)
   timed('adapter', 'persist', 'persist', inRead)
   JSON.parse = function (text: string, reviver?: Parameters<typeof JSON.parse>[1]) {

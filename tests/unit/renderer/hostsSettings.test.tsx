@@ -41,7 +41,7 @@ function fixture(hosts: HostStatus[] = [host()], answer?: (command: HostsCommand
   const connectTailscale = vi.fn(options.connect ?? (async (): Promise<TailscaleConnectOutcome> => 'connected'))
   const openTailscaleDownload = vi.fn(async () => undefined)
   const bridge: HostsBridge = { get: async () => state, command, onChanged: listener => { listeners.add(listener); return () => listeners.delete(listener) },
-    devices, tailscale: vi.fn(async () => tailscale), connectTailscale, openTailscaleDownload, providerAction: vi.fn(async () => ({})), signIn: vi.fn(async () => null) }
+    devices, tailscale: vi.fn(async () => tailscale), connectTailscale, openTailscaleDownload, providerAction: vi.fn(async () => ({})), updateClients: vi.fn(async () => ({})), signIn: vi.fn(async () => null) }
   return { bridge, command, push, state: () => state, devices, connectTailscale, openTailscaleDownload, setTailscale: (next: TailscaleSummary) => { tailscale = next } }
 }
 /** Opens Add host and waits for its device list. */

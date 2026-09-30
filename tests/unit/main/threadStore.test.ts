@@ -42,6 +42,25 @@ const conversation = (count: number): AgentMessage[] => Array.from({ length: cou
 ]).flat()
 
 describe('thread store', () => {
+  it('repairs exact native aliases durably without discarding distinct content or authority', async () => {
+    const f = await store()
+    const canonical = { ...message('own', 'user', 'Same words'), commandId: 'sent-command' }
+    const rows = [canonical, message('reply', 'assistant', 'Reply'), message('receipt', 'user', 'Same words'),
+      message('different-text', 'user', 'Different words'), message('different-role', 'assistant', 'Same words'),
+      { ...message('different-command', 'user', 'Same words'), commandId: 'outside-command' }]
+    f.store.appendMany('thread', rows.map(message => ({ kind: 'message-added', at, message })))
+    for (const messageId of ['receipt', 'different-text', 'different-role', 'different-command', 'own']) {
+      f.store.append('thread', { kind: 'message-aliased', at, messageId, canonicalId: 'own' })
+    }
+    const expected = rows.filter(row => row.id !== 'receipt')
+    expect(f.store.readMessages('thread').messages).toEqual(expected)
+    expect(f.store.eventsAfter(0).filter(row => row.event.kind === 'message-added')).toHaveLength(rows.length)
+    f.store.rebuild()
+    expect(f.store.readMessages('thread').messages).toEqual(expected)
+    f.store.redactAll(); f.store.rebuild()
+    expect(f.store.readMessages('thread').messages).toEqual([])
+  })
+
   it('projects added, appended and replaced messages, and answers windows in whole turns', async () => {
     const f = await store()
     f.store.appendMany('thread', conversation(3).map(item => ({ kind: 'message-added', at, message: item })))

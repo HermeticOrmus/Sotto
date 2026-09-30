@@ -71,4 +71,49 @@
 .host-sign-in__done { border-left-color: var(--tt-success); }
 .host-sign-in__done > svg { color: var(--tt-success); }
 
+/* A host's client updates (#480): the chip beside Show providers, and what a tile says about its client's update. */
+.host-providers__bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; justify-self: start; min-width: 0; }
+.host-client-updates__chip { display: inline-flex; align-items: center; gap: 6px; min-height: 26px; border: 1px solid color-mix(in srgb, var(--tt-update) 45%, transparent); border-radius: var(--tt-radius-pill); background: var(--tt-update-surface); color: var(--tt-update-text); padding: 0 10px; font: 600 12px var(--tt-font-ui); white-space: nowrap; cursor: pointer; }
+.host-client-updates__chip:hover, .host-client-updates__chip[aria-expanded='true'] { border-color: var(--tt-update); }
+.host-client-updates__chip[data-tone='error'] { border-color: var(--tt-error-border); background: var(--tt-error-surface); color: var(--tt-error-text); }
+.host-client-updates__chip[data-tone='error']:hover, .host-client-updates__chip[data-tone='error'][aria-expanded='true'] { border-color: var(--tt-error); }
+.host-client-updates__chip[data-tone='done'] { border-color: var(--tt-border); background: transparent; color: var(--tt-text-2); }
+.host-client-updates__chip[data-tone='done'] > svg { color: var(--tt-success); }
+
+/* The spinner an update shows while it runs; reduced motion keeps it still. */
+.host-client-update__spinner { display: inline-block; flex: none; width: 11px; height: 11px; border: 2px solid var(--tt-border); border-top-color: var(--tt-update); border-radius: 50%; animation: host-client-update-spin 900ms linear infinite; }
+@keyframes host-client-update-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .host-client-update__spinner { animation: none; border-right-color: var(--tt-update); } }
+[data-reduced-motion='on'] .host-client-update__spinner { animation: none; border-right-color: var(--tt-update); }
+
+/* A tile with an update to show grows to fit it, and keeps its presses at the bottom. */
+.host-provider[data-update] { display: flex; flex-direction: column; }
+.host-provider[data-update] .host-provider__act { align-self: stretch; margin-top: auto; padding-top: 2px; }
+.hosts-settings .host-client-update__line { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--tt-accent-text); font-size: 12px; font-weight: 500; }
+.hosts-settings .host-client-update__line[data-tone='quiet'] { color: var(--tt-text-muted); font-weight: 400; }
+.hosts-settings .host-client-update__line[data-tone='error'] { color: var(--tt-error-text); }
+.host-client-update__below { display: grid; gap: 8px; min-width: 0; }
+.hosts-settings .host-client-update__words { margin: 0; color: var(--tt-text); font-size: 12px; overflow-wrap: anywhere; }
+.host-client-update__details summary, .host-client-update__printed summary { width: fit-content; cursor: pointer; color: var(--tt-text-muted); font-size: 12px; }
+.host-client-update__details summary:hover, .host-client-update__printed summary:hover { color: var(--tt-text); }
+.host-client-update__details-body { display: grid; gap: 8px; margin-top: 6px; min-width: 0; }
+.host-client-update__printed pre { margin: 6px 0 0; max-height: 120px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; border-radius: var(--tt-radius-sm); background: var(--tt-code-bg); padding: 6px 8px; color: var(--tt-code-text); font: 11.5px/1.5 var(--tt-font-mono); }
+
+/* Client updates on forge: one row per client, Not now and Update all. Fixed, so it opens above the chip when below has no room. */
+.host-client-updates__panel { position: fixed; z-index: 40; display: grid; gap: 10px; width: 340px; max-width: calc(100vw - 24px); max-height: calc(100vh - 24px); overflow: auto; border: 1px solid var(--tt-hairline); border-radius: var(--tt-radius-md); background: var(--tt-surface-overlay); box-shadow: var(--tt-shadow-overlay); padding: 14px; }
+.host-client-updates__panel h6 { margin: 0; color: var(--tt-text); font-size: 14px; font-weight: 600; }
+.hosts-settings .host-client-updates__panel p { margin: 0; color: var(--tt-text-muted); font-size: 12.5px; }
+.hosts-settings .host-client-updates__panel .host-client-updates__status { color: var(--tt-text); }
+.hosts-settings .host-client-updates__panel .host-client-updates__refusal { color: var(--tt-error-text); }
+.host-client-updates__list { margin: 0; padding: 0; border-top: 1px solid var(--tt-border-faint); list-style: none; }
+.host-client-updates__list li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 10px; min-width: 0; border-bottom: 1px solid var(--tt-border-faint); padding: 8px 0; }
+.host-client-updates__name { color: var(--tt-text); font-size: 13px; font-weight: 600; }
+.host-client-updates__versions { color: var(--tt-text-muted); font-size: 12px; white-space: nowrap; }
+.host-client-updates__state { display: inline-flex; align-items: center; gap: 6px; justify-self: end; color: var(--tt-text-muted); font-size: 12px; white-space: nowrap; }
+.host-client-updates__list li[data-phase='updated'] .host-client-updates__state { color: var(--tt-success); }
+.host-client-updates__list li[data-phase='failed'] .host-client-updates__state { color: var(--tt-error-text); }
+.host-client-updates__why { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 10px; min-width: 0; }
+.hosts-settings .host-client-updates__why p { flex: 1 1 180px; font-size: 12px; }
+.host-client-updates__actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+
 @media (max-width: 700px) { .host-providers { padding-left: 0; } .host-providers__toggle.tt-button { margin-left: 0; } }

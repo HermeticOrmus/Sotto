@@ -364,7 +364,7 @@ describe('updating a client from the app', () => {
       const update = control.command({ type: 'update-client', provider: 'grok' })
       await vi.waitFor(() => { expect(installs).toBe(1) })
       const second = await control.command({ type: 'update-client', provider: 'grok' })
-      expect(second.error).toBe('Another client is updating. Wait for it to finish.')
+      expect(second.error).toBe('Grok Build is already updating. Wait for it to finish.')
       release()
       expect((await update).error).toBeNull()
       expect(installs).toBe(1)

@@ -13,7 +13,7 @@ import type { HostUpdateCandidate } from './hostUpdate'
 import type { HostUpdateAction, HostUpdateState } from '../../shared/hostUpdates'
 import { nameHostInRefusal, type AgentProviderStatus, type ProviderId } from '../../shared/agents'
 import type { HostProviderJobSource, ProviderJobHost } from './hostProviderJob'
-import { isProviderSignInPage, type HostProviderAction, type HostProviderActionResult, type HostSignIn, type HostSignInRequest, type ProviderSignInView } from '../../shared/hostProviders'
+import { isProviderSignInPage, type HostClientUpdateRequest, type HostProviderAction, type HostProviderActionResult, type HostSignIn, type HostSignInRequest, type ProviderSignInView } from '../../shared/hostProviders'
 
 /** Files from before the switch have no `sshPort` or `enabled` and still read: both are optional, and no `enabled` means on. */
 const savedHostSchema = remoteHostSchema.extend({ hostId: z.uuid().optional(), clientId: z.string().optional() })
@@ -455,6 +455,17 @@ export class DesktopHosts {
     return state.error ? { error: nameHostInRefusal(state.error, host.name) } : {}
   }
   /**
+   * Update from a provider tile, or Update all (#480): the clients join that host's own update line, which runs them one
+   * at a time and answers at once. How each goes comes back in the host's shell. A host that does not list
+   * `client-updates` shows no update on its tiles; if one is asked for anyway, nothing is sent to it.
+   */
+  async updateClients(request: HostClientUpdateRequest): Promise<HostProviderActionResult> {
+    const { host, socket } = this.connectedSocket(request.id)
+    if (!socket.offersClientUpdates()) throw new Error(`The host on ${host.name} cannot update its clients from here. Nothing was changed. Put this computer's version of the host on ${host.name}, stop the host and connect again.`)
+    const state = await socket.command({ type: request.action === 'cancel' ? 'cancel-client-updates' : 'queue-client-updates', providers: request.providers })
+    return state.error ? { error: nameHostInRefusal(state.error, host.name) } : {}
+  }
+  /**
    * A provider's sign-in on a connected host (ADR-0037), for Settings > Hosts. The host runs the client and holds what it
    * printed; the window gets the code to show and never the page's address. Open sign-in page asks the host for the page
    * again, checks it is one of that provider's own, and opens it in the default browser, keeping nothing here.
@@ -758,7 +769,7 @@ export class DesktopHosts {
       detail: id => socket.readThreadDetail(id), preview: request => socket.attachmentPreview(request), observe: ids => socket.observe(ids),
       stage: image => socket.stageAttachment(image), content: digest => socket.attachmentContent(digest),
       gitRefs: request => socket.gitRefs(request), gitChangedFiles: request => socket.gitChangedFiles(request), gitPullRequest: request => socket.gitPullRequest(request),
-      hostFolders: request => socket.hostFolders(request),
+      hostFolders: request => socket.hostFolders(request), offersClientUpdates: () => socket.offersClientUpdates(),
       subscribeDetail: listener => socket.subscribeThreadDetail(listener), available: () => connected,
     }
     // Back from an update's restart: the new connection takes the place its threads kept on the page.

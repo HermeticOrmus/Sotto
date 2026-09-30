@@ -332,15 +332,14 @@ describe('Devin dispatch and decision boundaries', () => {
     expect(await thread()).toMatchObject({ providerMode: 'bypass' })
   })
 
-  it('creates and sends to a thread on every mode Devin offers', async () => {
+  const offeredModes = ['ask-first', 'accept-edits', 'smart', 'plan', 'ask', 'bypass']
+  it.each(offeredModes)('creates and sends to a thread in %s mode', async providerMode => {
     // Devin announces the mode Sotto sets; that announcement is the thread's own choice, not a change.
     const modes = (await f.host.snapshot()).models.find(model => model.id === f.modelId)!.providerModes!.map(mode => mode.id)
-    expect(modes).toEqual(['ask-first', 'accept-edits', 'smart', 'plan', 'ask', 'bypass'])
-    for (const providerMode of modes) {
-      const id = await create(providerMode)
-      expect(await thread(id)).toMatchObject({ providerMode, status: 'idle' })
-      expect(await send(id)).toMatchObject({ accepted: true })
-    }
+    expect(modes).toEqual(offeredModes)
+    const id = await create(providerMode)
+    expect(await thread(id)).toMatchObject({ providerMode, status: 'idle' })
+    expect(await send(id)).toMatchObject({ accepted: true })
   })
 
   it('reopens a thread with history whose mode changed since Devin last held it', async () => {

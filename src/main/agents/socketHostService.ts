@@ -135,7 +135,8 @@ export class SocketHostService implements HostService {
     })
     if (generation !== this.generation) { this.frames.close(); throw new HostConnectionError('This host connection was closed.', 'disconnected') }
     try {
-      const accepts = this.features.includes('detail-delta') ? { accepts: ['detail-delta'] } : {}
+      const accepted = (['detail-delta', 'message-aliases', 'client-updates'] as const).filter(feature => this.features.includes(feature))
+      const accepts = { accepts: [...accepted] }
       const hello = this.read(hostHelloSchema, await this.call({ op: 'hello', afterSeq: this.catchesUp ? this.latestSeq : NO_EVENTS_AFTER, ...accepts }))
       if (hello.hostId !== session.hostId) throw new HostConnectionError('The host identity changed. Connect again.', 'unauthenticated')
       this.hostVersion = hello.sottoVersion; this.features = hello.features
@@ -358,6 +359,8 @@ export class SocketHostService implements HostService {
   }
   /** Whether the host runs its providers' sign-ins for this client (ADR-0037). */
   offersSignIn(): boolean { return this.features.includes('provider-sign-in') }
+  /** Whether the host shows its client updates to this client and runs them for it (#480). */
+  offersClientUpdates(): boolean { return this.features.includes('client-updates') }
   /**
    * A provider's own sign-in on the host (ADR-0037). The answer carries the page's address and the code while it waits;
    * the caller hands the window neither the address nor anything to keep. A host that does not list `provider-sign-in`

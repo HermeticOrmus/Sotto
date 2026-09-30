@@ -246,4 +246,19 @@ describe('a host restarting for an update (ADR-0040)', () => {
     await router.command({ type: 'manual-send', threadId: hostEntityKey(REMOTE, 'thread'), text: 'After the update' }, desktopWindowClient())
     expect(next.command).toHaveBeenCalledWith({ type: 'manual-send', threadId: 'thread', text: 'After the update' }, desktopWindowClient())
   })
+  it('passes a host’s client updates to the window only when the host offers them, so an older host shows nothing new (#480)', () => {
+    const router = new DesktopHostRouter(emptyDesktopState), older = fixture(LOCAL, 'remote'), newer = fixture(REMOTE, 'remote')
+    const reading = { id: 'codex' as const, installed: '0.155.1', published: '0.158.0', behind: true, channel: 'mise' as const, canInstall: true, checkedAt: '2026-09-29T00:00:00.000Z', state: 'updating' as const }
+    for (const item of [older, newer]) { item.state.clientUpdates = [reading]; item.state.clientUpdateRun = { total: 2, done: 0 } }
+    router.add(older.connection); router.add({ ...newer.connection, offersClientUpdates: () => true })
+    const [first, second] = router.shell().host.clientHosts!
+    expect(first).not.toHaveProperty('clientUpdates'); expect(first).not.toHaveProperty('clientUpdateRun')
+    expect(second).toMatchObject({ clientUpdates: [reading], clientUpdateRun: { total: 2, done: 0 } })
+    // This computer's corner card never shows a remote host's clients: they are on that host's tiles.
+    router.select(REMOTE)
+    expect(router.shell()).not.toHaveProperty('clientUpdates'); expect(router.shell()).not.toHaveProperty('clientUpdateRun')
+    const own = new DesktopHostRouter(emptyDesktopState), local = fixture(LOCAL, 'local')
+    local.state.clientUpdates = [reading]; own.add(local.connection)
+    expect(own.shell().clientUpdates).toEqual([reading])
+  })
 })
