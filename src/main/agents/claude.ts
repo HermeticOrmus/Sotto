@@ -1002,13 +1002,13 @@ export class ClaudeStreamJsonHost implements AgentHost {
       // A turn the user stopped ends in an error result, which is no failure of Claude Code's.
       const stopped = this.interrupting.has(id) || thread.lastTurn?.status === 'interrupted' && (!origin || thread.lastTurn.id === origin)
       this.interrupting.delete(id)
+      const failure = frame.is_error === true && !stopped ? claudeTurnFailure(frame, this.assistantErrors.get(id)) : null
       if (origin) {
         const status = stopped ? 'interrupted' : frame.is_error === true ? 'failed' : 'completed'
         this.completedOrigins.add(origin)
         thread.lastTurn = { id: origin, status }
-        this.markTurn(id, status, alias.origins.find(value => value.uuid === origin)?.messageId, typeof frame.result === 'string' && frame.is_error === true ? frame.result : undefined)
+        this.markTurn(id, status, alias.origins.find(value => value.uuid === origin)?.messageId, failure ?? undefined)
       }
-      const failure = frame.is_error === true && !stopped ? claudeTurnFailure(frame, this.assistantErrors.get(id)) : null
       this.assistantErrors.delete(id)
       // A prompt of Sotto's that Claude Code held behind its own turn starts next, so the thread goes straight on to it.
       const held = alias.origins.some(value => this.acknowledgements.has(value.uuid))
