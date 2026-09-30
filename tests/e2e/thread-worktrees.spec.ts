@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, test, type Locator, type Page } from '@playwright/test'
@@ -400,7 +400,7 @@ test('a worktree can be reclaimed from the pane or on settle, keeps its branch, 
   await mkdir(repo)
   git(repo, 'init', '-q')
   await commitFile(repo, 'README.md', 'Committed checkout\n')
-  await commitFile(repo, '.gitignore', 'node_modules/\n')
+  await commitFile(repo, '.gitignore', 'node_modules/\n.env\n.local/\n.worktrees/\n')
   let launched: LaunchedSotto | undefined
   try {
     launched = await launch([['repo-app', repo]])
@@ -456,12 +456,67 @@ test('a worktree can be reclaimed from the pane or on settle, keeps its branch, 
     await page.keyboard.press('Escape')
     await expect(question).toHaveCount(0)
     expect(existsSync(worktreePath)).toBe(true)
+    // Ignored files require their own acknowledgement, and a changed set needs a fresh question.
+    await writeFile(join(worktreePath, '.env'), 'synthetic local secret')
+    await details.getByRole('button', { name: 'Remove worktree folder, keeping its branch', exact: true }).click()
+    await expect(question.getByText('.env', { exact: true })).toBeVisible()
+    const remove = question.getByRole('button', { name: 'Remove worktree', exact: true })
+    await expect(remove).toBeDisabled()
+    for (const [width, height] of [[1600, 1000], [1280, 800], [820, 560]] as const) {
+      await resize(launched, width, height)
+      for (const appearance of ['dark', 'light'] as const) {
+        await page.evaluate(async mode => window.sotto!.updateSettings({ appearance: mode }), appearance)
+        for (const reducedMotion of ['no-preference', 'reduce'] as const) {
+          await page.emulateMedia({ reducedMotion })
+          await expect(remove).toBeInViewport()
+          await expect(question.getByRole('checkbox')).toBeInViewport()
+          await page.screenshot({ path: `${RECLAIM_SHOTS}/ignored-items-${width}x${height}-${appearance}-${reducedMotion}.png`, animations: 'disabled' })
+        }
+      }
+    }
+    await page.emulateMedia({ reducedMotion: 'no-preference' })
+    await page.evaluate(async () => window.sotto!.updateSettings({ appearance: 'dark' }))
+    await resize(launched, 1280, 800)
+    await question.getByRole('checkbox', { name: 'Delete these 1 ignored items with the folder' }).focus()
+    await page.keyboard.press('Space')
+    await expect(remove).toBeEnabled()
+    await mkdir(join(worktreePath, '.local'))
+    await writeFile(join(worktreePath, '.local', 'new.txt'), 'new local work')
+    await remove.click()
+    await expect(question.getByRole('alert')).toContainText('Nothing was removed')
+    expect(await readFile(join(worktreePath, '.env'), 'utf8')).toBe('synthetic local secret')
+    await page.keyboard.press('Escape')
+    await expect(question).toHaveCount(0)
+    // A nested repository is flagged with its work and cannot be discarded by acknowledgement.
+    const nested = join(worktreePath, '.worktrees', 'n')
+    await mkdir(nested, { recursive: true })
+    git(nested, 'init', '-q')
+    await writeFile(join(nested, 'unsaved.txt'), 'nested uncommitted work')
+    await details.getByRole('button', { name: 'Remove worktree folder, keeping its branch', exact: true }).click()
+    await expect(question).toContainText('Nested repository or worktree')
+    await expect(question).toContainText('?? unsaved.txt')
+    await question.getByRole('checkbox', { name: 'Delete these 3 ignored items with the folder' }).check()
+    await expect(remove).toBeDisabled()
+    await resize(launched, 820, 560)
+    await expect(question.getByRole('heading', { name: 'Remove this worktree?' })).toBeInViewport()
+    await expect(remove).toBeInViewport()
+    await page.screenshot({ path: `${RECLAIM_SHOTS}/nested-items-820x560-dark.png`, animations: 'disabled' })
+    await resize(launched, 1600, 1000)
+    await page.evaluate(async () => window.sotto!.updateSettings({ appearance: 'light' }))
+    await page.screenshot({ path: `${RECLAIM_SHOTS}/nested-items-1600x1000-light.png`, animations: 'disabled' })
+    await page.keyboard.press('Escape')
+    expect(await readFile(join(nested, 'unsaved.txt'), 'utf8')).toBe('nested uncommitted work')
+    await rename(join(worktreePath, '.worktrees'), join(root, 'nested-kept'))
+    await page.evaluate(async () => window.sotto!.updateSettings({ appearance: 'dark' }))
+    await resize(launched, 1280, 800)
     // With uncommitted work the question says so, and the folder goes only on that answer.
     await writeFile(join(worktreePath, 'README.md'), 'Unsaved work\n')
     await page.evaluate(() => window.dispatchEvent(new Event('focus')))
     await expect.poll(async () => (await activeThread(page)).worktree?.dirty).toBe(true)
     await details.getByRole('button', { name: 'Remove worktree folder, keeping its branch', exact: true }).click()
     await expect(question).toContainText('This folder has uncommitted changes.')
+    await expect(question.getByText('.local/new.txt', { exact: true })).toBeVisible()
+    await question.getByRole('checkbox', { name: 'Delete these 2 ignored items with the folder' }).check()
     await page.screenshot({ path: `${RECLAIM_SHOTS}/remove-worktree-dirty.png`, animations: 'disabled' })
     await question.getByRole('button', { name: 'Remove and lose changes', exact: true }).click()
     await expect(question).toHaveCount(0)

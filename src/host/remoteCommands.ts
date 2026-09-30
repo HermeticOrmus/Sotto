@@ -38,7 +38,8 @@ export const REMOTE_COMMANDS: { readonly [T in CommandType]?: Fields<T> } = {
     'existingWorktreePath', 'reasoningEffort', 'runtimeMode', 'providerMode', 'managed'],
   'retry-thread-worktree': ['threadId'], 'refresh-thread-worktree': ['threadId'],
   'restore-thread-branch': ['threadId', 'withUncommittedChanges'],
-  'reclaim-thread-worktree': ['threadId', 'withUncommittedChanges'],
+  'preview-reclaim-thread-worktree': ['threadId'],
+  'reclaim-thread-worktree': ['threadId', 'withUncommittedChanges', 'confirmedIgnored'],
   'configure-thread-working-copy': ['threadId', 'workingCopy', 'baseBranch', 'startFromOrigin', 'existingWorktreePath'],
   // The Git actions run on the host's own folder and discard nothing: Git refuses a switch that would lose work,
   // a push is never forced, and a pull is fast-forward only (ADR-0027).
@@ -89,7 +90,8 @@ export function remoteCommandNeedsAnswerPolicy(command: AgentCommand, askingProv
     case 'create-thread': case 'configure-thread':
       return (command.runtimeMode !== undefined && command.runtimeMode !== 'approval-required')
         || (command.providerMode !== undefined && !askingProviderModes.includes(command.providerMode))
-    case 'restore-thread-branch': case 'reclaim-thread-worktree': return command.withUncommittedChanges === true
+    case 'restore-thread-branch': return command.withUncommittedChanges === true
+    case 'reclaim-thread-worktree': return command.withUncommittedChanges === true || Boolean(command.confirmedIgnored?.length)
     default: return false
   }
 }

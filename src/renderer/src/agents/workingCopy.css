@@ -30,3 +30,10 @@
 .branch-notice .tt-button { gap: 6px; min-height: 34px; padding: 0 12px; font-size: 14px; }
 .branch-notice > .branch-notice__result { flex-basis: 100%; color: var(--tt-error-text); font-size: 12px; }
 .branch-notice .tt-button[aria-disabled='true'] { cursor: progress; opacity: .6; }
+.working-copy__ignored { max-height: 180px; overflow: auto; padding-left: 24px; }
+.working-copy__ignored li { margin-bottom: 8px; overflow-wrap: anywhere; }
+.working-copy__acknowledge { display: flex; align-items: flex-start; gap: 8px; }
+.working-copy__acknowledge > input { accent-color: var(--tt-accent); }
+.tt-dialog:has(.working-copy__ignored) { display: flex; flex-direction: column; max-height: calc(100dvh - 40px); overflow: hidden; }
+.tt-dialog:has(.working-copy__ignored) > h2, .tt-dialog:has(.working-copy__ignored) > .tt-dialog__actions, .tt-dialog:has(.working-copy__ignored) > .tt-dialog__status { flex-shrink: 0; }
+.tt-dialog:has(.working-copy__ignored) > .tt-dialog__description { min-height: 0; overflow: auto; }

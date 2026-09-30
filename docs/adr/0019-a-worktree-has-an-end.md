@@ -2,6 +2,8 @@
 
 Accepted September 22, 2026.
 
+Amended September 30, 2026 (#485): the owner chose removal prototype variant B. Both manual removal questions list every ignored item other than installed dependencies and require the separate **Delete these N ignored items with the folder** acknowledgement. Main refuses when the list differs from the one displayed, including when an initially empty list gains a file. Nested repositories and worktrees are flagged with their uncommitted work and block removal until moved out. Automatic rules still refuse ignored non-dependency items. The referenced `docs/prototypes/reclaim-and-mic-test-prototype.html` was absent from this checkout and GitHub main; the issue's binding behavior and copy supplied the implementation reference.
+
 Note, September 24, 2026: what the Git interface ([ADR-0027](0027-git-the-way-t3-code-does-it.md)) changed here.
 
 - **The rules stay under Settings → Application.** The other Git settings moved to Settings → Git, except the Generated switches, which stay under Cleanup; the owner's pick for that section left the worktree cleanup rules where they were.

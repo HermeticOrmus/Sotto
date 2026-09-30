@@ -609,7 +609,19 @@ export class WorkspaceHost implements AgentHost {
    * another thread, or has a terminal open in it. `withUncommittedChanges` is the user's answer to the
    * confirmation; a rule never gives it.
    */
-  async reclaimThreadWorktree(threadId: string, options: { withUncommittedChanges?: boolean; automatic?: boolean } = {}): Promise<AgentHostSnapshot> {
+  async previewThreadWorktreeReclaim(threadId: string): Promise<AgentHostSnapshot> {
+    return this.onLane(threadId, async () => {
+      await this.initialize()
+      const metadata = this.thread(threadId).worktree
+      if (!metadata || metadata.mode !== 'independent' || metadata.reused) throw new Error('This thread has no worktree of its own to remove.')
+      const facts = await this.worktrees.reclaimFacts(metadata)
+      const preview = { ...facts, ignored: [...facts.ignored], repositories: [...facts.repositories] }
+      // This preview belongs to the question, not the saved thread record.
+      const snapshot = this.workspaceSnapshot()
+      return { ...snapshot, threads: snapshot.threads.map(thread => thread.id === threadId ? { ...thread, worktree: { ...metadata, reclaimPreview: preview } } : thread) }
+    })
+  }
+  async reclaimThreadWorktree(threadId: string, options: { withUncommittedChanges?: boolean; automatic?: boolean; confirmedIgnored?: readonly string[] } = {}): Promise<AgentHostSnapshot> {
     return this.onLane(threadId, async () => {
       await this.initialize()
       const thread = this.thread(threadId)

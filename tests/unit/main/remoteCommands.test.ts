@@ -62,6 +62,7 @@ describe('remote command allow-list', () => {
       { type: 'configure-thread', threadId: 'thread', runtimeMode: 'auto-accept-edits' },
       { type: 'create-thread', projectId: 'project', title: 'Auto', modelId: 'codex', runtimeMode: 'auto' },
       { type: 'reclaim-thread-worktree', threadId: 'thread', withUncommittedChanges: true },
+      { type: 'reclaim-thread-worktree', threadId: 'thread', confirmedIgnored: ['.env'] },
       { type: 'restore-thread-branch', threadId: 'thread', withUncommittedChanges: true },
       { type: 'answer', threadId: 'thread', requestId: 'request', answer: 'Allow', approved: true },
     ]

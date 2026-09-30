@@ -10,7 +10,9 @@ const project = { path: 'C:\\Users\\zache\\Projects\\sotto-app' }
 const worktreePath = 'C:\\Users\\zache\\AppData\\Roaming\\Sotto\\thread-worktrees\\7f1c0000-0000-4000-8000-000000000000'
 const own: AgentWorktree = { mode: 'independent', status: 'ready', path: worktreePath, repositoryRoot: project.path, branch: 'feat/finished', dirty: false }
 const thread: WorkingCopyThread = { id: 'thread-1', nativeSessionStarted: true, workingDirectory: worktreePath, worktree: own }
-const ok = (): AgentState => ({ configuration: defaultAgentConfiguration(), connection: 'connected', error: null } as unknown as AgentState)
+const ok = (): AgentState => ({ configuration: defaultAgentConfiguration(), connection: 'connected', error: null,
+  host: { threads: [{ ...thread, worktree: { ...own, reclaimPreview: { path: worktreePath, branch: own.branch, dirty: false, ignored: [], repositories: [] } } }] },
+} as unknown as AgentState)
 const refused = (error: string): AgentState => ({ ...ok(), error } as AgentState)
 afterEach(() => cleanup())
 
@@ -20,6 +22,41 @@ function SettleButton({ command, target }: { readonly command: (request: AgentCo
 }
 
 describe('reclaiming a thread worktree', () => {
+  it('lists ignored items and requires a separate acknowledgement before removal', async () => {
+    const result = ok()
+    result.host.threads[0]!.worktree!.reclaimPreview!.ignored = ['.env', 'out/capture.png']
+    const command = vi.fn<(request: AgentCommand) => Promise<AgentState>>(async () => result)
+    render(<ThreadWorkingCopy thread={thread} project={project} command={command} />)
+    fireEvent.click(screen.getByRole('button', { name: /Working copy:/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Remove worktree folder, keeping its branch' }))
+    expect(await screen.findByText('.env')).toBeVisible()
+    expect(screen.getByText('out/capture.png')).toBeVisible()
+    const remove = screen.getByRole('button', { name: 'Remove worktree' })
+    expect(remove).toBeDisabled()
+    fireEvent.click(remove)
+    expect(command).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Delete these 2 ignored items with the folder' }))
+    expect(remove).toBeEnabled()
+    fireEvent.click(remove)
+    await waitFor(() => expect(command).toHaveBeenLastCalledWith({ type: 'reclaim-thread-worktree', threadId: thread.id, withUncommittedChanges: false, confirmedIgnored: ['.env', 'out/capture.png'] }))
+  })
+  it.each([true, false])('flags nested work (ignored: %s) and keeps removal disabled', async ignored => {
+    const result = ok()
+    const preview = result.host.threads[0]!.worktree!.reclaimPreview!
+    preview.ignored = ignored ? ['.worktrees/n'] : []
+    preview.repositories = [{ path: '.worktrees/n', changes: ['?? unsaved.txt'] }]
+    const command = vi.fn<(request: AgentCommand) => Promise<AgentState>>(async () => result)
+    render(<ThreadWorkingCopy thread={thread} project={project} command={command} />)
+    fireEvent.click(screen.getByRole('button', { name: /Working copy:/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Remove worktree folder, keeping its branch' }))
+    expect(await screen.findByText(/Nested repository or worktree/)).toBeVisible()
+    expect(screen.getByText('?? unsaved.txt')).toBeVisible()
+    if (ignored) fireEvent.click(screen.getByRole('checkbox'))
+    expect(screen.getByRole('button', { name: 'Remove worktree' })).toBeDisabled()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(command).toHaveBeenCalledTimes(1)
+  })
   it('offers Remove worktree for the thread’s own folder, asks once, and says what stays', async () => {
     const command = vi.fn<(request: AgentCommand) => Promise<AgentState>>(async () => ok())
     render(<ThreadWorkingCopy thread={thread} project={project} command={command} />)
@@ -32,24 +69,25 @@ describe('reclaiming a thread worktree', () => {
     fireEvent.keyDown(screen.getByRole('button', { name: 'Keep folder' }), { key: 'Escape' })
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     expect(screen.getByRole('group', { name: 'Working copy details' })).toBeInTheDocument()
-    expect(command).not.toHaveBeenCalled()
+    expect(command).toHaveBeenCalledWith({ type: 'preview-reclaim-thread-worktree', threadId: 'thread-1' })
     fireEvent.click(screen.getByRole('button', { name: 'Remove worktree folder, keeping its branch' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Remove worktree' })).toBeEnabled())
     fireEvent.click(screen.getByRole('button', { name: 'Remove worktree' }))
-    await waitFor(() => expect(command).toHaveBeenCalledWith({ type: 'reclaim-thread-worktree', threadId: 'thread-1', withUncommittedChanges: false }))
+    await waitFor(() => expect(command).toHaveBeenCalledWith({ type: 'reclaim-thread-worktree', threadId: 'thread-1', withUncommittedChanges: false, confirmedIgnored: [] }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
   })
 
   it('names uncommitted work before it goes, and asks again when main knows of work the record did not', async () => {
-    const command = vi.fn<(request: AgentCommand) => Promise<AgentState>>()
-      .mockResolvedValueOnce(refused(RECLAIM_WORKTREE_NEEDS_CONFIRMATION))
-      .mockResolvedValue(ok())
+    let reclaims = 0
+    const command = vi.fn<(request: AgentCommand) => Promise<AgentState>>(async request => request.type === 'reclaim-thread-worktree' && reclaims++ === 0 ? refused(RECLAIM_WORKTREE_NEEDS_CONFIRMATION) : ok())
     render(<ThreadWorkingCopy thread={thread} project={project} command={command} />)
     fireEvent.click(screen.getByRole('button', { name: 'Working copy: feat/finished' }))
     fireEvent.click(screen.getByRole('button', { name: 'Remove worktree folder, keeping its branch' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Remove worktree' })).toBeEnabled())
     fireEvent.click(screen.getByRole('button', { name: 'Remove worktree' }))
     await waitFor(() => expect(screen.getByRole('dialog')).toHaveTextContent('This folder has uncommitted changes.'))
     fireEvent.click(screen.getByRole('button', { name: 'Remove and lose changes' }))
-    await waitFor(() => expect(command).toHaveBeenLastCalledWith({ type: 'reclaim-thread-worktree', threadId: 'thread-1', withUncommittedChanges: true }))
+    await waitFor(() => expect(command).toHaveBeenLastCalledWith({ type: 'reclaim-thread-worktree', threadId: 'thread-1', withUncommittedChanges: true, confirmedIgnored: [] }))
   })
 
   it('does not offer removal for a shared, reused or already reclaimed folder, and says a reclaimed folder comes back on send', () => {
@@ -76,10 +114,11 @@ describe('reclaiming a thread worktree', () => {
     expect(dialog).toHaveTextContent('Remove its worktree too?')
     fireEvent.keyDown(document, { key: 'Escape' })
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
-    expect(command).toHaveBeenCalledTimes(1)
+    expect(command).toHaveBeenCalledTimes(2)
     fireEvent.click(screen.getByRole('button', { name: 'Settle' }))
-    fireEvent.click(await screen.findByRole('button', { name: 'Remove worktree' }))
-    await waitFor(() => expect(command).toHaveBeenLastCalledWith({ type: 'reclaim-thread-worktree', threadId: 'thread-1', withUncommittedChanges: false }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Remove worktree' })).toBeEnabled())
+    fireEvent.click(screen.getByRole('button', { name: 'Remove worktree' }))
+    await waitFor(() => expect(command).toHaveBeenLastCalledWith({ type: 'reclaim-thread-worktree', threadId: 'thread-1', withUncommittedChanges: false, confirmedIgnored: [] }))
   })
 
   it('asks nothing on settle for a shared folder, or when the settle itself was refused', async () => {

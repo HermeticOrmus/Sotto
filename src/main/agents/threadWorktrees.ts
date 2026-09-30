@@ -66,10 +66,13 @@ export interface WorktreeReclaimFacts {
   readonly dirty: boolean
   /** Ignored paths other than installed dependencies: build output, captures, anything a rule may not discard unasked. */
   readonly ignored: readonly string[]
+  readonly repositories: readonly { path: string; changes: string[] }[]
   /** A link inside the folder that leads out of it. Removing the folder could follow it, so nothing is removed while one is there. */
   readonly outsideLink: string | undefined
 }
 export interface WorktreeReclaimOptions {
+  /** The exact ignored paths displayed in the user's confirmation. */
+  readonly confirmedIgnored?: readonly string[]
   /** The user's answer to the uncommitted-changes confirmation. */
   readonly withUncommittedChanges?: boolean
   /** A rule acting on its own: a folder with anything but dependencies in its ignored files is left alone. */
@@ -323,8 +326,37 @@ export class ThreadWorktrees {
     const { worktree: inspected, identity } = await this.inspectWithin(metadata)
     const path = inspected.path!
     const listing = await this.git(path, ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z'])
-    const ignored = listing.split('\0').filter(entry => entry && !DEPENDENCY_FOLDER.test(entry))
-    return { ...(identity ? { identity } : {}), facts: { path, branch: inspected.branch, dirty: inspected.dirty === true, ignored, outsideLink: await this.outsideLink(path) } }
+    const ignored: string[] = []
+    const repositories: Array<{ path: string; changes: string[] }> = []
+    const visit = async (entry: string, ignoredEntry = true): Promise<void> => {
+      if (DEPENDENCY_FOLDER.test(entry)) return
+      const full = join(path, entry)
+      const info = await lstat(full)
+      if (!info.isDirectory() || info.isSymbolicLink()) { if (ignoredEntry) ignored.push(entry); return }
+      const names: string[] = []
+      const handle = await opendir(full)
+      for await (const child of handle) names.push(child.name)
+      if (entry && names.includes('.git')) {
+        if (ignoredEntry) ignored.push(entry)
+        if (!repositories.some(repository => repository.path === entry)) {
+          const status = await this.git(full, ['status', '--porcelain', '--untracked-files=all', '-z'])
+          repositories.push({ path: entry, changes: status.split('\0').filter(Boolean) })
+        }
+        return
+      }
+      if (!names.length && ignoredEntry) ignored.push(entry)
+      for (const name of names) {
+        if (!entry && name === '.git') continue
+        const child = (entry ? entry.replace(/\/$/u, '') + '/' : '') + name
+        if (name === 'node_modules' && (await lstat(join(path, child))).isDirectory()) continue
+        await visit(child, ignoredEntry)
+      }
+    }
+    for (const entry of listing.split('\0').filter(Boolean)) await visit(entry)
+    // Git omits nested .git entries even when their parent is not ignored. They still block removal.
+    await visit('', false)
+    ignored.sort()
+    return { ...(identity ? { identity } : {}), facts: { path, branch: inspected.branch, dirty: inspected.dirty === true, ignored, repositories, outsideLink: await this.outsideLink(path) } }
   }
 
   /**
@@ -342,6 +374,8 @@ export class ThreadWorktrees {
     if (!facts.branch) throw new Error('This folder has no branch checked out, so Sotto could not put it back. Switch it to a branch first. Nothing was changed.')
     if (facts.outsideLink) throw new Error(`This folder contains a link to another folder (${facts.outsideLink}). Remove the link first so nothing outside the folder is touched. Nothing was changed.`)
     if (options.automatic && facts.ignored.length) throw new Error('This folder holds ignored files besides installed dependencies, so a rule leaves it alone.')
+    if (facts.repositories.length) throw new Error('This folder holds a nested repository or worktree. Move it out before removing the folder. Nothing was changed.')
+    if (!options.automatic && ((facts.ignored.length && !options.confirmedIgnored) || (options.confirmedIgnored && JSON.stringify([...options.confirmedIgnored].sort()) !== JSON.stringify(facts.ignored)))) throw new Error('The ignored items changed. Nothing was removed. Close this question and choose Remove worktree again to review them.')
     // A rule never answers the confirmation on the user's behalf.
     if (facts.dirty && (options.automatic || !options.withUncommittedChanges)) throw new Error(RECLAIM_WORKTREE_NEEDS_CONFIRMATION)
     // A linked worktree's .git is a file; a directory there is a repository of its own and is never removed.
