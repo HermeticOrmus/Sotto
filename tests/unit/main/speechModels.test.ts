@@ -5,6 +5,18 @@ import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+const faults = vi.hoisted(() => ({ rename: false, remove: '' }))
+vi.mock('node:fs/promises', async importOriginal => {
+  const original = await importOriginal<typeof import('node:fs/promises')>()
+  return { ...original, rm: vi.fn(async (...args: Parameters<typeof original.rm>) => {
+    if (args[0] === faults.remove) throw Object.assign(new Error('private path'), { code: 'EACCES' })
+    return original.rm(...args)
+  }), rename: vi.fn(async (...args: Parameters<typeof original.rename>) => {
+    if (faults.rename) throw Object.assign(new Error('private path'), { code: 'EACCES' })
+    return original.rename(...args)
+  }) }
+})
+
 const fixture = vi.hoisted(() => ({
   repository: 'onnx-community/Supertonic-TTS-ONNX',
   revision: 'cff123c84b0655d9d647641f1b532c3cbb8f7faa',
@@ -26,6 +38,9 @@ import { NaturalSpeechModels } from '../../../src/main/agents/speechModels'
 
 const roots: string[] = []
 afterEach(async () => {
+  faults.rename = false
+  faults.remove = ''
+  vi.restoreAllMocks()
   for (const root of roots.splice(0)) {
     const resolved = resolve(root)
     if (!resolved.startsWith(`${resolve(tmpdir())}${sep}sotto-speech-models-`)) throw new Error('Unexpected test directory')
@@ -83,6 +98,46 @@ describe('NaturalSpeechModels', () => {
     expect((await restarted.status()).ready).toBe(true)
     expect(await readdir(join(userRoot, 'onnx-community'))).toEqual(['Supertonic-TTS-ONNX'])
     expect(downloader).toHaveBeenCalledTimes(before)
+  })
+
+  it('continues partial cleanup after a backup permission error and logs only an event name', async () => {
+    const { manager, installed, userRoot, downloader } = await setup()
+    await manager.download()
+    const backup = `${installed}.backup-12345678-1234-1234-1234-123456789abc`
+    await rename(installed, backup)
+    const partial = join(userRoot, 'onnx-community', '.Supertonic-TTS-ONNX.partial-12345678-1234-1234-1234-123456789abc')
+    await mkdir(partial)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    faults.rename = true
+    await new NaturalSpeechModels(userRoot, { downloader }).initialize()
+    expect(await readdir(join(userRoot, 'onnx-community'))).toEqual([backup.split(/[\\/]/).at(-1)])
+    expect(warn.mock.calls).toEqual([['natural-voice-backup-restore-failed']])
+  })
+
+  it('continues removing other temporary folders after one removal fails', async () => {
+    const { manager, installed, userRoot, downloader } = await setup()
+    await manager.download()
+    const backup = `${installed}.backup-12345678-1234-1234-1234-123456789abc`
+    await cp(installed, backup, { recursive: true })
+    const partial = join(userRoot, 'onnx-community', '.Supertonic-TTS-ONNX.partial-12345678-1234-1234-1234-123456789abc')
+    await mkdir(partial)
+    faults.remove = backup
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    await new NaturalSpeechModels(userRoot, { downloader }).initialize()
+    expect(await readdir(join(userRoot, 'onnx-community'))).toEqual(['Supertonic-TTS-ONNX', backup.split(/[\\/]/).at(-1)])
+    expect(warn.mock.calls).toEqual([['natural-voice-temporary-cleanup-failed']])
+  })
+
+  it('keeps backups when the installed model fails integrity verification', async () => {
+    const { manager, installed, userRoot, downloader } = await setup()
+    await manager.download()
+    const backup = `${installed}.backup-12345678-1234-1234-1234-123456789abc`
+    await cp(installed, backup, { recursive: true })
+    await writeFile(join(installed, 'LICENSE'), 'x'.repeat(Buffer.byteLength('LICENSE')))
+    const restarted = new NaturalSpeechModels(userRoot, { downloader })
+    await restarted.initialize()
+    expect((await restarted.status()).ready).toBe(false)
+    expect(await readFile(join(backup, 'LICENSE'), 'utf8')).toBe('LICENSE')
   })
 
   it('does not restore or remove a backup directory link', async () => {

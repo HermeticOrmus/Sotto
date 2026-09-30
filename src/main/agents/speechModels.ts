@@ -75,34 +75,38 @@ export class NaturalSpeechModels {
   }
 
   private async sweepTemporary(): Promise<void> {
+    let names: string[]
     try {
       await this.assertDirectory(this.userRoot)
       await this.assertDirectory(this.parent)
-      const names = (await readdir(this.parent)).sort()
-      const backups = names.filter(name => /^Supertonic-TTS-ONNX\.backup-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(name))
+      names = (await readdir(this.parent)).sort()
+    } catch { return /* Missing or unsafe roots cannot be swept safely. */ }
+    const backups = names.filter(name => /^Supertonic-TTS-ONNX\.backup-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(name))
+    try {
       const installed = await lstat(this.root).then(() => true, (error: NodeJS.ErrnoException) => {
         if (error.code === 'ENOENT') return false
         throw error
       })
       if (!installed) {
         for (const name of backups) {
-          const backup = join(this.parent, name)
-          try { await this.assertDirectory(backup) } catch { continue }
-          await rename(backup, this.root)
-          break
+          try {
+            const backup = join(this.parent, name)
+            await this.assertDirectory(backup)
+            await rename(backup, this.root)
+            break
+          } catch { console.warn('natural-voice-backup-restore-failed') }
         }
       }
-      // Never discard the last installed copy until a destination exists safely.
-      const destinationSafe = await this.assertDirectory(this.root).then(() => true, () => false)
-      if (destinationSafe) {
+      // Keep recovery copies until the installed model passes its integrity check.
+      if (await this.verified()) {
         for (const name of backups) await this.removeTemporary(join(this.parent, name))
       }
-      for (const name of names) {
-        if (/^\.Supertonic-TTS-ONNX\.partial-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(name)) {
-          await this.removeTemporary(join(this.parent, name))
-        }
+    } catch { console.warn('natural-voice-backup-cleanup-failed') }
+    for (const name of names) {
+      if (/^\.Supertonic-TTS-ONNX\.partial-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(name)) {
+        await this.removeTemporary(join(this.parent, name))
       }
-    } catch { /* Missing or unsafe model roots need no startup cleanup. */ }
+    }
   }
 
   async status(): Promise<NaturalSpeechModelStatus> {
@@ -292,6 +296,6 @@ export class NaturalSpeechModels {
       await this.assertDirectory(this.parent)
       await this.assertDirectory(path)
       await rm(path, { recursive: true, force: true })
-    } catch { /* Never recurse into a staging directory that escaped its boundary. */ }
+    } catch { console.warn('natural-voice-temporary-cleanup-failed') }
   }
 }
