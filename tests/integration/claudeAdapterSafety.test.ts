@@ -182,6 +182,25 @@ describe('Claude recovery and safety', () => {
     await f.host.execute({ type: 'send', commandId: 'next', messageId: 'next', threadId: id, text: 'Continue' })
     expect((await f.driver.requests()).filter(record => record.method === 'resume')).toHaveLength(1)
   })
+  it.each(['browser', 'setup'] as const)('cancels a launch superseded during %s tool setup without blocking its next send', async tools => {
+    let entered!: () => void, release!: () => void
+    const waiting = new Promise<void>(resolve => { entered = resolve })
+    const ready = new Promise<void>(resolve => { release = resolve })
+    const mcpServer = async () => {
+      entered(); await ready
+      return { name: 'sotto_browser' as const, type: 'http' as const, url: 'http://127.0.0.1:1234/mcp', headers: [] }
+    }
+    if (tools === 'browser') f.adapter.useBrowserTools({ definitions: [], call: async () => ({ content: [] }), mcpServer })
+    else f.adapter.useHostSetupTools({ name: 'fixture_tools', definitions: [], mcpServer })
+    const created = randomUUID()
+    const creating = f.host.execute({ type: 'create-thread', commandId: randomUUID(), threadId: created, projectId: f.projectId, title: 'Cancelled launch', modelId: f.modelId })
+    const cancelled = expect(creating).resolves.toEqual({ accepted: false, uncertain: true })
+    await waiting
+    await f.host.connect()
+    release(); await cancelled
+    expect(await f.host.execute({ type: 'send', commandId: 'after-reconnect', messageId: 'after-reconnect', threadId: created, text: 'Continue' })).toEqual({ accepted: true })
+    expect((await f.sessions!.starts(created))).toBe(1)
+  })
   const launches = async () => (await f.driver.requests()).filter(record => record.method === 'launch' || record.method === 'resume').map(record => (record.params?.frame as { args: string[] }).args).filter(args => !args.includes('--no-session-persistence'))
   const permission = (args: string[]) => ({ mode: args[args.indexOf('--permission-mode') + 1], prompts: args[args.indexOf('--permission-prompts') + 1], allowBypass: args.includes('--allow-dangerously-skip-permissions') })
   const surface = (args: string[]) => args[args.indexOf('--permission-prompt-tool') + 1]

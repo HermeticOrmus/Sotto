@@ -832,7 +832,7 @@ export class ClaudeStreamJsonHost implements AgentHost {
     const pending = this.starting.get(id); if (pending) return pending
     const runtime = this.runtimes.get(id); if (runtime) return runtime
     const work = this.launch(id); this.starting.set(id, work)
-    try { const started = await work; this.messageLog.pin(id); return started } finally { this.starting.delete(id); this.scheduleOutdatedStop() }
+    try { const started = await work; this.messageLog.pin(id); return started } finally { if (this.starting.get(id) === work) this.starting.delete(id); this.scheduleOutdatedStop() }
   }
   private async launch(id: string): Promise<Runtime> {
     const generation = this.generation
@@ -845,8 +845,10 @@ export class ClaudeStreamJsonHost implements AgentHost {
     if (generation !== this.generation) throw new Error('Claude connection was cancelled.')
     if (!resume && alias.origins.length) throw new Error('Claude native history is unavailable. Restore its session before continuing; Sotto will not recreate or resend an uncertain turn.')
     const browser = alias.kind !== 'personal' ? await this.browserTools?.mcpServer(id) : undefined
+    if (generation !== this.generation) throw new Error('Claude connection was cancelled.')
     // A host setup thread also gets the host setup tools, while its setup runs; every other thread gets none.
     const setup = alias.kind !== 'personal' ? await this.hostSetupTools?.mcpServer(id) : undefined
+    if (generation !== this.generation) throw new Error('Claude connection was cancelled.')
     const servers = [...(browser ? [{ server: browser, definitions: this.browserTools?.definitions ?? [] }] : []),
       ...(setup ? [{ server: setup, definitions: this.hostSetupTools?.definitions ?? [] }] : [])]
     const mcpConfig = servers.length ? join(this.options.userDataPath, `claude-mcp-${randomUUID()}.json`) : undefined
@@ -857,6 +859,7 @@ export class ClaudeStreamJsonHost implements AgentHost {
         }])) }), { mode: 0o600, flag: 'wx' })
       } catch (error) { await rm(mcpConfig, { force: true }); throw error }
     }
+    if (generation !== this.generation) { if (mcpConfig) await rm(mcpConfig, { force: true }); throw new Error('Claude connection was cancelled.') }
     const toolArguments = mcpConfig ? ['--mcp-config', mcpConfig, ...toolAllowance(servers)] : []
     const args = [...(this.options.args ?? []), ...toolArguments, '--print', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
       '--include-partial-messages', '--replay-user-messages', ...permissionArguments(alias.runtimeMode),
@@ -896,7 +899,7 @@ export class ClaudeStreamJsonHost implements AgentHost {
       }
     }
     catch (error) { void this.stopRuntime(id, runtime); throw error }
-    if (generation !== this.generation) { runtime.protocol.stop(); throw new Error('Claude connection was cancelled.') }
+    if (generation !== this.generation) { await this.stopRuntime(id, runtime); throw new Error('Claude connection was cancelled.') }
     // A change left unconfirmed is shown from the launch that carries it (see `unconfirmedSettings`).
     if (!sameSettings(settingsOf(this.threads.get(id)!), settingsOf(alias))) { this.showSettings(id); this.emit() }
     return runtime
