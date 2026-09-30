@@ -316,12 +316,12 @@ Press the global shortcut once to start and again to stop and transcribe. The de
 
 Settings:
 
-- Dictation: microphone, global shortcut, recording limit, local sound cues, and streaming transcription so long dictations finish almost immediately after you stop
+- Dictation: microphone, global shortcut, recording limit, local sound cues, and streaming transcription so long dictations finish almost immediately after you stop. The global shortcut saves only when its value changes; tabbing through it unchanged is quiet.
 
 **Test microphone** checks the input selected for dictation. While listening, the button reads **Stop test**. Press it, hide the window, or leave Dictation to close the microphone. After a successful test, Sotto says **Sotto heard you. The microphone is closed.** and offers **Test again**. Changing the input clears the previous test and stops its meter. A missing selected microphone is reported as missing; Sotto does not silently test the default input instead.
 - Transcription: MAI-Transcribe-2 through OpenRouter (the only model), your OpenRouter API key with a verify button, language, and conservative whitespace formatting
 - Cleanup: optional AI cleanup with quality tiers and the personal dictionary that also feeds transcription spelling hints; and the switches for generated thread titles, commit messages and pull request text. The dictionary holds up to 4,000 characters and saves when you leave its field or Settings. The field explains the limit when you reach it. An older save finishing while you type keeps your newer draft in place; if a save fails, leave the field again to retry.
-- Output: mandatory clipboard safety copy, optional automatic paste, paste delay, and success-message duration. The delay, duration and global shortcut save only when their value changes; tabbing through an unchanged field is quiet.
+- Output: mandatory clipboard safety copy, optional automatic paste, paste delay, and success-message duration. The delay and duration save only when their value changes; tabbing through an unchanged field is quiet.
 - Appearance: the color scheme (Light, Dark, or match the system), then one theme for light mode and one for dark, chosen in two columns. Sotto ships six themes of its own: Sotto, Hush, Linen, Nocturne, Tropic and Citrine. Sotto is the default, with an almost-black dark room and the app icon's teal (a deeper teal in light mode, so text and links stay readable). You can create a theme, import a T3 Code or VS Code theme file, or install one from Open VSX. Below the themes: the effort color, contrast and glass.
 - Updates: the version you are running and, on Windows, an automatic GitHub release check that is on by default and can be turned off, plus a manual check
 - Application and privacy: launch at login, start minimized, local history, retention, clear history, and reset settings; for threads, the working-copy default and the worktree cleanup rules
