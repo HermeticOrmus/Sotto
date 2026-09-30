@@ -2,6 +2,7 @@ import { chmod, mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { createAgentRuntime, type AgentRuntimeOptions } from '../main/agents/runtime'
+import { loadHostIdentity } from '../main/agents/hostIdentity'
 import { MISSING_REMOTE_ATTACHMENT } from '../main/agents/attachmentStore'
 import { SecureSettings } from '../main/agents/secureSettings'
 import { createStorageRepositories } from '../main/storage/repositories'
@@ -72,6 +73,7 @@ async function startHostRuntime(options: HeadlessHostOptions) {
   const repositories = createStorageRepositories(directory, recovery)
   const settings = new SecureSettings(repositories.settings, credentials)
   await settings.migrate()
+  await repositories.settings.migrateProjectWorkingCopyDefaults(await loadHostIdentity(directory))
   const startup = await settings.get()
   const memory = openRuntimeMemory(join(directory, 'memory.sqlite'), event => options.log?.(event))
   try {

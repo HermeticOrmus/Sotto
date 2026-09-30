@@ -1,5 +1,5 @@
 import React, { StrictMode } from 'react'
-import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, render, renderHook, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -132,6 +132,41 @@ const createController: AppControllerFactory = () => ({
   toggle: vi.fn(async () => undefined),
   cancel: vi.fn(async () => undefined),
   dispose: vi.fn(),
+})
+
+it('keeps cached history and reports failure when deletion is refused while history is off', async () => {
+  const entry = { id: 'retained', text: 'Retained transcript', createdAt: 1, durationMs: 10, language: 'en', modelPreset: 'balanced' as const }
+  const otherEntry = { ...entry, id: 'other-retained', text: 'Another retained transcript' }
+  const bridge = createBridge({
+    listHistory: vi.fn(async () => [entry, otherEntry]),
+    deleteHistory: vi.fn(async () => false),
+  })
+  const { result } = renderHook(() => useApp(), {
+    wrapper: ({ children }) => <AppProvider bridge={bridge} createController={createController}>{children}</AppProvider>,
+  })
+  await waitFor(() => expect(result.current.history).toEqual([entry, otherEntry]))
+  await act(async () => { await result.current.actions.updateSettings({ historyEnabled: false }) })
+  vi.mocked(bridge.listHistory).mockResolvedValue([])
+
+  let deleted: boolean | undefined
+  await act(async () => { deleted = await result.current.actions.deleteHistory(entry.id) })
+
+  expect(deleted).toBe(false)
+  expect(result.current.history).toEqual([entry, otherEntry])
+  expect(result.current.failure).toBe('HISTORY_UPDATE_FAILED')
+  expect(bridge.listHistory).toHaveBeenCalledOnce()
+
+  vi.mocked(bridge.deleteHistory).mockResolvedValue(true)
+  await act(async () => { deleted = await result.current.actions.deleteHistory(entry.id) })
+  expect(deleted).toBe(true)
+  expect(result.current.history).toEqual([otherEntry])
+  expect(result.current.historyStatus).toBe('ready')
+  await act(async () => { deleted = await result.current.actions.deleteHistory(otherEntry.id) })
+  expect(deleted).toBe(true)
+  expect(result.current.history).toEqual([])
+  expect(result.current.historyStatus).toBe('ready')
+  expect(bridge.deleteHistory).toHaveBeenNthCalledWith(3, otherEntry.id)
+  expect(bridge.listHistory).toHaveBeenCalledOnce()
 })
 
 /**

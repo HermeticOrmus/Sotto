@@ -253,6 +253,20 @@ describe('HistoryRepository', () => {
     expect(await repository.exists()).toBe(false)
   })
 
+  it('deletes retained history from disk after recording history is disabled', async () => {
+    const { filePath, repository } = await createRepository()
+    const kept = createEntry('kept', 1)
+    await repository.add(kept, { enabled: true, retention: 'unlimited' })
+    await repository.add(createEntry('deleted', 2), { enabled: true, retention: 'unlimited' })
+    await repository.add(createEntry('not-recorded', 3), { enabled: false, retention: 'unlimited' })
+
+    await expect(repository.delete('deleted')).resolves.toBe(true)
+
+    expect(JSON.parse(await readFile(filePath, 'utf8'))).toEqual([kept])
+    expect(await new HistoryRepository(filePath).list()).toEqual([kept])
+    expect(await repository.list({ enabled: false })).toEqual([])
+  })
+
   it('persists an empty list when clearing an existing history file', async () => {
     const { filePath, repository } = await createRepository()
     await repository.add(createEntry('1', 1), { enabled: true, retention: 'unlimited' })
