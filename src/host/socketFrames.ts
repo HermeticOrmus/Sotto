@@ -47,7 +47,6 @@ export class SocketFrames {
   }
   private receive(data: Buffer): void {
     if (this.ended) return
-    if (this.bufferedBytes + data.length > HOST_MAX_FRAME_BYTES + 14) { this.close(); return }
     if (data.length) { this.chunks.push(data); this.bufferedBytes += data.length }
     while (this.bufferedBytes >= 2 && !this.ended) {
       const header = this.header()
