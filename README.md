@@ -32,7 +32,7 @@ Saved Codex conversations keep both sides after a restart. Opening a thread also
 
 Thread drafts save automatically while you type, including while other threads are working.
 
-Claude Code keeps background work running when remembered preferences change. A chat that needs fresh context waits for that work to finish before sending.
+Claude Code keeps background work running when remembered preferences change. Messages continue with the chat's previous context while that work runs. The first send after it ends refreshes the context.
 
 New threads open in Unsettled with the defaults saved in Settings → Agents. An existing empty thread is reused only while it is unsettled, its known model, effort and permission choices match those defaults, and no setting change is pending.
 

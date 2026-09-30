@@ -183,13 +183,27 @@ describe('Claude recovery and safety', () => {
     await f.host.execute({ type: 'send', commandId: 'next', messageId: 'next', threadId: id, text: 'Continue' })
     expect((await f.driver.requests()).filter(record => record.method === 'resume')).toHaveLength(1)
   })
-  it('joins overlapping transcript polls and allows another read after they settle', async () => {
+  it('reads appended transcript lines before an overlapping caller returns', async () => {
+    clearInterval((f.adapter as unknown as { pollTimer: NodeJS.Timeout }).pollTimer)
+    const calls = vi.spyOn(f.adapter, 'pollSessionLogs')
     let release!: () => void
     const gate = new Promise<void>(resolve => { release = resolve })
-    const poll = vi.spyOn(ClaudeSessionLog.prototype, 'poll').mockImplementation(() => gate)
-    const reads = [f.adapter.pollSessionLogs(), f.adapter.pollSessionLogs(), f.host.snapshot()]
-    try { expect(poll).toHaveBeenCalledTimes(1) }
-    finally { release(); await Promise.all(reads); poll.mockRestore() }
+    const original = ClaudeSessionLog.prototype.poll
+    let reached!: () => void
+    const read = new Promise<void>(resolve => { reached = resolve })
+    const poll = vi.spyOn(ClaudeSessionLog.prototype, 'poll').mockImplementationOnce(async function (this: ClaudeSessionLog) {
+      await original.call(this); reached(); await gate
+    })
+    const first = f.adapter.pollSessionLogs()
+    await read
+    const joined = f.driver.typeInProvider(id, 'Appended after the first read')
+    try {
+      await expect.poll(() => calls.mock.calls.length).toBe(2)
+      release(); await Promise.all([first, joined])
+      // Inspect the projection directly: snapshot() would perform a fresh read and hide the bug.
+      const messages = (f.adapter as unknown as { messageLog: { messages(id: string): { text: string }[] } }).messageLog.messages(id)
+      expect(messages.some(message => message.text === 'Appended after the first read')).toBe(true)
+    } finally { release(); await first; poll.mockRestore() }
     const next = vi.spyOn(ClaudeSessionLog.prototype, 'poll')
     try { await f.adapter.pollSessionLogs(); expect(next).toHaveBeenCalledTimes(1) }
     finally { next.mockRestore() }
@@ -211,12 +225,16 @@ describe('Claude recovery and safety', () => {
     await expect.poll(() => f.adapter.personalSnapshot().find(thread => thread.id === personal)?.backgroundWork?.length).toBe(1)
     const memories = [{ id: 'memory', content: 'Use short replies.' }]
     const command = { type: 'send' as const, commandId: 'personal-send', messageId: 'personal-send', threadId: personal, text: 'Continue' }
-    await expect(f.adapter.sendPersonalConversation(command, memories)).rejects.toThrow('Nothing was changed')
+    const process = (await f.liveSettings.effective(personal)).process
+    expect(await f.adapter.sendPersonalConversation(command, memories)).toEqual({ accepted: true })
+    expect((await f.liveSettings.effective(personal)).process).toBe(process)
     expect(f.adapter.personalSnapshot().find(thread => thread.id === personal)?.backgroundWork).toHaveLength(1)
     expect(await f.sessions!.starts(personal)).toBe(1)
     await f.driver.backgroundWork!.end(personal)
     await expect.poll(() => f.adapter.personalSnapshot().find(thread => thread.id === personal)?.backgroundWork ?? []).toEqual([])
-    expect(await f.adapter.sendPersonalConversation(command, memories)).toEqual({ accepted: true })
+    await f.driver.completeTurn(personal, 'Finished the follow-up.')
+    await expect.poll(() => f.adapter.personalSnapshot().find(thread => thread.id === personal)?.status).toBe('idle')
+    expect(await f.adapter.sendPersonalConversation({ ...command, commandId: 'fresh', messageId: 'fresh' }, memories)).toEqual({ accepted: true })
     expect(await f.sessions!.starts(personal)).toBe(2)
     const launch = (await f.driver.requests()).filter(record => record.method === 'resume').at(-1)!
     expect((launch.params!.frame as { args: string[] }).args.join(' ')).toContain(memories[0]!.content)

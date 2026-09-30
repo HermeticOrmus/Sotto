@@ -221,6 +221,7 @@ export class ClaudeStreamJsonHost implements AgentHost {
   private outdatedTimer: ReturnType<typeof setImmediate> | undefined
   private pollTimer: ReturnType<typeof setInterval> | undefined
   private polling: Promise<void> | undefined
+  private pollAgain = false
   private readonly closures = new Set<Promise<void>>()
   private trackClosure(work: Promise<void>): void {
     this.closures.add(work)
@@ -620,8 +621,7 @@ export class ClaudeStreamJsonHost implements AgentHost {
       if (thread.requests.length) throw new Error('Answer the pending Claude request before sending another prompt.')
       this.dispatching.add(id)
       try {
-        if (this.staleContexts.has(id)) {
-          if (thread.backgroundWork?.length) throw new Error(backgroundWorkRunning(thread.backgroundWork, 'refreshing its context'))
+        if (this.staleContexts.has(id) && !thread.backgroundWork?.length) {
           this.staleContexts.delete(id)
           const stale = this.runtimes.get(id)
           if (stale) { await this.denyPending(id, stale); await this.stopRuntime(id, stale) }
@@ -675,9 +675,17 @@ export class ClaudeStreamJsonHost implements AgentHost {
       if (!pending) throw new Error('That request is no longer pending.')
       if (runtime.answered.has(pending.id)) return { accepted: false, uncertain: true }
       const answer = claudeAnswer(pending, command.answer, command.approved, command.questionAnswers, command.permissionChoice)
+      // Only another explicit user answer retries uncertain delivery. Clearing the marker while
+      // it is in flight keeps a concurrent answer from sending a second response.
+      const retry = pending.request.delivery === 'uncertain'
+      delete pending.request.delivery
       runtime.answered.add(pending.id)
-      alias.answeredRequestIds.push(pending.id)
-      try { await this.persist() } catch (error) { alias.answeredRequestIds = alias.answeredRequestIds.filter(id => id !== pending.id); runtime.answered.delete(pending.id); throw error }
+      if (!alias.answeredRequestIds.includes(pending.id)) alias.answeredRequestIds.push(pending.id)
+      try { await this.persist() } catch (error) {
+        if (retry) pending.request.delivery = 'uncertain'
+        else { alias.answeredRequestIds = alias.answeredRequestIds.filter(id => id !== pending.id); runtime.answered.delete(pending.id) }
+        throw error
+      }
       if (this.runtimes.get(id) !== runtime || !runtime.requests.has(pending.id)) return { accepted: false, uncertain: true }
       try {
         await this.reply(runtime, pending.id, answer)
@@ -800,9 +808,12 @@ export class ClaudeStreamJsonHost implements AgentHost {
     return { accepted: true, snapshot: this.view(command.historyFromEvents) }
   }
   async pollSessionLogs(): Promise<void> {
-    if (this.polling) return this.polling
-    const work = this.readSessionLogs(); this.polling = work
+    if (this.polling) { this.pollAgain = true; return this.polling }
+    const work = this.drainSessionLogs(); this.polling = work
     try { await work } finally { if (this.polling === work) this.polling = undefined }
+  }
+  private async drainSessionLogs(): Promise<void> {
+    do { this.pollAgain = false; await this.readSessionLogs() } while (this.pollAgain)
   }
   private async readSessionLogs(): Promise<void> { for (const [id, log] of this.logs) { await log.poll(); await this.readSubagentModels(id, log) } }
   /**

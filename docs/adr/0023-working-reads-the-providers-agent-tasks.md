@@ -114,7 +114,7 @@ meanwhile. Every stop the adapter makes is recorded until the process has exited
 waits for it, so one session never has two CLIs, whether the stop came from a settings change, a rewind, a
 changed personal context or the session reaper.
 
-A changed personal context also waits for background work to finish before it restarts the client. The send is refused with nothing sent or stopped, and the changed context stays pending for the next send.
+A changed personal context waits for background work to finish before it restarts the client. Messages continue on the existing client with its previous context while the work runs, including a message asking Claude to stop that work. The changed context stays pending, and the first send after the work ends restarts the client with the latest context. A context change never refuses a send for this reason.
 
 The adapter logs which path each change took, as event names and nothing else: `claude-settings-applied-live`,
 `claude-settings-applied-restart`, `claude-settings-live-rejected` and `claude-settings-unconfirmed`.
