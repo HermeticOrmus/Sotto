@@ -21,7 +21,7 @@ class FixtureEncryption implements CredentialEncryption {
 }
 
 async function directory(): Promise<string> {
-  const value = await mkdtemp(join(tmpdir(), 'sotto-membership-contract-'))
+  const value = await mkdtemp(join(tmpdir(), 'sotto-credential-storage-'))
   roots.push(value)
   return value
 }

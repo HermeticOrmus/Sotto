@@ -10,6 +10,8 @@ import { ConfiguredAgentReasoner, type AgentDecision, type AgentIntent } from '.
 import type { AgentHostCommand, AgentHostResult } from '../../../src/main/agents/host'
 import { E2EAgentHost } from '../../../src/main/e2e/agentEffects'
 import { agentCommandSchema, PROVIDER_LABELS, type AgentCommand, type AgentConfiguration } from '../../../src/shared/agents'
+import { olderDesktopAccountSchema } from '../../fixtures/olderDesktopAccountSchema'
+import { hostHelloSchema, hostPushSchema, shellForProtocolV1 } from '../../../src/shared/hostProtocol'
 import { immediatePublishScheduler } from '../../fixtures/publishScheduler'
 
 const roots: string[] = []
@@ -80,7 +82,7 @@ async function fixture(host = new E2EAgentHost(), options: { coordinatorEnabled?
   const reasoner = new ConfiguredAgentReasoner(() => control.get().configuration, credentials)
   const create = async (): Promise<void> => {
     control = new AgentControl({ schedule: immediatePublishScheduler, directory: root, host, credentials, reasoner, ...options,
-       })
+    })
     controls.push(control)
     await control.start()
     if (!control.get().host.connected) await control.command({ type: 'connect' })
@@ -211,6 +213,56 @@ describe('reasoning account route isolation', () => {
     const state = await f.control.command({ type: 'utterance', text: 'Choose the test project.' })
     expect(state.error).toBeNull()
     expect(f.requests[0]).toMatchObject({ origin: 'https://openrouter.ai', authorization: `Bearer ${ROUTER_KEY}` })
+  })
+
+  it('loads retired endpoint configuration without losing assignments or drafts', async () => {
+    const f = await fixture()
+    await f.control.command({ type: 'assign', threadId: 'workshop' })
+    await f.control.command({ type: 'save-thread-draft', threadId: 'workshop', draftId: '643812b8-aed2-4eaf-8cc5-cd5174103c1a', text: 'Keep this draft.' })
+    f.control.dispose()
+    const file = join(f.root, 'agents.json')
+    const saved = JSON.parse(await readFile(file, 'utf8'))
+    saved.configuration.membershipEndpoint = 'https://retired.example'
+    await writeFile(file, JSON.stringify(saved))
+    await f.restart()
+    expect(f.control.get().assignments).toEqual(saved.assignments)
+    expect(f.control.get().threadDrafts).toEqual(saved.threadDrafts)
+    expect(f.control.configuration()).not.toHaveProperty('membershipEndpoint')
+    expect(JSON.parse(await readFile(file, 'utf8')).configuration).not.toHaveProperty('membershipEndpoint')
+  })
+
+  it('clears retired encrypted slots at start and tolerates absent slots on the next start', async () => {
+    const f = await fixture()
+    await f.credentials.set('membership', 'retired-token')
+    await f.credentials.set('membership-cache', 'retired-cache')
+    await f.credentials.set('formatting', 'keep-this-key')
+    await f.restart()
+    const reloaded = new AgentCredentials(f.credentialsDirectory, encryption)
+    await reloaded.load()
+    expect(reloaded.has('membership')).toBe(false)
+    expect(reloaded.has('membership-cache')).toBe(false)
+    expect(reloaded.get('formatting')).toBe('keep-this-key')
+    await f.restart()
+    expect(f.credentials.has('membership')).toBe(false)
+  })
+
+  it('reads older hosts and sends retired v1 fields required by older desktops', async () => {
+    const f = await fixture()
+    const current = f.control.shell()
+    expect(current).not.toHaveProperty('membership')
+    expect(current.configuration).not.toHaveProperty('membershipEndpoint')
+    const wire = shellForProtocolV1(current)
+    const hello = hostHelloSchema.parse({ hostId: randomUUID(), clientId: 'older-host', shell: wire,
+      capabilities: { mayAnswer: false }, sottoVersion: '0.1.21', features: [], events: [], latestSeq: 0, hasMore: false })
+    expect(hello.shell).toEqual(current)
+    expect(olderDesktopAccountSchema.parse(wire)).toMatchObject({ membership: { status: 'beta' }, configuration: { membershipEndpoint: '' } })
+    for (const state of [current, wire]) {
+      const parsed = hostPushSchema.parse({ v: 1, event: 'shell', state })
+      expect(parsed).toMatchObject({ state: current })
+      if (parsed.event !== 'shell') throw new Error('Expected shell')
+      expect(parsed.state).not.toHaveProperty('membership')
+      expect(parsed.state.configuration).not.toHaveProperty('membershipEndpoint')
+    }
   })
 
   it('changes the default provider while preserving assignments and unrelated reasoning credentials', async () => {

@@ -317,6 +317,10 @@ export class AgentControl {
     this.attachmentPreviews = new AttachmentPreviews(dependencies.directory, this.attachments, () => dependencies.historyEnabled?.() !== false)
   }
   async start(): Promise<void> {
+    // Remove retired ciphertext without decrypting it, including while the vault is locked.
+    for (const slot of ['membership', 'membership-cache']) {
+      if (this.dependencies.credentials.has(slot)) await this.dependencies.credentials.set(slot, '')
+    }
     try {
       await retireLegacyProvider({ directory: this.dependencies.directory, parse: savedSchema.parse,
         historyEnabled: this.dependencies.historyEnabled?.() !== false, credentials: this.dependencies.credentials })

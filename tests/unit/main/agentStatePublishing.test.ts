@@ -119,7 +119,7 @@ describe('coalesced coordinator broadcasts', () => {
     const credentials = new AgentCredentials(root, { isEncryptionAvailable: () => false, encryptString: text => Buffer.from(text), decryptString: value => value.toString() })
     await credentials.load()
     const created = new AgentControl({ schedule: clock.schedule, directory: root, host: new E2EAgentHost(), credentials, reasoner: e2eAgentReasoner,
-       })
+    })
     controls.push(created)
     await created.start()
     // Settle whatever start published so the burst under test owns a fresh window.

@@ -14,6 +14,19 @@ import { providerIdSchema, type ProviderClientUpdate } from './agents'
  * hello's `accepts`; it never changes or removes what v1 already carries.
  */
 export const HOST_PROTOCOL_VERSION = 1 as const
+/** Retired account fields stay on v1's wire for desktops that still require them. */
+export function shellForProtocolV1(state: AgentState) {
+  return { ...state, membership: { status: 'beta' as const, label: '', expiresAt: null },
+    configuration: { ...state.configuration, membershipEndpoint: '' } }
+}
+/** Older hosts carry retired fields; strip them before the strict domain schemas read them. */
+const protocolAgentStateSchema = z.preprocess(value => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+  const { membership: _membership, configuration, ...state } = value as Record<string, unknown>
+  if (!configuration || typeof configuration !== 'object' || Array.isArray(configuration)) return state
+  const { membershipEndpoint: _endpoint, ...current } = configuration as Record<string, unknown>
+  return { ...state, configuration: current }
+}, agentStateSchema)
 /**
  * The host features this build offers: parts of v1 beyond its base, which a client uses only when a
  * host lists them. `detail-delta`: a client that accepts it is sent what changed in an observed thread
@@ -153,12 +166,11 @@ export const HOST_SESSION_REJECTED = 'This connection is no longer authorized. C
 /** What an HTTP 429 from the host means to the user: nothing is wrong with this device, and waiting is the fix. */
 export const HOST_BUSY = 'The host is busy. Nothing was lost. Try again in a moment.'
 
-
 const eventPageShape = { events: z.array(z.object({ seq: z.number().int().nonnegative(), threadId: id, event: threadEventSchema })).max(HOST_EVENT_PAGE_SIZE), latestSeq: z.number().int().nonnegative(), hasMore: z.boolean() }
 export const hostEventPageSchema = z.object(eventPageShape)
 export const hostPairingSchema = z.object({ v: z.literal(1), hostId: z.uuid(), clientId: id, token: z.string().regex(/^[A-Za-z0-9_-]{43}$/) })
 export const hostSessionSchema = z.object({ v: z.literal(1), hostId: z.uuid(), clientId: id, session: z.string().min(1).max(2048), expiresAt: z.iso.datetime() })
-export const hostHelloSchema = z.object({ ...eventPageShape, hostId: z.uuid(), clientId: id, shell: agentStateSchema, capabilities: z.object({ mayAnswer: z.boolean() }), sottoVersion, features: featureList })
+export const hostHelloSchema = z.object({ ...eventPageShape, hostId: z.uuid(), clientId: id, shell: protocolAgentStateSchema, capabilities: z.object({ mayAnswer: z.boolean() }), sottoVersion, features: featureList })
 export const hostHealthSchema = z.object({ v: z.literal(1), status: z.literal('ready'), hostId: z.uuid(), pid: z.number().int().positive(), port: z.number().int().min(1).max(65535), sottoVersion, features: featureList })
 /**
  * The Sotto version and features a host's health advertises, or null when the host does not speak the
@@ -174,7 +186,7 @@ export const hostResponseSchema = z.discriminatedUnion('ok', [
   z.object({ v: z.literal(1), id, ok: z.literal(false), error: hostProtocolErrorSchema }),
 ])
 export const hostPushSchema = z.discriminatedUnion('event', [
-  z.object({ v: z.literal(1), event: z.literal('shell'), state: agentStateSchema, eventPage: hostEventPageSchema.optional() }),
+  z.object({ v: z.literal(1), event: z.literal('shell'), state: protocolAgentStateSchema, eventPage: hostEventPageSchema.optional() }),
   z.object({ v: z.literal(1), event: z.literal('detail'), threadId: id, detail: agentThreadDetailResultSchema }),
   z.object({ v: z.literal(1), event: z.literal('detail-delta'), threadId: id, delta: agentThreadDetailDeltaSchema }),
   z.object({ v: z.literal(1), event: z.literal('error'), threadId: id.optional(), error: hostProtocolErrorSchema }),
