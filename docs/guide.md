@@ -385,7 +385,7 @@ Optional AI cleanup is off by default. When you enable it, the finished transcri
 
 Sotto has no analytics or crash upload. Dictation audio is never persisted. Transcript history is local, optional, bounded, searchable, and clearable. Two small diagnostic files in Sotto's data folder help explain a lost dictation: `polish-diagnostics.jsonl` records word counts around AI cleanup, and `transcription-diagnostics.jsonl` records why a transcription request failed (reason, HTTP status, attempts, clip length and time taken). They hold no words, audio or keys, each starts over past 256 KB with one older copy kept, and neither leaves this computer.
 
-Spellcheck stays enabled, but Sotto blocks dictionary downloads in its windows and browser. The OS spellchecker remains available where Electron supports it. A language that needs a downloaded dictionary may have no spelling suggestions.
+Spellcheck stays enabled, but Sotto blocks dictionary downloads in its windows and browser. The OS spellchecker remains available on Windows and macOS. A language that needs a downloaded dictionary may have no spelling suggestions.
 
 ### Thread titles, branch names and Git
 
