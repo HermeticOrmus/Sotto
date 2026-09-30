@@ -77,6 +77,14 @@ The large simulator also used accessibility text size and reduced motion. This
 evidence precedes the clean merge of main at `4af39aa2`; final merged-state gate
 status is recorded in the PR.
 
+The merged [run 36782409656](https://github.com/millZach/Sotto/actions/runs/36782409656)
+also passed the native package tests (93 executed, one skip) and four journeys on
+each phone size. GitHub nevertheless cancelled the job at its 35-minute safety limit during
+completion; the check annotation confirms that limit was exceeded. The CI job
+now allows 45 minutes for simulator startup, interaction, screenshots and cleanup.
+The test assertions and their deadlines are unchanged. The replacement check's
+status is recorded in the PR.
+
 These four inspected captures are retained:
 
 - [Neutral request message, small phone in dark](../../artifacts/review-iphone-feedback/request-gone-small-dark.png).
