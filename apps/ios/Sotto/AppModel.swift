@@ -35,6 +35,8 @@ struct Live {
     @Published var feedback: String? { didSet { feedbackOperations = [] } }
     private var feedbackOperations: Set<String> = []
     private var dispatchingAnswers: Set<String> = []
+    /// More than one check can await the same computer; keep markers until every check returns.
+    private var deliveryChecks: [String: Int] = [:]
     /// What went wrong while finding or pairing a computer.
     @Published var pairFeedback: String?
     /// Unsent replies, by `ThreadRef.id`.
@@ -601,6 +603,8 @@ struct Live {
     func checkDelivery(_ hostID: String) async {
         guard online(hostID), !scoped(hostID).isEmpty, let connection = connections[hostID] else { return }
         let current = generations[hostID]
+        deliveryChecks[hostID, default: 0] += 1
+        defer { deliveryChecks[hostID, default: 0] -= 1 }
         do {
             let fresh = try await connection.callReceived(["op": .string("shell")])
             guard generations[hostID] == current else { return }
@@ -674,7 +678,7 @@ struct Live {
         // A Keychain write failure is local feedback, not a lost connection to the computer.
         for item in scoped(hostID) {
             // A solicited shell is followed by a receipt check. Keep its answer marker until then.
-            if item.kind == "answer", !reconcileAnswers || dispatchingAnswers.contains(item.id) { continue }
+            if item.kind == "answer", !reconcileAnswers || dispatchingAnswers.contains(item.id) || (deliveryChecks[hostID] ?? 0) > 0 { continue }
             do { try settle(item, shell: next) }
             catch { feedback = error.localizedDescription }
         }
