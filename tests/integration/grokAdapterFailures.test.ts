@@ -39,7 +39,7 @@ it('reads a client that offers no cached sign-in as signed out, and still refuse
  expect(apiKey?.message).toBe('Could not connect Grok. Grok must be signed in to its own subscription; Sotto never connects it with an API key.')
  expect(apiKey?.problem).toBeUndefined()
 })
-it('connects to a client newer than the verified version and says which version is running (ADR-0021)',async()=>{
+it('connects to a client newer than the verified version and says which version is running (ADR-0042)',async()=>{
  f=await grokFixture();await f.script({cliVersion:'1.0.40'})
  const snapshot=await f.host.connect()
  expect(snapshot.connected).toBe(true)
