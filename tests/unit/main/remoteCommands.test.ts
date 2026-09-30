@@ -57,6 +57,12 @@ describe('remote command allow-list', () => {
     expect(remoteCommandRefusal({ type: 'send' }, { mayAnswer: false, draftRequestId: null })).toBeNull()
     expect(refuse({ type: 'save-thread-draft', threadId: 'thread', draftId: 'draft', text: 'Blue' })).toBeNull()
   })
+  it('applies command admission consistently while composing', () => {
+    const command = { type: 'compose', text: 'Draft text' } as const
+    expect(remoteCommandRefusal(command, { mayAnswer: false, draftRequestId: 'request' })).toBe('forbidden')
+    expect(remoteCommandRefusal(command, { mayAnswer: true, draftRequestId: 'request' })).toBeNull()
+    expect(remoteCommandRefusal(command, { mayAnswer: false, draftRequestId: null })).toBeNull()
+  })
   it('asks for the answer policy before a permission setting or discarding uncommitted work', () => {
     const gated: AgentCommand[] = [
       { type: 'create-thread', projectId: 'project', title: 'Bypass', modelId: 'devin', providerMode: 'bypass' },

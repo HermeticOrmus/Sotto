@@ -86,7 +86,7 @@ export const REMOTE_CONFIGURATION_FIELDS: readonly (keyof AgentConfiguration)[] 
 export function remoteCommandNeedsAnswerPolicy(command: AgentCommand, askingProviderModes: readonly string[], draftRequestId?: string | null): boolean {
   switch (command.type) {
     case 'answer': return true
-    case 'send': return draftRequestId != null
+    case 'compose': case 'send': return draftRequestId != null
     case 'save-thread-draft': return command.requestId != null
     case 'create-thread': case 'configure-thread':
       return (command.runtimeMode !== undefined && command.runtimeMode !== 'approval-required')

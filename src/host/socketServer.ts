@@ -217,8 +217,14 @@ export async function startSocketServer(options: SocketServerOptions) {
       return shell(peer)
     }
     const input = request.command
+    const state = service.shell()
+    const draftThreadId = state.composing ? state.draftThreadId : state.activeThreadId
+    const draftRequestId = state.draftRequestId ?? (input.type === 'compose'
+      ? state.threadDrafts?.find(draft => draft.threadId === draftThreadId)?.requestId
+        ?? state.host.threads.find(thread => thread.id === draftThreadId)?.requests.find(item => item.kind === 'question')?.id
+      : undefined)
     const refusal = remoteCommandRefusal(input, { mayAnswer: options.mayAnswer?.(peer.client) ?? false, askingProviderModes: askingProviderModes(input),
-      draftRequestId: input.type === 'send' ? service.shell().draftRequestId : undefined,
+      draftRequestId: input.type === 'send' || input.type === 'compose' ? draftRequestId : undefined,
       clientUpdates: options.clientUpdates === true })
     if (refusal) throw new Refusal(refusal)
     const recorded = !UNRECEIPTED.has(input.type)
