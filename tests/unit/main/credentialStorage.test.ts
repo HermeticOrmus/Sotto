@@ -2,7 +2,7 @@
 import { mkdir, mkdtemp, readFile, rename, rm, rmdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AgentCredentials, type CredentialEncryption } from '../../../src/main/agents/credentials'
 import { SecureSettings } from '../../../src/main/agents/secureSettings'
 import { SettingsRepository } from '../../../src/main/storage/settingsRepository'
@@ -40,6 +40,41 @@ afterEach(async () => {
   }
 })
 describe('credential storage and formatting migration', () => {
+  it.each(['success', 'repository failure', 'verification failure', 'locked vault'])('keeps the saved key through reset with %s', async outcome => {
+    const f = await fixture()
+    const settingsPath = join(f.root, 'settings.json')
+    const repository = new SettingsRepository(settingsPath)
+    const settings = new SecureSettings(repository, f.credentials)
+    const previous = await settings.update({ llmApiKey: 'fixture-reset-key', theme: 'light' })
+    const reset = repository.reset.bind(repository)
+    vi.spyOn(repository, 'reset').mockImplementation(async () => {
+      if (outcome === 'repository failure') throw new Error('Fixture reset failed')
+      const result = await reset()
+      return outcome === 'verification failure' ? { ...result, autoPaste: !result.autoPaste } : result
+    })
+    if (outcome === 'locked vault') f.encryption.unlocked = false
+    const vaultWrite = vi.spyOn(f.credentials, 'set')
+    const coordinator = new NativeSettingsCoordinator({
+      repository: settings,
+      hotkeys: { current: () => previous.hotkey, replace: () => ({ ok: true }) },
+      startup: { get: () => ({ enabled: false }), set: enabled => ({ enabled }) },
+      onAutoPasteChanged: () => undefined,
+      onSettingsChanged: () => undefined,
+    })
+    if (outcome.includes('failure')) {
+      await expect(coordinator.resetSettings()).rejects.toThrow('Native settings transaction failed')
+      expect((await coordinator.getSettings()).theme).toBe('light')
+    } else {
+      expect((await coordinator.resetSettings()).llmApiKey).toContain('operating system credential store')
+    }
+    expect(vaultWrite).not.toHaveBeenCalled()
+    f.encryption.unlocked = true
+    const reloaded = new AgentCredentials(f.root, f.encryption)
+    await reloaded.load()
+    expect(reloaded.get('formatting')).toBe('fixture-reset-key')
+    expect(await readFile(settingsPath, 'utf8')).not.toContain('fixture-reset-key')
+  })
+
   it('restores the previous secure key when the real settings file cannot be replaced', async () => {
     const f = await fixture()
     const settingsPath = join(f.root, 'settings.json')
@@ -134,22 +169,26 @@ describe('credential storage and formatting migration', () => {
     expect(f.credentials.has('formatting')).toBe(false)
   })
 
-  it('keeps an unmigrated key recoverable while encryption is locked without exposing it through renderer settings', async () => {
+  it.each(['locked', 'write failure'])('removes a legacy plaintext key after vault %s and asks for re-entry', async failure => {
     const f = await fixture()
-    const repository = new SettingsRepository(join(f.root, 'settings.json'))
+    const settingsPath = join(f.root, 'settings.json')
+    const repository = new SettingsRepository(settingsPath)
     await repository.update({ llmApiKey: 'fixture-unmigrated-key' })
     const settings = new SecureSettings(repository, f.credentials)
-    f.encryption.unlocked = false
-    await expect(settings.migrate()).rejects.toThrow('unavailable')
-    expect((await repository.get()).llmApiKey).toBe('fixture-unmigrated-key')
-    expect((await settings.get()).llmApiKey).toBe('')
-    expect((await settings.forFormatting()).llmApiKey).toBe('')
-    f.encryption.unlocked = true
-    await settings.migrate()
+    f.encryption.unlocked = failure !== 'locked'
+    f.encryption.failWrites = failure === 'write failure'
+    const onStorageFailure = vi.fn()
+    await expect(settings.migrate(onStorageFailure)).rejects.toThrow()
+    expect(onStorageFailure).toHaveBeenCalledOnce()
     expect((await repository.get()).llmApiKey).toBe('')
-    expect((await settings.forFormatting()).llmApiKey).toBe('fixture-unmigrated-key')
-    await settings.reset()
+    expect(await readFile(settingsPath, 'utf8')).not.toContain('fixture-unmigrated-key')
     expect((await settings.get()).llmApiKey).toBe('')
-    expect(f.credentials.has('formatting')).toBe(false)
+    f.encryption.unlocked = true
+    f.encryption.failWrites = false
+    await settings.migrate(onStorageFailure)
+    expect(onStorageFailure).toHaveBeenCalledOnce()
+    expect((await settings.forFormatting()).llmApiKey).toBe('')
+    await settings.update({ llmApiKey: 'fixture-reentered-key' })
+    expect((await settings.forFormatting()).llmApiKey).toBe('fixture-reentered-key')
   })
 })

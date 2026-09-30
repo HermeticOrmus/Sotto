@@ -1,12 +1,13 @@
 // @vitest-environment node
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { classifyRiskyAction, mayGrantLocally, type Authority, type RiskyAction } from '../../../src/main/agents/authority'
+import { classifyRiskyAction, mayGrantLocally, UNPAIRED_CLIENT_ERROR, type Authority, type RiskyAction } from '../../../src/main/agents/authority'
 import { AgentControl } from '../../../src/main/agents/control'
 import { AgentCredentials, type CredentialEncryption } from '../../../src/main/agents/credentials'
 import type { AgentHostCommand } from '../../../src/main/agents/host'
+import type { ClientIdentity } from '../../../src/main/agents/hostService'
 import { TurnRecorder } from '../../../src/main/agents/turns'
 import { E2EAgentHost, e2eAgentReasoner } from '../../../src/main/e2e/agentEffects'
 import { PolicyStore } from '../../../src/main/memory/policies'
@@ -131,6 +132,54 @@ describe('risky action classification', () => {
 })
 
 describe('authority at dispatch', () => {
+  it.each([false, true])('records one attribution for an uncertain answer with accepted %s', async accepted => {
+    const f = await fixture()
+    const recordAnswer = vi.fn()
+    Object.assign(f.host, { recordAnswer })
+    f.permission()
+    const execute = vi.spyOn(f.host, 'execute').mockResolvedValueOnce({ accepted, uncertain: true })
+    expect((await f.answer('Allow')).error).toBeTruthy()
+    expect(recordAnswer).toHaveBeenCalledExactlyOnceWith('workshop', expect.objectContaining({
+      kind: 'answer-given', requestId: 'permission', approved: true,
+      attribution: expect.objectContaining({ clientId: 'desktop-window', transport: 'ipc' }),
+    }))
+    expect(JSON.parse(await readFile(join(f.root, 'agents.json'), 'utf8')).outbox).toContainEqual(expect.objectContaining({
+      type: 'answer', threadId: 'workshop', requestId: 'permission',
+    }))
+    await f.answer('Allow')
+    expect(recordAnswer).toHaveBeenCalledOnce()
+    expect(execute).toHaveBeenCalledOnce()
+  })
+
+  it('leaves a definitively refused answer without attribution', async () => {
+    const f = await fixture()
+    const recordAnswer = vi.fn()
+    Object.assign(f.host, { recordAnswer })
+    f.permission()
+    vi.spyOn(f.host, 'execute').mockResolvedValueOnce({ accepted: false })
+    expect((await f.answer('Allow')).error).toBeTruthy()
+    expect(recordAnswer).not.toHaveBeenCalled()
+  })
+  it.each([false, true])('preserves command client context when permitted is %s', async allowed => {
+    const client: ClientIdentity = { clientId: 'fixture-client', user: 'Fixture client', transport: 'socket' }
+    const f = await fixture({ authorizes: () => ({ allowed: false, reason: 'no-policy' }),
+      mayGrant: identity => identity.transport === 'ipc' ? { allowed: true, reason: 'local-window' }
+        : { allowed, reason: allowed ? 'paired-client' : 'no-policy' } })
+    const recordAnswer = vi.fn()
+    Object.assign(f.host, { recordAnswer })
+    f.host.event({ type: 'question', threadId: 'workshop', requestId: 'choice', text: 'Which color?' })
+    await f.control.command({ type: 'select-thread', threadId: 'workshop' })
+    await f.control.command({ type: 'compose', text: 'Blue' })
+    const result = await f.control.commandShell({ type: 'send' }, client)
+    if (allowed) {
+      expect(result.error).toBeNull()
+      expect(recordAnswer).toHaveBeenCalledWith('workshop', expect.objectContaining({ attribution: client }))
+    } else {
+      expect(result.error).toBe(UNPAIRED_CLIENT_ERROR)
+      expect(f.host.executed.filter(command => command.type === 'answer')).toEqual([])
+      expect(recordAnswer).not.toHaveBeenCalled()
+    }
+  })
   it('supervision leaves a pending permission in the attention queue', async () => {
     const f = await fixture({ authorizes: () => ({ allowed: true, reason: 'allowed' }) })
     await f.control.command({ type: 'configure', patch: { reasoning: 'openrouter', reasoningModel: 'fixture-model' } })

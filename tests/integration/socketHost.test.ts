@@ -106,6 +106,68 @@ describe('authenticated host socket', () => {
     await expect(client.command({ type: 'answer', threadId, requestId: 'permission-two', answer: '', approved: true })).rejects.toMatchObject({ code: 'forbidden' })
     expect(host.service.shell().host.threads.find(thread => thread.id === threadId)?.requests).toContainEqual(expect.objectContaining({ id: 'permission-two' }))
   })
+  it.each(['shell', 'question', 'saved', 'queue'] as const)('preserves command admission context for composition: %s', async source => {
+    const { client } = await pair()
+    await client.command({ type: 'configure', patch: { provider: 'codex', enabledProviders: ['codex'] } })
+    await client.command({ type: 'connect', provider: 'codex' })
+    const threadId = client.shell().host.threads.find(thread => thread.title === 'Workshop')!.id
+    await client.command({ type: 'select-thread', threadId })
+    await host.service.command({ type: 'assign', threadId, instruction: 'Keep watching' }, desktopWindowClient())
+    native.event({ type: 'question', threadId: 'workshop', requestId: 'question-one', text: 'Choose a name' })
+    await expect.poll(() => host.service.shell().queue.some(item => item.requestId === 'question-one')).toBe(true)
+    if (source !== 'question' && source !== 'queue') {
+      await host.service.command({ type: 'compose', text: 'Original draft' }, desktopWindowClient())
+      if (source === 'saved') {
+        await host.service.command({ type: 'pause-draft' }, desktopWindowClient())
+        await host.service.command({ type: 'select-thread', threadId }, desktopWindowClient())
+      }
+    }
+    const originalShell = host.service.shell.bind(host.service)
+    const shell = source === 'queue' ? vi.spyOn(host.service, 'shell').mockImplementation(() => {
+      const state = originalShell()
+      return { ...state, queue: [{ ...state.queue[0]!, id: 'queue-note', requestId: undefined }, ...state.queue] }
+    }) : undefined
+    try {
+      const before = host.service.shell()
+      await expect(client.command({ type: 'compose', text: 'Changed draft' })).rejects.toMatchObject({ code: 'forbidden' })
+      expect(host.service.shell().threadDrafts).toEqual(before.threadDrafts)
+      expect(host.service.shell().draft).toBe(before.draft)
+    } finally { shell?.mockRestore() }
+  })
+  it.each(['composing', 'saved'] as const)('keeps ordinary composition available with its existing binding: %s', async source => {
+    const { client } = await pair()
+    await client.command({ type: 'configure', patch: { provider: 'codex', enabledProviders: ['codex'] } })
+    await client.command({ type: 'connect', provider: 'codex' })
+    const threadId = client.shell().host.threads.find(thread => thread.title === 'Workshop')!.id
+    await host.service.command({ type: 'assign', threadId, instruction: 'Keep watching' }, desktopWindowClient())
+    await host.service.command({ type: 'compose', text: 'Ordinary draft' }, desktopWindowClient())
+    if (source === 'saved') {
+      await host.service.command({ type: 'pause-draft' }, desktopWindowClient())
+      await host.service.command({ type: 'select-thread', threadId }, desktopWindowClient())
+    }
+    native.event({ type: 'question', threadId: 'workshop', requestId: 'question-one', text: 'Choose a name' })
+    await expect.poll(() => host.service.shell().queue.some(item => item.requestId === 'question-one')).toBe(true)
+    expect(host.service.shell().draftRequestId).toBeNull()
+    await client.command({ type: 'compose', text: 'Revised ordinary draft' })
+    expect(host.service.shell().error).toBeNull()
+    expect(host.service.shell().draftRequestId).toBeNull()
+    expect(host.service.shell().threadDrafts?.find(draft => draft.threadId === threadId)).toMatchObject({ text: 'Revised ordinary draft', requestId: null })
+  })
+  it('preserves command admission context for a submitted draft', async () => {
+    const { client } = await pair()
+    await client.command({ type: 'configure', patch: { provider: 'codex', enabledProviders: ['codex'] } })
+    await client.command({ type: 'connect', provider: 'codex' })
+    const threadId = client.shell().host.threads.find(thread => thread.title === 'Workshop')!.id
+    await host.service.command({ type: 'select-thread', threadId }, desktopWindowClient())
+    await host.service.command({ type: 'assign', threadId, instruction: 'Keep watching' }, desktopWindowClient())
+    native.event({ type: 'question', threadId: 'workshop', requestId: 'question-one', text: 'Choose a name' })
+    await expect.poll(() => host.service.shell().queue.some(item => item.requestId === 'question-one')).toBe(true)
+    await host.service.command({ type: 'compose', text: 'Original draft' }, desktopWindowClient())
+    expect(host.service.shell().draftRequestId).toBe('question-one')
+    await expect(client.command({ type: 'send' })).rejects.toMatchObject({ code: 'forbidden' })
+    expect(host.service.shell().draftRequestId).toBe('question-one')
+    expect(host.service.shell().draft).toBe('Original draft')
+  })
   it('refuses a second listener before it can open or overwrite the running host stores', async () => {
     await expect(startHeadlessHost({ dataDirectory: root, port: 0 })).rejects.toThrow(`Another host (process ${process.pid}) is using this data folder`)
     expect((await fetch(url + '/v1/health')).status).toBe(200)
