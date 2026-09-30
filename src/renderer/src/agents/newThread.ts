@@ -1,4 +1,4 @@
-import { hostEntityKey, parseHostEntityKey } from '../../../shared/clientIdentity'
+import { hostEntityKey, parseHostEntityKey, projectWorkingCopyDefaultKey } from '../../../shared/clientIdentity'
 import { defaultNewThreadModelId, hostForThread, type AgentProject, type AgentState, type AgentThread } from '../../../shared/agents'
 import { resolveModel } from '../../../shared/modelCatalog'
 import { nearestReasoningEffort, resolveNewThreadPermission } from '../../../shared/newThreadDefaults'
@@ -29,10 +29,8 @@ export const WORKING_COPY_READ_ERROR = 'Could not read your working-copy default
  */
 export async function projectWorkingCopy(state: AgentState, project: AgentProject): Promise<'independent' | 'shared'> {
   if (!window.sotto?.getSettings) return 'shared'
-  const localHostId = state.connections ? state.connections.find(host => host.kind === 'local')?.hostId : state.hostId
-  const defaultKey = (id: string): string => { const key = parseHostEntityKey(id); return key && key.hostId === localHostId ? key.id : id }
   const settings = await window.sotto.getSettings()
-  return settings.projectThreadWorkingCopyDefaults[defaultKey(project.id)] || settings.threadWorkingCopyDefault
+  return settings.projectThreadWorkingCopyDefaults[projectWorkingCopyDefaultKey(state, project.id)] || settings.threadWorkingCopyDefault
 }
 
 /**

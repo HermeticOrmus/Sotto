@@ -32,6 +32,8 @@ Saved Codex conversations keep both sides after a restart. Opening a thread also
 
 Thread drafts save automatically while you type, including while other threads are working.
 
+Settings → Application sets the working-copy default for new threads. Expand **Project defaults** to choose a different default for one project. Previously saved project choices are kept when Sotto updates.
+
 New threads open in Unsettled with the defaults saved in Settings → Agents. An existing empty thread is reused only while it is unsettled, its known model, effort and permission choices match those defaults, and no setting change is pending.
 
 In Settings, **Test microphone** checks the same input selected for dictation. Changing the input clears the previous test.
@@ -42,7 +44,7 @@ Terminal mode keeps closed terminals on its Closed shelf until you quit. Reopen 
 
 You need Windows 10 or 11 (x64), or an Apple silicon Mac with macOS 12 or newer.
 
-**Windows.** Run `Sotto Setup <version>.exe`. At least 1 GB of free space during installation is needed. The desktop shortcut is optional and unchecked by default. The installer isn't code-signed, so Windows may show a SmartScreen warning.
+**Windows.** Run `Sotto Setup <version>.exe`. Connecting an SSH host uses Windows' .NET Framework 4, which Windows 10 and 11 include. At least 1 GB of free space during installation is needed. The desktop shortcut is optional and unchecked by default. The installer isn't code-signed, so Windows may show a SmartScreen warning.
 
 **macOS.** Drag Sotto into Applications. The app isn't notarized, so the first launch is blocked: open **System Settings → Privacy & Security** and press **Open Anyway**, or run:
 
