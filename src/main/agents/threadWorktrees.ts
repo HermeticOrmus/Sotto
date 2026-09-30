@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { lstat, mkdir, opendir, readlink, realpath, stat } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { RECLAIM_WORKTREE_NEEDS_CONFIRMATION, type AgentWorkingCopyOptions, type AgentWorkingCopySelection, type AgentWorktree } from '../../shared/agents'
@@ -8,10 +8,10 @@ import { nativeEnvironment } from './subscriptionCodex'
 export type RunGit = (cwd: string, args: string[]) => Promise<string>
 export const runWorktreeGit: RunGit = (cwd, args) => new Promise((accept, reject) => {
   execFile('git', ['-c', 'core.quotePath=false', ...args], {
-    cwd, windowsHide: true, shell: false, timeout: 30_000, maxBuffer: 2_000_000,
+    cwd, windowsHide: true, shell: false, timeout: args[0] === 'worktree' && args[1] === 'add' ? 300_000 : 30_000, maxBuffer: 2_000_000,
     env: { ...nativeEnvironment(), LC_ALL: 'C', GIT_TERMINAL_PROMPT: '0' },
   }, (error, stdout, stderr) => {
-    if (error) reject(Object.assign(new Error(error.code === 'ENOENT' ? 'Git is unavailable. Install Git or explicitly choose a shared working copy.' : stderr.trim() || error.message), { code: error.code }))
+    if (error) reject(Object.assign(new Error(error.code === 'ENOENT' ? 'Git is unavailable. Install Git or explicitly choose a shared working copy.' : stderr.trim() || error.message), { code: error.code, timedOut: error.killed === true && error.signal === 'SIGTERM' }))
     else accept(stdout)
   })
 })
@@ -43,11 +43,11 @@ async function coordinateRegistry(identity: RegistryIdentity, run: () => Promise
   finally { if (registryOperations.get(identity.key) === settled) registryOperations.delete(identity.key) }
 }
 
-function registeredWorktrees(output: string): Array<{ path: string; branch: string | undefined; locked: boolean; prunable: boolean }> {
+function registeredWorktrees(output: string): Array<{ path: string; branch: string | undefined; locked: boolean; lockReason: string | undefined; prunable: boolean }> {
   return output.split('\0\0').filter(Boolean).map(record => {
     const fields = record.split('\0')
     return { path: fields.find(field => field.startsWith('worktree '))?.slice(9) ?? '', branch: fields.find(field => field.startsWith('branch '))?.slice(7),
-      locked: fields.some(field => field === 'locked' || field.startsWith('locked ')), prunable: fields.some(field => field === 'prunable' || field.startsWith('prunable ')) }
+      locked: fields.some(field => field === 'locked' || field.startsWith('locked ')), lockReason: fields.find(field => field.startsWith('locked '))?.slice(7), prunable: fields.some(field => field === 'prunable' || field.startsWith('prunable ')) }
   })
 }
 
@@ -99,6 +99,81 @@ export class ThreadWorktrees {
 
   private async registry(cwd: string, args: string[], identity?: RegistryIdentity): Promise<string> {
     return coordinateRegistry(identity ?? await this.registryIdentity(cwd), () => this.git(cwd, args))
+  }
+
+  /** Only the fresh token path this add started may be cleaned up after its own deadline. */
+  private async addWorktree(repositoryRoot: string, path: string, branch: string, args: string[], identity: RegistryIdentity): Promise<void> {
+    await coordinateRegistry(identity, async () => {
+      try { return await this.git(repositoryRoot, args) }
+      catch (error) {
+        if (!(error instanceof Error) || !('timedOut' in error) || error.timedOut !== true) throw error
+        try {
+          const entries = registeredWorktrees(await this.git(repositoryRoot, ['worktree', 'list', '--porcelain', '-z']))
+          const entry = entries.find(item => pathKey(item.path) === pathKey(path))
+          if (entry && (entry.lockReason !== 'initializing' || (entry.branch && entry.branch !== `refs/heads/${branch}`))) throw new Error('The incomplete checkout is no longer initializing on its reserved branch.', { cause: error })
+          if (entry) {
+            const present = await lstat(path).then(() => true, (failure: NodeJS.ErrnoException) => { if (failure.code === 'ENOENT') return false; throw failure })
+            if (present) {
+              if (pathKey(await realpath(path)) !== pathKey(path) || !(await lstat(join(path, '.git'))).isFile()) throw new Error('The incomplete folder was replaced.', { cause: error })
+              const common = (await this.git(path, ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim()
+              if (pathKey(common) !== pathKey(identity.common) || await this.outsideLink(path)) throw new Error('The incomplete folder was redirected.', { cause: error })
+              await this.verifyIncompleteCheckout(path, branch)
+            }
+            await this.git(repositoryRoot, ['worktree', 'unlock', '--', path])
+            await this.git(repositoryRoot, ['worktree', 'remove', '--force', '--', path])
+          } else if (await lstat(path).then(() => true, (failure: NodeJS.ErrnoException) => { if (failure.code === 'ENOENT') return false; throw failure })) {
+            throw new Error('The incomplete folder is not registered to this checkout.', { cause: error })
+          }
+        } catch (cleanupError) {
+          throw new Error('Worktree setup took too long. The incomplete folder was kept because it could not be safely removed. Move any local files out and restore the checkout before retrying.', { cause: cleanupError })
+        }
+        throw new Error('Worktree setup took too long. Retry setup to continue on the same branch.', { cause: error })
+      }
+    })
+  }
+
+  /** A killed reset may not have written the index. Compare present files with the branch itself. */
+  private async verifyIncompleteCheckout(path: string, branch: string): Promise<void> {
+    const files: string[] = []
+    const links = new Map<string, Buffer>()
+    const visit = async (directory: string): Promise<void> => {
+      const handle = await opendir(directory)
+      for await (const entry of handle) {
+        if (directory === path && entry.name === '.git') continue
+        const full = join(directory, entry.name)
+        if (entry.isDirectory()) await visit(full)
+        else {
+          const local = relative(path, full).split(sep).join('/')
+          if (entry.isSymbolicLink()) links.set(local, await readlink(full, { encoding: 'buffer' }))
+          else if (!entry.isFile()) throw new Error('The incomplete folder contains local files.')
+          files.push(local)
+        }
+      }
+    }
+    await visit(path)
+    // Bound each argument list on Windows. Hashing applies the checkout's normal clean filters.
+    for (let offset = 0; offset < files.length; offset += 32) {
+      const batch = files.slice(offset, offset + 32)
+      // Read only these files, not the whole potentially huge branch tree. Paths are always literal.
+      const tree = await this.git(path, ['--literal-pathspecs', 'ls-tree', '-r', '-z', '--full-tree', `refs/heads/${branch}`, '--', ...batch])
+      const blobs = new Map(tree.split('\0').filter(Boolean).map(record => {
+        const tab = record.indexOf('\t')
+        const [mode, , hash] = record.slice(0, tab).split(' ')
+        return [record.slice(tab + 1), { mode, hash: hash! }]
+      }))
+      if (batch.some(file => !blobs.has(file))) throw new Error('The incomplete folder contains local files.')
+      for (const file of batch) {
+        const target = links.get(file), blob = blobs.get(file)!
+        if (target) {
+          const hash = createHash(blob.hash.length === 64 ? 'sha256' : 'sha1').update(`blob ${target.length}\0`).update(target).digest('hex')
+          if (blob.mode !== '120000' || hash !== blob.hash) throw new Error('The incomplete folder contains local changes.')
+        } else if (blob.mode !== '100644' && blob.mode !== '100755' && blob.mode !== '120000') throw new Error('The incomplete folder contains local changes.')
+      }
+      const regular = batch.filter(file => !links.has(file))
+      if (!regular.length) continue
+      const hashes = (await this.git(path, ['hash-object', '--', ...regular])).trim().split(/\r?\n/u)
+      if (hashes.length !== regular.length || regular.some((file, index) => hashes[index] !== blobs.get(file)!.hash)) throw new Error('The incomplete folder contains local changes.')
+    }
   }
 
   /**
@@ -274,8 +349,7 @@ export class ThreadWorktrees {
     // exists already and is checked out as it stands, with no -b.
     await mkdir(allocationRoot, { recursive: true })
     if (pathKey(await realpath(allocationRoot)) !== pathKey(allocationRoot)) throw new Error('The reserved worktree parent folder was redirected. Nothing was changed.')
-    if (metadata.checkoutBranch) await this.registry(repositoryRoot, ['worktree', 'add', '--', metadata.path, branch], identity)
-    else await this.registry(repositoryRoot, ['worktree', 'add', '-b', branch, '--', metadata.path, baseCommit], identity)
+    await this.addWorktree(repositoryRoot, metadata.path, branch, metadata.checkoutBranch ? ['worktree', 'add', '--', metadata.path, branch] : ['worktree', 'add', '-b', branch, '--', metadata.path, baseCommit], identity)
     return (await this.inspectWithin({ ...metadata, status: 'ready', error: undefined }, identity)).worktree
   }
 
@@ -310,7 +384,7 @@ export class ThreadWorktrees {
     await mkdir(allocationRoot, { recursive: true })
     if (pathKey(await realpath(allocationRoot)) !== pathKey(allocationRoot)) throw new Error('The reserved worktree parent folder was redirected. Nothing was changed.')
     // No -b and no -B: the recorded branch is checked out as it stands, with its commits.
-    try { await this.registry(repositoryRoot, ['worktree', 'add', '--', path, branch], identity) }
+    try { await this.addWorktree(repositoryRoot, path, branch, ['worktree', 'add', '--', path, branch], identity) }
     catch (error) { throw new Error(`This thread’s working folder was missing and Sotto could not put it back on ${branch}. Nothing was lost; the branch still has its commits. ${error instanceof Error ? error.message : ''}`.trim(), { cause: error }) }
     return { ...metadata, status: 'ready', error: undefined, reclaimedAt: undefined }
   }
