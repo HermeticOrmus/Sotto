@@ -25,6 +25,7 @@ describe('reclaiming a thread worktree', () => {
   it('lists ignored items and requires a separate acknowledgement before removal', async () => {
     const result = ok()
     result.worktreeReclaimPreview!.ignored = ['.env', 'out/capture.png']
+    result.worktreeReclaimPreview!.items = [{ path: '.env', bytes: 20, fileCount: 1 }, { path: 'out/capture.png', bytes: 100, fileCount: 1 }]
     const command = vi.fn<(request: AgentCommand) => Promise<AgentState>>(async () => result)
     render(<ThreadWorkingCopy thread={thread} project={project} command={command} />)
     fireEvent.click(screen.getByRole('button', { name: /Working copy:/ }))
@@ -38,7 +39,7 @@ describe('reclaiming a thread worktree', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: 'Delete these 2 ignored items with the folder' }))
     expect(remove).toBeEnabled()
     fireEvent.click(remove)
-    await waitFor(() => expect(command).toHaveBeenLastCalledWith({ type: 'reclaim-thread-worktree', threadId: thread.id, withUncommittedChanges: false, confirmedIgnored: ['.env', 'out/capture.png'], confirmedRepositories: [] }))
+    await waitFor(() => expect(command).toHaveBeenLastCalledWith({ type: 'reclaim-thread-worktree', threadId: thread.id, withUncommittedChanges: false, confirmedIgnored: ['.env', 'out/capture.png'], confirmedItems: [{ path: '.env', fileCount: 1 }, { path: 'out/capture.png', fileCount: 1 }], confirmedRepositories: [] }))
   })
   it('names nested work in plain words and requires the tick', async () => {
     const result = ok()
@@ -87,7 +88,7 @@ describe('reclaiming a thread worktree', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Remove worktree folder, keeping its branch' }))
     await waitFor(() => expect(screen.getByRole('button', { name: 'Remove worktree' })).toBeEnabled())
     fireEvent.click(screen.getByRole('button', { name: 'Remove worktree' }))
-    await waitFor(() => expect(command).toHaveBeenCalledWith({ type: 'reclaim-thread-worktree', threadId: 'thread-1', withUncommittedChanges: false, confirmedIgnored: [], confirmedRepositories: [] }))
+    await waitFor(() => expect(command).toHaveBeenCalledWith({ type: 'reclaim-thread-worktree', threadId: 'thread-1', withUncommittedChanges: false, confirmedIgnored: [], confirmedItems: [], confirmedRepositories: [] }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
   })
 
@@ -101,7 +102,7 @@ describe('reclaiming a thread worktree', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Remove worktree' }))
     await waitFor(() => expect(screen.getByRole('dialog')).toHaveTextContent('This folder has uncommitted changes.'))
     fireEvent.click(screen.getByRole('button', { name: 'Remove and lose changes' }))
-    await waitFor(() => expect(command).toHaveBeenLastCalledWith({ type: 'reclaim-thread-worktree', threadId: 'thread-1', withUncommittedChanges: true, confirmedIgnored: [], confirmedRepositories: [] }))
+    await waitFor(() => expect(command).toHaveBeenLastCalledWith({ type: 'reclaim-thread-worktree', threadId: 'thread-1', withUncommittedChanges: true, confirmedIgnored: [], confirmedItems: [], confirmedRepositories: [] }))
   })
 
   it('does not offer removal for a shared, reused or already reclaimed folder, and says a reclaimed folder comes back on send', () => {
@@ -132,7 +133,7 @@ describe('reclaiming a thread worktree', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Settle' }))
     await waitFor(() => expect(screen.getByRole('button', { name: 'Remove worktree' })).toBeEnabled())
     fireEvent.click(screen.getByRole('button', { name: 'Remove worktree' }))
-    await waitFor(() => expect(command).toHaveBeenLastCalledWith({ type: 'reclaim-thread-worktree', threadId: 'thread-1', withUncommittedChanges: false, confirmedIgnored: [], confirmedRepositories: [] }))
+    await waitFor(() => expect(command).toHaveBeenLastCalledWith({ type: 'reclaim-thread-worktree', threadId: 'thread-1', withUncommittedChanges: false, confirmedIgnored: [], confirmedItems: [], confirmedRepositories: [] }))
   })
 
   it('asks nothing on settle for a shared folder, or when the settle itself was refused', async () => {

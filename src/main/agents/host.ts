@@ -172,7 +172,7 @@ export interface AgentHost {
   restoreThreadBranch?(threadId: string, withUncommittedChanges: boolean): Promise<AgentHostSnapshot>
   /** Remove the thread's own worktree folder and keep its branch (ADR-0019). */
   previewThreadWorktreeReclaim?(threadId: string): Promise<WorktreeReclaimPreview>
-  reclaimThreadWorktree?(threadId: string, options?: { withUncommittedChanges?: boolean; automatic?: boolean; confirmedIgnored?: readonly string[]; confirmedRepositories?: WorktreeReclaimPreview['repositories'] }): Promise<AgentHostSnapshot>
+  reclaimThreadWorktree?(threadId: string, options?: { withUncommittedChanges?: boolean; automatic?: boolean; confirmedIgnored?: readonly string[]; confirmedItems?: readonly { path: string; fileCount: number }[]; confirmedRepositories?: WorktreeReclaimPreview['repositories'] }): Promise<AgentHostSnapshot>
   threadWorkingDirectory?(threadId: string): Promise<string>
   /** T3's stacked Git action on the thread's folder, reported on the thread record as it runs (ADR-0027). */
   runGitAction?(command: { threadId: string; actionId: string; action: GitStackedAction; commitMessage?: string | undefined; featureBranch?: boolean | undefined; filePaths?: readonly string[] | undefined; allowDefaultBranch?: boolean | undefined }): Promise<AgentHostSnapshot>

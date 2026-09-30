@@ -2124,7 +2124,7 @@ export class AgentControl {
       }
       case 'reclaim-thread-worktree': {
         if (!this.dependencies.host.reclaimThreadWorktree) throw new Error('Removing this thread’s worktree is unavailable.')
-        this.acceptSnapshot(await this.dependencies.host.reclaimThreadWorktree(command.threadId, { withUncommittedChanges: command.withUncommittedChanges === true, ...(command.confirmedIgnored ? { confirmedIgnored: command.confirmedIgnored } : {}), ...(command.confirmedRepositories ? { confirmedRepositories: command.confirmedRepositories } : {}) }))
+        this.acceptSnapshot(await this.dependencies.host.reclaimThreadWorktree(command.threadId, { withUncommittedChanges: command.withUncommittedChanges === true, ...(command.confirmedIgnored ? { confirmedIgnored: command.confirmedIgnored } : {}), ...(command.confirmedItems ? { confirmedItems: command.confirmedItems } : {}), ...(command.confirmedRepositories ? { confirmedRepositories: command.confirmedRepositories } : {}) }))
         this.state.notice = 'Worktree removed. The branch is kept.'
         return
       }

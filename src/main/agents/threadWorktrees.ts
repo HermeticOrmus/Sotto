@@ -108,6 +108,7 @@ export interface WorktreeReclaimFacts {
 export interface WorktreeReclaimOptions {
   /** The exact ignored paths displayed in the user's confirmation. */
   readonly confirmedIgnored?: readonly string[]
+  readonly confirmedItems?: readonly { path: string; fileCount: number }[]
   readonly confirmedRepositories?: readonly { path: string; changeCount: number; kind: 'worktree' | 'repository' }[]
   /** The user's answer to the uncommitted-changes confirmation. */
   readonly withUncommittedChanges?: boolean
@@ -521,6 +522,8 @@ export class ThreadWorktrees {
     // Take the last observation inside the registry lane, immediately before the destructive command.
     await coordinateRegistry(identity!, async () => {
       const { facts: latest, submodules } = await this.reclaimFactsWithin(metadata, identity)
+      const counts = (items: readonly { path: string; fileCount: number }[]) => JSON.stringify(items.map(({ path, fileCount }) => ({ path, fileCount })).sort((a, b) => a.path.localeCompare(b.path)))
+      if (!options.automatic && counts(options.confirmedItems ?? []) !== counts(latest.items)) throw new Error('The folder changed. Nothing was removed. Choose Remove worktree again to see the new list.')
       if (latest.outsideLink || latest.branch !== facts.branch || latest.dirty !== facts.dirty ||
         JSON.stringify(latest.ignored) !== JSON.stringify(facts.ignored) ||
         JSON.stringify(latest.untracked) !== JSON.stringify(facts.untracked) ||

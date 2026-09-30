@@ -61,13 +61,13 @@ function useWorkingCopyAction(threadId: string, command: AgentConnection['comman
   const [error, setError] = useState<string | null>(null)
   const lastError = useRef<string | null>(null)
   const inFlight = useRef(false)
-  const run = async (type: Action, withUncommittedChanges?: boolean, confirmedIgnored?: string[], confirmedRepositories?: WorktreeReclaimPreview['repositories']): Promise<boolean> => {
+  const run = async (type: Action, withUncommittedChanges?: boolean, confirmedIgnored?: string[], confirmedRepositories?: WorktreeReclaimPreview['repositories'], confirmedItems?: { path: string; fileCount: number }[]): Promise<boolean> => {
     if (inFlight.current) return false
     inFlight.current = true
     setRunning(type); setError(null); lastError.current = null
     const fail = (message: string): false => { lastError.current = message; setError(message); return false }
     try {
-      const result = await command(type === 'restore-thread-branch' || type === 'reclaim-thread-worktree' ? { type, threadId, withUncommittedChanges, ...(type === 'reclaim-thread-worktree' && confirmedIgnored ? { confirmedIgnored, confirmedRepositories } : {}) } : { type, threadId })
+      const result = await command(type === 'restore-thread-branch' || type === 'reclaim-thread-worktree' ? { type, threadId, withUncommittedChanges, ...(type === 'reclaim-thread-worktree' && confirmedIgnored ? { confirmedIgnored, confirmedRepositories, confirmedItems } : {}) } : { type, threadId })
       if (!result || result.error) return fail(result?.error ?? 'Could not confirm this action. Try again.')
       return true
     } catch { return fail('Could not confirm this action. Try again.') }
@@ -98,7 +98,7 @@ export function ThreadWorkingCopy({ thread, project, command }: ThreadWorkingCop
   // The worktree Sotto made for this thread alone can be given back; a shared or reused folder is never offered.
   const reclaimable = isReclaimable(thread)
   const confirmReclaim = async (preview: WorktreeReclaimPreview): Promise<boolean> => {
-    const done = await run('reclaim-thread-worktree', reclaiming === 'dirty' || preview.dirty, preview.ignored, preview.repositories)
+    const done = await run('reclaim-thread-worktree', reclaiming === 'dirty' || preview.dirty, preview.ignored, preview.repositories, preview.items.map(({ path, fileCount }) => ({ path, fileCount })))
     if (done) { setOpen(false); return true }
     // The record can lag the folder: when main finds work it did not know about, the question is asked again, naming it.
     if (reclaiming === 'clean' && lastError.current === RECLAIM_WORKTREE_NEEDS_CONFIRMATION) setReclaiming('dirty')
@@ -233,7 +233,7 @@ export function useSettleThread(command: AgentConnection['command']) {
   const dialog = asking ? <ReclaimWorktreeDialog facts={describeWorkingCopy(asking.thread, asking.project)} dirty={asking.dirty} title="Remove its worktree too?" threadId={asking.thread.id} command={command}
     onCancel={() => setAsking(null)}
     onConfirm={async preview => {
-      const result = await command({ type: 'reclaim-thread-worktree', threadId: asking.thread.id, withUncommittedChanges: asking.dirty || preview.dirty, confirmedIgnored: preview.ignored, confirmedRepositories: preview.repositories })
+      const result = await command({ type: 'reclaim-thread-worktree', threadId: asking.thread.id, withUncommittedChanges: asking.dirty || preview.dirty, confirmedIgnored: preview.ignored, confirmedItems: preview.items.map(({ path, fileCount }) => ({ path, fileCount })), confirmedRepositories: preview.repositories })
       if (result && !result.error) return true
       if (!asking.dirty && result?.error === RECLAIM_WORKTREE_NEEDS_CONFIRMATION) setAsking({ ...asking, dirty: true })
       return false

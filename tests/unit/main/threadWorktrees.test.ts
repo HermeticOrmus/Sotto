@@ -549,16 +549,16 @@ describe('independent working-copy allocation', () => {
     const facts = await f.service.reclaimFacts(a)
     expect(facts).toMatchObject({ dirty: false, ignored: ['.env', 'local/'] })
     await expect(f.service.reclaim(a)).rejects.toThrow('holds ignored files')
-    await expect(f.service.reclaim(a, { confirmedIgnored: empty.ignored })).rejects.toThrow('ignored items changed')
-    await expect(f.service.reclaim(a, { automatic: true, confirmedIgnored: facts.ignored })).rejects.toThrow('besides installed dependencies')
+    await expect(f.service.reclaim(a, { confirmedItems: empty.items, confirmedIgnored: empty.ignored })).rejects.toThrow('ignored items changed')
+    await expect(f.service.reclaim(a, { automatic: true, confirmedItems: facts.items, confirmedIgnored: facts.ignored })).rejects.toThrow('besides installed dependencies')
     await writeFile(join(a.path!, 'another.env'), 'new local work')
     await writeFile(join(a.path!, '.gitignore'), '.env\nanother.env\nlocal/\nnode_modules/\n')
     await git(a.path!, ['add', '.gitignore'])
     await git(a.path!, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'Ignore another file'])
-    await expect(f.service.reclaim(a, { confirmedIgnored: facts.ignored })).rejects.toThrow('ignored items changed')
+    await expect(f.service.reclaim(a, { confirmedItems: facts.items, confirmedIgnored: facts.ignored })).rejects.toThrow('ignored items changed')
     expect(await readFile(join(a.path!, '.env'), 'utf8')).toBe('keep this secret')
     const refreshed = await f.service.reclaimFacts(a)
-    expect((await f.service.reclaim(a, { confirmedIgnored: refreshed.ignored })).reclaimedAt).toBeTruthy()
+    expect((await f.service.reclaim(a, { confirmedItems: refreshed.items, confirmedIgnored: refreshed.ignored })).reclaimedAt).toBeTruthy()
   })
   it.each([
     ['repository', true], ['worktree', true], ['repository', false], ['worktree', false],
@@ -576,12 +576,12 @@ describe('independent working-copy allocation', () => {
     expect(facts.ignored).toEqual(ignored ? ['.worktrees/', '.worktrees/n/'] : ['.worktrees/n/'])
     expect(facts.repositories).toEqual([{ path: '.worktrees/n/', changeCount: 1, kind }])
     await expect(f.service.reclaim(a, { withUncommittedChanges: true })).rejects.toThrow('holds ignored files')
-    await expect(f.service.reclaim(a, { withUncommittedChanges: true, confirmedIgnored: facts.ignored })).rejects.toThrow('nested work changed')
+    await expect(f.service.reclaim(a, { withUncommittedChanges: true, confirmedItems: facts.items, confirmedIgnored: facts.ignored })).rejects.toThrow('nested work changed')
     expect(await readFile(join(nested, 'unsaved.txt'), 'utf8')).toBe('nested uncommitted work')
-    expect((await f.service.reclaim(a, { withUncommittedChanges: true, confirmedIgnored: facts.ignored, confirmedRepositories: facts.repositories })).reclaimedAt).toBeTruthy()
+    expect((await f.service.reclaim(a, { withUncommittedChanges: true, confirmedItems: facts.items, confirmedIgnored: facts.ignored, confirmedRepositories: facts.repositories })).reclaimedAt).toBeTruthy()
     await expect(lstat(nested)).rejects.toMatchObject({ code: 'ENOENT' })
   })
-  it('summarizes an ignored cache once and accepts new files inside the confirmed folder', async () => {
+  it.each(['added', 'removed', 'rewritten'])('checks file counts inside the confirmed ignored folder (%s)', async change => {
     const f = await fixture(); const a = await f.service.ensure(await f.service.allocate(f.project, 'independent'))
     await writeFile(join(a.path!, '.gitignore'), 'dist/\n')
     await git(a.path!, ['add', '.gitignore'])
@@ -591,8 +591,18 @@ describe('independent working-copy allocation', () => {
     const facts = await f.service.reclaimFacts(a)
     expect(facts.ignored).toEqual(['dist/'])
     expect(facts.items).toEqual([{ path: 'dist/', bytes: 4, fileCount: 1 }])
-    await writeFile(join(a.path!, 'dist', 'two.js'), 'more cache')
-    expect((await f.service.reclaim(a, { confirmedIgnored: facts.ignored })).reclaimedAt).toBeTruthy()
+    if (change === 'added') await writeFile(join(a.path!, 'dist', 'two.js'), 'unseen work')
+    else if (change === 'removed') await unlink(join(a.path!, 'dist', 'one.js'))
+    else await writeFile(join(a.path!, 'dist', 'one.js'), 'a rewritten cache with a different size')
+    const removal = f.service.reclaim(a, { confirmedItems: facts.items, confirmedIgnored: facts.ignored })
+    if (change === 'rewritten') expect((await removal).reclaimedAt).toBeTruthy()
+    else {
+      await expect(removal).rejects.toThrow('The folder changed. Nothing was removed. Choose Remove worktree again to see the new list.')
+      expect((await lstat(a.path!)).isDirectory()).toBe(true)
+      if (change === 'added') expect(await readFile(join(a.path!, 'dist', 'two.js'), 'utf8')).toBe('unseen work')
+      const refreshed = await f.service.reclaimFacts(a)
+      expect((await f.service.reclaim(a, { confirmedItems: refreshed.items, confirmedIgnored: refreshed.ignored })).reclaimedAt).toBeTruthy()
+    }
   })
   it.each(['ignored', 'untracked'])('refuses a new %s path added during the final filesystem walk', async kind => {
     const f = await fixture(); const a = await f.service.ensure(await f.service.allocate(f.project, 'independent'))
@@ -607,7 +617,7 @@ describe('independent working-copy allocation', () => {
       if (cwd === nested && args[0] === 'status' && ++reads === 2) await writeFile(join(a.path!, kind === 'ignored' ? 'new.env' : 'unsaved.txt'), 'keep me')
       return git(cwd, args)
     })
-    await expect(service.reclaim(a, { confirmedIgnored: preview.ignored, confirmedRepositories: preview.repositories })).rejects.toThrow('files changed')
+    await expect(service.reclaim(a, { confirmedItems: preview.items, confirmedIgnored: preview.ignored, confirmedRepositories: preview.repositories })).rejects.toThrow('files changed')
     expect(await readFile(join(a.path!, kind === 'ignored' ? 'new.env' : 'unsaved.txt'), 'utf8')).toBe('keep me')
   })
   it.each(['clean', 'recursive', 'dirty-hidden'])('reclaims initialized submodules safely (%s)', async mode => {
@@ -638,7 +648,7 @@ describe('independent working-copy allocation', () => {
       expect(facts.dirty).toBe(true)
       expect(facts.repositories).toEqual([{ path: 'module/', changeCount: 1, kind: 'worktree' }])
       await expect(f.service.reclaim(a, { automatic: true })).rejects.toThrow('besides installed dependencies')
-      expect((await f.service.reclaim(a, { withUncommittedChanges: true, confirmedIgnored: facts.ignored, confirmedRepositories: facts.repositories })).reclaimedAt).toBeTruthy()
+      expect((await f.service.reclaim(a, { withUncommittedChanges: true, confirmedItems: facts.items, confirmedIgnored: facts.ignored, confirmedRepositories: facts.repositories })).reclaimedAt).toBeTruthy()
       return
     }
     expect((await f.service.reclaimFacts(a)).repositories).toEqual([])
@@ -654,7 +664,7 @@ describe('independent working-copy allocation', () => {
     const facts = await f.service.reclaimFacts(a)
     expect(facts.repositories).toEqual([{ path: 'node_modules/local.git/', changeCount: 0, kind: 'repository' }])
     await expect(f.service.reclaim(a, { automatic: true })).rejects.toThrow('besides installed dependencies')
-    expect((await f.service.reclaim(a, { confirmedIgnored: facts.ignored, confirmedRepositories: facts.repositories })).reclaimedAt).toBeTruthy()
+    expect((await f.service.reclaim(a, { confirmedItems: facts.items, confirmedIgnored: facts.ignored, confirmedRepositories: facts.repositories })).reclaimedAt).toBeTruthy()
   })
   it('resolves authoritative cwd before project fallback and blocks unresolved setup', () => {
     expect(resolveThreadWorkingDirectory({ workingDirectory: '/actual' }, { path: '/project' })).toBe('/actual')
