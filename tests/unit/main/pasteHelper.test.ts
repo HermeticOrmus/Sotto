@@ -173,7 +173,7 @@ describe('createWarmPasteAdapter', () => {
     expect(spawnHelper).toHaveBeenCalledTimes(2)
   })
 
-  it('rejects the in-flight paste when the helper dies mid-request via the fallback', async () => {
+  it.each(['exit', 'error'] as const)('does not repeat an unacknowledged paste after helper %s', async failure => {
     const processes: FakeHelperProcess[] = []
     const fallback = fallbackAdapter(true)
     const adapter = createWarmPasteAdapter({
@@ -186,13 +186,14 @@ describe('createWarmPasteAdapter', () => {
     })
 
     const result = adapter.run(buildPasteInvocation())
-    processes[0]?.exit(1)
+    if (failure === 'exit') processes[0]?.exit(1)
+    else processes[0]?.fail(new Error('helper lost after paste'))
 
-    await expect(result).resolves.toBe(true)
-    expect(fallback.calls).toBe(1)
+    await expect(result).resolves.toBe(false)
+    expect(fallback.calls).toBe(0)
   })
 
-  it('times out a hung helper, kills it, and uses the fallback', async () => {
+  it('times out a hung helper without repeating the paste, even when its acknowledgement arrives late', async () => {
     const timers: Array<() => void> = []
     const processes: FakeHelperProcess[] = []
     const fallback = fallbackAdapter(true)
@@ -213,9 +214,48 @@ describe('createWarmPasteAdapter', () => {
 
     const result = adapter.run(buildPasteInvocation())
     timers.at(-1)?.()
+    processes[0]?.emit('ok\n')
+
+    await expect(result).resolves.toBe(false)
+    expect(processes[0]?.killed).toBe(true)
+    expect(fallback.calls).toBe(0)
+  })
+
+  it('waits for acknowledgement when stdin reports backpressure', async () => {
+    const helper = new FakeHelperProcess()
+    helper.stdin.write = vi.fn(() => false)
+    const fallback = fallbackAdapter()
+    const adapter = createWarmPasteAdapter({ spawnHelper: () => helper, fallback })
+
+    const result = adapter.run(buildPasteInvocation())
+    helper.emit('ok\n')
 
     await expect(result).resolves.toBe(true)
-    expect(processes[0]?.killed).toBe(true)
+    expect(helper.killed).toBe(false)
+    expect(fallback.calls).toBe(0)
+  })
+
+  it('does not retry when writing the paste command throws after dispatch may have started', async () => {
+    const helper = new FakeHelperProcess()
+    helper.stdin.write = () => { throw new Error('stream lost') }
+    const fallback = fallbackAdapter()
+    const adapter = createWarmPasteAdapter({ spawnHelper: () => helper, fallback })
+
+    await expect(adapter.run(buildPasteInvocation())).resolves.toBe(false)
+    expect(helper.killed).toBe(true)
+    expect(fallback.calls).toBe(0)
+  })
+
+  it('uses the fallback when the helper has no command pipe before dispatch', async () => {
+    const helper = new FakeHelperProcess()
+    const fallback = fallbackAdapter()
+    const adapter = createWarmPasteAdapter({ spawnHelper: () => ({
+      stdin: null, stdout: helper.stdout,
+      once: helper.once.bind(helper), kill: helper.kill.bind(helper),
+    }), fallback })
+
+    await expect(adapter.run(buildPasteInvocation())).resolves.toBe(true)
+    expect(helper.killed).toBe(true)
     expect(fallback.calls).toBe(1)
   })
 

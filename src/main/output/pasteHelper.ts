@@ -28,7 +28,7 @@ export interface WarmPasteAdapter extends PasteProcessAdapter {
 const HELPER_RESPONSE_TIMEOUT_MS = 5_000
 
 interface PendingPaste {
-  resolve(successful: boolean | 'helper-lost'): void
+  resolve(successful: boolean): void
   timer: unknown
 }
 
@@ -49,23 +49,23 @@ export function createWarmPasteAdapter(options: WarmPasteAdapterOptions): WarmPa
   let session: HelperSession | null = null
   let disposed = false
 
-  const settlePending = (session: HelperSession, outcome: boolean | 'helper-lost'): void => {
+  const settlePending = (session: HelperSession): void => {
     const pending = session.pending.splice(0)
     for (const request of pending) {
       clearTimer(request.timer)
-      request.resolve(outcome)
+      request.resolve(false)
     }
   }
 
-  const destroySession = (target: HelperSession, outcome: boolean | 'helper-lost'): void => {
+  const destroySession = (target: HelperSession): void => {
     if (session === target) session = null
     if (target.dead) return
     target.dead = true
-    settlePending(target, outcome)
+    settlePending(target)
     try {
       target.process.kill()
     } catch {
-      // The helper is already unusable; the fallback path covers delivery.
+      // The helper may already have pasted. An unconfirmed command is never retried.
     }
   }
 
@@ -83,9 +83,10 @@ export function createWarmPasteAdapter(options: WarmPasteAdapterOptions): WarmPa
     session = created
 
     try {
-      process.once('error', () => destroySession(created, 'helper-lost'))
-      process.once('exit', () => destroySession(created, 'helper-lost'))
+      process.once('error', () => destroySession(created))
+      process.once('exit', () => destroySession(created))
       process.stdout?.on('data', (chunk) => {
+        if (created.dead) return
         created.buffer += String(chunk)
         let newlineIndex = created.buffer.indexOf('\n')
         while (newlineIndex >= 0) {
@@ -100,29 +101,32 @@ export function createWarmPasteAdapter(options: WarmPasteAdapterOptions): WarmPa
         }
       })
     } catch {
-      destroySession(created, 'helper-lost')
+      destroySession(created)
+      return null
+    }
+    if (created.dead || process.stdin === null || process.stdout === null) {
+      destroySession(created)
       return null
     }
     return created
   }
 
-  const pasteViaHelper = (target: HelperSession): Promise<boolean | 'helper-lost'> => {
+  const pasteViaHelper = (target: HelperSession): Promise<boolean> => {
     return new Promise((resolve) => {
       const request: PendingPaste = {
         resolve,
         timer: setTimer(() => {
-          // A hung helper cannot be trusted for future pastes either.
-          destroySession(target, 'helper-lost')
+          // Ctrl+V precedes acknowledgement. Timeout leaves its outcome unknown.
+          destroySession(target)
         }, responseTimeoutMs),
       }
       target.pending.push(request)
-      let written: boolean
       try {
-        written = target.process.stdin?.write('paste\n') ?? false
+        // A false return means backpressure, not that the command was rejected.
+        target.process.stdin!.write('paste\n')
       } catch {
-        written = false
+        destroySession(target)
       }
-      if (!written) destroySession(target, 'helper-lost')
     })
   }
 
@@ -135,15 +139,13 @@ export function createWarmPasteAdapter(options: WarmPasteAdapterOptions): WarmPa
       const target = ensureSession()
       if (target === null) return options.fallback.run(invocation)
 
-      const outcome = await pasteViaHelper(target)
-      if (outcome === 'helper-lost') return options.fallback.run(invocation)
-      return outcome
+      return pasteViaHelper(target)
     },
 
     dispose(): void {
       disposed = true
       const target = session
-      if (target !== null) destroySession(target, false)
+      if (target !== null) destroySession(target)
     },
   }
 }

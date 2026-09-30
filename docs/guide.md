@@ -335,6 +335,8 @@ Automatic paste is best effort. Windows blocks synthetic input into elevated app
 
 Sotto finishes each automatic paste before copying or pasting the next transcript. Copying from History while a dictation is waiting to paste waits for that delivery to finish.
 
+If the Windows paste helper stops or does not confirm in time, Sotto keeps the copied result and does not repeat the paste. Check the target before pasting manually: the text may already have arrived.
+
 ## Updates
 
 Automatic update checks are on by default. Shortly after launch and then every few minutes, the installed Windows app asks the GitHub releases page whether a newer version exists, which means GitHub sees an ordinary web request from your computer: IP address, time, and the version you are running. No audio, transcripts, settings, or identifiers are sent. When a release is found, the update control at the end of the sidebar foot offers it: one press downloads it, the next press asks before restarting into the installer, and nothing is installed behind your back when you quit. The whole check can be turned off under Settings → Updates, and "Check for Updates…" in the tray menu runs one on demand. The macOS disk image carries no update feed, so on a Mac, download each new version from the [releases page](https://github.com/millZach/Sotto-releases/releases/latest).
