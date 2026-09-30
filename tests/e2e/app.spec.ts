@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
+import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import { expect, test, type ElectronApplication, type Page } from '@playwright/test'
@@ -534,6 +535,35 @@ test('a second instance reveals the existing hidden window', async () => {
     })
     await expect.poll(async () => (await snapshot(launched.page)).mainVisible).toBe(true)
   } finally {
+    await closeSotto(launched)
+  }
+})
+
+test('quitting retains native windows during the drain and releases the lock for relaunch', async () => {
+  const launched = await launchSotto()
+  let relaunched: Awaited<ReturnType<typeof launchSotto>> | undefined
+  try {
+    await mkdir('artifacts/review-quit-drain', { recursive: true })
+    await launched.page.screenshot({ path: 'artifacts/review-quit-drain/before-quit.png' })
+    const exited = new Promise<number | null>(resolve => launched.app.process().once('exit', resolve))
+    const state = await launched.app.evaluate(({ app, BrowserWindow }) => {
+      let observed: { prevented: boolean; windows: number } | undefined
+      app.once('before-quit', event => {
+        observed = {
+          prevented: event.defaultPrevented,
+          windows: BrowserWindow.getAllWindows().length,
+        }
+      })
+      app.quit()
+      return observed
+    })
+    expect(state?.prevented).toBe(true)
+    expect(state?.windows).toBeGreaterThan(0)
+    expect(await exited).toBe(0)
+    relaunched = await launchSotto('success', launched.userData)
+    await expect(relaunched.page.getByRole('button', { name: 'Continue', exact: true })).toBeVisible()
+  } finally {
+    if (relaunched) await closeSotto(relaunched)
     await closeSotto(launched)
   }
 })

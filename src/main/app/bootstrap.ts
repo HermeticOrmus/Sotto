@@ -244,7 +244,7 @@ function trySetPermissionHandlers(
 }
 
 type BootstrapEvent = 'second-instance' | 'activate' | 'before-quit'
-type BootstrapListener = () => void
+type BootstrapListener = (event?: { readonly defaultPrevented: boolean }) => void
 
 export interface BootstrapApplication {
   requestSingleInstanceLock(): boolean
@@ -566,7 +566,12 @@ export async function bootstrapSotto(
       stopRuntime(activeRuntime)
     }
   }
-  const onBeforeQuit = (): void => dispose()
+  const onBeforeQuit: BootstrapListener = (event) => {
+    // The host drain prevents the first quit. Keep native resources until its
+    // second quit; a timed-out drain uses app.exit(), which closes windows itself.
+    if (event?.defaultPrevented) return
+    dispose()
+  }
 
   // 'activate' (macOS Dock/menu-bar reopen) and 'second-instance' (Windows
   // relaunch) are the same intent: the user asked for the main window.
