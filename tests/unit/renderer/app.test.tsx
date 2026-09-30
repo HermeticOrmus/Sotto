@@ -369,6 +369,19 @@ describe('Sotto application onboarding integration', () => {
     expect(screen.getByRole('heading', { level: 1, name: /ready when you are/i })).toBeVisible()
   })
 
+  it('shows the startup key migration notice and repeats recovery guidance in Settings', async () => {
+    const bridge = createBridge({
+      getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, onboardingComplete: true })),
+      listRecoveryNotices: vi.fn(async () => [{ code: 'OPENROUTER_KEY_MIGRATION_FAILED' as const }]),
+    })
+    renderApp(bridge)
+    await openPage('home')
+    expect(await screen.findByText('The OpenRouter key could not be stored securely. Enter it again in Settings → Transcription.')).toBeVisible()
+    act(() => shell.navigate('settings'))
+    await userEvent.setup().click(screen.getByRole('tab', { name: 'Transcription' }))
+    expect(await screen.findByText('The OpenRouter key could not be stored securely. Enter it again.')).toBeVisible()
+  })
+
   it('explains both macOS permission panes when auto-paste is refused', async () => {
     const bridge = createBridge({
       platform: 'darwin',

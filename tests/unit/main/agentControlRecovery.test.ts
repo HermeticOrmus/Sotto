@@ -11,6 +11,7 @@ import type { AgentHostCommand, AgentHostResult } from '../../../src/main/agents
 import { E2EAgentHost } from '../../../src/main/e2e/agentEffects'
 import { agentCommandSchema, PROVIDER_LABELS, type AgentCommand, type AgentConfiguration } from '../../../src/shared/agents'
 import { immediatePublishScheduler } from '../../fixtures/publishScheduler'
+import { AtomicJsonStore } from '../../../src/main/storage/atomicJsonStore'
 
 const roots: string[] = []
 const controls: AgentControl[] = []
@@ -547,6 +548,117 @@ describe('the hidden coordinator', () => {
 })
 
 describe('supervision event ordering', () => {
+  it.each([false, true])('keeps management active when shutdown cancels a decision and the final save fails: %s', async saveFails => {
+    const f = await fixture()
+    await f.account()
+    const failure = new Error('Sotto reasoning stopped.')
+    const decide = vi.spyOn(ConfiguredAgentReasoner.prototype, 'decide').mockImplementationOnce(async () => {
+      await decisionGate
+      throw failure
+    })
+    let release!: () => void
+    const decisionGate = new Promise<void>(resolve => { release = resolve })
+    const write = AtomicJsonStore.prototype.write
+    let rejectWrites = false
+    const save = vi.spyOn(AtomicJsonStore.prototype, 'write').mockImplementation(function (this: AtomicJsonStore<unknown>, value: unknown) {
+      if (saveFails && rejectWrites) return decisionGate.then(() => { throw new Error('Synthetic final save failure') })
+      return write.call(this, value)
+    })
+    try {
+      await f.control.command({ type: 'assign', threadId: 'workshop', instruction: 'Keep watching' })
+      rejectWrites = true
+      f.host.event({ type: 'ready', threadId: 'workshop', text: 'Review this result' })
+      await expect.poll(() => decide.mock.calls.length).toBe(1)
+      f.control.dispose()
+      release()
+      await expect.poll(() => decide.mock.settledResults[0]?.type).toBe('rejected')
+      expect(f.control.get().assignments[0]).toMatchObject({ mode: 'managed', paused: false, stopReason: 'none' })
+      expect(f.control.get().queue).toEqual([])
+    } finally { release(); save.mockRestore(); decide.mockRestore() }
+    await f.control.privacyChanged()
+    const saved = JSON.parse(await readFile(join(f.root, 'agents.json'), 'utf8'))
+    expect(saved.assignments[0]).toMatchObject({ mode: 'managed', paused: false, stopReason: 'none' })
+    expect(saved.queue).toEqual([])
+    await f.restart()
+    expect(f.control.get().assignments[0]).toMatchObject({ mode: 'managed', paused: false })
+    expect(f.control.get().queue.some(item => item.text === failure.message)).toBe(false)
+  })
+  it.each([1, 2001])('keeps management and context age when %s earlier messages are loaded', async count => {
+    const f = await fixture()
+    f.host.event({ type: 'history', threadId: 'workshop', text: '', messages: [
+      { id: 'recent', role: 'user', text: 'Recent prompt', createdAt: new Date().toISOString() },
+    ] })
+    await f.control.command({ type: 'assign', threadId: 'workshop', instruction: 'Keep watching' })
+    await f.control.command({ type: 'pause', threadId: 'workshop' })
+    const before = f.control.get()
+    Object.assign(f.host, { loadEarlierMessages: async () => {
+      f.host.event({ type: 'history', threadId: 'workshop', text: '', messages: [
+        ...Array.from({ length: count }, (_, index) => ({ id: `older-${index}`, role: 'user' as const, text: 'Earlier prompt', createdAt: '2026-01-01T00:00:00.000Z' })),
+        ...before.host.threads.find(thread => thread.id === 'workshop')!.messages,
+      ] })
+      return f.host.snapshot()
+    } })
+    const after = await f.control.command({ type: 'load-earlier-messages', threadId: 'workshop' })
+    expect(after.assignments).toEqual(before.assignments.map(assignment => ({ ...assignment, seenMessageIds: after.assignments[0]!.seenMessageIds })))
+    expect(after.assignments[0]!.seenMessageIds.length).toBeLessThanOrEqual(2000)
+    const saved = JSON.parse(await readFile(join(f.root, 'agents.json'), 'utf8'))
+    expect(saved.assignments[0].seenMessageIds.length).toBeLessThanOrEqual(2000)
+    expect(after.queue).toEqual(before.queue)
+    expect(after.speech).toEqual(before.speech)
+    for (let refresh = 0; refresh < 2; refresh += 1) {
+      const refreshed = await f.control.command({ type: 'refresh' })
+      expect(refreshed.assignments[0]).toMatchObject({ mode: 'managed', contextUpdatedAt: before.assignments[0]!.contextUpdatedAt })
+      expect(refreshed.queue).toEqual(before.queue)
+      expect(refreshed.speech).toEqual(before.speech)
+    }
+    f.host.event({ type: 'manual', threadId: 'workshop', text: 'A new prompt' })
+    expect(f.control.get().assignments[0]?.mode).toBe('manual')
+  })
+  it('bounds message identities when management starts and saved state is restored', async () => {
+    const f = await fixture()
+    const messages = Array.from({ length: 2500 }, (_, index) => ({ id: `message-${index}`, role: 'user' as const,
+      text: 'Earlier prompt', createdAt: '2026-01-01T00:00:00.000Z' }))
+    f.host.event({ type: 'history', threadId: 'workshop', text: '', messages })
+    const assigned = await f.control.command({ type: 'assign', threadId: 'workshop', instruction: 'Keep watching' })
+    expect(assigned.assignments[0]!.seenMessageIds).toEqual(messages.slice(-2000).map(message => message.id))
+    const file = join(f.root, 'agents.json')
+    const saved = JSON.parse(await readFile(file, 'utf8'))
+    saved.assignments[0].seenMessageIds = messages.map(message => message.id)
+    await writeFile(file, JSON.stringify(saved), 'utf8')
+    await f.restart()
+    const restored = await f.control.command({ type: 'refresh' })
+    expect(restored.assignments[0]!.seenMessageIds).toEqual(messages.slice(-2000).map(message => message.id))
+    expect(restored.assignments[0]!.mode).toBe('managed')
+    expect(JSON.parse(await readFile(file, 'utf8')).assignments[0].seenMessageIds).toHaveLength(2000)
+  })
+  it('detects a new manual prompt while earlier messages are still loading', async () => {
+    const f = await fixture()
+    f.host.event({ type: 'history', threadId: 'workshop', text: '', messages: [
+      { id: 'recent', role: 'user', text: 'Recent prompt', createdAt: new Date().toISOString() },
+    ] })
+    await f.control.command({ type: 'assign', threadId: 'workshop', instruction: 'Keep watching' })
+    let release!: () => void
+    let started!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const waiting = new Promise<void>(resolve => { started = resolve })
+    Object.assign(f.host, { loadEarlierMessages: async () => {
+      const snapshot = await f.host.snapshot()
+      f.host.event({ type: 'history', threadId: 'workshop', text: '', messages: [
+        { id: 'older', role: 'user', text: 'Earlier prompt', createdAt: '2026-01-01T00:00:00.000Z' },
+        ...snapshot.threads.find(thread => thread.id === 'workshop')!.messages,
+      ] })
+      started(); await gate
+      return f.host.snapshot()
+    } })
+    const loading = f.control.command({ type: 'load-earlier-messages', threadId: 'workshop' })
+    try {
+      await waiting
+      expect(f.control.get().assignments[0]?.mode).toBe('managed')
+      f.host.event({ type: 'manual', threadId: 'workshop', text: 'I am handling this now' })
+      expect(f.control.get().assignments[0]?.mode).toBe('manual')
+    } finally { release(); await loading }
+    expect(f.control.get().assignments[0]?.mode).toBe('manual')
+  })
   it('restores a completed response without paying for another review, while new responses and explicit resume still work', async () => {
     const f = await fixture()
     await f.account()
