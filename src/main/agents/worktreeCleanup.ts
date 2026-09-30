@@ -41,7 +41,7 @@ function lastActivity(thread: AgentThread, now: number): number {
 }
 
 /**
- * Reclaims worktrees under the rules the user turned on (ADR-0019): every hour, when the rules change,
+ * Reclaims worktrees under the rules the user turned on (ADR-0041): every hour, when the rules change,
  * and when a thread is settled. It only ever asks WorkspaceHost, whose own checks and the folder's own
  * state decide; a folder with uncommitted work or anything but dependencies in its ignored files is left
  * alone, and the branch is always kept. The same sweep settles threads whose pull request merged, when the
