@@ -67,7 +67,15 @@ The first rework CI run, [36774010024](https://github.com/millZach/Sotto/actions
 captured the neutral request message and unreadable-action warning on the small
 iPhone simulator before XCTest rejected the longer recovery message as an
 identifier. The corrected query matches its full label with a predicate; it keeps
-the same assertion. Latest package and small/large journey results are in the PR.
+the same assertion.
+
+The corrected [run 36778392859](https://github.com/millZach/Sotto/actions/runs/36778392859)
+passed Windows, Linux and native iOS. The native package executed 93 tests with
+one skip and no failures. All four Focus journeys passed on each phone size,
+including all three feedback scenarios in both appearances and reachable dismissal.
+The large simulator also used accessibility text size and reduced motion. This
+evidence precedes the clean merge of main at `4af39aa2`; final merged-state gate
+results are recorded in the PR.
 
 These two inspected captures are retained:
 
@@ -75,13 +83,17 @@ These two inspected captures are retained:
   The message and dismissal remain readable and reachable.
 - [Unreadable actions, small phone in light with larger text](../../artifacts/review-iphone-feedback/markers-small-light-larger-text.png).
   The entire warning wraps within the existing feedback surface without clipping.
+- [Recovered computer warning, small phone in light with larger text](../../artifacts/review-iphone-feedback/computer-small-light-larger-text.png).
+  The host ID wraps and the complete recovery instruction remains visible.
+- [Recovered computer warning, large phone in dark at accessibility text size](../../artifacts/review-iphone-feedback/computer-large-dark-accessibility-text.png).
+  The larger warning remains readable, with its dismissal at the top of the surface.
 
 ## Limits
 
-Windows cannot run SwiftUI or the native package tests. The macOS CI gate runs
+Windows cannot run SwiftUI or the native package tests. The macOS CI gate ran
 those tests and Focus simulator journeys, including revised feedback in both
 appearances, larger text and reachable dismissal. Native results and inspected
-captures are recorded in the pull request after that gate completes. Neither scripted transport
+captures are recorded above and in the PR. Neither scripted transport
 nor those journeys establishes physical-device locked Keychain behavior,
 cellular-network compatibility or hands-on VoiceOver. No physical iPhone test was
 performed for this batch.
