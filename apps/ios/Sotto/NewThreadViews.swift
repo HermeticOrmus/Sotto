@@ -217,6 +217,8 @@ private struct ComputerFolderPicker: View {
     @State private var loading = false
     @State private var problem: String?
     @State private var requestID = UUID()
+    private enum Field: Hashable { case path, filter }
+    @FocusState private var focusedField: Field?
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
@@ -233,11 +235,13 @@ private struct ComputerFolderPicker: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Full folder path").font(.figtree(13, .footnote)).foregroundStyle(Palette.muted)
                     TextField("Enter a folder path", text: $path, prompt: Text("Enter a folder path").foregroundStyle(Palette.muted)).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .focused($focusedField, equals: .path)
                         .submitLabel(.go).onSubmit { if !path.isEmpty { read(.string(path)) } }.fieldSurface()
                         .accessibilityIdentifier("project-folder-path").accessibilityLabel("Full folder path on \(model.name(hostID))")
                     Button("Go to folder") { read(.string(path)) }.disabled(path.isEmpty).frame(minHeight: 44)
                 }
                 TextField("Filter folders", text: $filter, prompt: Text("Filter folders").foregroundStyle(Palette.muted)).textInputAutocapitalization(.never).autocorrectionDisabled()
+                    .focused($focusedField, equals: .filter).submitLabel(.done).onSubmit { focusedField = nil }
                     .fieldSurface().accessibilityLabel("Filter folders in this directory").accessibilityIdentifier("folder-filter")
                 if loading { ProgressView("Reading folders…").frame(maxWidth: .infinity) }
                 if let problem { Text(problem).foregroundStyle(Palette.warning) }
@@ -271,7 +275,7 @@ private struct ComputerFolderPicker: View {
                 .accessibilityIdentifier("use-project-folder").padding(.horizontal, 22).padding(.vertical, 12).background(Palette.canvas)
         }
     }
-    private func read(_ path: JSONValue?) { Task { await load(path) } }
+    private func read(_ path: JSONValue?) { focusedField = nil; Task { await load(path) } }
     private func load(_ target: JSONValue?) async {
         let current = UUID(); requestID = current; loading = true; problem = nil
         defer { if requestID == current { loading = false } }

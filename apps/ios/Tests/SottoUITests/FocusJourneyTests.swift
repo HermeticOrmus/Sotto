@@ -137,10 +137,14 @@ import XCTest
         XCTAssertTrue(filter.waitForExistence(timeout: 5))
         capture("new-project-folders-light")
         filter.tap(); filter.typeText("New")
+        capture("new-project-filter-keyboard")
+        filter.typeText("\n")
+        let keyboardDismissed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: app.keyboards.firstMatch)
+        XCTAssertEqual(XCTWaiter.wait(for: [keyboardDismissed], timeout: 5), .completed)
         let folder = app.buttons["folder-New project"]
         reveal(folder); XCTAssertTrue(folder.isHittable)
         XCTAssertFalse(app.buttons["folder-Panel tools"].exists)
-        capture("new-project-filter-keyboard")
+        capture("new-project-filtered-folders")
         folder.tap()
         let use = app.buttons["use-project-folder"]
         XCTAssertTrue(use.waitForExistence(timeout: 5)); XCTAssertTrue(use.isEnabled)
