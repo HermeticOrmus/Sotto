@@ -49,7 +49,7 @@ const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0
 
 const shellName = (path: string): string => basename(path).replace(/\.exe$/iu, '')
 const posixQuote = (token: string): string => `'${token.replace(/'/gu, `'\\''`)}'`
-const powerShellQuote = (token: string): string => `'${token.replace(/'/gu, "''")}'`
+const powerShellQuote = (token: string): string => `'${token.replace(/['\u2018-\u201b]/gu, quote => quote + quote)}'`
 
 /**
  * Terminals of Terminal mode: each belongs to a project folder (or a worktree Sotto made for it) and runs either a

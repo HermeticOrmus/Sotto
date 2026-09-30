@@ -163,7 +163,7 @@ export function isReclaimable(thread: Pick<AgentThread, 'worktree'>): boolean {
   return worktree?.mode === 'independent' && worktree.status === 'ready' && Boolean(worktree.path) && !worktree.reused && !worktree.reclaimedAt
 }
 
-/** The one question before a worktree folder goes: what is in it, and that the branch stays (ADR-0019). */
+/** The one question before a worktree folder goes: what is in it, and that the branch stays (ADR-0041). */
 export function ReclaimWorktreeDialog({ facts, dirty, title, onConfirm, onCancel, fallbackFocusRef }: {
   readonly facts: Pick<WorkingCopyFacts, 'branch'>
   readonly dirty: boolean
@@ -182,7 +182,7 @@ export function ReclaimWorktreeDialog({ facts, dirty, title, onConfirm, onCancel
 }
 
 /**
- * Settle a thread, then ask whether its own worktree should go with it (ADR-0019). The Settle press
+ * Settle a thread, then ask whether its own worktree should go with it (ADR-0041). The Settle press
  * settles at once, as it always has; the question is a separate one, answered by Keep folder or Escape.
  * With the on-settle rule turned on, a clean folder goes without the question and a dirty one still asks.
  */
