@@ -66,7 +66,7 @@ export interface AgentRuntimeOptions {
   gitStatus?: { fetchIntervalMs: () => number; foreground?: () => boolean
     /** A scripted `gh` for a journey in the running app; development only. */
     ghStandIn?: { executable: string; args: readonly string[] } }
-  /** What the worktree cleanup (ADR-0019) may reach beyond the workspace: GitHub for the merged rule and Auto-settle
+  /** What the worktree cleanup (ADR-0041) may reach beyond the workspace: GitHub for the merged rule and Auto-settle
    * merged threads, and a log of stable event names. Without `pullRequestMerged` neither fires; the other rules read only the repository. */
   worktreeCleanup?: Pick<WorktreeCleanupDependencies, 'pullRequestMerged' | 'log'>
 }
@@ -144,7 +144,7 @@ export async function createAgentRuntime(options: AgentRuntimeOptions) {
     writeThreadTitle: threadTitleWriter(shortTextWriter, options.writingSettings),
     reasoner,
   })
-  // Reclaims worktrees only under the rules the user turned on (ADR-0019); every rule starts off. The desktop's
+  // Reclaims worktrees only under the rules the user turned on (ADR-0041); every rule starts off. The desktop's
   // local host and a headless host both own worktrees, so both get it. Its owner starts it once the owner's own
   // checks are wired (the desktop's open terminals), and close drains it before anything it asks is closed.
   // Auto-settle merged threads rides the same sweep: it asks GitHub the way the merged rule does, on the same hour.
