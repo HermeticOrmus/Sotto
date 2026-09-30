@@ -76,10 +76,10 @@ async function createThread(page: Page, project: string, title: string): Promise
   await page.keyboard.type(project)
   await page.keyboard.press('ArrowDown')
   await page.keyboard.press('Enter')
-  await dialog.locator('summary').click()
-  await dialog.getByRole('textbox', { name: 'Thread name' }).fill(title)
-  await dialog.getByRole('button', { name: 'Create thread', exact: true }).click()
   await expect(dialog).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: 'New thread', exact: true })).toBeVisible()
+  await expect.poll(async () => (await activeThread(page))?.title).toBe('New thread')
+  await command(page, { type: 'rename-thread', title })
   await expect(page.getByRole('heading', { name: title, exact: true })).toBeVisible()
   await expect.poll(async () => (await activeThread(page))?.title).toBe(title)
 }

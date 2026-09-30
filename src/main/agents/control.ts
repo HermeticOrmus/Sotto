@@ -692,6 +692,7 @@ export class AgentControl {
       return bytes
     } }
   }
+  membershipStatus(): AgentState['membership']['status'] { return this.state.membership.status }
   /** Configuration alone. get() copies every thread's history, which is costly on every provider event. */
   configuration(): AgentConfiguration {
     return structuredClone(this.state.configuration)
@@ -2050,6 +2051,7 @@ export class AgentControl {
         const path = resolve(target)
         const existing = await stat(path).catch((error: NodeJS.ErrnoException) => { if (error.code !== 'ENOENT') throw error; return null })
         if (existing && (!existing.isDirectory() || !command.useExisting)) throw new Error('That folder already exists. Select “Use existing folder” to attach it without overwriting its contents.')
+        if (command.useExisting && !existing) throw new Error('That folder no longer exists. Nothing was added. Choose another folder.')
         const folderKey = (value: string): string => process.platform === 'win32' ? resolve(value).toLowerCase() : resolve(value)
         const known = command.useExisting ? this.state.host.projects.find(project => folderKey(project.path) === folderKey(path) && (!project.providerId || project.providerId === provider)) : undefined
         if (known) {
