@@ -90,6 +90,7 @@ describe('warm helper invocation', () => {
     const script = Buffer.from(invocation.args[5] ?? '', 'base64').toString('utf16le')
     expect(script).toContain('SendInput')
     expect(script).toContain('ReadLine')
+    expect(script).toContain("WriteLine('ready')")
     expect(script).toContain("WriteLine('ok')")
     expect(script).toContain("WriteLine('fail')")
     expect(script).not.toContain('System.Windows.Forms')
@@ -97,6 +98,27 @@ describe('warm helper invocation', () => {
 })
 
 describe('createWarmPasteAdapter', () => {
+  it.each(['exit', 'error', 'timeout'] as const)('falls back when the helper fails before ready: %s', async failure => {
+    vi.useFakeTimers()
+    try {
+      const helper = new FakeHelperProcess()
+      const fallback = fallbackAdapter()
+      const adapter = createWarmPasteAdapter({ spawnHelper: () => helper, fallback })
+      const result = adapter.run(buildPasteInvocation())
+      expect(helper.writes).toEqual([])
+      if (failure === 'exit') helper.exit(1)
+      else if (failure === 'error') helper.fail(new Error('Add-Type failed'))
+      else await vi.advanceTimersByTimeAsync(5_000)
+      await expect(result).resolves.toBe(true)
+      expect(fallback.calls).toBe(1)
+      helper.emit('ready\nok\n')
+      expect(helper.writes).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+
   it('spawns the helper once and resolves pastes over its stdin protocol', async () => {
     const processes: FakeHelperProcess[] = []
     const spawnHelper = vi.fn(() => {
@@ -108,6 +130,7 @@ describe('createWarmPasteAdapter', () => {
     const adapter = createWarmPasteAdapter({ spawnHelper, fallback })
 
     const first = adapter.run(buildPasteInvocation())
+    processes[0]?.emit('ready\n')
     processes[0]?.emit('ok\r\n')
     await expect(first).resolves.toBe(true)
 
@@ -134,6 +157,7 @@ describe('createWarmPasteAdapter', () => {
     })
 
     const result = adapter.run(buildPasteInvocation())
+    processes[0]?.emit('ready\n')
     processes[0]?.emit('fail\n')
 
     await expect(result).resolves.toBe(false)
@@ -162,12 +186,14 @@ describe('createWarmPasteAdapter', () => {
     const adapter = createWarmPasteAdapter({ spawnHelper, fallback: fallbackAdapter() })
 
     const first = adapter.run(buildPasteInvocation())
+    processes[0]?.emit('ready\n')
     processes[0]?.emit('ok\n')
     await expect(first).resolves.toBe(true)
 
     processes[0]?.exit(1)
 
     const second = adapter.run(buildPasteInvocation())
+    processes[1]?.emit('ready\n')
     processes[1]?.emit('ok\n')
     await expect(second).resolves.toBe(true)
     expect(spawnHelper).toHaveBeenCalledTimes(2)
@@ -186,6 +212,7 @@ describe('createWarmPasteAdapter', () => {
     })
 
     const result = adapter.run(buildPasteInvocation())
+    processes[0]?.emit('ready\n')
     if (failure === 'exit') processes[0]?.exit(1)
     else processes[0]?.fail(new Error('helper lost after paste'))
 
@@ -213,7 +240,9 @@ describe('createWarmPasteAdapter', () => {
     })
 
     const result = adapter.run(buildPasteInvocation())
+    processes[0]?.emit('ready\n')
     timers.at(-1)?.()
+    processes[0]?.emit('ready\n')
     processes[0]?.emit('ok\n')
 
     await expect(result).resolves.toBe(false)
@@ -228,6 +257,7 @@ describe('createWarmPasteAdapter', () => {
     const adapter = createWarmPasteAdapter({ spawnHelper: () => helper, fallback })
 
     const result = adapter.run(buildPasteInvocation())
+    helper.emit('ready\n')
     helper.emit('ok\n')
 
     await expect(result).resolves.toBe(true)
@@ -241,7 +271,9 @@ describe('createWarmPasteAdapter', () => {
     const fallback = fallbackAdapter()
     const adapter = createWarmPasteAdapter({ spawnHelper: () => helper, fallback })
 
-    await expect(adapter.run(buildPasteInvocation())).resolves.toBe(false)
+    const result = adapter.run(buildPasteInvocation())
+    helper.emit('ready\n')
+    await expect(result).resolves.toBe(false)
     expect(helper.killed).toBe(true)
     expect(fallback.calls).toBe(0)
   })

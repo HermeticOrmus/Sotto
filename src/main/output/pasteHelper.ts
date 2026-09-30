@@ -28,7 +28,7 @@ export interface WarmPasteAdapter extends PasteProcessAdapter {
 const HELPER_RESPONSE_TIMEOUT_MS = 5_000
 
 interface PendingPaste {
-  resolve(successful: boolean): void
+  resolve(result: boolean | 'unavailable'): void
   timer: unknown
 }
 
@@ -37,6 +37,7 @@ interface HelperSession {
   readonly pending: PendingPaste[]
   buffer: string
   dead: boolean
+  ready: boolean
 }
 
 export function createWarmPasteAdapter(options: WarmPasteAdapterOptions): WarmPasteAdapter {
@@ -53,7 +54,7 @@ export function createWarmPasteAdapter(options: WarmPasteAdapterOptions): WarmPa
     const pending = session.pending.splice(0)
     for (const request of pending) {
       clearTimer(request.timer)
-      request.resolve(false)
+      request.resolve(session.ready ? false : 'unavailable')
     }
   }
 
@@ -79,7 +80,7 @@ export function createWarmPasteAdapter(options: WarmPasteAdapterOptions): WarmPa
     } catch {
       return null
     }
-    const created: HelperSession = { process, pending: [], buffer: '', dead: false }
+    const created: HelperSession = { process, pending: [], buffer: '', dead: false, ready: false }
     session = created
 
     try {
@@ -92,7 +93,18 @@ export function createWarmPasteAdapter(options: WarmPasteAdapterOptions): WarmPa
         while (newlineIndex >= 0) {
           const line = created.buffer.slice(0, newlineIndex).trim()
           created.buffer = created.buffer.slice(newlineIndex + 1)
-          const request = created.pending.shift()
+          if (line === 'ready') {
+            if (!created.ready) {
+              created.ready = true
+              for (let index = 0, count = created.pending.length; index < count; index += 1) {
+                if (created.dead) break
+                dispatchPaste(created)
+              }
+            }
+            newlineIndex = created.buffer.indexOf('\n')
+            continue
+          }
+          const request = created.ready ? created.pending.shift() : undefined
           if (request !== undefined) {
             clearTimer(request.timer)
             request.resolve(line === 'ok')
@@ -111,22 +123,26 @@ export function createWarmPasteAdapter(options: WarmPasteAdapterOptions): WarmPa
     return created
   }
 
-  const pasteViaHelper = (target: HelperSession): Promise<boolean> => {
+  const dispatchPaste = (target: HelperSession): void => {
+    try {
+      // A false return means backpressure, not that the command was rejected.
+      target.process.stdin!.write('paste\n')
+    } catch {
+      destroySession(target)
+    }
+  }
+
+  const pasteViaHelper = (target: HelperSession): Promise<boolean | 'unavailable'> => {
     return new Promise((resolve) => {
       const request: PendingPaste = {
         resolve,
         timer: setTimer(() => {
-          // Ctrl+V precedes acknowledgement. Timeout leaves its outcome unknown.
+          // Before ready no command is sent; after ready a paste may have happened.
           destroySession(target)
         }, responseTimeoutMs),
       }
       target.pending.push(request)
-      try {
-        // A false return means backpressure, not that the command was rejected.
-        target.process.stdin!.write('paste\n')
-      } catch {
-        destroySession(target)
-      }
+      if (target.ready) dispatchPaste(target)
     })
   }
 
@@ -139,7 +155,8 @@ export function createWarmPasteAdapter(options: WarmPasteAdapterOptions): WarmPa
       const target = ensureSession()
       if (target === null) return options.fallback.run(invocation)
 
-      return pasteViaHelper(target)
+      const result = await pasteViaHelper(target)
+      return result === 'unavailable' ? options.fallback.run(invocation) : result
     },
 
     dispose(): void {
