@@ -337,6 +337,14 @@ describe('the stacked Git action, the way T3 runs it', () => {
     expect(git(fork, 'log', '-1', '--pretty=%s', 'main')).toBe('Second')
     expect(git(f.remote, 'log', '-1', '--pretty=%s', 'main')).toBe('First')
   }, 40000)
+  it.each(['remote.pushDefault', 'branch.main.pushRemote'])('pushes an unchanged fetch upstream to the fork chosen by %s', async setting => {
+    const f = await fixture()
+    const fork = join(f.root, 'fork.git'); git(f.root, 'init', '--bare', '-q', '-b', 'main', fork)
+    git(f.repo, 'remote', 'add', 'fork', fork); git(f.repo, 'config', setting, 'fork')
+    const result = await f.actions.runStackedAction({ threadId: 't', cwd: f.repo, action: 'push', allowDefaultBranch: true })
+    expect(result.push.status).toBe('pushed')
+    expect(git(fork, 'rev-parse', 'refs/heads/main')).toBe(git(f.repo, 'rev-parse', 'HEAD'))
+  })
   it('runs one action per folder at a time', async () => {
     const f = await fixture()
     await writeFile(join(f.repo, 'work.txt'), 'second\n')

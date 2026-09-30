@@ -266,12 +266,12 @@ export class GitActions {
     const status = await this.dependencies.status.read(cwd, { remote: false })
     const remote = await this.pushRemote(cwd, branch)
     const publish = branch.replace(/^[^/]+\//u, match => (remote && match === `${remote}/` ? '' : match))
-    if (status.ahead === 0 && status.behind === 0 && status.upstream) return { status: 'skipped_up_to_date' }
     if (!remote) throw new GitActionRefusal('Cannot push because no git remote is configured for this repository.')
     const upstream = status.upstream ? parseUpstream(status.upstream) : null
     try {
       if (!upstream) {
-        if (status.ahead === 0 && await this.git(cwd, ['rev-parse', '--verify', '-q', `refs/remotes/${remote}/${publish}`]).then(() => true, () => false)) return { status: 'skipped_up_to_date' }
+        const destination = (await this.git(cwd, ['rev-parse', '--verify', '-q', `refs/remotes/${remote}/${publish}`]).catch(() => '')).trim()
+        if (destination && destination === (await this.git(cwd, ['rev-parse', 'HEAD'])).trim()) return { status: 'skipped_up_to_date' }
         await this.git(cwd, ['push', '-u', remote, `HEAD:refs/heads/${publish}`], { timeoutMs: PUSH_TIMEOUT_MS })
         return { status: 'pushed', branch: publish, upstream: `${remote}/${publish}`, setUpstream: true }
       }
@@ -291,6 +291,7 @@ export class GitActions {
         await this.git(cwd, ['push', '-u', remote, `HEAD:refs/heads/${publish}`], { timeoutMs: PUSH_TIMEOUT_MS })
         return { status: 'pushed', branch: publish, upstream: `${remote}/${publish}`, setUpstream: true }
       }
+      if (status.ahead === 0 && status.behind === 0) return { status: 'skipped_up_to_date' }
       await this.git(cwd, ['push', upstream.remote, `HEAD:refs/heads/${upstream.branch}`], { timeoutMs: PUSH_TIMEOUT_MS })
       return { status: 'pushed', branch: upstream.branch, upstream: status.upstream! }
     } catch (error) {
