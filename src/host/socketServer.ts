@@ -218,6 +218,7 @@ export async function startSocketServer(options: SocketServerOptions) {
     }
     const input = request.command
     const refusal = remoteCommandRefusal(input, { mayAnswer: options.mayAnswer?.(peer.client) ?? false, askingProviderModes: askingProviderModes(input),
+      draftRequestId: input.type === 'send' ? service.shell().draftRequestId : undefined,
       clientUpdates: options.clientUpdates === true })
     if (refusal) throw new Refusal(refusal)
     const recorded = !UNRECEIPTED.has(input.type)

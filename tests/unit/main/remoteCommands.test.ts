@@ -52,6 +52,10 @@ describe('remote command allow-list', () => {
     expect(refuse({ type: 'interrupt', threadId: 'thread', extra: true } as unknown as AgentCommand, true)).toBe('forbidden')
     expect(refuse({ type: 'configure', patch: { membershipEndpoint: 'https://untrusted.example' } } as AgentCommand, true)).toBe('forbidden')
     expect(refuse({ type: 'interrupt', threadId: 'thread' })).toBeNull()
+    expect(remoteCommandRefusal({ type: 'send' }, { mayAnswer: false, draftRequestId: 'request' })).toBe('forbidden')
+    expect(remoteCommandRefusal({ type: 'send' }, { mayAnswer: true, draftRequestId: 'request' })).toBeNull()
+    expect(remoteCommandRefusal({ type: 'send' }, { mayAnswer: false, draftRequestId: null })).toBeNull()
+    expect(refuse({ type: 'save-thread-draft', threadId: 'thread', draftId: 'draft', text: 'Blue' })).toBeNull()
   })
   it('asks for the answer policy before a permission setting or discarding uncommitted work', () => {
     const gated: AgentCommand[] = [
@@ -64,6 +68,7 @@ describe('remote command allow-list', () => {
       { type: 'reclaim-thread-worktree', threadId: 'thread', withUncommittedChanges: true },
       { type: 'restore-thread-branch', threadId: 'thread', withUncommittedChanges: true },
       { type: 'answer', threadId: 'thread', requestId: 'request', answer: 'Allow', approved: true },
+      { type: 'save-thread-draft', threadId: 'thread', draftId: 'draft', text: 'Blue', requestId: 'request' },
     ]
     for (const command of gated) {
       expect(refuse(command, false, ['ask']), command.type).toBe('forbidden')

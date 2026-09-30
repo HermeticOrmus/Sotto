@@ -2030,7 +2030,7 @@ export class AgentControl {
         this.say(`Recovered draft ready in ${target.title}. Review it before sending.`)
         return
       }
-      case 'send': await this.sendDraft(turn, manualRetryId, selectionRevision); return
+      case 'send': await this.sendDraft(turn, manualRetryId, selectionRevision, client); return
       case 'manual-send': await this.sendManual(command.threadId, command.text, turn, manualRetryId, command.attachments, command.draftId, command.skills, command.files); return
       case 'steer-followup': await this.steerFollowup(command, turn); return
       case 'steer': await this.steer(command, turn); return
@@ -2608,7 +2608,7 @@ export class AgentControl {
     this.say(`Sent to ${thread.title}.`)
     this.observe()
   }
-  private async sendDraft(turn?: ActiveTurn, retryId?: string, selectionRevision = this.selectionRevision): Promise<void> {
+  private async sendDraft(turn?: ActiveTurn, retryId?: string, selectionRevision = this.selectionRevision, client = this.localClient): Promise<void> {
     const pendingId = retryId ?? this.outbox.find(item => item.threadId === this.state.draftThreadId)?.id
     if (pendingId) {
       this.canAct()
@@ -2638,7 +2638,7 @@ export class AgentControl {
       if (attachments.length) throw new Error('Images cannot answer a pending question. Remove the images and answer it explicitly.')
       const requestId = this.state.draftRequestId
       if (!thread.requests.some(request => request.id === requestId && request.kind === 'question')) throw new Error('This question is no longer pending. Your answer is saved; review it before starting a new prompt.')
-      await this.execute({ type: 'answer', threadId: thread.id, requestId, answer: text }, turn, undefined, selectionRevision)
+      await this.execute({ type: 'answer', threadId: thread.id, requestId, answer: text }, turn, undefined, selectionRevision, client)
       return
     }
     if (thread.requests.length) throw new Error('Answer the pending question or permission explicitly before sending a new prompt.')

@@ -83,9 +83,11 @@ export const REMOTE_CONFIGURATION_FIELDS: readonly (keyof AgentConfiguration)[] 
  * the provider modes `askingProviderModes` names for the thread's model, by what each allows rather than by
  * where it sits in the list, because the list is only the modes the provider happens to report.
  */
-export function remoteCommandNeedsAnswerPolicy(command: AgentCommand, askingProviderModes: readonly string[]): boolean {
+export function remoteCommandNeedsAnswerPolicy(command: AgentCommand, askingProviderModes: readonly string[], draftRequestId?: string | null): boolean {
   switch (command.type) {
     case 'answer': return true
+    case 'send': return draftRequestId != null
+    case 'save-thread-draft': return command.requestId != null
     case 'create-thread': case 'configure-thread':
       return (command.runtimeMode !== undefined && command.runtimeMode !== 'approval-required')
         || (command.providerMode !== undefined && !askingProviderModes.includes(command.providerMode))
@@ -96,6 +98,7 @@ export function remoteCommandNeedsAnswerPolicy(command: AgentCommand, askingProv
 
 /** Why a paired client may not send this command, or null when it may. */
 export function remoteCommandRefusal(command: AgentCommand, context: { readonly mayAnswer: boolean; readonly askingProviderModes?: readonly string[] | undefined
+  readonly draftRequestId?: string | null | undefined
   /** Whether this listener offers `client-updates`: the headless host does, the desktop's phone listener does not. */
   readonly clientUpdates?: boolean | undefined }): 'forbidden' | null {
   const fields = REMOTE_COMMANDS[command.type] as readonly string[] | undefined
@@ -103,6 +106,6 @@ export function remoteCommandRefusal(command: AgentCommand, context: { readonly 
   if ((command.type === 'queue-client-updates' || command.type === 'cancel-client-updates') && context.clientUpdates !== true) return 'forbidden'
   if (Object.keys(command).some(key => key !== 'type' && !fields.includes(key))) return 'forbidden'
   if (command.type === 'configure' && Object.keys(command.patch).some(key => !(REMOTE_CONFIGURATION_FIELDS as readonly string[]).includes(key))) return 'forbidden'
-  if (!context.mayAnswer && remoteCommandNeedsAnswerPolicy(command, context.askingProviderModes ?? [])) return 'forbidden'
+  if (!context.mayAnswer && remoteCommandNeedsAnswerPolicy(command, context.askingProviderModes ?? [], context.draftRequestId)) return 'forbidden'
   return null
 }
