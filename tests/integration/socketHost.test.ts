@@ -10,7 +10,7 @@ import { PairedClients, SESSION_LIFETIME_MS } from '../../src/main/agents/pairin
 import { desktopWindowClient, type HostService } from '../../src/main/agents/hostService'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { startHeadlessHost } from '../../src/host'
-import { SocketHostService } from '../../src/main/agents/socketHostService'
+import { HostConnectionError, SocketHostService } from '../../src/main/agents/socketHostService'
 import { E2EAgentHost, e2eAgentReasoner } from '../../src/main/e2e/agentEffects'
 import { execFileSync } from 'node:child_process'
 import { SCREENSHOT_NOT_ITS_TYPE, type AgentCommand, type AgentThreadDetail, type AgentThreadDetailDelta, type AgentThreadDetailUpdate } from '../../src/shared/agents'
@@ -30,9 +30,9 @@ beforeEach(async () => {
   url = 'http://127.0.0.1:' + host.descriptor!.port; clients = []
 })
 afterEach(async () => { await Promise.all(clients.map(client => client.close())); await host?.close(); if (root && dirname(root) === tmpdir() && root.includes('sotto-socket-')) await rm(root, { recursive: true, force: true }) })
-async function pair(name = 'Socket test') {
+async function pair(name = 'Socket test', onPushError?: (message: string) => void) {
   const result = await SocketHostService.pair(url, host.pairing.issuePairingCode().code, name)
-  const client = new SocketHostService({ url, token: result.token, expectedHostId: result.hostId }); clients.push(client)
+  const client = new SocketHostService({ url, token: result.token, expectedHostId: result.hostId, ...(onPushError ? { onPushError } : {}) }); clients.push(client)
   await client.connect(); return { client, result }
 }
 describe('authenticated host socket', () => {
@@ -63,6 +63,17 @@ describe('authenticated host socket', () => {
     expect(host.service.shell().configuration.enabled).toBe(false)
     const other = await pair('Other')
     expect(await other.client.receipt(commandId)).toEqual({ status: 'unknown' })
+  })
+  it.each(['too_large', 'disconnected'] as const)('keeps an acknowledged rename successful when detail refresh fails with %s', async code => {
+    const report = vi.fn()
+    const { client } = await pair('Refresh failure', report)
+    await client.command({ type: 'connect', provider: 'codex' })
+    const threadId = client.shell().host.threads.find(thread => thread.title === 'Workshop')!.id
+    vi.spyOn(client, 'readThreadDetail').mockRejectedValueOnce(new HostConnectionError('Fixture detail failure', code))
+    const result = await client.command({ type: 'rename-thread', threadId, title: 'Renamed once' })
+    expect(result.host.threads.find(thread => thread.id === threadId)?.title).toBe('Renamed once')
+    expect(host.service.shell().host.threads.find(thread => thread.id === threadId)?.title).toBe('Renamed once')
+    expect(report).toHaveBeenCalledOnce()
   })
   it('refuses grant-equivalent permission changes and host-local administration without authority', async () => {
     const { client } = await pair()
