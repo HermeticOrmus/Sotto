@@ -1,56 +1,56 @@
 # Thread worktree removal, restore and setup recovery
 
-Package pkg-03: #485 (S-003), #506 (S-026), #507 (S-027). Verified on Windows with real Git and the built Electron app using synthetic projects and the fixture provider. No personal profile or live provider was used.
+Package pkg-03: #485 (S-003), #506 (S-026), #507 (S-027). Windows verification uses real Git, synthetic projects, a fixture provider and the built Electron app. No personal profile or live provider was used. Actual macOS execution remains unverified.
 
-## Removal question
+## Accepted removal question
 
-The owner's decision is prototype variant B: list ignored items other than installed dependencies and require **Delete these N ignored items with the folder** before enabling removal. The named `docs/prototypes/reclaim-and-mic-test-prototype.html` is absent from this checkout, its Git history and GitHub main (the contents API returns 404). The issue's explicit behavior and copy supplied the reference; this note does not claim a visual comparison with the missing file.
+The owner chose variant B, **List and tick**, in `D:/Talk to Text Application/docs/prototypes/reclaim-and-mic-test-prototype.html`. The file was read and rendered directly from the main checkout, read-only; it was not copied into this branch. The implemented question was visually compared with B.
 
-The Electron worktree specification passed all five journeys. The affected removal journey was repeated after the review fixes. It checks:
+The Electron journeys check:
 
-- A clean removal question keeps the branch, and Escape keeps the folder.
-- An ignored `.env` appears, installed dependencies do not, and the red Remove button is disabled until the checkbox is checked. Space operates the checkbox.
-- Adding another ignored file while the question is open refuses removal and keeps both files. Closing and reopening reads the new list.
-- A nested repository is flagged with `?? unsaved.txt`; acknowledgement still leaves removal disabled, and Escape keeps its work.
-- The user's confirmation can remove ordinary ignored files and uncommitted changes. The branch stays; the next send restores the committed checkout.
-- Settle uses the same question, and Keep folder preserves the checkout.
+- A clean question says the branch stays and sending restores the folder. Escape keeps it.
+- Ignored items appear as relative paths; installed dependencies do not. Each ignored folder has one size/file-count row. The single-item label uses **Delete this 1 ignored item with the folder**.
+- The callout says **These files are ignored by Git and are deleted with the folder:**. The button says **Remove with these files** and requires the separate tick.
+- Adding another ignored path while the question is open refuses removal. Reopening reads the new list.
+- Nested work is flagged with a plain count of uncommitted changes, without raw Git status. The tick adds **, including the nested worktree’s uncommitted work**. The checked tick uses the danger theme role. Escape preserves the nested files; later acknowledged removal deletes them with the folder.
+- Dirty removal keeps the branch; the next send restores the committed checkout. Settle asks the same question, and Keep folder preserves it.
 
-Checked at 1600x1000, 1280x800 and 820x560, in light and dark and with reduced motion on and off. The minimum-size question keeps its heading and actions visible while its description scrolls. New colors use the existing theme tokens; the checkbox accent follows the selected theme.
+Checked at 1600x1000, 1280x800 and 820x560, light and dark, with reduced motion on and off. Heading, tick and actions remain visible at the minimum. Recaptured and visually inspected:
 
-Retained captures in `artifacts/reclaim-worktrees/`:
+- `artifacts/reclaim-worktrees/ignored-items-1600x1000-dark-no-preference.png`
+- `artifacts/reclaim-worktrees/ignored-items-1280x800-light-no-preference.png`
+- `artifacts/reclaim-worktrees/ignored-items-820x560-dark-reduce.png`
+- `artifacts/reclaim-worktrees/ignored-items-820x560-light-reduce.png`
+- `artifacts/reclaim-worktrees/nested-items-1600x1000-light.png`
+- `artifacts/reclaim-worktrees/nested-items-820x560-dark.png`
 
-- `ignored-items-1600x1000-dark-no-preference.png`
-- `ignored-items-1280x800-light-no-preference.png`
-- `ignored-items-820x560-dark-reduce.png`
-- `ignored-items-820x560-light-reduce.png`
-- `nested-items-1600x1000-light.png`
-- `nested-items-820x560-dark.png`
+These six captures are deliberate evidence for the changed question. Incidental captures were restored; design baselines were not regenerated.
 
-These are deliberate evidence for the changed question. Incidental changes to existing captures were restored; design baselines were not regenerated.
+## Main and transport regressions
 
-## Main-process regressions
+Removal compares the confirmed ignored folder rows and nested-change counts with disk. New cache files inside an acknowledged ignored folder are accepted. New ignored or untracked paths injected during the final filesystem walk are refused by the Git re-list immediately before removal. Ignored and untracked nested repositories/worktrees require the tick; an acknowledged nested worktree is deleted. A bare repository inside dependency content also requires acknowledgement. Outside links still block removal.
 
-- Removal requires the exact displayed ignored set, including an initially empty list. Automatic cleanup refuses nondependency ignored files. Ignored and untracked nested repositories and worktrees are discovered and cannot be reclaimed even with confirmation.
-- Restoring a missing thread checkout removes only its own Git registration. Another missing personal checkout keeps its registration and branch protection.
-- Worktree add has a five-minute deadline; ordinary Git commands keep their existing deadline. Timeout cleanup acts only on the reserved path in the original repository still locked as initializing, under the registry lane.
-- Complete and partial initialization can recover and retry on the same branch. A missing index and an unfinished index lock are covered. Added files and edits to tracked files are preserved rather than forced away.
-- A real 28,000-entry branch tree exercises recovery beyond the Git output limit. Only files actually present are queried, in literal batches; the fixture constructs the tree with `mktree` rather than checking out thousands of files.
-- Committed links inside the checkout can recover. The Windows regression uses Git's normal file representation with `core.symlinks=false`; the same test uses a real symlink on other platforms. Actual macOS execution remains unverified.
+Clean initialized submodules, including recursive submodules, are classified against their containing index and can be reclaimed automatically. A dirty submodule hidden by user Git settings still produces a truthful warning and can be removed only with explicit acknowledgement. The clean-settle refusal tells the user to choose Remove worktree, without referring to an unopened question.
 
-The stronger partial-index and local-edit regressions failed against the resumed timeout draft and passed after correction. The large-tree regression passes after changing the tree read to bounded batches. The regression subset also fails against main's original implementation for all three entries.
+Coordinator and authenticated socket tests prove that the preview is returned only to the requesting command: it is not saved, broadcast or cached, and another paired client never receives it. Router tests cover older hosts returning no preview or refusing the command with a plain update message.
+
+Restoring a missing checkout removes only that checkout’s registration; other missing worktrees keep theirs. Setup retains its five-minute add deadline and ordinary commands keep thirty seconds. The writing-grandchild regression fails with single-process termination and passes with whole-tree termination. Cleanup waits for exit and successful tree termination; a failed taskkill returns a refusal and keeps the folder.
+
+Existing recovery regressions cover complete/partial initialization, missing and unfinished indexes, local edits, a 28,000-entry branch tree and committed internal links. The Windows internal-link test uses Git’s file representation with `core.symlinks=false`; its POSIX branch uses real symlinks.
 
 ## Review and gates
 
-The standards and spec reviews were separate, read-only `gpt-6.1-sol` reviews at high reasoning. They found the unthemed checkbox, nonignored nested repositories, full-tree output overflow and internal committed links. Each finding was fixed and checked again. The parent also reviewed the integrated diff against AGENTS.md and the three entries.
+Separate read-only `gpt-6.1-sol` reviews at high reasoning checked Standards and Spec. They found remote preview reply loss/cache propagation, final-list timing, recursive submodules, stop-failure handling and inconsistent submodule visibility. All findings were fixed and rechecked. The parent inspected the integrated diff and rendered captures.
 
-Final gates before opening the pull request:
+Final committed source: `cc52060b`.
 
 - `npm run typecheck`: passed.
 - `npm run lint`: passed.
-- `npm test -- --maxWorkers=2`: 483 files passed, 39 skipped; 6,400 tests passed, 153 skipped, no failures.
-- `npm run notices:verify`: passed, 174 components verified.
-- `npm run build`: passed. `npx playwright test tests/e2e/thread-worktrees.spec.ts --workers=1`: all five passed. The removal journey passed again after the final layout change.
+- `npm test -- --maxWorkers=2`: 6,416 passed, 153 skipped; 483 files passed, 39 skipped. No failures.
+- `npm run notices:verify`: passed, 174 components.
+- `npm run build` and `npx playwright test tests/e2e/thread-worktrees.spec.ts --workers=1`: all five passed.
+- Final focused worktree/timeout regressions: all 50 passed.
 
-The first full run had two failures: the existing branch-naming poll in `workspace.test.ts` passed alone and then with its full file; the new nonignored nested-repository renderer case ran while its implementation was being updated. Both files passed on the final source, and the fresh complete run above passed without changing any deadline or skipping an assertion.
+`origin/main` at `ff2c8c9e` was merged without conflicts before these final checks.
 
-Reviewer fixture cleanup was rejected by automatic approval review with only **rejected: blocked by policy**. Two review-only folders remain outside the checkout: `%TEMP%/sotto-spec-review-Ejsgn0` and `%TEMP%/sotto-spec-review-tjOzwF`. No bypass or further deletion was attempted.
+The earlier full run overlapped review edits and failed four new cases: prompt refusal after failed taskkill, setup/restore registry coordination, clean recursive submodule removal and a bare repository inside dependency content. Those cases passed on corrected, committed source before the fresh final full run. The initial run also reported an after-test cleanup error for the taskkill fixture. No deadline was shortened and no assertion was skipped to pass the gates.

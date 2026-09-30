@@ -1,6 +1,6 @@
 # A thread follows its worktree's branch
 
-Corrected September 30, 2026 (#507): worktree add has a five-minute deadline. If its own add times out, Sotto removes only the fresh reserved token checkout still locked by Git as initializing. It verifies the repository and path and refuses cleanup when local files or an outside link appeared during setup. The branch is kept, so Retry setup can restore it. Other locked or replaced folders stay protected.
+Corrected September 30, 2026 (#507): worktree add has a five-minute deadline. On timeout Sotto stops the entire Git process tree (`taskkill /pid <pid> /T /F` on Windows, its detached process group on POSIX) and waits for the child to close before cleanup. If the tree cannot be stopped, the folder is kept and setup reports the refusal. Sotto removes only the fresh reserved token checkout still locked by Git as initializing. It verifies the repository and path and refuses cleanup when local files or an outside link appeared during setup. The branch is kept, so Retry setup can restore it. Other locked or replaced folders stay protected.
 
 Note, September 22, 2026: the sentences below that say Sotto "never removes" a checkout and that "settling a thread removes nothing" describe the state before [ADR-0019](0019-a-worktree-has-an-end.md). A thread's own worktree can now be reclaimed on the user's word or under a rule they turned on; the branch stays and the restore path described here puts the folder back on the next send. Everything else in this record stands.
 
