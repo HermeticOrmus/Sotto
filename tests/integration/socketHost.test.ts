@@ -68,7 +68,6 @@ describe('authenticated host socket', () => {
     const { client } = await pair()
     await expect(client.command({ type: 'configure-thread', threadId: 'missing', runtimeMode: 'full-access' })).rejects.toMatchObject({ code: 'forbidden' })
     await expect(client.command({ type: 'create-thread', projectId: 'project', title: 'Bypass', modelId: 'fixture-model', runtimeMode: 'full-access' })).rejects.toMatchObject({ code: 'forbidden' })
-    await expect(client.command({ type: 'configure', patch: { membershipEndpoint: 'https://untrusted.example' } })).rejects.toMatchObject({ code: 'forbidden' })
     await expect(client.command({ type: 'credential', slot: 'reasoning', value: 'not-a-real-key' })).rejects.toMatchObject({ code: 'forbidden' })
     // Devin's Bypass permissions stops Sotto asking at all, and discarding uncommitted work answers a confirmation.
     await expect(client.command({ type: 'create-thread', projectId: 'project', title: 'Bypass', modelId: 'fixture-model', providerMode: 'bypass' })).rejects.toMatchObject({ code: 'forbidden' })
@@ -113,7 +112,6 @@ describe('authenticated host socket', () => {
     await expect(client.command({ type: 'answer', threadId: 'missing', requestId: 'missing', answer: '', approved: true }, { clientId: 'desktop-window', user: 'owner', transport: 'ipc' })).rejects.toMatchObject({ code: 'forbidden' })
   })
 })
-
 
 describe('socket client isolation and reconnect', () => {
   it('carries a thread\'s Git status to a paired client through the shell it already receives', async () => {
@@ -217,7 +215,6 @@ describe('socket client isolation and reconnect', () => {
     } finally { frames.close(); await server.close() }
   })
 })
-
 
 it('negotiates message aliases without breaking legacy event pages or cursors', async () => {
   const rows: import('../../src/shared/threadEvents').StoredThreadEvent[] = [{ seq: 1, threadId: 'synthetic',

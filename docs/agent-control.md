@@ -124,7 +124,7 @@ The upgrade notice identifies the local recovery record. Check the original codi
 
 ## Data and accounts
 
-Coding and reasoning usage belongs to the selected provider account. Sotto membership pays for coordination features and does not include model usage. Sotto never enables overages, buys credits or changes accounts automatically. Native clients retain subscription authentication; Sotto-owned API keys use the operating system's encrypted credential store. A locked vault reports an error without storing plaintext credentials.
+Coding and reasoning usage belongs to the selected provider account. Sotto has no account or subscription. Sotto never enables overages, buys credits or changes accounts automatically. Native clients retain subscription authentication; Sotto-owned API keys use the operating system's encrypted credential store. A locked vault reports an error without storing plaintext credentials.
 
 Sotto stores thread bindings, assignment ownership, counters and dispatch identities locally. Assignment context expires after seven days without activity. **Keep local history** off suppresses supervision and clarification text. An unsent draft is the explicit exception: it remains local until sent or cleared. Recovery evidence follows the same history and expiry policy. Background audio and full native transcripts are not copied into coordinator state.
 
@@ -134,7 +134,7 @@ Coordinator actions append bounded turn records containing timings, acted-on thr
 
 ## Development status
 
-Every build without a configured membership service, installed or unpackaged, runs as private beta with agent actions available; that is not a paid entitlement. Production billing and deployment remain separate work. Native protocol evidence, automated tests and live checks are documented separately; a fixture test does not prove native compatibility or microphone performance.
+Every build allows agent actions through connected provider accounts. Sotto has no membership service or hosted billing. Native protocol evidence, automated tests and live checks are documented separately; a fixture test does not prove native compatibility or microphone performance.
 
 See [native-host removal and current verification](verification/issue-24-closeout.md), [native adapter verification](verification/issues-17-22-23.md), [Claude protocol evidence](research/issue-22-claude-native-verification.md), [Grok protocol evidence](research/2026-09-11-issue-23-grok-acp-verification.md), and [Codex adapter decision](adr/0005-codex-app-server-adapter.md).
 

@@ -70,9 +70,8 @@ describe('agent command IPC authorization', () => {
   })
 
   it.each([
-    ...['reasoning', 'membership', 'grokSpeech'].map(slot => ({ type: 'credential', slot, value: 'fixture' })),
+    ...['reasoning', 'grokSpeech'].map(slot => ({ type: 'credential', slot, value: 'fixture' })),
     { type: 'connect' }, { type: 'disconnect' },
-    { type: 'membership', action: 'refresh' },
     { type: 'voice-state', status: 'idle', error: null },
     { type: 'check-reasoning', provider: 'codex' },
     { type: 'preview-voice' },

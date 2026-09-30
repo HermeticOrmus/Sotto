@@ -80,10 +80,7 @@ async function fixture(host = new E2EAgentHost(), options: { coordinatorEnabled?
   const reasoner = new ConfiguredAgentReasoner(() => control.get().configuration, credentials)
   const create = async (): Promise<void> => {
     control = new AgentControl({ schedule: immediatePublishScheduler, directory: root, host, credentials, reasoner, ...options,
-      membership: {
-        status: async () => ({ status: 'beta', label: 'Fixture beta', expiresAt: null }),
-        action: async () => ({ status: 'beta', label: 'Fixture beta', expiresAt: null }),
-      } })
+       })
     controls.push(control)
     await control.start()
     if (!control.get().host.connected) await control.command({ type: 'connect' })

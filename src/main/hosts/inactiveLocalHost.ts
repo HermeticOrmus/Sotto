@@ -13,7 +13,6 @@ export function emptyDesktopState(hostId?: string): AgentState {
     draftRequestId: null, pendingRequest: '', globalLaneBusy: false, notice: '', error: null,
     speech: { id: 0, text: '' }, voice: { status: 'off', error: null, action: 'none', revision: 0 },
     credentials: { reasoning: false, grokSpeech: false, secure: false }, reasoningAccounts: [],
-    membership: { status: 'free', label: 'Local host off', expiresAt: null },
   }
 }
 
@@ -58,7 +57,6 @@ export async function inactiveLocalHost(directory: string): Promise<Awaited<Retu
     close: async () => undefined,
   } as unknown as Awaited<ReturnType<typeof createAgentRuntime>>
 }
-
 
 /** Refuse an explicit privacy change before saving settings if its local cleanup cannot run. */
 export function requireLocalHistoryCleanup(localHostRunning: boolean, historyEnabled: boolean, requestedHistoryEnabled: boolean | undefined): void {

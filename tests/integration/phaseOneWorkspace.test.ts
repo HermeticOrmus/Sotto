@@ -49,8 +49,7 @@ async function fixture() {
     const host = new WorkspaceHost(native, directory, () => historyEnabled)
     const control = new AgentControl({ schedule: immediatePublishScheduler, directory, host, credentials, historyEnabled: () => historyEnabled,
       reasoner: { intent: async () => ({ type: 'clarify', text: 'Choose a thread' }), decide: async () => ({ decision: 'human', text: 'Review' }) },
-      membership: { status: async () => ({ status: 'beta', label: 'Fixture', expiresAt: null }),
-        action: async () => ({ status: 'beta', label: 'Fixture', expiresAt: null }) } })
+       })
     await control.start(); await stageInto(control, PIXEL_PNG)
     return { control, host, registry }
   }

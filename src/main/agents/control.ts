@@ -142,11 +142,6 @@ function outcomeOf(before: ProviderClientUpdate): Partial<ProviderClientUpdate> 
   return kept
 }
 
-export interface AgentMembership {
-  status(): Promise<AgentState['membership']>
-  action(action: 'refresh' | 'signin' | 'checkout' | 'portal'): Promise<AgentState['membership']>
-}
-
 /** Owns assignment authority, queue ordering and durable dispatch intent across all host adapters. */
 import type { GitRefsPage, GitRefsRequest } from '../../shared/gitRefs'
 import type { GitChangedFiles, GitChangedFilesRequest } from '../../shared/gitChangedFiles'
@@ -217,7 +212,7 @@ export class AgentControl {
   private sottoRequests: SottoThreadRequests | undefined
   private unsubscribeSottoRequests: (() => void) | undefined
   private readonly activeCommands = new Set<Promise<AgentState>>()
-  private membershipTimer: ReturnType<typeof setInterval> | null = null
+  private maintenanceTimer: ReturnType<typeof setInterval> | null = null
   private privacyCleanupPending = false
   private privacyRevision = 0
   private presentedQueueId: string | null = null
@@ -265,7 +260,7 @@ export class AgentControl {
   /** Sotto's own supervision, so a recorded answer shows it came from Sotto and not from the user. */
   private readonly supervisionClient: ClientIdentity = supervisionClient(this.localClient.user)
   constructor(private readonly dependencies: {
-    directory: string; host: AgentHost; credentials: AgentCredentials; reasoner: AgentReasoner; membership: AgentMembership
+    directory: string; host: AgentHost; credentials: AgentCredentials; reasoner: AgentReasoner
     bindRequestDraftDecision?: BindRequestDraftDecision
     historyEnabled?: () => boolean
     /** Whether the voice coordinator ships. Off, no thread stays managed across a start (ADR-0012). */
@@ -315,7 +310,6 @@ export class AgentControl {
       voice: { status: 'off', error: null, action: 'none', revision: 0 },
       credentials: { reasoning: false, grokSpeech: false, secure: false },
       reasoningAccounts: [],
-      membership: { status: 'free', label: 'Free dictation', expiresAt: null },
     }
     this.store = new AtomicJsonStore(join(dependencies.directory, 'agents.json'), savedSchema.parse, () => this.saved())
     this.attachments = new AttachmentStore(dependencies.directory, { historyEnabled: () => dependencies.historyEnabled?.() !== false, missing: dependencies.missingAttachment })
@@ -413,18 +407,12 @@ export class AgentControl {
     // Redaction also reaches disk when control is disabled and no reconnect will run.
     await this.persist()
     await this.attachments.sweep(() => this.ownedAttachments())
-    this.state.membership = await this.dependencies.membership.status()
-    this.membershipTimer = setInterval(() => {
+    this.maintenanceTimer = setInterval(() => {
       const pendingPrivacy = this.privacyCleanupPending
       void (pendingPrivacy ? this.privacyChanged() : this.maintainAttachments()).catch(() => {
         this.state.error = pendingPrivacy ? PRIVACY_CLEANUP_ERROR : ATTACHMENT_UPKEEP_ERROR
         this.publish()
       })
-      void this.dependencies.membership.status().then(status => {
-        this.state.membership = status
-        if (!['active', 'beta'].includes(status.status)) this.state.assignments.forEach(a => { a.paused = true })
-        this.publish()
-      }).catch(() => undefined)
     }, 30_000)
     this.updateCredentials()
     if (isSubscriptionReasoning(this.state.configuration.reasoning)) {
@@ -1155,8 +1143,6 @@ export class AgentControl {
   /** `draftKept` is whether what the user was doing survives a refusal as a saved draft: true for a send, false for a create. */
   private canAct(threadId?: string, draftKept = true): void {
     if (this.disposed) throw new Error('Sotto is stopping. Your draft is saved.')
-    if (!['active', 'beta'].includes(this.state.membership.status)) throw new Error('Agent actions require an active Sotto membership. Free dictation remains available.')
-    if (this.state.membership.expiresAt && Date.parse(this.state.membership.expiresAt) <= Date.now()) throw new Error('Refresh your Sotto membership before starting more agent actions. Existing provider work continues.')
     // Nothing connected at all names the machine and the page that connects one (#459); one thread's provider
     // being down while others are connected is that thread's own refusal.
     if (!this.state.host.connected) throw new Error(noProviderRefusal(this.dependencies.runsAs === 'headless-host' ? 'host' : 'desktop', draftKept))
@@ -1929,10 +1915,6 @@ export class AgentControl {
         return
       }
       case 'credential': await this.dependencies.credentials.set(command.slot, command.value.trim()); return
-      case 'membership':
-        this.state.membership = await this.dependencies.membership.action(command.action)
-        if (!['active', 'beta'].includes(this.state.membership.status)) this.state.assignments.forEach(a => { a.paused = true })
-        return
       case 'connect': {
         if (command.provider) {
           this.state.configuration.enabledProviders = [...new Set([...enabledThreadProviders(this.state.configuration), command.provider])]
@@ -3071,7 +3053,7 @@ export class AgentControl {
     this.broadcastCancel = null
     this.broadcastOpen = false
     this.broadcastPending = false
-    if (this.membershipTimer) clearInterval(this.membershipTimer)
+    if (this.maintenanceTimer) clearInterval(this.maintenanceTimer)
     this.unsubscribe?.()
     this.unsubscribeSottoRequests?.()
     // Updates still waiting in the line never start; whoever waits for one is told rather than left waiting.

@@ -520,7 +520,6 @@ export const agentConfigurationSchema = z.object({
   reasoning: z.enum(['none', 'codex', 'claude', 'grok', 'openrouter', 'openai']),
   reasoningModel: z.string().max(512),
   reasoningEffort: z.string().max(64).default(''),
-  membershipEndpoint: z.string().max(2_048),
   checkClientUpdates: z.boolean().default(true),
   /**
    * What a new thread in a project starts on, apart from personal chats' reasoning model and effort
@@ -540,7 +539,7 @@ export const defaultAgentConfiguration = (): AgentConfiguration => ({
   provider: 'codex',
   orbColor: 'teal',
   enabled: false, projectsDirectory: '', defaultModelId: '',
-  followupLimit: 5, speak: true, speechProvider: 'grok', speechVoice: 'F1', grokSpeechVoice: 'altair', wakeModelDirectory: '', wakeRuntimeDirectory: '', reasoning: 'none', reasoningModel: '', reasoningEffort: '', membershipEndpoint: '', checkClientUpdates: true,
+  followupLimit: 5, speak: true, speechProvider: 'grok', speechVoice: 'F1', grokSpeechVoice: 'altair', wakeModelDirectory: '', wakeRuntimeDirectory: '', reasoning: 'none', reasoningModel: '', reasoningEffort: '', checkClientUpdates: true,
   newThreadModelId: '', newThreadReasoningEffort: '',
 })
 
@@ -641,10 +640,6 @@ export const agentStateSchema = z.object({
   voice: z.object({ status: z.string(), error: z.string().nullable(), action: z.enum(['none', 'mute', 'unmute', 'stop-speaking', 'sleep']), revision: z.number() }),
   credentials: z.object({ reasoning: z.boolean(), grokSpeech: z.boolean().default(false), secure: z.boolean() }),
   reasoningAccounts: z.array(subscriptionAccountSchema).default([]),
-  membership: z.object({
-    status: z.enum(['beta', 'free', 'active', 'expired', 'unavailable']),
-    label: z.string(), expiresAt: z.string().nullable(),
-  }),
   /** Whether the user keeps local history; the window persists its startup shell only when true. */
   historyEnabled: z.boolean().optional(),
   /** True only for the shell the window painted from its own cache before main answered. */
@@ -807,7 +802,7 @@ export function agentShell(state: AgentState): AgentState {
 export const agentCommandSchema = z.discriminatedUnion('type', [
   // Re-extend defaulted fields: Zod 4 applies defaults through partial(), resetting omitted settings.
   z.object({ type: z.literal('configure'), patch: agentConfigurationSchema.partial().extend({ provider: providerIdSchema.optional(), orbColor: orbColorSchema.optional(), reasoningEffort: z.string().max(64).optional(), speechProvider: speechProviderSchema.optional(), speechVoice: z.enum(NATURAL_VOICES).optional(), grokSpeechVoice: grokSpeechVoiceSchema.optional(), checkClientUpdates: z.boolean().optional(), newThreadReasoningEffort: z.string().max(64).optional() }) }).strict(),
-  z.object({ type: z.literal('credential'), slot: z.enum(['reasoning', 'membership', 'grokSpeech']), value: z.string().max(16_384) }).strict(),
+  z.object({ type: z.literal('credential'), slot: z.enum(['reasoning', 'grokSpeech']), value: z.string().max(16_384) }).strict(),
   z.object({ type: z.literal('connect'), provider: providerIdSchema.optional() }).strict(),
   z.object({ type: z.literal('disconnect'), provider: providerIdSchema.optional() }).strict(),
   z.object({ type: z.literal('refresh'), provider: providerIdSchema.optional() }).strict(),
@@ -907,7 +902,6 @@ export const agentCommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('compact-thread'), threadId: id }).strict(),
   z.object({ type: z.enum(['next', 'later']) }).strict(),
   z.object({ type: z.literal('answer'), threadId: id, requestId: id, answer: text, approved: z.boolean().optional(), questionAnswers: agentQuestionAnswersSchema.optional(), permissionChoice: id.optional() }).strict(),
-  z.object({ type: z.literal('membership'), action: z.enum(['refresh', 'signin', 'checkout', 'portal']) }).strict(),
 ])
 export type AgentCommand = z.infer<typeof agentCommandSchema>
 /** The desktop exposes host-qualified client keys here. The preload decodes them before host IPC. */
