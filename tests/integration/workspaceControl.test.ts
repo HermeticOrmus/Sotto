@@ -68,6 +68,30 @@ describe('workspace controller integration', () => {
     } finally { pause.mockRestore() }
   })
 
+  it.each(['closed', 'unsupported'] as const)('restores management when Stop becomes unavailable during queue persistence: %s', async refusal => {
+    const f = await fixture()
+    const threadId = f.control.get().host.threads.find(thread => thread.providerId === 'codex')!.id
+    await f.control.command({ type: 'assign', threadId, instruction: 'Keep watching' })
+    const native = f.adapters.codex.state.threads.find(thread => thread.id === f.registry.byThread(threadId)!.sessionId)!
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const pause = vi.spyOn(FollowupStore.prototype, 'pause').mockImplementationOnce(async () => { await gate })
+    const stopping = f.control.command({ type: 'interrupt', threadId })
+    try {
+      await expect.poll(() => pause.mock.calls.length).toBe(1)
+      if (refusal === 'closed') native.archivedAt = new Date().toISOString()
+      else f.adapters.codex.state.capabilities.interrupt = false
+      f.adapters.codex.emit()
+      await f.control.command({ type: 'refresh' })
+      release()
+      const result = await stopping
+      expect(result.error).toBe(refusal === 'closed' ? 'This thread is settled or archived. There is no open work to stop.' : 'This connection cannot stop agent work.')
+      expect(result.assignments.find(item => item.threadId === threadId)?.paused).toBe(false)
+      expect(JSON.parse(await readFile(join(f.root, 'agents.json'), 'utf8')).assignments.find((item: { threadId: string }) => item.threadId === threadId).paused).toBe(false)
+      expect(f.adapters.codex.commands.filter(command => command.type === 'interrupt')).toEqual([])
+    } finally { release(); await stopping; pause.mockRestore() }
+  })
+
   it('reports a failed Stop intent save without claiming cancellation reached the provider', async () => {
     const f = await fixture()
     const threadId = f.control.get().host.threads.find(thread => thread.providerId === 'codex')!.id

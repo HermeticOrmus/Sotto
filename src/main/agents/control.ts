@@ -93,6 +93,7 @@ const MAX_SEEN_MESSAGE_IDS = 2000
 /** A write handed to the store: the state it carries, serialized and by outbox, and its landing. */
 type QueuedWrite = { serialized: string; outbox: Saved['outbox']; written: Promise<void> }
 class SupersededSupervision extends Error {}
+class RefusedInterrupt extends Error {}
 const PRIVACY_CLEANUP_ERROR = 'Could not finish applying history privacy. Sotto will retry when local storage is available.'
 /** The 30-second upkeep of previews and staged images failed: nothing anyone still needs was touched. */
 const ATTACHMENT_UPKEEP_ERROR = 'Could not remove screenshots Sotto no longer needs. Nothing was lost. Check access to local storage.'
@@ -1772,28 +1773,39 @@ export class AgentControl {
     const turn = this.beginTurn({ source: 'command', commandType: 'interrupt', text: '', threadId: command.threadId,
       projectId: this.state.host.threads.find(thread => thread.id === command.threadId)?.projectId ?? null })
     let failure: string | undefined
+    const assignment = this.state.assignments.find(item => item.threadId === command.threadId)
+    const wasPaused = assignment?.paused
     // Stopping a turn waits for nothing, not even that thread's own lane, but the thread is working on it.
     const release = this.mark(this.busyThreads, command.threadId)
     try {
       this.state.error = null
       this.publish()
       this.validateInterrupt(command.threadId)
-      const assignment = this.state.assignments.find(item => item.threadId === command.threadId)
       if (assignment) assignment.paused = true
       let pauseFailure: string | undefined
       try { await this.followupStore.pause(command.threadId, 'The turn was interrupted. Review the thread and resume queued follow-ups when ready.') }
       catch { pauseFailure = 'Stop was sent, but the queue pause could not be saved. Your queued messages are still saved. Check them before sending another message.' }
       this.syncFollowups(); await this.execute(command, turn); await this.persist()
       if (pauseFailure) this.state.error = pauseFailure
-    } catch (error) { failure = error instanceof Error ? error.message : 'Could not interrupt this thread.'; this.state.error = failure }
+    } catch (error) {
+      failure = error instanceof Error ? error.message : 'Could not interrupt this thread.'
+      if (error instanceof RefusedInterrupt && assignment && wasPaused !== undefined && assignment.paused !== wasPaused) {
+        assignment.paused = wasPaused
+        try { await this.persist() }
+        catch { failure = 'Stop was refused, and the previous management state could not be saved. Refresh before resuming management.' }
+      }
+      this.state.error = failure
+    }
     release()
     this.publish(); await this.finishTurn(turn, failure); return this.shell()
   }
   private validateInterrupt(threadId: string): void {
-    this.canAct(undefined, false)
-    const thread = this.thread(threadId)
-    if (!capabilitiesForThread(this.state.host, thread).interrupt) throw new Error('This connection cannot stop agent work.')
-    if (isThreadClosed(thread)) throw new Error('This thread is settled or archived. There is no open work to stop.')
+    try {
+      this.canAct(undefined, false)
+      const thread = this.thread(threadId)
+      if (!capabilitiesForThread(this.state.host, thread).interrupt) throw new Error('This connection cannot stop agent work.')
+      if (isThreadClosed(thread)) throw new Error('This thread is settled or archived. There is no open work to stop.')
+    } catch (error) { throw new RefusedInterrupt(error instanceof Error ? error.message : 'Could not interrupt this thread.') }
   }
   private async steerFollowup(command: Extract<AgentCommand, { type: 'steer-followup' }>, turn?: ActiveTurn): Promise<void> {
     const queued = this.followupStore.get().items.find(item => item.threadId === command.threadId && item.id === command.itemId)
