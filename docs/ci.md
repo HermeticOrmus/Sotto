@@ -13,6 +13,8 @@
 | Unit and integration tests | `npm test -- --maxWorkers=2` | `vitest run` — the whole suite except the Playwright end-to-end specs, which the vitest config excludes. The worker cap keeps the jsdom and child-process heavy files inside a small runner's memory; unpinned parallelism has produced "Worker exited unexpectedly" crashes on a loaded machine. Main-process and integration files run under node rather than jsdom, declared by a `@vitest-environment node` header on each file; a file in those folders that needs a DOM says `jsdom` instead. |
 | Third-party notices | `npm run notices:verify` | Checks `THIRD_PARTY_NOTICES.md` against the installed dependency tree. |
 
+`tests/unit/release/trackedFileEncoding.test.ts` checks every Git-tracked file for a UTF-8 byte order mark in the normal test gate. Files stay UTF-8 without a BOM.
+
 Each gate is its own named step, so a red check names the gate that failed.
 
 `tsconfig.tests.json` checks every `tests/**/*.tsx` file, including renderer tests,
