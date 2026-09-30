@@ -29,3 +29,9 @@ The focused renderer run passed 124 tests in 9 files. Typecheck, lint, build and
 ## Review
 
 The standards pass checked privacy, main-owned clipboard delivery, existing permission gates, keyboard paths, theme roles, test placement and UTF-8 encoding. It removed an unused test-mock parameter found by lint. The spec pass checked all four copy callers, all four composition fields, empty-query reload, pending-Enter cancellation and current callback dependencies. It also added late-response and thread-change coverage.
+
+## Main integration
+
+Windows CI passed on the three-fix revision before main was merged. Integrating main at `dee39cf3695db282e3873adbf55d45d5287b9c51` produced one guide conflict: the resolution keeps the branch-search guidance and main's updated Git staging instructions. The code merged without conflicts.
+
+The integrated revision passed typecheck, lint and build, then 317 tests across 20 renderer, Git, host, IPC and coordinator files. The Git-action and shared-checkout Electron journeys both passed. The three retained branch captures were refreshed and inspected after this integration; the existing chooser baselines were left unchanged.
