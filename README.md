@@ -56,6 +56,8 @@ First-run setup asks you to test your microphone or choose **Skip for now** befo
 
 ## Privacy and cost
 
+**Reset settings** restores defaults and reopens setup. It keeps your saved OpenRouter key, including when the reset fails.
+
 If a legacy OpenRouter key cannot be moved into the credential store, Sotto removes the plaintext key from settings anyway. Settings says it could not be stored securely and asks you to enter it again.
 
 Sotto has no account of its own and collects nothing about you: no analytics, no crash reports. Your data leaves your computer only when a feature you use needs it, and only to that feature's service:

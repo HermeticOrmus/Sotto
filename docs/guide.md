@@ -312,6 +312,8 @@ A remote host keeps its own OpenRouter key, in its encrypted credential file, an
 
 ## Dictation and settings
 
+**Reset settings** restores defaults and reopens setup. It keeps your saved OpenRouter key, including when the reset fails.
+
 Press the global shortcut once to start and again to stop and transcribe. The default is `Ctrl+Shift+Space` on Windows and `⌃⇧Space` (the literal Control key) on macOS. `Escape` cancels an active session. The floating widget also starts dictation with a click and can be dragged anywhere.
 
 Settings:

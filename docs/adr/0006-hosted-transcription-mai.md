@@ -40,3 +40,7 @@ Constraints:
 ## Legacy key migration recovery
 
 Amended 2026-09-30 (#513). If a legacy OpenRouter key cannot be moved into the credential store, Sotto removes the plaintext key from settings anyway. Settings says it could not be stored securely and asks you to enter it again. The recovery notice carries only a stable code; no key or vault error reaches the renderer or logs.
+
+## Reset keeps the saved key
+
+Amended 2026-09-30 (#571). Reset settings restores preferences without changing the formatting credential slot. Reset and its rollback never decrypt, clear or rewrite the saved OpenRouter key, so even a locked credential store or a failed reset leaves it intact. Removing the key remains an explicit edit in Settings.

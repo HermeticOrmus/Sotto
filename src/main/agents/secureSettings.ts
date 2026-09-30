@@ -37,7 +37,7 @@ export class SecureSettings implements NativeSettingsRepository {
     const copy = { ...value }
     return this.mutate(copy.llmApiKey, () => this.repository.save({ ...copy, llmApiKey: '' }))
   }
-  reset(): Promise<AppSettings> { return this.mutate('', () => this.repository.reset()) }
+  reset(): Promise<AppSettings> { return this.mutate(undefined, () => this.repository.reset()) }
   private mutate(key: string | undefined, write: () => Promise<AppSettings>): Promise<AppSettings> {
     const operation = this.mutation.then(async () => {
       const changesKey = key !== undefined && key !== STORED_KEY
