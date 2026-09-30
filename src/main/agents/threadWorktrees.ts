@@ -301,10 +301,11 @@ export class ThreadWorktrees {
       const entries = registeredWorktrees(await this.registry(repositoryRoot, ['worktree', 'list', '--porcelain', '-z'], identity))
       const occupant = entries.find(entry => entry.branch === `refs/heads/${branch}` && pathKey(entry.path) !== pathKey(path))
       if (occupant) throw new Error(`The branch ${branch} is checked out in ${occupant.path}, so this thread’s folder cannot be put back on it. Nothing was lost or changed. Close that folder’s checkout or move it to another branch, then retry.`)
+      return entries
     }
-    await refuseAnotherFolder()
-    // Prune drops only the registry entry for the folder that is gone; it never touches files or branches.
-    await this.registry(repositoryRoot, ['worktree', 'prune'], identity)
+    const entries = await refuseAnotherFolder()
+    // Remove only this missing folder's registration. Other missing checkouts may be on unplugged drives.
+    if (entries.some(entry => pathKey(entry.path) === pathKey(path))) await this.registry(repositoryRoot, ['worktree', 'remove', '--', path], identity)
     await refuseAnotherFolder()
     await mkdir(allocationRoot, { recursive: true })
     if (pathKey(await realpath(allocationRoot)) !== pathKey(allocationRoot)) throw new Error('The reserved worktree parent folder was redirected. Nothing was changed.')
