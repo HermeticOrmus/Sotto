@@ -3,6 +3,34 @@ import { expect, it } from 'vitest'
 import { installerDetail, installerOutput } from '../../../src/main/agents/installerDetail'
 
 it.each([
+  [String.raw`C:\Users\John Smith\AppData\codex.exe: The process cannot access the file…`, '…: The process cannot access the file…'],
+  ['mise ERROR /Users/John Smith/Library/Application Support/mise/codex failed: exit status 1', 'mise ERROR …: exit status 1'],
+  [String.raw`at Object.<anonymous> (C:\Users\John Smith\x.js:1:2)`, 'at Object.<anonymous> (…:1:2)'],
+  ['~/.local/share/mise: Permission denied', '~/.local/share/mise: Permission denied'],
+  [String.raw`Cannot write C:\Users\John Smith\codex.exe) Try again`, 'Cannot write …) Try again'],
+  ['Cannot write /home/jsmith/codex: Permission denied', 'Cannot write …: Permission denied'],
+  ['at /home/jsmith/x.js:1:2 (load failed)', 'at …:1:2 (load failed)'],
+  ['Cannot write /Users/John Smith/codex (permission denied)', 'Cannot write … (permission denied)'],
+  ['Cannot write /home/jsmith/codex) Try again', 'Cannot write …) Try again'],
+  ['file:///Users/John Smith/codex: Permission denied', 'file://…: Permission denied'],
+  ['file:///home/jsmith/x.js:1:2', 'file://…:1:2'],
+  ['Cannot write "file:///Users/John Smith/codex"; permission denied', 'Cannot write "…"; permission denied'],
+  ['Cannot write file:///C:/Users/John Smith/codex.exe: Permission denied', 'Cannot write file://…: Permission denied'],
+])('preserves diagnostics while redacting unquoted paths: %s', (line, expected) => {
+  for (const format of [installerDetail, installerOutput]) {
+    const shown = format(line)
+    expect(shown).toBe(expected)
+    expect(shown).not.toMatch(/John Smith|jsmith/u)
+  }
+})
+
+it.each(['"', '<', '>', '|', '?', '*'])('ends a Windows path at the forbidden character %s', delimiter => {
+  const line = String.raw`C:\Users\John Smith\codex.exe` + delimiter + ' Permission denied'
+  expect(installerDetail(line)).toBe(`…${delimiter} Permission denied`)
+  expect(installerOutput(line)).toBe(`…${delimiter} Permission denied`)
+})
+
+it.each([
   String.raw`C:\Users\John Smith\AppData\Local\npm-cache`,
   'C:/Users/John Smith/AppData/Local/npm-cache',
   String.raw`\\server\People\John Smith\tools`,

@@ -3,13 +3,15 @@ import { homedir, userInfo } from 'node:os'
 // Identify every absolute prefix before removing text. A quoted path cannot
 // consume another path's prefix and leave a private relative suffix behind.
 // URLs and package names such as aqua:openai/codex are not absolute paths.
-const ABSOLUTE_START = /(?<![\w/\\])(?:[A-Za-z]:[\\/]|\\\\|\/(?=[^\s/]))|(?<![\w:/\\])\/\//gu
+const ABSOLUTE_START = /(?<=file:\/\/)\/(?:[A-Za-z]:[\\/])?|(?<![\w/\\~])(?:[A-Za-z]:[\\/]|\\\\|\/(?=[^\s/]))|(?<![\w:/\\~])\/\//gu
 function redactPaths(line: string): string {
   const paths = Array.from(line.matchAll(ABSOLUTE_START), match => {
     const start = match.index
-    const preceding = line[start - 1]
+    const prefixStart = line.slice(start - 7, start) === 'file://' ? start - 7 : start
+    const preceding = line[prefixStart - 1]
     const quote = preceding === '"' || preceding === "'" ? preceding : undefined
-    return { start: quote ? start - 1 : start, quote }
+    const windows = /^(?:\/?[A-Za-z]:[\\/]|\\\\|\/\/)/u.test(match[0])
+    return { start: quote ? prefixStart - 1 : start, quote, windows, prefixLength: match[0].length }
   })
   let shown = '', cursor = 0
   for (const [index, path] of paths.entries()) {
@@ -25,8 +27,14 @@ function redactPaths(line: string): string {
       if (closing > 0 && (/^\s*$/u.test(after)
         || next && /^\s*(?:->|to|,)\s*$/u.test(after)
         || /^\s*[,;:)]/u.test(after) && !/[\\/]/u.test(after))) suffix = after
-    } else if (next) {
-      suffix = /\s+(?:->|to)\s*$/u.exec(span)?.[0] ?? ''
+    } else {
+      // Spaces belong to account folders too. Only clear diagnostic delimiters
+      // end an unquoted path; skip the drive colon when finding that boundary.
+      const boundary = path.windows ? /:(?=[ \d])|["<>|?*)]/u : /: |\s*[()]|:\d+:\d+(?=\s|[)]|$)/u
+      const diagnostic = boundary.exec(span.slice(path.prefixLength))
+      const separator = next ? /\s+(?:->|to)\s*$/u.exec(span) : null
+      const suffixStart = Math.min(diagnostic ? path.prefixLength + diagnostic.index : span.length, separator?.index ?? span.length)
+      suffix = span.slice(suffixStart)
     }
     shown += line.slice(cursor, path.start) + (path.quote ? `${path.quote}…${path.quote}` : '…') + suffix
     cursor = end
