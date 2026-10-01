@@ -17,6 +17,7 @@ import { FakeProviderHost } from '../../fixtures/fakeProviderHost'
 import type { AgentHostSnapshot } from '../../../src/shared/agents'
 import type { ThreadHostEvent } from '../../../src/main/agents/host'
 import { immediatePublishScheduler } from '../../fixtures/publishScheduler'
+import { AtomicJsonStore } from '../../../src/main/storage/atomicJsonStore'
 import { ProviderUnavailable } from '../../../src/main/agents/providerProblem'
 
 class RetainedCallbacksProvider extends FakeProviderHost {
@@ -216,6 +217,20 @@ describe('independent thread providers', () => {
       expect(f.adapters.codex.commands.at(-1)).toMatchObject({ type: 'send', text: 'Healthy provider work' })
     } finally { release(); await pending }
   })
+  it('retries a new folder after its registration intent could not be saved', async () => {
+    const f = await fixture(); f.adapters.claude.state.projects[0]!.path = join(f.root, 'other')
+    const initial = await f.host.connect()
+    const project = initial.projects.find(project => project.providerId === 'codex')!
+    const model = initial.models.find(model => model.providerId === 'claude')!
+    const create = { type: 'create-thread' as const, commandId: 'first', threadId: 'new-thread', title: 'New task', projectId: project.id, modelId: model.id }
+    const write = vi.spyOn((f.host as unknown as { registrationStore: AtomicJsonStore<string[]> }).registrationStore, 'write').mockRejectedValueOnce(new Error('EPERM'))
+    await expect(f.host.execute(create)).rejects.toThrow('EPERM')
+    expect(f.adapters.claude.commands).toEqual([])
+    write.mockRestore()
+    expect((await f.host.execute({ ...create, commandId: 'retry' })).accepted).toBe(true)
+    expect(f.adapters.claude.commands.map(command => command.type)).toEqual(['create-project', 'create-thread'])
+  })
+
   it('recovers an uncertain folder registration across restart without replaying it or submitting a thread early', async () => {
     const f = await fixture(); f.adapters.claude.state.projects[0]!.path = join(f.root, 'other')
     const initial = await f.host.connect()

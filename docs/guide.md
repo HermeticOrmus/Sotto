@@ -57,7 +57,7 @@ Native clients retain their own subscription sign-in and model catalogs. Wake co
 
 ### Questions and permissions
 
-If delivery of your answer to Claude Code is uncertain, press **Check again** to check its state, read the thread's activity, or press **Stop** to interrupt the work. Checking sends no answer. While the original write is pending, another answer cannot be sent. If that write finishes, Sotto keeps your original choice and marks it answered. If the write fails outright or the client is gone, **Check again** can reopen a request that is still pending so you can choose and send another answer. Sotto never retries it on its own.
+If delivery of your answer to Claude Code is uncertain, press **Check again** to check its state, read the thread's activity, or press **Stop** to interrupt the work. Checking sends no answer. While the original write is pending, another answer cannot be sent. If that write finishes, Sotto keeps your original choice and marks it answered. If the write fails outright or the client is gone, **Check again** can reopen a request that is still pending so you can choose and send another answer. Sotto never retries it on its own. An unconfirmed answer from a phone is reported to that phone only; it raises no desktop notice or spoken reply.
 
 In split threads, **Ctrl+Shift+M** zooms the focused pane or returns to all panes. If dictation uses that shortcut, use the pane's **Zoom** or **Show all panes** button instead.
 
