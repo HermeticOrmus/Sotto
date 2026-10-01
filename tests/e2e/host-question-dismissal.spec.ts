@@ -77,6 +77,8 @@ test('Escape dismisses saved host questions and only Switch it off disables the 
             const box = element.getBoundingClientRect()
             return box.left >= 0 && box.right <= innerWidth && box.top >= 0 && box.bottom <= innerHeight && element.scrollWidth <= element.clientWidth
           })).toBe(true)
+          const primary = await continueButton.boundingBox(), secondary = await dialog.getByRole('button', { name: 'Switch it off' }).boundingBox()
+          expect(primary!.x + primary!.width).toBeLessThan(secondary!.x)
           await page.screenshot({ path: join(shots, `host-${kind}-${width}-${appearance}.png`), animations: 'disabled' })
           await page.keyboard.press('Escape')
           const row = page.getByRole('region', { name: 'forge', exact: true })
@@ -86,8 +88,6 @@ test('Escape dismisses saved host questions and only Switch it off disables the 
             const box = element.getBoundingClientRect()
             return box.left >= 0 && box.right <= innerWidth && box.top >= 0 && box.bottom <= innerHeight && element.scrollWidth <= element.clientWidth
           })).toBe(true)
-          const primary = await continueButton.boundingBox(), secondary = await dialog.getByRole('button', { name: 'Switch it off' }).boundingBox()
-          expect(primary!.x + primary!.width).toBeLessThan(secondary!.x)
           await page.screenshot({ path: join(shots, `host-answer-${width}-${appearance}.png`), animations: 'disabled' })
           await row.getByRole('button', { name: 'Answer forge' }).click()
           await expect(dialog).toBeVisible()
