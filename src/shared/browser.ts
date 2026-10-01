@@ -1,12 +1,12 @@
 import { z } from 'zod'
+import { UNSAFE_URL_CHARACTERS } from './externalLinks'
 import { fileWorkspaceSchema } from './files'
 import { toolTargetSchema, type ToolsResult } from './tools'
 
 export const BROWSER_CHANNEL = 'sotto:browser:'
 export const BROWSER_EVENT = `${BROWSER_CHANNEL}event`
 export function safeBrowserUrl(input: string): string | null {
-  // eslint-disable-next-line no-control-regex -- Reject display spoofing and URL parser control stripping.
-  if (/[\x00-\x20\x7f\u202a-\u202e\u2066-\u2069]/.test(input) || input.length > 8192) return null
+  if (UNSAFE_URL_CHARACTERS.test(input) || input.length > 8192) return null
   try {
     const url = new URL(input)
     return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password ? url.href : null

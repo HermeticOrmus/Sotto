@@ -1,3 +1,4 @@
+import { cleanSettingsHistory } from './settings/privacyCleanup'
 import { registerQuitDrain } from './app/quitDrain'
 import { HOSTS_CHANGED } from '../shared/hosts'
 import { parseHostEntityKey } from '../shared/clientIdentity'
@@ -1010,8 +1011,7 @@ async function createRuntime(): Promise<NativeRuntimeController> {
       if (grantDefaultChanged) browserService?.settingChanged()
       agentHistoryEnabled = settings.historyEnabled
       agentVoiceCoordinatorEnabled = settings.voiceCoordinatorEnabled
-      await agentControl.privacyChanged()
-      await personalChats.privacyChanged()
+      await cleanSettingsHistory(agentControl, personalChats)
       showWidgetWhenIdle = settings.showWidgetWhenIdle
       widgetPresentation = widgetPresentationFor(settings)
       if (!dictationLifecycle.isIdle()) {
@@ -1124,7 +1124,7 @@ async function createRuntime(): Promise<NativeRuntimeController> {
       })
       const cleanupFiles = registerFilesIpc(ipcMain, files, () => windows.getTrustedRenderers())
       const cleanupSubagents = registerSubagentIpc(ipcMain, agentHost, () => windows.getTrustedRenderers(), change => windows.sendToMain(SUBAGENTS_CHANGED, change))
-      const checkpointIntegration = connectCheckpoints({ files, directory: userDataPath, host: agentHost, control: agentControl, registry: threadRegistry,
+      const checkpointIntegration = connectCheckpoints({ historyEnabled: () => agentHistoryEnabled, files, directory: userDataPath, host: agentHost, control: agentControl, registry: threadRegistry,
         git: () => gitChanges, report: () => { logOperational('checkpoint-unavailable') } })
       agentHost.setMutationGuard(checkpointIntegration.canMutate)
       const gitChanges = new GitChangesService({ files, checkpoints: checkpointIntegration.checkpoints, canMutate: checkpointIntegration.canMutate,
