@@ -1,12 +1,38 @@
 import { homedir, userInfo } from 'node:os'
 
-// Spaces belong to paths too. Quotes, diagnostic separators and the end of the
-// line bound them; an ambiguous unquoted suffix is removed rather than leaked.
-// A path cannot start inside a URL or a package name such as aqua:openai/codex.
-// An account folder can contain the same quote as its surrounding message.
-// Prefer the last matching quote, stopping earlier only at a quoted rename.
-const QUOTED_ABSOLUTE_PATH = /(["'])(?:[A-Za-z]:[\\/]|\\\\|\/\/|\/(?=[^\s/]))(?:(?!\1\s+->\s+["'](?:[A-Za-z]:[\\/]|\\\\|\/\/|\/(?=[^\s/])))[^\r\n])*\1/gu
-const ABSOLUTE_PATH = /(?<![\w:/\\])(?:[A-Za-z]:[\\/]|\\\\|\/\/|\/(?=[^\s/]))[^\r\n"<>|]*?(?=\s+->(?:\s|$)|["<>|\r\n]|$)/gu
+// Identify every absolute prefix before removing text. A quoted path cannot
+// consume another path's prefix and leave a private relative suffix behind.
+// URLs and package names such as aqua:openai/codex are not absolute paths.
+const ABSOLUTE_START = /(?<![\w/\\])(?:[A-Za-z]:[\\/]|\\\\|\/(?=[^\s/]))|(?<![\w:/\\])\/\//gu
+function redactPaths(line: string): string {
+  const paths = Array.from(line.matchAll(ABSOLUTE_START), match => {
+    const start = match.index
+    const preceding = line[start - 1]
+    const quote = preceding === '"' || preceding === "'" ? preceding : undefined
+    return { start: quote ? start - 1 : start, quote }
+  })
+  let shown = '', cursor = 0
+  for (const [index, path] of paths.entries()) {
+    const next = paths[index + 1]
+    const end = next?.start ?? line.length
+    const span = line.slice(path.start, end)
+    let suffix = ''
+    if (path.quote) {
+      // Quotes and spaces can be part of an account folder. Prefer the last
+      // matching quote within this path's span, and keep only clear diagnostics.
+      const closing = span.lastIndexOf(path.quote)
+      const after = span.slice(closing + 1)
+      if (closing > 0 && (/^\s*$/u.test(after)
+        || next && /^\s*(?:->|to|,)\s*$/u.test(after)
+        || /^\s*[,;:)]/u.test(after) && !/[\\/]/u.test(after))) suffix = after
+    } else if (next) {
+      suffix = /\s+(?:->|to)\s*$/u.exec(span)?.[0] ?? ''
+    }
+    shown += line.slice(cursor, path.start) + (path.quote ? `${path.quote}…${path.quote}` : '…') + suffix
+    cursor = end
+  }
+  return shown + line.slice(cursor)
+}
 
 /** The lines worth showing: not blank, and not npm's pointer to a log that sits in the home folder. */
 function shownLines(output: string): string[] {
@@ -26,7 +52,7 @@ function ownNames(): RegExp[] {
 }
 const escaped = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
 const redact = (line: string): string => {
-  let shown = line.replace(QUOTED_ABSOLUTE_PATH, '$1…$1').replace(ABSOLUTE_PATH, '…')
+  let shown = redactPaths(line)
   for (const name of ownNames()) shown = shown.replace(name, '…')
   return shown.trim()
 }

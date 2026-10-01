@@ -32,7 +32,25 @@ it('keeps the operation and separators around multiple quoted or unquoted paths'
     .toBe("rename '…' -> '…'")
 })
 
+it.each([
+  [String.raw`rename 'C:\Users\John Smith\old' -> C:\Users\Chris' Work\new`, "rename '…' -> …"],
+  [String.raw`Copy 'C:\Users\John Smith\old' to "C:\Users\Chris' Work\new"`, "Copy '…' to \"…\""],
+  [String.raw`rename C:\Users\Chris' Work\old -> '/home/John Smith/new'`, "rename … -> '…'"],
+])('keeps mixed path formats private: %s', (line, expected) => {
+  expect(installerDetail(line)).toBe(expected)
+  expect(installerOutput(line)).toBe(expected)
+})
+
 it('leaves URLs, package names and ordinary diagnostic text readable', () => {
   const line = 'Failed aqua:openai/codex@1.0 from https://example.com/releases: permission denied'
   expect(installerDetail(line)).toBe(line)
+})
+
+it.each([
+  String.raw`C:\Users\John Smith\AppData\Local\npm-cache`,
+  String.raw`\\server\People\John Smith\tools`,
+  '/home/John Smith/.cache/tools',
+])('redacts a path immediately after a diagnostic label: %s', path => {
+  expect(installerDetail(`npm ERR! path:${path}`)).toBe('npm ERR! path:…')
+  expect(installerOutput(`npm ERR! path:${path}`)).toBe('npm ERR! path:…')
 })
