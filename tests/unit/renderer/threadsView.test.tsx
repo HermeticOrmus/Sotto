@@ -609,6 +609,30 @@ describe('a thread created without a round trip', () => {
     expect(command).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'manual-send' }))
   })
 
+  it('does not recover a sent prompt when published creation precedes a lost command reply', async () => {
+    const state = stateFixture()
+    let settle: (value: AgentState | null) => void = () => undefined
+    const creating = new Promise<AgentState | null>(resolve => { settle = resolve })
+    const command = vi.fn(async (...args: unknown[]) => (args[0] as AgentCommand).type === 'create-thread' ? creating : state)
+    vi.mocked(useAgents).mockReturnValue(connection(state, command))
+    const { rerender } = render(<ThreadsView onOpenAgents={vi.fn()} now={NOW} />)
+    createThread()
+    await screen.findByRole('heading', { name: 'New thread' })
+    const threadId = createRequest(command)!.threadId!
+    const arrived = { ...draftThreads.get()[0]!, nativeSessionStarted: true }
+    const published = { ...state, activeThreadId: threadId, host: { ...state.host, threads: [...state.host.threads, arrived] } }
+    const connected = connection(published, command)
+    vi.mocked(useAgents).mockReturnValue(connected)
+    rerender(<ThreadsView onOpenAgents={vi.fn()} now={NOW} />)
+    await waitFor(() => expect(draftThreads.get()).toEqual([]))
+    connected.threadDrafts.edit(threadId, { text: 'Already sent to the live thread.' })
+    connected.threadDrafts.submit(threadId, NOW)
+    await act(async () => { settle(null) })
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    connected.threadDrafts.restoreRefusedCreation('another-thread', 'workshop')
+    expect(connected.threadDrafts.draft('another-thread').text).toBe('')
+  })
+
   it.each([false, true])('keeps a screenshot whose staging finishes after refusal (after reopening: %s)', async reopenFirst => {
     const state = stateFixture()
     state.host.models.forEach(model => { model.supportsImages = true })

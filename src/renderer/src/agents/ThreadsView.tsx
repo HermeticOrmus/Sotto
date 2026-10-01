@@ -99,9 +99,10 @@ export function ThreadsView({ onOpenAgents, now: fixedNow, updateControl, tools,
   // command about it waits for that creation instead of being refused for naming a thread main does not know.
   const drafts = useDraftThreads()
   const published = agents.state
+  const publishedRef = useRef(published)
   const state = useMemo(() => overlayDraftThreads(published, drafts), [published, drafts])
   const command = useMemo(() => gateOnCreation(agents.command), [agents.command])
-  useEffect(() => { draftThreads.reconcile(published) }, [published])
+  useEffect(() => { publishedRef.current = published; draftThreads.reconcile(published) }, [published])
   // Derived facts are shared with the ones on screen: an update that did not touch a thread leaves its row,
   // its folder and its pane label at the same reference, so the memoised sidebar and panes below skip it.
   const rows = useShared(useMemo(() => state === null ? [] : describeThreads(state, now), [state, now]))
@@ -160,6 +161,8 @@ export function ThreadsView({ onOpenAgents, now: fixedNow, updateControl, tools,
     focusNewComposer()
     void start.created.then(creationError => {
       if (creationError === null) return
+      // A broadcast can confirm creation and release sends before the command's reply is lost.
+      if (publishedRef.current?.host.threads.some(thread => thread.id === start.thread.id)) return
       setNewThreadError(creationError)
       // The pane is gone and gated sends never left the window; retain all its content, not just unsent text.
       store.carryRefusedCreation(start.thread.id, start.thread.projectId)
