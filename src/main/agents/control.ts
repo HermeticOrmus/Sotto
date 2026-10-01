@@ -41,6 +41,11 @@ import { isSottoRequest, withSottoRequests, type SottoThreadRequests } from './s
 
 /** One shared empty array stands in for every shell thread's history; the clone that follows copies nothing. */
 const EMPTY_MESSAGES: AgentMessage[] = []
+
+/** Its error is published before observing completion, so the command catch must not publish it again. */
+class AnswerDeliveryUnconfirmed extends Error {
+  delivered = false
+}
 const EMPTY_ACTIVITIES: AgentActivity[] = []
 const RECORDED_COMMAND_TYPES: ReadonlySet<AgentCommand['type']> = new Set([
   'utterance', 'connect', 'refresh', 'send', 'steer', 'steer-followup', 'manual-send', 'answer', 'create-thread', 'create-project', 'select-project',
@@ -1617,9 +1622,10 @@ export class AgentControl {
         if (admissionError instanceof Error) throw admissionError
         await this.execute(command, turn, manualRetryId, selectionRevision, client)
       } catch (error) {
-        failure = error instanceof Error ? error.message : 'Sotto could not complete this action.'
-        this.setCommandError(error, failure)
-        this.say(failure)
+        failure = error instanceof AnswerDeliveryUnconfirmed && error.delivered ? undefined
+          : error instanceof Error ? error.message : 'Sotto could not complete this action.'
+        if (!(error instanceof AnswerDeliveryUnconfirmed)) this.setCommandError(error, failure!)
+        if (failure !== undefined) this.say(failure)
       }
       if ((command.type === 'manual-send' || command.type === 'steer') && command.draftId) {
         const delivery = this.state.deliveries?.find(item => item.threadId === command.threadId && item.draftId === command.draftId)
@@ -2563,10 +2569,14 @@ export class AgentControl {
       this.recordAnswerAttribution(command, client)
     }
     // An adapter that knows more about what an unconfirmed action cost says it; the intent is kept either way.
-    const uncertaintyError = new Error(result.error ?? PROVIDER_RESULT_UNCONFIRMED)
+    const uncertaintyError = command.type === 'answer' && result.uncertain && result.answerCompletion
+      ? new AnswerDeliveryUnconfirmed(result.error ?? PROVIDER_RESULT_UNCONFIRMED)
+      : new Error(result.error ?? PROVIDER_RESULT_UNCONFIRMED)
+    if (uncertaintyError instanceof AnswerDeliveryUnconfirmed) this.setCommandError(uncertaintyError, uncertaintyError.message)
     if (command.type === 'answer' && result.answerCompletion) {
       void result.answerCompletion.then(async delivered => {
         if (!delivered) return
+        if (uncertaintyError instanceof AnswerDeliveryUnconfirmed) uncertaintyError.delivered = true
         if (answerIntent) this.recordAnsweredRequest(answerIntent)
         if (this.visibleCommandError === uncertaintyError && this.state.error === uncertaintyError.message) {
           this.setCommandError(undefined, null)
