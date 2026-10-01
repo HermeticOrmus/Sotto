@@ -995,10 +995,13 @@ async function createRuntime(): Promise<NativeRuntimeController> {
       worktreeCleanup?.settingsChanged()
       phoneAccess.settingsChanged()
       if (grantDefaultChanged) browserService?.settingChanged()
+      const historyChanged = agentHistoryEnabled !== settings.historyEnabled
       agentHistoryEnabled = settings.historyEnabled
       agentVoiceCoordinatorEnabled = settings.voiceCoordinatorEnabled
-      await agentControl.privacyChanged()
-      await personalChats.privacyChanged()
+      if (historyChanged) {
+        await agentControl.privacyChanged()
+        await personalChats.privacyChanged()
+      }
       showWidgetWhenIdle = settings.showWidgetWhenIdle
       widgetPresentation = widgetPresentationFor(settings)
       if (!dictationLifecycle.isIdle()) {

@@ -1,12 +1,18 @@
 // @vitest-environment node
+import * as fsPromises from 'node:fs/promises'
 import { execFileSync } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, rename, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { FilesService } from '../../../src/main/files/service'
 import { CheckpointService } from '../../../src/main/tools/checkpoints'
 import type { CheckpointDependencies, CheckpointThread } from '../../../src/main/tools/checkpointTypes'
+
+vi.mock('node:fs/promises', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  return { ...actual }
+})
 
 const cleanup: (() => Promise<void>)[] = []
 afterEach(async () => { for (const dispose of cleanup.splice(0).reverse()) await dispose() })
@@ -41,6 +47,80 @@ async function fixture() {
 }
 
 describe('completed native turn checkpoints', () => {
+  it('refuses a concurrent Git action on the thread lane and completes the revert', async () => {
+    const f = await fixture(), request = await f.complete()
+    await f.service.initialize()
+    let lane: Promise<unknown> = Promise.resolve()
+    const onLane = <T>(work: () => Promise<T>): Promise<T> => {
+      const next = lane.then(work, work); lane = next.catch(() => undefined); return next
+    }
+    let release!: () => void, checking!: () => void
+    const paused = new Promise<void>(resolve => { release = resolve })
+    const entered = new Promise<void>(resolve => { checking = resolve })
+    const internals = f.service as unknown as { checkFiles: (...args: unknown[]) => Promise<void> }
+    const checkFiles = internals.checkFiles.bind(f.service)
+    vi.spyOn(internals, 'checkFiles').mockImplementationOnce(async (...args) => { checking(); await paused; await checkFiles(...args) })
+    const rollback = f.dependencies.rollback
+    f.dependencies.rollback = (...args) => onLane(() => rollback(...args))
+    const revert = f.service.revertCheckpoint({ ...request, confirmed: true })
+    await entered
+    const gitAction = onLane(async () => {
+      await f.service.initialize()
+      if (await f.service.isWorkspaceBlocked('thread-a')) return 'refused'
+      git(f.repo, 'status', '--porcelain'); return 'accepted'
+    })
+    // Start the action while validation holds the checkpoint queue.
+    release()
+    expect(await gitAction).toBe('refused')
+    expect(unwrap(await revert).status).toBe('reverted')
+  })
+  it.each(['EBUSY', 'EPERM'])('retries %s blob removal and keeps sends working after cleanup fails', async code => {
+    const f = await fixture(); await f.complete()
+    const orphan = join(f.dependencies.directory, 'blobs', 'f'.repeat(64))
+    await writeFile(orphan, 'orphan')
+    const realUnlink = fsPromises.unlink
+    const report = vi.fn(); f.dependencies.report = report
+    const remove = vi.spyOn(fsPromises, 'unlink').mockImplementation(async path => {
+      if (path === orphan) throw Object.assign(new Error('private path'), { code })
+      await realUnlink(path)
+    })
+    try {
+      await expect(f.service.beforeTurn('thread-a')).resolves.toBeUndefined()
+      expect(remove.mock.calls.filter(([path]) => path === orphan)).toHaveLength(3)
+      expect(report).toHaveBeenCalledWith('checkpoint-cleanup-failed')
+    } finally { remove.mockRestore() }
+  })
+  it.each(['age', 'size', 'history off'])('keeps unfinished revert guards and blobs through %s cleanup', async limit => {
+    const f = await fixture(), request = await f.complete()
+    f.refresh.mockRejectedValueOnce(new Error('interrupted after native acceptance'))
+    expect(await f.service.revertCheckpoint({ ...request, confirmed: true })).toMatchObject({ ok: false })
+    const blobs = (await readdir(join(f.dependencies.directory, 'blobs'))).sort()
+    if (limit === 'age') f.dependencies.now = () => Date.now() + 31 * 24 * 60 * 60 * 1000
+    if (limit === 'size') f.dependencies.maxBytes = 1
+    if (limit === 'history off') f.dependencies.historyEnabled = () => false
+    await f.service.privacyChanged()
+    const restarted = new CheckpointService(f.dependencies); cleanup.push(async () => restarted.dispose())
+    await restarted.initialize()
+    expect(await restarted.isWorkspaceBlocked('thread-b')).toBe(true)
+    await expect(restarted.beforeTurn('thread-a')).rejects.toThrow('interrupted checkpoint')
+    expect((await readdir(join(f.dependencies.directory, 'blobs'))).sort()).toEqual(blobs)
+    expect(unwrap(await restarted.recoverCheckpoint(request)).status).toBe('reverted')
+    expect(f.rollback).toHaveBeenCalledTimes(1)
+  })
+  it('never cleans through a blob directory junction or removes non-blob entries', async () => {
+    const f = await fixture(); await f.complete()
+    const directory = join(f.dependencies.directory, 'blobs'), external = join(f.root, 'external')
+    await writeFile(join(directory, 'keep.txt'), 'keep')
+    await mkdir(join(directory, 'a'.repeat(64)))
+    await f.service.privacyChanged()
+    expect(await readFile(join(directory, 'keep.txt'), 'utf8')).toBe('keep')
+    await rename(directory, external)
+    await symlink(external, directory, 'junction')
+    f.dependencies.historyEnabled = () => false
+    await f.service.privacyChanged()
+    expect(await readdir(external)).toContain('keep.txt')
+    expect((await readdir(external)).filter(name => /^[a-f0-9]{64}$/.test(name)).length).toBeGreaterThan(1)
+  })
   it('deletes forgotten checkpoints and shared blobs only after their last reference goes', async () => {
     const f = await fixture()
     await f.complete(); await f.service.beforeTurn('thread-b')
@@ -159,13 +239,14 @@ describe('completed native turn checkpoints', () => {
     expect(restarted.isBlocked('thread-a')).toBe(true)
     const backup = (await readdir(f.dependencies.directory)).find(name => name.startsWith('checkpoints.json.corrupt-'))!
     expect(await readFile(join(f.dependencies.directory, backup), 'utf8')).toBe(damaged)
-    expect(report).toHaveBeenCalledWith(expect.stringContaining(join(f.dependencies.directory, backup)))
-    expect(unwrap(await restarted.checkpoints(f.target)).reason).toContain(backup)
+    expect(report).toHaveBeenCalledWith('Sotto set aside a checkpoint file it could not read and kept the rest.')
+    expect(unwrap(await restarted.checkpoints(f.target)).reason).toBe('Sotto set aside a checkpoint file it could not read and kept the rest.')
     expect(JSON.parse(await readFile(path, 'utf8'))).toMatchObject({ version: 1, records: saved.records })
     expect(f.rollback).toHaveBeenCalledTimes(1)
     f.dependencies.historyEnabled = () => false
     await restarted.privacyChanged()
     expect(await readdir(f.dependencies.directory)).not.toContain(backup)
+    expect(unwrap(await restarted.checkpoints(f.target)).reason).toBeUndefined()
   })
   it('erases a recovery backup that contains a forgotten thread without discarding other checkpoints', async () => {
     const f = await fixture(); await f.complete(); await f.service.beforeTurn('thread-b')

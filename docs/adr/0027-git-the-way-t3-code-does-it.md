@@ -98,8 +98,8 @@ The commit action keeps staged hunks in selected files and stages selected files
 
 ## Amendment: checkpoint retention (September 30, 2026)
 
-Turn checkpoints follow Keep local history. Turning it off or forgetting a thread deletes its checkpoints and file backups that no other checkpoint needs. Checkpoints expire after 30 days; checkpoint storage is capped at 500 MB, removing the oldest checkpoints and recovery backups first. Turning history back on starts fresh checkpoints.
+Turn checkpoints follow Keep local history. Turning it off or forgetting a thread deletes its saved checkpoints at once, along with file backups that no other checkpoint needs. Turning history off and the age and size limits keep unfinished revert records and their file backups until recovery finishes. Completed checkpoints expire after 30 days; checkpoint storage is capped at 500 MB, removing the oldest checkpoints and recovery backups first. Turning history back on starts fresh checkpoints.
 
 ## Amendment: checkpoint file recovery (September 30, 2026)
 
-Checkpoint storage uses a versioned file. If it is damaged, Sotto keeps readable records and backs up the original beside `checkpoints.json` as `checkpoints.json.corrupt-<id>`. The recovery message names that backup. Readable interrupted reverts still require recovery before more work; unreadable records cannot be restored. Backups share the storage limit, expire after 30 days and are erased when Keep local history is turned off or a thread they mention is forgotten.
+The checkpoint file records which storage format it uses. If it is damaged, Sotto keeps readable records and backs up the original beside `checkpoints.json` as `checkpoints.json.corrupt-<id>`. The Checkpoints drawer says Sotto set aside a file it could not read. Readable interrupted reverts still require recovery before more work; unreadable records cannot be restored. Backups share the storage limit, expire after 30 days and are erased when Keep local history is turned off or a thread they mention is forgotten.

@@ -1,4 +1,5 @@
 import { constants } from 'node:fs'
+import { setTimeout as delay } from 'node:timers/promises'
 import { execFile } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { copyFile, lstat, mkdir, readFile, readdir, realpath, rename, unlink, writeFile } from 'node:fs/promises'
@@ -50,6 +51,8 @@ export class CheckpointService extends ToolOperations {
   private readonly records = new Map<string, Record>()
   private initialized = false
   private recoveryNotice: string | undefined
+  private recoveryBackup: string | undefined
+  private readonly blobSizes = new Map<string, number>()
   private loaded: Promise<void> | undefined
   private tail: Promise<unknown> = Promise.resolve()
   private readonly maintenance: ReturnType<typeof setInterval>
@@ -88,7 +91,8 @@ export class CheckpointService extends ToolOperations {
         catch { throw new Error(`Checkpoint storage at ${source} could not be repaired. No checkpoints were discarded. Restore access and try again; the backup could not be saved at ${backup}.`) }
         try { await this.store.write({ version: 1, records }) }
         catch { throw new Error(`Checkpoint storage at ${source} could not be repaired. The original file is backed up at ${backup}. Restore access to local storage and try again.`) }
-        this.recoveryNotice = `Some checkpoints could not be read. Readable checkpoints were kept. The original file is backed up at ${backup}.`
+        this.recoveryBackup = backup
+        this.recoveryNotice = 'Sotto set aside a checkpoint file it could not read and kept the rest.'
         try { this.dependencies.report?.(this.recoveryNotice) } catch { /* Reporting cannot prevent recovery. */ }
       }
       for (const record of records) {
@@ -101,39 +105,84 @@ export class CheckpointService extends ToolOperations {
     }).catch(error => { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') { this.loaded = undefined; if (error instanceof Error && error.message.startsWith('Checkpoint storage at ')) throw error; throw new Error(`Checkpoint storage at ${join(this.dependencies.directory, 'checkpoints.json')} could not be read. No checkpoints were discarded. Restore access to the file and try again.`, { cause: error }) } })
   }
   initialize(): Promise<void> { if (this.initialized) return Promise.resolve(); return this.serial(async () => { await this.load(); if (!this.initialized) { await this.save(); this.initialized = true } }) }
+  private async refreshRecoveryNotice(): Promise<void> {
+    if (!this.recoveryBackup) return
+    const exists = await lstat(this.recoveryBackup).catch(error => { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error })
+    if (!exists) { this.recoveryBackup = undefined; this.recoveryNotice = undefined }
+  }
+  private unresolved(record: Record): boolean { return record.status === 'reverting' || record.status === 'uncertain' }
+  private async removeBackup(path: string): Promise<void> {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try { await unlink(path); if (path === this.recoveryBackup) { this.recoveryBackup = undefined; this.recoveryNotice = undefined } return }
+      catch (error) {
+        const code = (error as NodeJS.ErrnoException).code
+        if (code === 'ENOENT') return
+        if ((code === 'EBUSY' || code === 'EPERM') && attempt < 2) { await delay(25); continue }
+        this.dependencies.report?.('checkpoint-cleanup-failed')
+        return
+      }
+    }
+  }
   private async save(): Promise<void> {
     const cutoff = (this.dependencies.now?.() ?? Date.now()) - 30 * 24 * 60 * 60 * 1000
-    for (const record of this.records.values()) if (this.dependencies.historyEnabled?.() === false || Date.parse(record.createdAt) < cutoff) this.records.delete(record.id)
+    for (const record of this.records.values()) if (!this.unresolved(record) && (this.dependencies.historyEnabled?.() === false || Date.parse(record.createdAt) < cutoff)) this.records.delete(record.id)
     const directory = join(this.dependencies.directory, 'blobs')
-    const names = await readdir(directory).catch(error => { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error })
-    const sizes = new Map<string, number>()
-    for (const name of names) sizes.set(name, (await lstat(join(directory, name))).size)
-    const references = (): Set<string> => new Set([...this.records.values()].flatMap(record => [record.before, record.after].flatMap(snapshot => snapshot ? Object.values(snapshot.files).map(file => file.hash) : [])))
-    let referenced = references()
+    const blobInfo = await lstat(directory).catch(error => { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error })
+    const safeDirectory = blobInfo?.isDirectory() && !blobInfo.isSymbolicLink()
+    if (blobInfo && !safeDirectory) this.dependencies.report?.('checkpoint-cleanup-unsafe-directory')
+    const names = safeDirectory ? (await readdir(directory)).filter(name => /^[a-f0-9]{64}$/.test(name)) : []
+    const regular = new Set<string>()
+    for (const name of names) {
+      if (this.blobSizes.has(name)) { regular.add(name); continue }
+      const info = await lstat(join(directory, name)).catch(error => { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error })
+      if (info?.isFile() && !info.isSymbolicLink()) { regular.add(name); if (!this.blobSizes.has(name)) this.blobSizes.set(name, info.size) }
+    }
+    const hashes = (record: Record): Set<string> => new Set([record.before, record.after].flatMap(snapshot => snapshot ? Object.values(snapshot.files).map(file => file.hash) : []))
+    const counts = new Map<string, number>()
+    let total = Buffer.byteLength(JSON.stringify({ version: 1, records: [...this.records.values()] }, null, 2) + '\n')
+    const recordBytes = new Map<string, number>()
+    for (const record of this.records.values()) {
+      // Each record is indented four spaces inside the stored array.
+      const bytes = Buffer.byteLength(JSON.stringify(record, null, 2).split('\n').map(line => `    ${line}`).join('\n')) + 2
+      recordBytes.set(record.id, bytes)
+      for (const hash of hashes(record)) { if (!counts.has(hash)) total += this.blobSizes.get(hash) ?? 0; counts.set(hash, (counts.get(hash) ?? 0) + 1) }
+    }
     const backupNames = (await readdir(this.dependencies.directory).catch(error => { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error })).filter(name => name.startsWith('checkpoints.json.corrupt-'))
     const backups = new Map<string, { size: number; createdAt: number }>()
     const removedBackups = new Set<string>()
     for (const name of backupNames) {
       const info = await lstat(join(this.dependencies.directory, name))
+      if (!info.isFile() || info.isSymbolicLink()) continue
       if (this.dependencies.historyEnabled?.() === false || info.mtimeMs < cutoff) removedBackups.add(name)
-      else backups.set(name, { size: info.size, createdAt: info.mtimeMs })
+      else { backups.set(name, { size: info.size, createdAt: info.mtimeMs }); total += info.size }
     }
-    const bytes = (): number => [...referenced].reduce((total, hash) => total + (sizes.get(hash) ?? 0), 0)
-      + [...backups.values()].reduce((total, backup) => total + backup.size, 0)
-      + Buffer.byteLength(JSON.stringify({ version: 1, records: [...this.records.values()] }, null, 2) + '\n')
     const oldest = [
-      ...[...this.records.values()].map(record => ({ createdAt: Date.parse(record.createdAt), recordId: record.id, backup: undefined })),
+      ...[...this.records.values()].filter(record => !this.unresolved(record)).map(record => ({ createdAt: Date.parse(record.createdAt), recordId: record.id, backup: undefined })),
       ...[...backups].map(([name, info]) => ({ createdAt: info.createdAt, recordId: undefined, backup: name })),
     ].sort((a, b) => a.createdAt - b.createdAt)
     for (const item of oldest) {
-      if (bytes() <= (this.dependencies.maxBytes ?? 500_000_000)) break
-      if (item.recordId) { this.records.delete(item.recordId); referenced = references() }
-      if (item.backup) { backups.delete(item.backup); removedBackups.add(item.backup) }
+      if (total <= (this.dependencies.maxBytes ?? 500_000_000)) break
+      if (item.recordId) {
+        const record = this.records.get(item.recordId)!
+        this.records.delete(item.recordId); total -= recordBytes.get(item.recordId) ?? 0
+        if (!this.records.size) total -= 2
+        for (const hash of hashes(record)) {
+          const remaining = counts.get(hash)! - 1
+          if (remaining) counts.set(hash, remaining)
+          else { counts.delete(hash); total -= this.blobSizes.get(hash) ?? 0 }
+        }
+      }
+      if (item.backup) { total -= backups.get(item.backup)!.size; backups.delete(item.backup); removedBackups.add(item.backup) }
     }
-    // Commit references first, so a failed write cannot leave a durable record pointing at a deleted blob.
+    // Commit references before deleting any file backups.
     await this.store.write({ version: 1, records: [...this.records.values()] })
-    for (const name of names) if (!referenced.has(name)) await unlink(join(directory, name))
-    for (const name of removedBackups) await unlink(join(this.dependencies.directory, name))
+    for (const name of regular) if (!counts.has(name)) {
+      const info = await lstat(join(directory, name)).catch(error => { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error })
+      if (info?.isFile() && !info.isSymbolicLink()) await this.removeBackup(join(directory, name))
+      this.blobSizes.delete(name)
+    }
+    for (const name of removedBackups) await this.removeBackup(join(this.dependencies.directory, name))
+    await this.refreshRecoveryNotice()
   }
   async forgetThread(threadId: string): Promise<void> { return this.serial(async () => {
     await this.load()
@@ -146,10 +195,10 @@ export class CheckpointService extends ToolOperations {
       const mentionsThread = [...text.matchAll(/"threadId"\s*:\s*("(?:[^"\\]|\\.)*")/g)].some(match => {
         try { return JSON.parse(match[1]!) === threadId } catch { return false }
       })
-      if (mentionsThread) await unlink(path)
+      if (mentionsThread) await this.removeBackup(path)
     }
   }) }
-  async privacyChanged(): Promise<void> { return this.serial(async () => { await this.load(); await this.save(); if (this.dependencies.historyEnabled?.() === false) this.recoveryNotice = undefined }) }
+  async privacyChanged(): Promise<void> { return this.serial(async () => { await this.load(); await this.save() }) }
   private serial<T>(operation: () => Promise<T>): Promise<T> {
     const next = this.tail.then(operation, operation)
     this.tail = next.catch(() => undefined)
@@ -162,7 +211,6 @@ export class CheckpointService extends ToolOperations {
   }
   async isWorkspaceBlocked(threadId: string): Promise<boolean> {
     await this.load()
-    if (this.dependencies.historyEnabled?.() === false) return false
     if (this.isBlocked(threadId)) return true
     const owner = await workspace(this.dependencies.files, threadId)
     const cwd = await realpath(owner.workingDirectory)
@@ -216,6 +264,7 @@ export class CheckpointService extends ToolOperations {
       if (total > 64 * 1024 * 1024 || info.size > 8 * 1024 * 1024) return fail('too-large', 'This working copy exceeds the checkpoint size limit (64 MiB total, 8 MiB per file).')
       const bytes = await readFile(absolute), hash = digest(bytes)
       await writeFile(join(blobDirectory, hash), bytes, { flag: 'wx', mode: 0o600 }).catch(error => { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error })
+      this.blobSizes.set(hash, bytes.length)
       files[path] = { hash, mode: info.mode }
     }
     return { files, index: await this.git(cwd, ['ls-files', '--stage', '-z']), head: await this.git(cwd, ['rev-parse', '--verify', 'HEAD']).then(text => text.trim(), () => '') }
@@ -224,8 +273,8 @@ export class CheckpointService extends ToolOperations {
     await this.afterTurn(threadId)
     return this.serial(async () => {
     await this.load()
-    if (this.dependencies.historyEnabled?.() === false) { await this.save(); return }
     if (this.isBlocked(threadId)) return fail('blocked', 'Resolve the interrupted checkpoint revert before sending more work.')
+    if (this.dependencies.historyEnabled?.() === false) { await this.save(); return }
     const thread = await this.dependencies.resolveThread(threadId)
     if (!thread) return
     const pending = [...this.records.values()].find(record => record.threadId === threadId && record.status === 'capturing')
@@ -278,6 +327,7 @@ export class CheckpointService extends ToolOperations {
   checkpoints(payload: unknown) { return this.run(async () => {
     const request = parse(toolListRequestSchema, payload)
     await this.afterTurn(request.threadId)
+    await this.refreshRecoveryNotice()
     const owner = await workspace(this.dependencies.files, request.threadId, request.workspaceId)
     const thread = await this.dependencies.resolveThread(request.threadId)
     return { checkpoints: [...this.records.values()].filter(record => record.threadId === request.threadId && record.workspaceId === owner.workspaceId && record.status !== 'capturing').reverse().map(record => this.public(record, thread)), supported: thread?.rollbackSupported ?? false, ...((this.recoveryNotice || !thread?.rollbackSupported) ? { reason: [this.recoveryNotice, !thread?.rollbackSupported ? thread?.unsupportedReason ?? 'Native conversation rollback is unavailable for this provider.' : undefined].filter(Boolean).join(' ') } : {}) }
@@ -345,8 +395,9 @@ export class CheckpointService extends ToolOperations {
       await this.checkFiles(record)
       const guarded = await this.dependencies.resolveThread(thread.threadId)
       if (!guarded || guarded.busy || !this.matches(record, guarded) || !equal(guarded.userMessageIds, record.afterUsers)) return fail('blocked', 'Thread work changed while checking the checkpoint. Review it again before reverting.')
-      record.status = 'reverting'; await this.save()
+      await this.save()
       if (!this.records.has(record.id)) return fail('blocked', 'This checkpoint expired or local history changed. No rollback was sent. Review the working copy.')
+      record.status = 'reverting'; await this.save()
       let result: { accepted: boolean; uncertain?: boolean }
       try { result = await this.dependencies.rollback(thread.threadId, record.afterUsers.length - record.beforeUsers.length, record.afterUsers) }
       catch { result = { accepted: false } }

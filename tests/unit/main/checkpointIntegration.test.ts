@@ -4,6 +4,7 @@ import { workspaceFixture } from '../../fixtures/workspaceFixture'
 import { connectCheckpoints } from '../../../src/main/tools/checkpointIntegration'
 import { FilesService } from '../../../src/main/files/service'
 import { resolveFilesBinding } from '../../../src/main/files/binding'
+import type { GitActions } from '../../../src/main/agents/gitActions'
 import type { AgentControl } from '../../../src/main/agents/control'
 import type { GitChangesService } from '../../../src/main/tools/gitChanges'
 
@@ -35,12 +36,14 @@ it('excludes an unallocated worktree from shared-folder checkpoint guards while 
     const checking = new Promise<void>(resolve => { entered = resolve })
     const revert = internals.serial(async () => {
       internals.locks.add('ready'); entered(); await paused
-      await f.host.refreshThread('ready')
+      await f.host.rollbackThread('ready', 1, []).catch(() => undefined)
       internals.locks.delete('ready')
     })
     await checking
-    const git = f.host.execute({ type: 'git-pull', threadId: 'ready' })
-    const refused = expect(git).rejects.toThrow('interrupted checkpoint revert')
+    f.host.setGitActions({} as GitActions)
+    f.host.setMutationGuard(integration.canMutate)
+    const git = f.host.pullThreadBranch('ready')
+    const refused = expect(git).rejects.toThrow('Wait for active or pending thread work')
     release()
     await refused
     await revert
