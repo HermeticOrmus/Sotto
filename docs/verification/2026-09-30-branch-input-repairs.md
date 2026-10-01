@@ -1,37 +1,41 @@
 # Branch input repairs
 
-Package pkg-25 fixes #520, #541 and #542. The controls, copy and theme roles are unchanged. No setting, permission, host or provider behavior was added; these repairs follow ADR-0014, ADR-0018, ADR-0027 and ADR-0033. The guide now names the copy actions and the keyboard behavior.
+Package pkg-25 fixes #520, #541 and #542. The review rework completes the Settings copy callers, composition guards and recovery advice. It follows ADR-0011, ADR-0014, ADR-0018, ADR-0027, ADR-0033 and ADR-0035. No permission record, setting, provider, host or glossary term changed. The guide names the restored copy behavior.
 
 ## Regression evidence
 
-Four copy regressions failed before the fix with browser clipboard writes denied. They now pass through main's copy-only output bridge for branch names, pull request links, phone addresses and terminal selections.
+The four original copy cases cover branch names, pull request links, phone addresses and terminal selections with browser clipboard writes denied. Four more cases exercise the actual Settings buttons: client update commands, provider sign-in codes, Devin's sign-in command and setup fix commands. Each reaches main's copy-only output bridge. The renderer audit finds browser clipboard access only in `richActions.ts`, as its fallback for a window without the preload bridge; production uses main's serialized output path from #637.
 
-Ten composition cases failed before the fix: both `isComposing` and keyCode 229 in the branch picker (loaded and pending searches), project chooser, thread rename and new-folder field. They now leave the action for a separate Enter. The existing composer uses the same extracted guard.
+Both `isComposing` and keyCode 229 leave Enter actions untouched in branch search, project choice, thread renaming, new-folder naming, the phone computer name, host rename, connection fields and theme names. SSH answers and pasted provider sign-in codes use the same guard. A separate Enter still completes each action. Composing Escape stays inside branch search instead of bubbling to picker dismissal; ordinary Escape still closes it.
 
-Four search regressions failed before the fix: clearing a search, editing after a pending Enter, changing the current thread's state before Enter, and a late search response. A fifth test checks that a pending Enter cannot act after switching threads and that a fresh Enter still works in the new thread.
+The original search tests cover clearing the search, editing after a pending Enter, current-thread state, late responses and switching threads while an Enter waits. The repairs remain intact after merging main.
+
+Terminal copying keeps the selection while main answers and after a failure. The error says that the selection is kept and asks for another Ctrl+C. A whitespace-only selection neither writes to the clipboard nor interrupts the command; it says to select text first. Branch copy failures give manual-copy advice. Pull request failures direct the user to Open on GitHub and copy the browser address, and the test verifies that action opens the correct URL.
+
+The focused renderer run passed 161 tests in eight files. Before the repairs, tests reproduced all four Settings clipboard failures, both composition signals in the four missed Settings fields, both composing Escape cases and both terminal selection defects. The theme regression waits for the asynchronous save, so it catches the premature action.
 
 ## Built Windows app
 
-The `thread-worktrees.spec.ts` shared-checkout journey passed with added assertions for the main-owned clipboard, restoring all refs after clearing and both composition signals. The existing journey also checks switching and creating branches, Git refusal, workspace choices and keyboard focus. The other four worktree journeys, the phone-settings journey and the host-folder-browser journey passed in the initial selected-spec run.
+The selected specs were `thread-worktrees.spec.ts`, `phones.spec.ts`, `host-folder-browser.spec.ts`, `pull-request-surface.spec.ts` and `terminal-display.spec.ts`. Eight distinct journeys passed across the run and reruns: all five worktree journeys, Phones, Pull request and Terminal. The pull request fixture now follows instant thread creation; the terminal fixture uses the current Sotto thread ID after host qualification. Neither assertion nor deadline was weakened.
 
-The branch picker was captured at 1600×1000, 1280×800 and 820×560 CSS pixels in dark and light with reduced motion enabled. The search and restored main ref stay in the viewport, with no document overflow. These retained captures were inspected:
+The shared-checkout branch journey passed again after rebuilding, including main-owned copying, clearing the search, both composition signals for Enter and Escape, switching and creating branches, Git refusal, workspace choices and keyboard focus. The picker was captured at 1600?1000, 1280?800 and 820?560 CSS pixels in dark and light with reduced motion enabled. Search and the restored main ref remain in the viewport, with no document overflow. These inspected captures are retained outside the test's generated output:
 
-- [Minimum size, dark](../../artifacts/new-thread-setup/pkg25-branch-820x560-dark.png)
-- [Minimum size, light](../../artifacts/new-thread-setup/pkg25-branch-820x560-light.png)
-- [1280×800, dark](../../artifacts/new-thread-setup/pkg25-branch-1280x800-dark.png)
+- [Minimum size, dark](../../artifacts/branch-input-repairs/pkg25-branch-820x560-dark.png)
+- [Minimum size, light](../../artifacts/branch-input-repairs/pkg25-branch-820x560-light.png)
+- [1280?800, dark](../../artifacts/branch-input-repairs/pkg25-branch-1280x800-dark.png)
 
-IME verification uses browser keyboard events, rather than a hands-on Japanese or Chinese operating-system input session. No design baseline was regenerated.
+The test continues writing scratch captures under the ignored `artifacts/new-thread-setup/`. None of its `pkg25-branch-*.png` files is tracked there. Rerunning it cannot overwrite these retained captures. No design baseline was regenerated.
 
-The selected Electron run initially had 6 passes and 3 failures. The branch test's clipboard assertion was corrected to read the existing private main-process E2E clipboard; its complete journey then passed. The remaining failures reproduce both alone on this branch and in an archived source build of starting commit `64e6fa658347e05463dada00e2e01236b1819f2c`, inside this worktree: `pull-request-surface.spec.ts` still waits for the removed Create thread button, and `terminal-display.spec.ts` looks up the unqualified workshop ID after host qualification. Both fail during setup, before reaching the changed controls. They are left intact rather than changing thread-creation fixtures in this package.
+The folder-browser journey fails when Use this folder is pressed for a newly named folder: ?That folder no longer exists. Nothing was added. Choose another folder.? Add project always sends `useExisting: true`, and main now refuses a missing folder. The same journey and refusal were reproduced against an archived source build of main at `af69ca9e18caa0f7aeb9e0a69694f64b649d69b4`, under this worktree's ignored `out/` directory. The original main spec failed at the same assertion; a second run with only the test's improved diagnostic assertion confirmed the identical words. This inherited folder-creation failure is outside the copy/composition/search repairs and remains visible in the results.
 
-The focused renderer run passed 124 tests in 9 files. Typecheck, lint, build and notices verification passed. The full two-worker run had a host-update timeout in `sshLauncher.test.ts`; its isolated rerun passed all 40 tests without changing the test or its deadline.
+IME verification uses browser keyboard events, not a hands-on operating-system IME session. The copy-feedback state prototype was driven and inspected in Chromium and retained on local branch `prototype/pkg25-copy-recovery`; it confirmed selection retention and recovery feedback without proposing a new layout. The shipped changes use the existing components and theme roles.
 
-## Review
+## Review and gates
 
-The standards pass checked privacy, main-owned clipboard delivery, existing permission gates, keyboard paths, theme roles, test placement and UTF-8 encoding. It removed an unused test-mock parameter found by lint. The spec pass checked all four copy callers, all four composition fields, empty-query reload, pending-Enter cancellation and current callback dependencies. It also added late-response and thread-change coverage.
+Independent standards and spec reviews used gpt-6.1-sol at high reasoning. Both identified the same recovery defect: the pull request URL is not selectable in this surface. The advice now names the existing Open on GitHub action, and regression coverage clicks it and verifies the URL. Both reviewers then reported no remaining implementation findings.
 
-## Main integration
+All issue comments, pull request reviews and inline review comments were read through the three GitHub API endpoints. The initial feedback consisted only of Cursor's usage-limit notice and Greptile's credit-limit notice; there were no actionable online points. Every repair item in the resumed rework brief was accepted and addressed. Code, capture relocation and this note are separate commits.
 
-Windows CI passed on the three-fix revision before main was merged. Integrating main at `dee39cf3695db282e3873adbf55d45d5287b9c51` produced one guide conflict: the resolution keeps the branch-search guidance and main's updated Git staging instructions. The code merged without conflicts.
+The initial current-main integration at `af69ca9e` passed all four required local gates: typecheck, lint, `npm test -- --maxWorkers=2` (6,659 passed, 153 skipped, no failures), and notices verification (174 components). Build also passed.
 
-The integrated revision passed typecheck, lint and build, then 317 tests across 20 renderer, Git, host, IPC and coordinator files. The Git-action and shared-checkout Electron journeys both passed. The three retained branch captures were refreshed and inspected after this integration; the existing chooser baselines were left unchanged.
+A subsequent fetch brought in main at `081d9afadd45307c13a24d3732a20285e5a7e8bd`. It merged without conflicts. The integrated revision passed typecheck, lint, notices and build, followed by every changed non-Electron test file plus the package's affected tests: 1,529 passed and 12 skipped across 95 files. Nine Electron journeys passed on this revision: all five worktree journeys, Phones, Pull request, Terminal and the new thread-composer recovery journey. The retained captures were refreshed and inspected after this integration. The inherited folder-creation failure described above remains the only selected Electron failure.
