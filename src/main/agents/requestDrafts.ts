@@ -30,7 +30,7 @@ export interface RequestDraftOwnerState {
 /** Shared production projection: legacy redacted decisions deliberately have no digest fallback. */
 export function personalRequestDraftState(state: PersonalChatState, owner: RequestDraftOwner): RequestDraftOwnerState | undefined {
   const chat = state.chats.find(item => owner.kind === 'personal' && item.id === owner.ownerId && item.providerId === owner.providerId)
-  return chat ? { connected: state.connected && !state.connecting, ready: chat.historyStatus !== 'loading' && chat.historyStatus !== 'error',
+  return chat ? { connected: chat.connected === true, ready: chat.historyStatus !== 'loading' && chat.historyStatus !== 'error',
     requests: chat.requests,
     uncertainRequestIds: [...new Set((chat.decisions ?? []).map(item => item.requestId))].filter(id => personalAnswerHeld(chat, id)),
     completed: (chat.decisions ?? []).filter(item => item.status === 'accepted').map(item => ({ requestId: item.requestId,
