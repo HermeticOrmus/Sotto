@@ -213,12 +213,15 @@ function createBufferedSubscription<Output>(
   })
   return (nextListener) => {
     // Each registration owns its unsubscribe, even when callers use the same callback.
-    const listener = (payload: Output): void => nextListener(payload)
+    const listener = (payload: Output): void => {
+      try { nextListener(payload) }
+      catch { /* A subscriber cannot stop delivery to others. Never log state or exception bodies. */ }
+    }
     listeners.add(listener)
     const replay = buffered.splice(0)
     for (const payload of replay) {
       if (!listeners.has(listener)) break
-      nextListener(payload)
+      listener(payload)
     }
     let subscribed = true
     return () => {

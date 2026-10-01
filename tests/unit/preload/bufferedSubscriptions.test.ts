@@ -13,6 +13,25 @@ function fixture() {
 }
 
 describe('buffered settings subscriptions', () => {
+  it('delivers to later subscribers when an earlier subscriber throws', () => {
+    const { bridge, emit } = fixture(), later = vi.fn()
+    bridge.onSettingsChanged(() => { throw new Error('Synthetic subscriber failure') })
+    bridge.onSettingsChanged(later)
+    expect(() => emit(DEFAULT_SETTINGS)).not.toThrow()
+    expect(later).toHaveBeenCalledWith(DEFAULT_SETTINGS)
+    emit(DEFAULT_SETTINGS)
+    expect(later).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps a throwing replay subscriber registered without preventing later delivery', () => {
+    const { bridge, emit } = fixture(), later = vi.fn()
+    emit(DEFAULT_SETTINGS)
+    expect(() => bridge.onSettingsChanged(() => { throw new Error('Synthetic replay failure') })).not.toThrow()
+    bridge.onSettingsChanged(later)
+    emit(DEFAULT_SETTINGS)
+    expect(later).toHaveBeenCalledWith(DEFAULT_SETTINGS)
+  })
+
   it('delivers changes to both the app and voice settings and keeps the app subscribed after voice settings unmount', () => {
     const { bridge, emit } = fixture(), app = vi.fn(), voice = vi.fn()
     const offApp = bridge.onSettingsChanged(app)
