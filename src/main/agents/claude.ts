@@ -75,10 +75,10 @@ const backgroundWorkRunning = (work: readonly AgentBackgroundWork[], action: str
  * Stopping a thread's CLI ends the background work and watches it was running, so a stop Sotto makes on its own
  * account names what ended with it: the user started that work, and it does not come back by itself.
  */
-function workStopped(reason: string, work: readonly { label: string }[]): string {
+function workStopped(reason: string, work: readonly { label: string }[], next = 'The session starts again with the new settings the next time you use the thread.'): string {
   const what = work.length === 1 ? `"${work[0]!.label}"` : `${work.length} background tasks`
   const them = work.length === 1 ? 'it' : 'them'
-  return `${reason}, so Sotto stopped this thread's session, and ${what} stopped with it. The session starts again with the new settings the next time you use the thread. Ask Claude to start ${them} again if you still need ${them}.`
+  return `${reason}, so Sotto stopped this thread's session, and ${what} stopped with it. ${next} Ask Claude to start ${them} again if you still need ${them}.`
 }
 type ConfigureCommand = Extract<AgentHostCommand, { type: 'configure-thread' }>
 const SETTINGS_UNCONFIRMED = 'Claude Code did not confirm the settings change'
@@ -648,7 +648,12 @@ export class ClaudeStreamJsonHost implements AgentHost {
       try {
         if (this.nativeTakeovers.has(id) || this.revokedContexts.has(id) || this.staleMemoryContexts.has(id) && !thread.backgroundWork?.length) {
           const stale = this.runtimes.get(id)
-          if (stale) { await this.denyPending(id, stale); await this.stopRuntime(id, stale) }
+          if (stale) {
+            await this.denyPending(id, stale)
+            const ended = await this.stopRuntime(id, stale)
+            if (ended.length) this.report(workStopped(this.revokedContexts.has(id) ? 'A memory in this session was deleted' : 'The native conversation changed', ended,
+              'The session resumes with the updated context before this message is sent.'))
+          }
           this.staleMemoryContexts.delete(id); this.revokedContexts.delete(id); this.nativeTakeovers.delete(id)
         }
         const runtime = await this.start(id)
@@ -1325,4 +1330,3 @@ export class ClaudeStreamJsonHost implements AgentHost {
   }
   private emit(streaming = false): void { this.publisher.publish(streaming); this.scheduleOutdatedStop() }
 }
-
