@@ -794,6 +794,47 @@ describe('independent working-copy allocation', () => {
     expect((await f.service.reclaim(f.a, { confirmedItems: preview.items, confirmedIgnored: preview.ignored, confirmedRepositories: preview.repositories })).reclaimedAt).toBeTruthy()
     await expect(lstat(f.gitDirectory)).rejects.toMatchObject({ code: 'ENOENT' })
   }, 60_000)
+  it.each(['published', 'private'] as const)('inspects retained recursive submodule history without its checkout (%s)', async history => {
+    const f = await fixture(), moduleOrigin = await fixture(), childOrigin = await fixture()
+    await git(moduleOrigin.project, ['-c', 'protocol.file.allow=always', 'submodule', 'add', childOrigin.project, 'child'])
+    await git(moduleOrigin.project, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-am', 'Add child module'])
+    await git(f.project, ['-c', 'protocol.file.allow=always', 'submodule', 'add', moduleOrigin.project, 'module'])
+    await git(f.project, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-am', 'Add module'])
+    const a = await f.service.ensure(await f.service.allocate(f.project, 'independent'))
+    await git(a.path!, ['-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', '--recursive'])
+    const child = join(a.path!, 'module', 'child')
+    const recorded = (await git(child, ['rev-parse', 'HEAD'])).trim()
+    const childDirectory = (await git(child, ['rev-parse', '--absolute-git-dir'])).trim()
+    let privateCommit = ''
+    if (history === 'private') {
+      await git(child, ['checkout', '-b', 'private'])
+      await writeFile(join(child, 'private.txt'), 'unpublished recursive history')
+      await git(child, ['add', '.'])
+      await git(child, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'Private child work'])
+      privateCommit = (await git(child, ['rev-parse', 'HEAD'])).trim()
+      await git(child, ['checkout', '--detach', recorded])
+    }
+    await git(a.path!, ['submodule', 'deinit', '--', 'module'])
+    await expect(lstat(child)).rejects.toMatchObject({ code: 'ENOENT' })
+    // Parent deinit retains the child's core.worktree pointing at the removed checkout.
+    expect(await readFile(join(childDirectory, 'config'), 'utf8')).toContain('worktree =')
+    const preview = await f.service.reclaimFacts(a)
+    expect(preview.dirty).toBe(false)
+    if (history === 'published') {
+      expect(preview.repositories).toEqual([])
+      expect(preview.ignored).toEqual([])
+      expect((await f.service.reclaim(a, { automatic: true })).reclaimedAt).toBeTruthy()
+    } else {
+      expect(preview.repositories).toEqual([{ path: '.git/modules/module/modules/child/', changeCount: 0, kind: 'repository', unpushedCommitCount: 1 }])
+      expect(preview.items.find(item => item.path === '.git/modules/module/modules/child/')?.fileCount).toBeGreaterThan(0)
+      await expect(f.service.reclaim(a, { automatic: true })).rejects.toThrow('a rule leaves it alone')
+      await expect(f.service.reclaim(a)).rejects.toThrow('Choose Remove worktree to review them')
+      await expect(f.service.reclaim(a, { confirmedItems: preview.items, confirmedIgnored: preview.ignored })).rejects.toThrow('The nested work changed')
+      expect(await git(childDirectory, ['--git-dir', childDirectory, '--work-tree', childDirectory, 'cat-file', '-t', privateCommit])).toBe('commit\n')
+      expect((await f.service.reclaim(a, { confirmedItems: preview.items, confirmedIgnored: preview.ignored, confirmedRepositories: preview.repositories })).reclaimedAt).toBeTruthy()
+    }
+    await expect(lstat(childDirectory)).rejects.toMatchObject({ code: 'ENOENT' })
+  }, 60_000)
   it.each(['clean', 'recursive', 'dirty-hidden'])('reclaims initialized submodules safely (%s)', async mode => {
     const recursive = mode === 'recursive'
     const f = await fixture()

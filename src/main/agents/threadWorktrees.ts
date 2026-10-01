@@ -532,10 +532,15 @@ export class ThreadWorktrees {
         const head = await lstat(join(directory, 'HEAD')).catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return undefined; throw error })
         if (head?.isFile()) {
           if (!inspectedSubmoduleDirectories.has(pathKey(await realpath(directory)))) {
-            const unpushedCommitCount = Number((await this.git(directory, ['--git-dir', directory, 'rev-list', '--count', '--all', '--not', '--remotes'])).trim())
+            // Recursive deinit keeps core.worktree pointing at a deleted checkout. History reads
+            // need no checkout, so override that path with the existing metadata directory.
+            const unpushedCommitCount = Number((await this.git(directory, ['--git-dir', directory, '--work-tree', directory, 'rev-list', '--count', '--all', '--not', '--remotes'])).trim())
+            // Git also refuses ordinary removal for retained recursive metadata. The final
+            // scan must cover its history before force removal, even when every ref is published.
+            submodules.push(`.git/modules/${relative(modulesDirectory, directory).split(sep).join('/')}/`)
             if (unpushedCommitCount) {
-              // Git removes core.worktree on deinit. Read the checkout path from .gitmodules when
-              // it is still recorded; orphaned or recursive metadata retains its own visible path.
+              // Read the checkout path from the parent's .gitmodules when it is still recorded;
+              // orphaned or recursive metadata retains its own visible path.
               if (!modulePaths) {
                 modulePaths = new Map()
                 if (await lstat(join(path, '.gitmodules')).then(info => info.isFile(), (error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return false; throw error })) {
