@@ -977,9 +977,11 @@ export class GrokAcpHost implements AgentHost {
         rpc.write({ jsonrpc: '2.0', id: frame.id, error: { code: -32601, message: 'Sotto does not handle this request.' } })
         // Grok reads that refusal as an answer and keeps going, so a renamed or reshaped approval would
         // otherwise pass as the user declining. Foreign sessions stay none of Sotto's business.
-        if (threadId && needsPerson(method) && this.state.error !== unreadableRequest('Grok')) {
-          this.state.error = unreadableRequest('Grok')
-          this.emit()
+        if (threadId && needsPerson(method)) {
+          const notice = unreadableRequest('Grok'); const thread = this.thread(threadId)
+          if (this.state.error !== notice || thread.requestNotice !== notice) {
+            thread.requestNotice = notice; this.state.error = notice; this.emit()
+          }
         }
       }
       return
