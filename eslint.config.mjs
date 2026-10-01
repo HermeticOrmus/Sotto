@@ -5,6 +5,7 @@ export default tseslint.config(
   {
     ignores: [
       'artifacts/main-infra-bundle/**',
+      'artifacts/pkg-18-e2e/**',
       'artifacts/windows-askpass/**',
       'artifacts/codex-restored-replies/**',
       'artifacts/workspace-picker/**',
