@@ -69,24 +69,29 @@ final class AppModelTests: XCTestCase {
     @MainActor func testShortConnectionsKeepBackoffUntilLivenessSucceeds() async throws {
         let (_, ref) = try fixture()
         let clock = RetryClock()
+        let scheduled = (1...3).map { expectation(description: "Retry \($0) scheduled") }
         let model = AppModel(keychain: TestKeychain.store, retryJitter: { 1 }, retrySleep: { delay in
-            _ = await clock.record(delay)
+            let count = await clock.record(delay)
+            if count <= scheduled.count { scheduled[count - 1].fulfill() }
             throw CancellationError()
         })
+        let initial = expectation(description: "Initial connection")
+        HostConnection.afterGreeting = { _ in initial.fulfill() }
         model.phase(.active)
-        await model.connect(ref.hostID)
+        await fulfillment(of: [initial], timeout: 10)
+        HostConnection.afterGreeting = nil
         let connection = try XCTUnwrap(HostConnection.instances.last)
         connection.onDisconnect?()
-        while await clock.delays.count < 1 { await Task.yield() }
+        await fulfillment(of: [scheduled[0]], timeout: 10)
         await model.connect(ref.hostID)
         connection.onDisconnect?()
-        while await clock.delays.count < 2 { await Task.yield() }
+        await fulfillment(of: [scheduled[1]], timeout: 10)
         let shortDelays = await clock.delays
         XCTAssertEqual(shortDelays, [1_000_000_000, 2_000_000_000])
         await model.connect(ref.hostID)
         connection.onLiveness?()
         connection.onDisconnect?()
-        while await clock.delays.count < 3 { await Task.yield() }
+        await fulfillment(of: [scheduled[2]], timeout: 10)
         let recoveredDelays = await clock.delays
         XCTAssertEqual(recoveredDelays, [1_000_000_000, 2_000_000_000, 1_000_000_000])
         model.phase(.background)
