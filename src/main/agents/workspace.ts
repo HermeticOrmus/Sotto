@@ -687,13 +687,21 @@ export class WorkspaceHost implements AgentHost {
       const identity = await this.worktrees.checkoutIdentity(metadata.path)
       const others = this.state.snapshot.threads.filter(other => other.id !== threadId)
       for (const other of others) {
+        if (other.worktree?.reclaimedAt) continue
         if (other.nativeSessionStarted === false && other.worktree?.mode === 'independent' && !other.worktree.path && !other.worktree.existingWorktreePath) continue
         const path = other.workingDirectory ?? other.worktree?.path ?? other.worktree?.existingWorktreePath
           ?? this.state.snapshot.projects.find(project => project.id === other.projectId)?.path
-        if (!path || await this.worktrees.checkoutIdentity(path) === identity) return false
+        if (!path) return false
+        try {
+          if (await this.worktrees.checkoutIdentity(path) === identity) return false
+        } catch (error) {
+          // A missing folder cannot share this checkout. Other failures still leave ownership unproven.
+          const cause = error instanceof Error ? error.cause : undefined
+          if (!cause || typeof cause !== 'object' || !('code' in cause) || cause.code !== 'ENOENT') return false
+        }
       }
       return true
-    } catch { return false } // An unavailable folder makes exclusive ownership unprovable.
+    } catch { return false } // The owner’s unavailable folder makes exclusive ownership unprovable.
   }
   async renameTemporaryBranch(threadId: string, name: string): Promise<void> {
     return this.onLane(threadId, async () => {
