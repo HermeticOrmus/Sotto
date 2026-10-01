@@ -168,3 +168,7 @@ Client-owned pings require `client-liveness` in hello's `accepts`, an additive v
 ## October 1 amendment: phone reads on slow links
 
 The phone no longer relies on the WebSocket task's byte counter. Each ten-second liveness round checks completed messages and pong replies, and closes only after two consecutive silent rounds. A request still awaiting its reply within its own deadline prevents silence from accumulating. Detail and observe reads have 120-second deadlines; other requests retain 30 seconds. A connection with no requests closes at the second round, about 60 seconds after opening; an unanswered detail expires at 120 seconds and cannot protect a dead connection indefinitely. Only an actual message or pong resets reconnect backoff. This replaces the earlier byte-progress rule.
+
+## October 1 clarification: a question draft keeps its answer outcome
+
+A socket `send` of a question-bound draft executes an answer inside the coordinator. It returns the same command-local failure as an explicit answer, even though the shared desktop shell remains clear of answer uncertainty. The listener carries that result in the sending client's reply and receipt, retains its active editor on uncertainty, and replays an unsuccessful receipt without sending another answer. This extends the existing outcome evidence to the draft path; it changes no permission rule or v1 command.

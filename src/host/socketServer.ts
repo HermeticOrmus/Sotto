@@ -251,6 +251,7 @@ export async function startSocketServer(options: SocketServerOptions) {
       if (!thread?.requests.some(item => item.id === input.requestId && !item.delivery)) throw new Refusal('stale_request')
     }
     const receipt: HostReceipt = { status: 'pending' }
+    let privateError: string | null | undefined
     const task = (async () => {
       try {
         if (input.type === 'select-thread') {
@@ -267,7 +268,8 @@ export async function startSocketServer(options: SocketServerOptions) {
           const result = await service.command(input, { ...peer.client, selectedThreadId: peer.selectedThreadId })
           if (input.type === 'compose' && result.error) peer.editingThreadId = previousEditor
           if (['pause-draft', 'cancel-draft', 'send'].includes(input.type) && !result.error) peer.editingThreadId = null
-          if (input.type === 'answer') {
+          if (input.type === 'answer' || input.type === 'send') privateError = result.error
+          if (input.type === 'answer' || input.type === 'send' && draftRequestId) {
             receipt.answerDelivered = result.error == null
             if (!receipt.answerDelivered) receipt.error = { code: 'unavailable', message: errors.unavailable }
           }
@@ -282,7 +284,7 @@ export async function startSocketServer(options: SocketServerOptions) {
       void task.then(settle, settle)
     }
     await task
-    return shell(peer)
+    return privateError === undefined ? shell(peer) : { ...shell(peer), error: privateError }
   }
   const dispatch = async (peer: Peer, request: HostRequest): Promise<unknown> => {
     if (closing) throw new Refusal('unavailable')

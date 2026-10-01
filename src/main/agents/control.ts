@@ -1656,9 +1656,9 @@ export class AgentControl {
       await this.finishTurn(turn, unconfirmedAnswer?.delivered ? undefined : failure)
       // Completion can settle during persistence or diagnostics, after the catch observed uncertainty.
       if (unconfirmedAnswer?.delivered) failure = undefined
-      // The socket receipt needs this answer's outcome, not a shared error another lane can change.
+      // Socket replies and receipts keep the command's outcome, including Send answering a question draft.
       // Keep the published shell and desktop response as they are.
-      return command.type === 'answer' && client.transport === 'socket'
+      return (command.type === 'answer' || command.type === 'send') && client.transport === 'socket'
         ? { ...this.shell(), error: failure ?? null } : this.shell()
     })
     if (independent) {

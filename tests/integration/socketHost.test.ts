@@ -198,6 +198,39 @@ describe('authenticated host socket', () => {
       expect(host.service.shell().host.threads.find(thread => thread.id === threadId)?.requests).toHaveLength(requestLeaves ? 0 : 1)
     } finally { spy.mockRestore() }
   })
+  it.each([false, true])('keeps an uncertain question draft send private when accepted is %s', async accepted => {
+    const { client, result } = await pair()
+    await client.command({ type: 'configure', patch: { provider: 'codex', enabledProviders: ['codex'] } })
+    await client.command({ type: 'connect', provider: 'codex' })
+    const threadId = client.shell().host.threads.find(thread => thread.title === 'Workshop')!.id
+    await host.service.command({ type: 'assign', threadId, instruction: 'Fix the tests' }, desktopWindowClient())
+    const descriptor = JSON.parse(await readFile(join(root, 'host-listener.json'), 'utf8')) as { adminToken: string }
+    expect((await fetch(url + '/v1/admin/allow-answers', { method: 'POST', headers: { Authorization: 'Bearer ' + descriptor.adminToken, 'Content-Type': 'application/json' }, body: JSON.stringify({ clientId: result.clientId }) })).status).toBe(200)
+    native.event({ type: 'question', threadId: 'workshop', requestId: 'question-draft-receipt', text: 'Which color?' })
+    await expect.poll(() => client.shell().queue.some(item => item.requestId === 'question-draft-receipt')).toBe(true)
+    await client.command({ type: 'select-thread', threadId })
+    expect(await client.command({ type: 'compose', text: 'Blue' })).toMatchObject({ composing: true, draft: 'Blue', draftRequestId: 'question-draft-receipt' })
+    const execute = native.execute.bind(native)
+    const adapter = vi.spyOn(native, 'execute').mockImplementation(command => command.type === 'answer'
+      ? Promise.resolve({ accepted, uncertain: true }) : execute(command))
+    const dispatch = host.service.command.bind(host.service)
+    let coordinatorError: string | null | undefined
+    const coordinator = vi.spyOn(host.service, 'command').mockImplementation(async (command, identity) => {
+      const state = await dispatch(command, identity)
+      if (command.type === 'send') coordinatorError = state.error
+      return state
+    })
+    try {
+      const commandId = randomUUID()
+      const sent = await client.command({ type: 'send' }, undefined, commandId)
+      expect(coordinatorError).toBeTruthy()
+      expect(sent).toMatchObject({ error: coordinatorError, composing: true, draft: 'Blue', draftRequestId: 'question-draft-receipt' })
+      expect(await client.receipt(commandId)).toMatchObject({ status: 'completed', answerDelivered: false, error: { code: 'unavailable' } })
+      expect(host.service.shell().error).toBeNull()
+      await expect(client.command({ type: 'send' }, undefined, commandId)).rejects.toMatchObject({ code: 'unavailable' })
+      expect(adapter.mock.calls.filter(([command]) => command.type === 'answer')).toHaveLength(1)
+    } finally { coordinator.mockRestore(); adapter.mockRestore() }
+  })
   it('confirms a socket answer whose delayed delivery finishes before the wrapped result arrives', async () => {
     const { client, result } = await pair()
     await client.command({ type: 'configure', patch: { provider: 'codex', enabledProviders: ['codex'] } })
