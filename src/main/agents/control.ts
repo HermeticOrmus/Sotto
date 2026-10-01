@@ -2822,12 +2822,16 @@ export class AgentControl {
     if (provider && snapshot.providers?.find(status => status.id === provider)?.connection !== 'connected') return true
     return isLiveAttention(item, snapshot.threads)
   }
+  private processedAssignmentThreads = new Set<string>()
+
   private acceptSnapshot(incoming: AgentHostSnapshot): void {
     if (this.disposed) return
     const connecting = this.state.connection === 'connecting'
     // Sotto's own requests join the provider's before anything below reads the threads, so the attention queue
     // takes and keeps them the same way (ADR-0035).
     const snapshot = this.withSottoRequests(incoming)
+    const previousProcessed = this.processedAssignmentThreads
+    this.processedAssignmentThreads = new Set()
     const previousThreads = new Map(this.state.host.threads.map(thread => [thread.id, thread]))
     this.state.host = snapshot
     this.scheduleProviderReconnects()
@@ -2892,7 +2896,8 @@ export class AgentControl {
     for (const assignment of this.state.assignments) {
       const thread = snapshot.threads.find(t => t.id === assignment.threadId)
       if (!thread || isThreadClosed(thread) || !isThreadProviderConnected(snapshot, thread)) continue
-      const previousMessages = previousThreads.get(thread.id)?.messages ?? []
+      this.processedAssignmentThreads.add(thread.id)
+      const previousMessages = previousProcessed.has(thread.id) ? previousThreads.get(thread.id)?.messages ?? [] : []
       const restoredBoundary = previousMessages.length === 0 ? assignment.seenMessageIds.at(-1) : undefined
       const boundary = this.earlierMessageBoundaries.get(thread.id)
         ?? (restoredBoundary && thread.messages.some(message => message.id === restoredBoundary) ? restoredBoundary : undefined)
