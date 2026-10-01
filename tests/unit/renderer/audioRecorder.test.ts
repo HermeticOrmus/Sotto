@@ -4,6 +4,10 @@ import { runInNewContext } from 'node:vm'
 
 import { describe, expect, it, vi } from 'vitest'
 
+import { MAX_TRANSCRIPTION_SAMPLES, TRANSCRIPTION_SAMPLE_RATE } from '../../../src/shared/audio'
+import { transcriptionRequestSchema } from '../../../src/shared/contracts'
+import { encodeWavPcm16 } from '../../../src/shared/wav'
+
 import {
   AUDIO_CAPTURE_PROCESSOR_NAME,
   AudioRecorder,
@@ -11,6 +15,7 @@ import {
   type AudioContextAdapter,
   type AudioNodeAdapter,
   type AudioRecorderDependencies,
+  type AudioRecordingResult,
   type AudioWorkletNodeAdapter,
   type MediaStreamAdapter,
 } from '../../../src/renderer/src/audio/audioRecorder'
@@ -25,7 +30,7 @@ class FakeWorkletNode extends FakeNode implements AudioWorkletNodeAdapter {
 }
 
 class FakeContext implements AudioContextAdapter {
-  readonly sampleRate = 48_000
+  constructor(readonly sampleRate = 48_000) {}
   readonly destination = new FakeNode()
   readonly source = new FakeNode()
   readonly gain = Object.assign(new FakeNode(), { gain: { value: 1 } })
@@ -45,8 +50,8 @@ function deferred<T>() {
   return { promise, reject: rejectPromise, resolve: resolvePromise }
 }
 
-function createHarness(overrides: Partial<AudioRecorderDependencies> = {}) {
-  const context = new FakeContext()
+function createHarness(overrides: Partial<AudioRecorderDependencies> = {}, sampleRate = 48_000) {
+  const context = new FakeContext(sampleRate)
   const worklet = new FakeWorkletNode()
   const trackListeners = new Set<() => void>()
   const track = {
@@ -412,6 +417,42 @@ describe('AudioRecorder', () => {
     expect(harness.context.close).toHaveBeenCalledOnce()
     expect(harness.track.stop).toHaveBeenCalledOnce()
   })
+
+  it.each([['stop', TRANSCRIPTION_SAMPLE_RATE], ['limit', 48_000]] as const)(
+    'keeps the first five minutes accepted by transcription when %s at %i Hz follows a delayed limit timer',
+    async (delivery, sampleRate) => {
+      const harness = createHarness({}, sampleRate)
+      const onDurationLimit = vi.fn<(result: AudioRecordingResult) => void>()
+      const recorder = harness.recorder({ maxRecordingSeconds: 300, onDurationLimit })
+      await recorder.start()
+      harness.worklet.port.onmessage?.({
+        data: new Float32Array(300 * sampleRate).fill(0.25),
+      })
+      // Audio keeps arriving before a throttled renderer runs its limit timer.
+      harness.worklet.port.onmessage?.({ data: new Float32Array(128).fill(0.75) })
+
+      let result: AudioRecordingResult | null
+      if (delivery === 'limit') {
+        harness.fireTimer()
+        await vi.waitFor(() => expect(onDurationLimit).toHaveBeenCalledOnce())
+        result = onDurationLimit.mock.calls[0]![0]
+      } else {
+        result = await recorder.stop()
+      }
+
+      expect(result).not.toBeNull()
+      const wav = encodeWavPcm16(result!.samples, TRANSCRIPTION_SAMPLE_RATE)
+      expect(transcriptionRequestSchema.safeParse({
+        requestId: 'delayed-limit', wav: wav.buffer, timeoutMs: 30_000,
+      }).success).toBe(true)
+      expect(result!.samples).toHaveLength(MAX_TRANSCRIPTION_SAMPLES)
+      expect(result!.samples[0]).toBe(0.25)
+      // Downsampling's low-pass filter blends samples near the cut boundary.
+      expect(result!.samples[MAX_TRANSCRIPTION_SAMPLES - 1]).toBeCloseTo(0.25, 1)
+      expect(await recorder.stop()).toBeNull()
+      expect(harness.track.stop).toHaveBeenCalledOnce()
+    },
+  )
 
   it('reports a finite device-unavailable error and releases capture when the active track ends', async () => {
     const harness = createHarness()

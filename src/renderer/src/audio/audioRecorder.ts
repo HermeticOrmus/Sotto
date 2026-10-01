@@ -1,4 +1,4 @@
-import { TRANSCRIPTION_SAMPLE_RATE } from '../../../shared/audio'
+import { MAX_TRANSCRIPTION_SAMPLES, TRANSCRIPTION_SAMPLE_RATE } from '../../../shared/audio'
 import { calculateRms, resampleMono } from './audioMath'
 import { microphoneConstraints, type MicrophoneConstraints } from './microphoneConstraints'
 export type { MicrophoneConstraints } from './microphoneConstraints'
@@ -428,8 +428,13 @@ export class AudioRecorder {
             joined.set(chunk, offset)
             offset += chunk.length
           }
+          const samples = resampleMono(joined, sampleRate)
           result = {
-            samples: resampleMono(joined, sampleRate),
+            // The duration timer can run late in a hidden renderer. Keep its
+            // overrun from making the entire WAV exceed the IPC limit.
+            samples: samples.length > MAX_TRANSCRIPTION_SAMPLES
+              ? samples.slice(0, MAX_TRANSCRIPTION_SAMPLES)
+              : samples,
             sourceSampleRate: sampleRate,
             durationMs: (session.totalFrames / sampleRate) * 1_000,
           }
