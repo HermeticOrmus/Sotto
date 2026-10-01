@@ -95,6 +95,9 @@ test('Phones: sets up through the checklist, pairs a phone with a code, and clos
     // The phone redeems it: the code closes and the phone is listed, connected once it opens a socket.
     const code = (await codeBox.locator('.phones-code__value').textContent())!
     expect(code).toMatch(/^[2-9A-Z]{8}$/u)
+    expect(await codeBox.ariaSnapshot()).toContain(`Pairing code ${[...code].join(' ')}`)
+    await expect(codeBox.locator('.phones-code__value')).toHaveAttribute('aria-hidden', 'true')
+    await expect(codeBox.locator('[role="img"], [role="status"], [aria-live]')).toHaveCount(0)
     const paired = await SocketHostService.pair(base, code, 'Zach’s iPhone')
     await expect(codeBox).toHaveCount(0)
     const row = page.getByRole('region', { name: 'Zach’s iPhone' })
