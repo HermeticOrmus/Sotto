@@ -273,7 +273,11 @@ final class AppModelTests: XCTestCase {
             }
         }
         let model = try modelWithMarker(marker)
+        let settled = expectation(description: "The reconnected answer marker settles")
+        let observation = model.$pending.filter { $0.isEmpty }.prefix(1).sink { _ in settled.fulfill() }
+        defer { observation.cancel(); model.phase(.background) }
         model.phase(.active); await model.reconnectAll()
+        await fulfillment(of: [settled], timeout: 10)
         XCTAssertTrue(model.pending.isEmpty)
         XCTAssertEqual(model.feedback, "Answer sent.")
         let connection = try XCTUnwrap(HostConnection.instances.last)
