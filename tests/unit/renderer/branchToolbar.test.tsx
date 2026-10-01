@@ -448,3 +448,10 @@ describe('BranchToolbar', () => {
     expect(css).toMatch(/\.branch-toolbar__refs > button\s*\{[^}]*min-width:\s*0/u)
   })
 })
+
+it('explains how to recover when copying the branch fails', async () => {
+  mount(thread())
+  vi.stubGlobal('sotto', { ...window.sotto, deliverOutput: vi.fn(async () => 'failed') })
+  fireEvent.contextMenu(screen.getByRole('combobox', { name: 'Choose branch' }))
+  expect(await screen.findByRole('alert')).toHaveTextContent('Could not copy the branch name. Select it and copy it with Ctrl+C.')
+})

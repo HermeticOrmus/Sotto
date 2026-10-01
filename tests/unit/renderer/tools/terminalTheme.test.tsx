@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-const xterm = vi.hoisted(() => ({ instances: [] as { options: Record<string, unknown>; themes: unknown[]; key: (event: KeyboardEvent) => boolean; clearSelection: ReturnType<typeof vi.fn> }[] }))
+const xterm = vi.hoisted(() => ({ selection: 'terminal selection', instances: [] as { options: Record<string, unknown>; themes: unknown[]; key: (event: KeyboardEvent) => boolean; clearSelection: ReturnType<typeof vi.fn> }[] }))
 const gpu = vi.hoisted(() => ({ fail: false, instances: [] as { dispose: ReturnType<typeof vi.fn>; lose(): void }[] }))
 vi.mock('@xterm/addon-webgl', () => ({ WebglAddon: class {
   readonly dispose = vi.fn()
@@ -24,7 +24,7 @@ vi.mock('@xterm/xterm', () => ({
     key: (event: KeyboardEvent) => boolean = () => true
     attachCustomKeyEventHandler(handler: (event: KeyboardEvent) => boolean): void { this.key = handler }
     hasSelection(): boolean { return true }
-    getSelection(): string { return 'terminal selection' }
+    getSelection(): string { return xterm.selection }
     readonly clearSelection = vi.fn()
     open(): void {}
     dispose(): void {}
@@ -47,7 +47,7 @@ it('copies a terminal selection through main when browser clipboard access is de
   await Promise.resolve()
   expect(deliverOutput).toHaveBeenCalledWith({ text: 'terminal selection', autoPaste: false, pasteDelayMs: 50 })
   expect(writeText).not.toHaveBeenCalled()
-  expect(terminal.clearSelection).toHaveBeenCalledOnce()
+  await vi.waitFor(() => expect(terminal.clearSelection).toHaveBeenCalledOnce())
   view.dispose()
   vi.unstubAllGlobals()
 })
@@ -95,6 +95,38 @@ afterEach(() => {
   xterm.instances.length = 0
   gpu.instances.length = 0
   gpu.fail = false
+  xterm.selection = 'terminal selection'
+})
+
+it('keeps the terminal selection until copying succeeds and explains a failed copy', async () => {
+  vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} }))
+  let fail!: (error: Error) => void
+  vi.stubGlobal('sotto', { deliverOutput: vi.fn(() => new Promise((_resolve, reject) => { fail = reject })) })
+  const onNotice = vi.fn()
+  const view = createXtermView({ onInput() {}, onInterrupt() {}, onNotice }, { resolveColor: value => value })
+  const terminal = xterm.instances[0]!
+  terminal.key(new KeyboardEvent('keydown', { key: 'c', ctrlKey: true }))
+  expect(terminal.clearSelection).not.toHaveBeenCalled()
+  fail(new Error('Permission denied'))
+  await vi.waitFor(() => expect(onNotice).toHaveBeenCalledWith('Could not copy. Your selection is kept. Try Ctrl+C again.'))
+  expect(terminal.clearSelection).not.toHaveBeenCalled()
+  view.dispose()
+})
+
+it('does not copy whitespace-only terminal selections or interrupt the command', () => {
+  vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} }))
+  const deliverOutput = vi.fn(), onInterrupt = vi.fn(), onNotice = vi.fn()
+  vi.stubGlobal('sotto', { deliverOutput })
+  xterm.selection = ' \n\t '
+  const view = createXtermView({ onInput() {}, onInterrupt, onNotice }, { resolveColor: value => value })
+  view.setInputEnabled(true)
+  const terminal = xterm.instances[0]!
+  terminal.key(new KeyboardEvent('keydown', { key: 'c', ctrlKey: true }))
+  expect(deliverOutput).not.toHaveBeenCalled()
+  expect(terminal.clearSelection).not.toHaveBeenCalled()
+  expect(onInterrupt).not.toHaveBeenCalled()
+  expect(onNotice).toHaveBeenCalledWith('Nothing to copy. Select some text first.')
+  view.dispose()
 })
 
 describe('terminal colours', () => {

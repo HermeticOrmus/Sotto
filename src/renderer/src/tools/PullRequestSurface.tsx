@@ -103,7 +103,7 @@ export function PullRequestSurface({ thread, command, onStatus }: { readonly thr
     if (await send({ type: 'git-unlink-pull-request', threadId: thread.id, url }, 'unlink', 'Could not unlink the pull request.') && chosen === url) setChosen(null)
   }
   const copyLink = async (url: string): Promise<void> => {
-    try { await writeClipboard(url); onStatus('Link copied') } catch { onStatus('Could not copy the link') }
+    try { await writeClipboard(url); onStatus('Link copied') } catch { onStatus('Could not copy the link. Open on GitHub and copy the address from your browser.') }
   }
   const openExternal = (url: string): void => { void window.sotto?.openExternalLink?.(url) }
   /** A linked pull request opens here; the view starts again at its top line. */

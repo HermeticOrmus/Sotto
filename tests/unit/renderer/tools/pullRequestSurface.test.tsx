@@ -457,3 +457,13 @@ describe('the Pull request surface', () => {
     expect(gitPullRequestDetailSchema.parse(earlier)).toMatchObject({ reviews: [], mergedAt: null })
   })
 })
+
+it('explains how to recover when copying the pull request link fails', async () => {
+  const { onStatus, openExternalLink } = mount()
+  vi.stubGlobal('sotto', { ...window.sotto, deliverOutput: vi.fn(async () => 'failed') })
+  await opened()
+  await menu('Copy link')
+  await waitFor(() => expect(onStatus).toHaveBeenCalledWith('Could not copy the link. Open on GitHub and copy the address from your browser.'))
+  fireEvent.click(screen.getByRole('button', { name: 'Open on GitHub' }))
+  expect(openExternalLink).toHaveBeenCalledWith(URL)
+})

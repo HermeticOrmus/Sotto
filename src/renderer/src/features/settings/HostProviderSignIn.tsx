@@ -1,5 +1,6 @@
 import React, { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { Check, Copy, LoaderCircle } from 'lucide-react'
+import { writeClipboard } from '../../agents/richActions'
 import { PROVIDER_LABELS, type ProviderId } from '../../../../shared/agents'
 import type { HostsBridge, HostStatus } from '../../../../shared/hosts'
 import { PASTED_CODE_MAX, type ProviderSignInView } from '../../../../shared/hostProviders'
@@ -97,7 +98,7 @@ export function HostProviderSignIn({ host, provider, bridge, onClose }: {
     catch (failure) { setCodeError(clean(failure, 'The code could not be sent. Nothing was changed. Try again.')) }
     finally { setBusy(false) }
   }
-  const copy = async (value: string): Promise<void> => { try { await navigator.clipboard.writeText(value); setCopied('copied') } catch { setCopied('failed') } }
+  const copy = async (value: string): Promise<void> => { try { await writeClipboard(value); setCopied('copied') } catch { setCopied('failed') } }
   const tryAgain = (): void => setAttempt(value => value + 1)
   const close = (): void => { onClose() }
 

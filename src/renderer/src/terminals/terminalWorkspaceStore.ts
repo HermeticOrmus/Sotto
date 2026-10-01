@@ -202,6 +202,7 @@ export class TerminalWorkspaceStore {
       record.view = factory({
         onInput: data => this.write(bridge, id, data),
         onInterrupt: () => this.interrupt(bridge, id),
+        onNotice: notice => this.set({ ...this.state, notice }),
         onPasteImage: dataUrl => void this.pasteImage(bridge, id, dataUrl),
       })
     }

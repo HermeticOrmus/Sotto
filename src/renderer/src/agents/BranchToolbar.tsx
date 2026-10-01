@@ -105,7 +105,7 @@ export function BranchToolbar({ row, state, command, focused = true, onExplained
   }
   const copyName = async (name: string): Promise<void> => {
     try { await writeClipboard(name); setNotice({ text: `Copied ${name}.`, tone: 'status' }) }
-    catch { setNotice({ text: 'Could not copy the branch name.', tone: 'error' }) }
+    catch { setNotice({ text: 'Could not copy the branch name. Select it and copy it with Ctrl+C.', tone: 'error' }) }
   }
 
   // The shortcuts: each is claimed only when the dictation hotkey does not already mean the same keys, and only

@@ -168,8 +168,9 @@ export const createXtermView = (handlers: TerminalViewHandlers, { resolveColor =
     }
     if (ctrl && !event.shiftKey && (event.key === 'c' || event.key === 'C')) {
       if (terminal.hasSelection()) {
-        void writeClipboard(terminal.getSelection()).catch(() => undefined)
-        terminal.clearSelection()
+        const selection = terminal.getSelection()
+        if (!selection.trim()) { handlers.onNotice?.('Nothing to copy. Select some text first.'); return false }
+        void writeClipboard(selection).then(() => terminal.clearSelection(), () => handlers.onNotice?.('Could not copy. Your selection is kept. Try Ctrl+C again.'))
         return false
       }
       if (inputEnabled) handlers.onInterrupt()
