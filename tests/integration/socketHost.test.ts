@@ -220,16 +220,25 @@ describe('authenticated host socket', () => {
       if (command.type === 'send') coordinatorError = state.error
       return state
     })
+    const readEvents = client.readEvents.bind(client)
+    let refreshed = false
+    const refresh = vi.spyOn(client, 'readEvents').mockImplementation(async (...args) => {
+      const page = await readEvents(...args)
+      expect((await client.readShell()).error).toBeNull()
+      refreshed = true
+      return page
+    })
     try {
       const commandId = randomUUID()
       const sent = await client.command({ type: 'send' }, undefined, commandId)
+      expect(refreshed).toBe(true)
       expect(coordinatorError).toBeTruthy()
       expect(sent).toMatchObject({ error: coordinatorError, composing: true, draft: 'Blue', draftRequestId: 'question-draft-receipt' })
       expect(await client.receipt(commandId)).toMatchObject({ status: 'completed', answerDelivered: false, error: { code: 'unavailable' } })
       expect(host.service.shell().error).toBeNull()
       await expect(client.command({ type: 'send' }, undefined, commandId)).rejects.toMatchObject({ code: 'unavailable' })
       expect(adapter.mock.calls.filter(([command]) => command.type === 'answer')).toHaveLength(1)
-    } finally { coordinator.mockRestore(); adapter.mockRestore() }
+    } finally { refresh.mockRestore(); coordinator.mockRestore(); adapter.mockRestore() }
   })
   it('confirms a socket answer whose delayed delivery finishes before the wrapped result arrives', async () => {
     const { client, result } = await pair()

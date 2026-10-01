@@ -331,7 +331,9 @@ export class SocketHostService implements HostService {
         }
       }
     }
-    return generation === this.generation ? this.state() : acknowledged
+    const refreshed = generation === this.generation ? this.state() : acknowledged
+    // State refreshes cannot settle this command's private answer outcome.
+    return command.type === 'answer' || command.type === 'send' ? { ...refreshed, error: state.error } : refreshed
   }
   async receipt(commandId: string): Promise<HostReceipt> { return this.read(hostReceiptSchema, await this.call({ op: 'receipt', commandId })) }
   attachmentPreview(request: AgentAttachmentPreviewRequest): Promise<AgentAttachmentPreviewResult> {
