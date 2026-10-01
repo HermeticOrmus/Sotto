@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -111,8 +111,7 @@ describe('coordinator turn records', () => {
       const result = await f.control.command({ type: 'interrupt', threadId: 'docs' })
       expect(result.globalLaneBusy).toBe(true)
       expect(await lastRawRecord(f.root)).toMatchObject({ commandType: 'interrupt', source: 'command', outcome,
-        threadId: 'docs', projectId: 'project', providerSessionId: 'session-docs',
-        error: outcome === 'failed' ? 'Synthetic interrupt failure' : '' })
+        threadId: 'docs', projectId: 'project', providerSessionId: 'session-docs' })
       expect((await f.recorder.recent(100)).filter(record => record.commandType === 'interrupt')).toHaveLength(1)
       if (outcome === 'completed') expect(result.host.threads.find(thread => thread.id === 'docs')?.status).toBe('idle')
     } finally { pendingIntent.resolve(); await reasoning }
@@ -198,8 +197,6 @@ describe('coordinator turn records', () => {
       projectId: 'project',
       source: 'utterance',
       commandType: 'utterance',
-      text: 'Open workshop',
-      error: '',
       outcome: 'completed',
       retrievedMemoryIds: [],
       contextTokenEstimate: Math.ceil('Open workshop'.length / 4),
@@ -209,21 +206,21 @@ describe('coordinator turn records', () => {
     expect(parsed.timings.intentMs).toBeGreaterThanOrEqual(0)
   })
 
-  it('records a failed turn with the error text', async () => {
+  it('records a failed outcome without error text', async () => {
     const f = await fixture()
     await f.control.command({ type: 'select-thread', threadId: 'workshop' })
     await f.control.command({ type: 'compose', text: '' })
     await f.control.command({ type: 'send' })
+    expect(await readFile(f.recorder.path(), 'utf8')).not.toContain('There is no prompt to send.')
     const [record] = await f.recorder.recent(1)
     expect(record).toMatchObject({
       commandType: 'send',
       source: 'command',
       outcome: 'failed',
-      error: 'There is no prompt to send.',
     })
   })
 
-  it('redacts text and error when history is off', async () => {
+  it('omits text and error when history is off', async () => {
     const f = await fixture()
     historyEnabled = false
     await f.control.command({ type: 'select-thread', threadId: 'workshop' })
@@ -232,8 +229,8 @@ describe('coordinator turn records', () => {
     const records = (await f.recorder.recent(10)).filter(record => record.commandType !== 'connect')
     expect(records).toHaveLength(2)
     for (const record of records) {
-      expect(record.text).toBe('')
-      expect(record.error).toBe('')
+      expect(record).not.toHaveProperty('text')
+      expect(record).not.toHaveProperty('error')
       expect(record.timings.totalMs).toBeGreaterThan(0)
     }
     const failed = records.find(record => record.commandType === 'send')
@@ -254,16 +251,28 @@ describe('coordinator turn records', () => {
 
   it('returns the newest records first', async () => {
     const f = await fixture()
-    await f.control.command({ type: 'select-thread', threadId: 'workshop' })
-    await f.control.command({ type: 'utterance', text: 'first draft' })
-    await f.control.command({ type: 'utterance', text: 'second draft' })
+    for (const threadId of ['first', 'second']) {
+      await f.recorder.finish(f.recorder.begin({ source: 'command', commandType: 'send', text: '', threadId }), 'completed')
+    }
     const recent = await f.recorder.recent(2)
-    expect(recent).toHaveLength(2)
-    expect(recent.map(record => ({ commandType: record.commandType, text: record.text }))).toEqual([
-      { commandType: 'utterance', text: 'second draft' },
-      { commandType: 'utterance', text: 'first draft' },
-    ])
+    expect(recent.map(record => record.threadId)).toEqual(['second', 'first'])
     expect(Date.parse(recent[0]!.startedAt)).toBeGreaterThanOrEqual(Date.parse(recent[1]!.startedAt))
+  })
+
+  it.each([true, false])('scrubs existing records and omits new content with history %s', async enabled => {
+    const f = await fixture()
+    const record = (await f.recorder.recent(1))[0]!
+    await writeFile(f.recorder.path(), `${JSON.stringify({ ...record, text: 'Private prompt and answer', error: 'Private error' })}\n{broken private text\n`)
+    const upgraded = new TurnRecorder({ directory: f.root, historyEnabled: () => enabled, resolveSession: () => undefined })
+    await upgraded.initialize()
+    expect(await readFile(upgraded.path(), 'utf8')).not.toContain('Private')
+    expect(await readFile(upgraded.path(), 'utf8')).not.toContain('broken')
+    await upgraded.finish(upgraded.begin({ source: 'command', commandType: 'answer', text: 'Private answer' }), 'failed')
+    const raw = await readFile(upgraded.path(), 'utf8')
+    expect(raw).not.toContain('Private')
+    expect(raw).not.toContain('"text"')
+    expect(raw).not.toContain('"error"')
+    expect((await upgraded.recent(1))[0]?.outcome).toBe('failed')
   })
 
   it('keeps overlapping finishes in order while compacting', async () => {
@@ -294,9 +303,9 @@ describe('coordinator turn records', () => {
     for (let index = 1; index <= 1100; index += 1) {
       const turn = recorder.begin({
         source: 'command',
-        commandType: 'compose',
-        text: `n=${String(index).padStart(4, '0')} ${'a'.repeat(280)}`,
-        threadId: null,
+        commandType: 'send',
+        text: 'Private prompt',
+        threadId: `thread-${String(index).padStart(4, '0')}`,
         projectId: null,
       })
       await recorder.finish(turn, 'completed')
@@ -306,8 +315,8 @@ describe('coordinator turn records', () => {
     expect(Buffer.byteLength(contents, 'utf8')).toBeLessThanOrEqual(200_000)
     expect(lines.length).toBeLessThanOrEqual(1000)
     expect(lines.length).toBeGreaterThan(100)
-    expect(turnRecordSchema.parse(JSON.parse(lines.at(-1)!)).text).toContain('n=1100')
-    expect(contents).not.toContain('n=0001')
+    expect(turnRecordSchema.parse(JSON.parse(lines.at(-1)!)).threadId).toBe('thread-1100')
+    expect(contents).not.toContain('thread-0001')
   })
 
   it('records a clarification outcome', async () => {
@@ -320,8 +329,6 @@ describe('coordinator turn records', () => {
       commandType: 'utterance',
       source: 'utterance',
       outcome: 'clarified',
-      text: 'Create a project called Lantern.',
-      error: '',
     })
   })
 
@@ -358,7 +365,7 @@ describe('coordinator turn records', () => {
     await f.control.command({ type: 'send' })
     const records = await f.recorder.recent(100)
     expect(records).toHaveLength(before + 1)
-    expect(records[0]).toMatchObject({ commandType: 'send', text: 'Edit the tests' })
+    expect(records[0]).toMatchObject({ commandType: 'send' })
   })
 
   it('measures intent time when reasoning rejects', async () => {
@@ -369,7 +376,7 @@ describe('coordinator turn records', () => {
     })
     await f.control.command({ type: 'utterance', text: 'Choose the right project' })
     const record = await lastRawRecord(f.root)
-    expect(record).toMatchObject({ outcome: 'failed', error: 'Intent unavailable' })
+    expect(record).toMatchObject({ outcome: 'failed' })
     expect(record.timings.intentMs).toBeGreaterThan(0)
   })
 
@@ -381,7 +388,7 @@ describe('coordinator turn records', () => {
     expect(write).toHaveBeenCalled()
     expect(state.error).toBe('Could not save agent state. Pause management until storage is available.')
     expect(state.assignments.every(assignment => assignment.paused)).toBe(true)
-    expect(await lastRawRecord(f.root)).toMatchObject({ outcome: 'failed', error: expect.stringContaining('Disk is full') })
+    expect(await lastRawRecord(f.root)).toMatchObject({ outcome: 'failed' })
   })
 
   it('keeps commands usable when a supplied recorder begin throws', async () => {
@@ -425,7 +432,7 @@ describe('coordinator turn records', () => {
       const record = (await f.recorder.recent(100)).find(record => record.source === 'supervision')
       expect(record).toMatchObject({
         source: 'supervision', commandType: 'send', threadId: 'workshop', providerSessionId: 'session-workshop',
-        text: f.service.decision.text, outcome: reject ? 'failed' : 'completed', error: reject ? 'Host send failed' : '',
+        outcome: reject ? 'failed' : 'completed',
         contextTokenEstimate: Math.ceil(f.service.decision.text.length / 4),
       })
     })
@@ -505,7 +512,7 @@ describe('coordinator turn records', () => {
     await f.control.command({ type: 'answer', threadId, requestId: 'permission', answer: 'Allow test edits', approved: true })
     expect(execute).toHaveBeenCalledWith(expect.objectContaining({ type: 'answer', approved: true }))
     expect(await lastRawRecord(f.root)).toMatchObject({
-      threadId, projectId, outcome: 'completed', text: 'Allow test edits', contextTokenEstimate: Math.ceil('Allow test edits'.length / 4),
+      threadId, projectId, outcome: 'completed', contextTokenEstimate: Math.ceil('Allow test edits'.length / 4),
     })
   })
 
@@ -546,7 +553,7 @@ describe('coordinator turn records', () => {
     decisionGate.resolve()
     await vi.waitFor(async () => {
       expect((await f.recorder.recent(100)).find(record => record.source === 'supervision')).toMatchObject({
-        outcome: 'failed', error: 'Follow-up storage failed', text: f.service.decision.text,
+        outcome: 'failed',
       })
     })
   })

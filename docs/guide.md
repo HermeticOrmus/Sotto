@@ -84,6 +84,8 @@ Stop can cancel running work even when the provider has not confirmed the last p
 
 A thread's messages and retained activity are Sotto's own record, kept in `threads.sqlite` in the app's data folder rather than rebuilt from the provider each time Sotto starts. A thread pane opens on its newest ten turns; press **Show earlier messages** above the oldest one to read further back. A provider session starts when you open or send to a thread, not at connect, and one left idle for thirty minutes is stopped until the next time it is needed. With **Keep local history** off, no message text or activity output is written to disk; turning it off removes the text already written, and what was not kept cannot be recovered. See [ADR-0016](adr/0016-sotto-owned-history-on-an-event-store.md).
 
+Diagnostic turn records keep event names, IDs, outcomes and timings only. They never keep prompt, answer or error text. On upgrade, Sotto removes text from existing turn records before starting the coordinator.
+
 Hovering a message or a finished reply shows a copy control at its top corner. One press copies it as Markdown, so code blocks, lists and tables paste intact somewhere else. Right-click the control, or press Shift+F10 with it focused, to copy as plain text instead. A reply still being written has no copy control, and each code block keeps a copy button of its own.
 
 ### Working indicators

@@ -205,7 +205,7 @@ describe('authority at dispatch', () => {
     f.host.event({ type: 'question', threadId: 'workshop', requestId: 'permission', text: 'May I publish?' })
     await vi.waitFor(async () => {
       expect((await f.recorder.recent(100)).find(record => record.source === 'supervision')).toMatchObject({
-        outcome: 'failed', error: 'Permissions are never answered automatically. This request stays in your attention queue.',
+        outcome: 'failed',
       })
     })
     expect(f.host.executed.filter(command => command.type === 'answer')).toEqual([])

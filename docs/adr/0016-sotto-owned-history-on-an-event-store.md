@@ -148,3 +148,10 @@ This extends the event kinds above. `messages-reset` remains reserved for replac
 
 
 Both the adapter log and the projection use the same content comparison. Seeded identities alone cannot prove equality: repair reads just the two indexed saved messages, and leaves both alone if either is unavailable. The host exposes these events only to clients accepting `message-aliases`; other clients receive the corrected thread detail and a cursor advanced past the internal repair.
+
+
+## Amendment: diagnostic turn records contain no text (September 30, 2026, #608)
+
+The owner chose the privacy rule in AGENTS.md over the glossary's former description of content-bearing diagnostic turn records. `turns.jsonl` is diagnostic evidence, separate from thread history: it keeps event names, identities, outcomes, timing and context counts, never prompt, answer or error text, even with Keep local history on.
+
+Before the coordinator starts, its recorder scrubs existing records through the current schema and atomically replaces the file. Unknown fields and malformed lines are discarded so old content cannot survive outside the schema. This runs once per recorder lifetime and rewrites only when needed, so an interrupted upgrade retries at the next start. A failed scrub stops startup rather than leaving old text in service. Appends and bounded compaction share that recorder's write lane.

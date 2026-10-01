@@ -29,8 +29,6 @@ export const turnRecordSchema = z.object({
   retrievedMemoryIds: z.array(z.string()),
   contextTokenEstimate: z.number().int().nonnegative(),
   outcome: z.enum(['completed', 'clarified', 'failed']),
-  text: z.string(),
-  error: z.string(),
 })
 export type TurnRecord = z.infer<typeof turnRecordSchema>
 
@@ -76,9 +74,9 @@ function hasErrorCode(error: unknown, code: string): boolean {
 
 /** Append-only coordinator turn log. Writes never throw into the command path. */
 export class TurnRecorder {
+  private scrubbed = false
   private lane: Promise<void> = Promise.resolve()
   private readonly directory: string
-  private readonly historyEnabled: () => boolean
   private readonly resolveSession: (threadId: string) => { provider: string; sessionId: string } | undefined
   private readonly maxBytes: number
   private readonly maxLines: number
@@ -91,7 +89,6 @@ export class TurnRecorder {
     maxLines?: number
   }) {
     this.directory = options.directory
-    this.historyEnabled = options.historyEnabled
     this.resolveSession = options.resolveSession
     this.maxBytes = options.maxBytes ?? 2 * 1024 * 1024
     this.maxLines = options.maxLines ?? 1000
@@ -137,11 +134,10 @@ export class TurnRecorder {
     }
   }
 
-  async finish(turn: ActiveTurn | undefined, outcome: TurnRecord['outcome'], error?: string): Promise<void> {
+  async finish(turn: ActiveTurn | undefined, outcome: TurnRecord['outcome']): Promise<void> {
     if (!turn) return
     try {
       const finishedAtMs = Date.now()
-      const retain = this.historyEnabled()
       const threadId = turn.threadId ?? null
       const record: TurnRecord = {
         id: randomUUID(),
@@ -168,10 +164,9 @@ export class TurnRecorder {
         retrievedMemoryIds: turn.retrievedMemoryIds,
         contextTokenEstimate: turn.contextTokenEstimate,
         outcome,
-        text: retain ? turn.text : '',
-        error: retain ? error ?? '' : '',
       }
       await this.enqueue(async () => {
+        await this.scrub()
         await mkdir(this.directory, { recursive: true })
         const filePath = this.path()
         await appendFile(filePath, `${JSON.stringify(record)}\n`, 'utf8')
@@ -188,6 +183,32 @@ export class TurnRecorder {
     } catch {
       // Recording must never throw into the command path.
     }
+  }
+
+  /** Remove legacy content before the recorder is used, even when no new turn finishes. */
+  async initialize(): Promise<void> {
+    await this.enqueue(() => this.scrub())
+  }
+
+  private async scrub(): Promise<void> {
+    if (this.scrubbed) return
+    let contents: string
+    try { contents = await readFile(this.path(), 'utf8') } catch (error) {
+      if (!hasErrorCode(error, 'ENOENT')) throw error
+      this.scrubbed = true
+      return
+    }
+    const lines: string[] = []
+    for (const line of contents.split(/\r?\n/u)) {
+      if (!line) continue
+      try {
+        const record = turnRecordSchema.safeParse(JSON.parse(line))
+        if (record.success) lines.push(JSON.stringify(record.data))
+      } catch { /* Discard corrupt legacy lines rather than retaining unknown content. */ }
+    }
+    const cleaned = lines.length ? `${lines.join('\n')}\n` : ''
+    if (cleaned !== contents) await this.replace(cleaned)
+    this.scrubbed = true
   }
 
   private enqueue(operation: () => Promise<void>): Promise<void> {
@@ -207,7 +228,7 @@ export class TurnRecorder {
   }
 
   async recent(limit: number): Promise<TurnRecord[]> {
-    await this.lane
+    await this.initialize()
     let contents: string
     try {
       contents = await readFile(this.path(), 'utf8')

@@ -326,6 +326,7 @@ export class AgentControl {
     this.attachmentPreviews = new AttachmentPreviews(dependencies.directory, this.attachments, () => dependencies.historyEnabled?.() !== false)
   }
   async start(): Promise<void> {
+    await this.dependencies.turns?.initialize()
     try {
       await retireLegacyProvider({ directory: this.dependencies.directory, parse: savedSchema.parse,
         historyEnabled: this.dependencies.historyEnabled?.() !== false, credentials: this.dependencies.credentials })
@@ -1882,7 +1883,7 @@ export class AgentControl {
   private async finishTurn(turn: ActiveTurn | undefined, error?: string): Promise<void> {
     if (!turn) return
     try {
-      await this.dependencies.turns?.finish(turn, error !== undefined ? 'failed' : turn.clarified ? 'clarified' : 'completed', error)
+      await this.dependencies.turns?.finish(turn, error !== undefined ? 'failed' : turn.clarified ? 'clarified' : 'completed')
     } catch { /* recording must never throw into the command path */ }
   }
   private async navigate(threadId: string): Promise<AgentState> {
