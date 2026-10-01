@@ -38,7 +38,8 @@ export interface HostService {
   /** The published state without any thread's history: what every client needs on every frame. */
   shell(): AgentState
   threadDetail(threadId: string): AgentThreadDetail | null
-  /** Runs one client's command and answers with the shell: no thread's history rides on the answer. */
+  /** Runs one client's command and answers with the shell, without history. A socket answer's returned
+   * error is its own command outcome; it is independent of the published shell's shared error. */
   command(command: AgentCommand, client: ClientIdentity): Promise<AgentState>
   subscribeThreadDetail?(listener: (update: AgentThreadDetailUpdate) => void): () => void
   attachmentPreview?(request: AgentAttachmentPreviewRequest): AgentAttachmentPreviewResult | Promise<AgentAttachmentPreviewResult>

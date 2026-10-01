@@ -1632,7 +1632,10 @@ export class AgentControl {
       this.publish()
       if (turn) turn.firstFeedbackAtMs ??= Date.now()
       await this.finishTurn(turn, failure)
-      return this.shell()
+      // The socket receipt needs this answer's outcome, not a shared error another lane can change.
+      // Keep the published shell and desktop response as they are.
+      return command.type === 'answer' && client.transport === 'socket'
+        ? { ...this.shell(), error: failure ?? null } : this.shell()
     })
     if (independent) {
       this.threadActions.set(laneThreadId, task)
@@ -2572,6 +2575,11 @@ export class AgentControl {
     await this.persist()
     if (!result.accepted && !result.uncertain) throw new Error(PROVIDER_REJECTED_ACTION)
     this.acceptSnapshot(await this.readThread(threadId, provider))
+    // Another client or a cancellation can remove the request during this send. That reconciles
+    // the waiting request, but never upgrades this adapter's uncertain answer into a confirmation.
+    if (command.type === 'answer' && client.transport === 'socket' && result.uncertain) {
+      throw new Error(result.error ?? PROVIDER_RESULT_UNCONFIRMED)
+    }
   }
   /**
    * Keeps the images of a prompt the provider has taken, without holding the send on the disk write. A failed
