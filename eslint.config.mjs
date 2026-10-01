@@ -15,6 +15,7 @@ export default tseslint.config(
       'artifacts/review-*/**',
       'artifacts/renderer-other-bundle-run/**',
       'artifacts/review-644/**',
+      'artifacts/review-667/**',
       'artifacts/phase-three-themes/**',
       'artifacts/thread-browser-player/**',
       'artifacts/new-thread-defaults/**',
