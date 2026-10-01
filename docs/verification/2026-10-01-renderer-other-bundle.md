@@ -67,3 +67,14 @@ The throwaway semantics demo is retained on
 code and shows the readable text separately, without a live region. The wording
 was a reversible assumption after clarification was requested; no user choice
 was recorded.
+
+The rework's built Electron journeys passed for Hosts, Memory, Phones and real
+settings save failures. The accessibility-tree checks find the ordinary readable
+progress text and spelled pairing code, and reject live regions on those labels.
+The save-feedback journey again covers all three window sizes in light/dark with
+reduced motion and keyboard retries. Fresh captures at those sizes were visually
+inspected; minimum-size feedback wraps, and the code remains spaced and readable.
+The two existing retained feedback captures were refreshed from this run.
+
+- [Questionnaire progress](../../artifacts/renderer-save-feedback/questionnaire-readable-progress.png)
+- [Pairing code, 820x560 dark](../../artifacts/renderer-save-feedback/pairing-code-820-dark.png)
