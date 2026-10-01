@@ -1,4 +1,4 @@
-import { useEffect, useRef, type RefObject } from 'react'
+import { useLayoutEffect, useRef, type RefObject } from 'react'
 
 const FOCUSABLE = 'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [href], [tabindex]:not([tabindex="-1"])'
 
@@ -16,7 +16,7 @@ export function useDialogFocus({ onEscape, initialFocus, fallbackFocus }: {
   const dialog = useRef<HTMLElement>(null)
   const escape = useRef(onEscape)
   escape.current = onEscape
-  useEffect(() => {
+  useLayoutEffect(() => {
     const previous = document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null
     initialFocus.current?.focus()
     const onKey = (event: KeyboardEvent): void => {
