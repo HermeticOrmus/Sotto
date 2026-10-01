@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AgentCommand, AgentState } from '../../../src/shared/agents'
+import { agentCommandSchema, type AgentCommand, type AgentState } from '../../../src/shared/agents'
 import { ThreadDraftStore, UNCONFIRMED_SUBMISSION, queueAdmissionOpen, submissionStatus } from '../../../src/renderer/src/agents/threadDraftStore'
 
 type SaveCommand = Extract<AgentCommand, { type: 'save-thread-draft' }>
@@ -34,6 +34,93 @@ beforeEach(() => { vi.useFakeTimers() })
 afterEach(() => { vi.useRealTimers() })
 
 describe('ThreadDraftStore revisions and saves', () => {
+  it.each(['count', 'bytes', 'text'] as const)('retains separate, valid recovery revisions when their combined %s exceeds a limit', reason => {
+    const held = heldCommand()
+    const store = new ThreadDraftStore(held.command, 250, uuids())
+    const images = (count: number, prefix: string, sizeBytes = 8) => Array.from({ length: count }, (_, index) => ({
+      id: `${prefix}-${index}`, name: `${prefix}-${index}.png`, mimeType: 'image/png' as const, sizeBytes, digest: 'e'.repeat(64) }))
+    const first = { text: reason === 'text' ? 'A'.repeat(60_000) : 'First prompt', attachments: reason === 'count' ? images(8, 'first') : reason === 'bytes' ? images(2, 'first', 6 * 1024 * 1024) : [] }
+    const second = { text: reason === 'text' ? 'B'.repeat(60_000) : 'Newer prompt', attachments: reason === 'count' ? images(1, 'second') : reason === 'bytes' ? images(2, 'second', 6 * 1024 * 1024) : [] }
+    store.edit('source', first)
+    store.submit('source', 1)
+    store.edit('source', second)
+    store.carryRefusedCreation('source', 'project')
+    store.restoreRefusedCreation('target', 'project')
+    expect(store.draft('target')).toMatchObject(first)
+    const retained = store.submissions().filter(item => item.threadId === 'target')
+    expect(retained).toHaveLength(2)
+    expect(retained[0]).toMatchObject(first)
+    expect(retained[1]).toMatchObject(second)
+    expect(retained.every(item => item.notSent)).toBe(true)
+    expect(retained.every(item => agentCommandSchema.safeParse({ type: 'manual-send', threadId: 'target', text: item.text, attachments: item.attachments, skills: item.skills, files: item.files, draftId: item.draftId }).success)).toBe(true)
+    store.flush('target')
+    expect(held.saves().filter(save => save.threadId === 'target').every(save => agentCommandSchema.safeParse(save).success)).toBe(true)
+    // State reception and another send must not silently discard or automatically restore overflow.
+    store.receive(baseState())
+    store.submit('target', 2)
+    store.receive(baseState())
+    expect(store.draft('target').text).toBe('')
+    expect(store.submissions().filter(item => item.threadId === 'target' && item.notSent)).toHaveLength(2)
+    store.restore('target', retained[1]!.draftId)
+    expect(store.draft('target')).toMatchObject(second)
+    store.restore('target', retained[0]!.draftId)
+    expect(store.draft('target')).toMatchObject(first)
+  })
+
+  it('retains a late staged screenshot separately when recovered screenshots fill the composer', () => {
+    const store = new ThreadDraftStore(heldCommand().command, 250, uuids())
+    const images = Array.from({ length: 8 }, (_, index) => ({ id: `shot-${index}`, name: `shot-${index}.png`, mimeType: 'image/png' as const, sizeBytes: 8, digest: 'e'.repeat(64) }))
+    store.edit('source', { text: 'First prompt', attachments: images })
+    store.submit('source', 1)
+    const endRead = store.beginScreenshotRead('source')
+    store.carryRefusedCreation('source', 'project')
+    store.restoreRefusedCreation('target', 'project')
+    const late = { ...images[0]!, id: 'late', name: 'late.png' }
+    store.addLateScreenshots('source', [late], { imagesSupported: true })
+    endRead()
+    expect(store.draft('target').attachments).toEqual(images)
+    const retained = store.submissions().filter(item => item.threadId === 'target')
+    expect(retained).toHaveLength(2)
+    expect(retained[1]!.attachments).toEqual([late])
+    store.restore('target', retained[1]!.draftId)
+    expect(store.draft('target').attachments).toEqual([late])
+    expect(store.screenshotReads('target').pending).toBe(0)
+  })
+
+  it.each([1, 2])('updates retained recovery content when %s late images partly fit the restored draft', count => {
+    const store = new ThreadDraftStore(heldCommand().command, 250, uuids())
+    const images = Array.from({ length: 7 }, (_, index) => ({ id: `shot-${index}`, name: `shot-${index}.png`, mimeType: 'image/png' as const, sizeBytes: 8, digest: 'e'.repeat(64) }))
+    store.edit('source', { text: 'A'.repeat(60_000), attachments: images })
+    store.submit('source', 1)
+    store.edit('source', { text: 'B'.repeat(60_000) })
+    store.carryRefusedCreation('source', 'project')
+    store.restoreRefusedCreation('target', 'project')
+    const late = Array.from({ length: count }, (_, index) => ({ ...images[0]!, id: `late-${index}`, name: `late-${index}.png` }))
+    store.addLateScreenshots('source', late, { imagesSupported: true })
+    const retained = store.submissions().filter(item => item.threadId === 'target')
+    expect(retained).toHaveLength(count === 1 ? 2 : 3)
+    expect(retained[0]!.attachments).toEqual([...images, late[0]!])
+    if (count === 2) expect(retained[2]!.attachments).toEqual([late[1]!])
+    store.restore('target', retained[1]!.draftId)
+    store.restore('target', retained[0]!.draftId)
+    expect(store.draft('target').attachments).toEqual([...images, late[0]!])
+  })
+
+  it('recovers a second refused creation without duplicating its restored and submitted revision', () => {
+    const store = new ThreadDraftStore(heldCommand().command, 250, uuids())
+    const images = Array.from({ length: 8 }, (_, index) => ({ id: `shot-${index}`, name: `shot-${index}.png`, mimeType: 'image/png' as const, sizeBytes: 8, digest: 'e'.repeat(64) }))
+    store.edit('source', { text: 'First prompt', attachments: images })
+    store.submit('source', 1)
+    store.edit('source', { text: 'Newer prompt', attachments: [{ ...images[0]!, id: 'newer' }] })
+    store.carryRefusedCreation('source', 'project')
+    store.restoreRefusedCreation('intermediate', 'project')
+    store.submit('intermediate', 2)
+    store.carryRefusedCreation('intermediate', 'project')
+    store.restoreRefusedCreation('target', 'project')
+    expect(store.draft('target').text).toBe('First prompt')
+    expect(store.submissions().filter(item => item.threadId === 'target').map(item => item.text)).toEqual(['First prompt', 'Newer prompt'])
+  })
+
   it('recovers an unconfirmed creation into itself without duplicating content or redirecting its reads', () => {
     const store = new ThreadDraftStore(heldCommand().command, 250, uuids())
     const image = { id: 'shot', name: 'Screenshot.png', mimeType: 'image/png' as const, sizeBytes: 8, digest: 'e'.repeat(64) }

@@ -568,7 +568,7 @@ describe('a thread created without a round trip', () => {
     expect(command.mock.calls.filter(([request]) => (request as AgentCommand).type === 'create-thread')).toHaveLength(1)
   })
 
-  it.each(['unsent', 'sent', 'sent with newer typing', 'sent after navigation', 'sent into reused thread'])('recovers the %s prompt and staged images after creation is refused', async mode => {
+  it.each(['unsent', 'sent', 'sent with newer typing', 'sent with overflow', 'sent after navigation', 'sent into reused thread'])('recovers the %s prompt and staged images after creation is refused', async mode => {
     const state = stateFixture()
     let settle: (value: AgentState) => void = () => undefined
     const refusing = new Promise<AgentState>(resolve => { settle = resolve })
@@ -584,9 +584,10 @@ describe('a thread created without a round trip', () => {
     const newThread = draftThreads.get().find(thread => thread.id === firstId)!
     const store = connectionStores.get(command)!
     const image = handleOf(new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]), 'recover-image', 'recover.png')
-    act(() => store.edit(firstId, { text: 'Keep this prompt.', attachments: [image] }))
+    const images = mode === 'sent with overflow' ? Array.from({ length: 8 }, (_, index) => ({ ...image, id: `recover-${index}`, name: `recover-${index}.png` })) : [image]
+    act(() => store.edit(firstId, { text: 'Keep this prompt.', attachments: images }))
     if (mode !== 'unsent') fireEvent.click(screen.getByRole('button', { name: 'Send prompt' }))
-    if (mode === 'sent with newer typing') {
+    if (mode === 'sent with newer typing' || mode === 'sent with overflow') {
       act(() => store.edit(firstId, { text: 'And this next thought.', attachments: [{ ...image, id: 'newer-image', name: 'newer.png' }] }))
     }
     await act(async () => { settle({ ...state, error: 'That model is unavailable.' }) })
@@ -605,7 +606,16 @@ describe('a thread created without a round trip', () => {
     const nextId = mode === 'sent into reused thread' ? 'reusable' : (requests[1] as Extract<AgentCommand, { type: 'create-thread' }>).threadId!
     expect(requests).toHaveLength(mode === 'sent into reused thread' ? 1 : 2)
     expect(store.draft(nextId).text).toBe(mode === 'sent with newer typing' ? 'Keep this prompt.\n\nAnd this next thought.' : mode === 'sent into reused thread' ? 'Keep this prompt.\n\nAlready here.' : 'Keep this prompt.')
-    expect(store.draft(nextId).attachments.map(attachment => attachment.name)).toEqual(mode === 'sent with newer typing' ? ['recover.png', 'newer.png'] : ['recover.png'])
+    expect(store.draft(nextId).attachments.map(attachment => attachment.name)).toEqual(mode === 'sent with newer typing' ? ['recover.png', 'newer.png'] : images.map(image => image.name))
+    if (mode === 'sent with overflow') {
+      expect(screen.getAllByRole('status').some(status => status.textContent === 'Not sent')).toBe(true)
+      fireEvent.click(screen.getByRole('button', { name: 'Restore prompt' }))
+      expect(screen.getByRole('textbox', { name: 'Prompt' })).toHaveValue('And this next thought.')
+      expect(store.draft(nextId).attachments.map(attachment => attachment.name)).toEqual(['newer.png'])
+      fireEvent.click(screen.getByRole('button', { name: 'Restore prompt' }))
+      expect(screen.getByRole('textbox', { name: 'Prompt' })).toHaveValue('Keep this prompt.')
+      expect(store.draft(nextId).attachments).toEqual(images)
+    }
     expect(command).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'manual-send' }))
   })
 

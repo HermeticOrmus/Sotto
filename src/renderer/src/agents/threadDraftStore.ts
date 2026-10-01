@@ -1,7 +1,7 @@
 import { useMemo, useSyncExternalStore } from 'react'
 import type { AgentSkillReference } from '../../../shared/agentSkills'
 import type { AgentFileReference } from '../../../shared/agentFiles'
-import { MAX_DELIVERED_DRAFTS, agentAttachmentHandlesSchema, type AgentAttachmentHandle, type AgentCommand, type AgentDelivery, type AgentState } from '../../../shared/agents'
+import { MAX_DELIVERED_DRAFTS, agentAttachmentHandlesSchema, agentThreadDraftSchema, type AgentAttachmentHandle, type AgentCommand, type AgentDelivery, type AgentState } from '../../../shared/agents'
 import { gateOnCreation } from './draftThreads'
 
 type Command = (command: AgentCommand) => Promise<AgentState | null>
@@ -108,6 +108,8 @@ export interface Submission {
   readonly notSent?: boolean
   /** The revision this prompt went back to the composer as, when it was refused and nothing newer was written. */
   readonly restoredAs?: string
+  /** Refused-creation overflow remains available until explicitly dismissed or delivered. */
+  readonly recovered?: boolean
 }
 
 export type SubmissionStatus = AgentDelivery['status']
@@ -127,6 +129,7 @@ interface Entry {
 }
 
 const EMPTY: ComposerDraft = { draftId: '', text: '', attachments: [], skills: [], files: [], requestId: null }
+const recoveredContentSchema = agentThreadDraftSchema.pick({ text: true, attachments: true, skills: true, files: true })
 const combineDrafts = (content: readonly Pick<ComposerDraft, 'text' | 'attachments' | 'skills' | 'files'>[]): ComposerDraft => ({ ...EMPTY,
   text: content.map(item => item.text).filter(text => text.trim()).join('\n\n'),
   attachments: [...new Map(content.flatMap(item => item.attachments).map(item => [item.id, item])).values()],
@@ -214,9 +217,10 @@ export class ThreadDraftStore {
   private readonly reads = new Map<string, ScreenshotReads>()
   private readonly answers = new Map<string, ComposerAnswerState>()
   private submissionList: readonly Submission[] = []
-  private readonly refusedDrafts = new Map<string, ComposerDraft>()
+  private readonly refusedDrafts = new Map<string, readonly ComposerDraft[]>()
   private readonly projectRecoveries = new Map<string, readonly string[]>()
   private readonly recoveryTargets = new Map<string, string>()
+  private readonly recoveryThreads = new Set<string>()
   /** Every write waits for the creation of a thread this window minted, so a fresh thread's draft is never refused. */
   private readonly command: Command
   constructor(command: Command, private readonly debounceMs = 250, private readonly uuid: () => string = () => crypto.randomUUID()) {
@@ -250,8 +254,11 @@ export class ThreadDraftStore {
   /** Nothing reached a refused creation: carry submitted revisions and newer typing back as one draft. */
   carryRefusedCreation(threadId: string, projectId: string): void {
     const draft = this.draft(threadId)
-    const sent = this.submissionList.filter(item => item.threadId === threadId && item.restoredAs !== draft.draftId)
-    this.refusedDrafts.set(threadId, { ...combineDrafts([...sent.map(item => ({ ...item, files: item.files ?? [] })), draft]), draftId: draft.draftId })
+    const submissions = this.submissionList.filter(item => item.threadId === threadId)
+    const kept = submissions.filter(item => item.restoredAs !== draft.draftId
+      && (!item.recovered || !submissions.some(other => other.draftId === item.restoredAs)))
+    const sent = [...kept.filter(item => !item.recovered), ...kept.filter(item => item.recovered)]
+    this.refusedDrafts.set(threadId, [...sent.map(item => ({ ...item, files: item.files ?? [], requestId: null })), draft])
     this.projectRecoveries.set(projectId, [...new Set([...(this.projectRecoveries.get(projectId) ?? []), threadId])])
   }
 
@@ -260,12 +267,14 @@ export class ThreadDraftStore {
     const sources = this.projectRecoveries.get(projectId)
     if (!sources) return
     const targetDraft = this.draft(threadId)
-    const alreadyCarried = this.refusedDrafts.get(threadId)?.draftId === targetDraft.draftId
-    const content = combineDrafts([...sources.map(id => this.refusedDrafts.get(id)!), ...(alreadyCarried ? [] : [targetDraft])])
+    const alreadyCarried = this.refusedDrafts.get(threadId)?.some(draft => draft.draftId === targetDraft.draftId)
+    const content = [...sources.flatMap(id => this.refusedDrafts.get(id)!), ...(alreadyCarried ? [] : [targetDraft])]
     // An unconfirmed creation can later appear in main and be reused as its own recovery target.
     this.recoveryTargets.delete(threadId)
     this.projectRecoveries.delete(projectId)
-    this.restoreDraft(threadId, content)
+    this.submissionList = this.submissionList.filter(item => !sources.includes(item.threadId))
+    this.recoveryThreads.add(threadId)
+    this.restoreRecoveredDrafts(threadId, content)
     for (const sourceId of sources) {
       this.refusedDrafts.delete(sourceId)
       if (sourceId === threadId) continue
@@ -275,6 +284,31 @@ export class ThreadDraftStore {
       this.recoveryTargets.set(sourceId, threadId)
       this.setScreenshotReads(threadId, { pending: reads.pending + targetReads.pending, problem: [targetReads.problem, reads.problem].filter(Boolean).join(' ') || null })
     }
+  }
+
+  /** Keep each recovery batch within the same limits as a saved or sent draft. Overflow stays visible. */
+  private restoreRecoveredDrafts(threadId: string, content: readonly ComposerDraft[]): void {
+    const batches: ComposerDraft[] = [EMPTY]
+    for (const draft of content) {
+      const merged = combineDrafts([batches.at(-1)!, draft])
+      if (recoveredContentSchema.safeParse(merged).success) batches[batches.length - 1] = merged
+      else batches.push(draft)
+    }
+    const previous = this.draft(threadId)
+    const restoredAs = this.restoreDraft(threadId, batches[0]!)!
+    const retained = this.submissionList.find(item => item.recovered && item.threadId === threadId && item.restoredAs === previous.draftId)
+    if (retained) this.submissionList = this.submissionList.map(item => item === retained ? { ...item, ...batches[0]!, draftId: item.draftId, restoredAs } : item)
+    if (batches.length === 1) { if (retained) this.emit(new Set([threadId])); return }
+    for (const [index, batch] of batches.entries()) {
+      // Late screenshots can overflow an already restored batch; keep its existing message once.
+      if (index === 0 && retained) continue
+      const draftId = this.uuid()
+      this.submissionList = [...this.submissionList, { ...batch, threadId, draftId, mode: 'send', submittedAt: 0,
+        startedAt: new Date().toISOString(), resolved: true, notSent: true, recovered: true,
+        error: 'This prompt was kept after a new thread was refused. Restore it separately. Nothing was sent.',
+        ...(index === 0 ? { restoredAs } : {}) }]
+    }
+    this.emit(new Set([threadId]))
   }
 
   private recoveredThreadId(threadId: string): string {
@@ -313,7 +347,15 @@ export class ThreadDraftStore {
   addLateScreenshots(threadId: string, images: readonly AgentAttachmentHandle[], { imagesSupported, failure = null }: { readonly imagesSupported: boolean; readonly failure?: string | null }): void {
     threadId = this.recoveredThreadId(threadId)
     const recovering = this.refusedDrafts.get(threadId)
-    const draft = recovering ?? this.draft(threadId)
+    const draft = recovering?.at(-1) ?? this.draft(threadId)
+    if (draft.requestId === null && imagesSupported && (recovering || this.recoveryThreads.has(threadId))) {
+      const added = images.map(image => ({ ...EMPTY, attachments: [image] }))
+      if (recovering) this.refusedDrafts.set(threadId, [...recovering, ...added])
+      else this.restoreRecoveredDrafts(threadId, [draft, ...added])
+      if (failure) this.reads.set(threadId, { ...this.screenshotReads(threadId), problem: failure })
+      this.emit(new Set([threadId]))
+      return
+    }
     const before = draft.attachments
     const refusal = draft.requestId !== null ? 'answering' : !imagesSupported ? 'unsupported' : null
     let attachments = before
@@ -324,7 +366,7 @@ export class ThreadDraftStore {
       else leftOut += 1
     }
     if (attachments !== before) {
-      if (recovering) this.refusedDrafts.set(threadId, { ...recovering, attachments })
+      if (recovering) this.refusedDrafts.set(threadId, [...recovering.slice(0, -1), { ...draft, attachments }])
       else this.revise(threadId, { attachments })
     }
     const problems = [...(leftOut > 0 ? [lateScreenshotsLeftOut(leftOut, refusal ?? 'full')] : []), ...(failure ? [failure] : [])]
@@ -545,7 +587,9 @@ export class ThreadDraftStore {
       threadId, draftId: draft.draftId, mode, text: draft.text.trim(), submittedAt, startedAt: new Date().toISOString(), resolved: false, error: null,
       attachments: draft.attachments.map(attachment => ({ ...attachment })), skills: [...draft.skills], files: [...draft.files],
     }
-    this.submissionList = [...this.submissionList.filter(item => key(item.threadId, item.draftId) !== key(threadId, draft.draftId)), submission].slice(-MAX_DELIVERED_DRAFTS)
+    const submissions = [...this.submissionList.filter(item => key(item.threadId, item.draftId) !== key(threadId, draft.draftId)), submission]
+    const recent = new Set(submissions.filter(item => !item.recovered).slice(-MAX_DELIVERED_DRAFTS))
+    this.submissionList = submissions.filter(item => item.recovered || recent.has(item))
     this.revise(threadId, { text: '', attachments: [], skills: [], files: [], requestId: null })
     this.clearScreenshotProblem(threadId)
     this.emit(new Set([threadId]))
@@ -617,7 +661,7 @@ export class ThreadDraftStore {
   /** Offer a refused prompt back to its composer, once, and only while nothing newer is written there. */
   private returnPrompt(submission: Submission, changed: Set<string>): Submission {
     const id = key(submission.threadId, submission.draftId)
-    if (this.returnedPrompts.has(id)) return submission
+    if (submission.recovered || this.returnedPrompts.has(id)) return submission
     this.returnedPrompts.add(id)
     if (this.returnedPrompts.size > MAX_DELIVERED_DRAFTS * 4) this.returnedPrompts.delete(this.returnedPrompts.values().next().value!)
     const restoredAs = this.putBack(submission.threadId, { ...submission, files: submission.files ?? [], requestId: null }, true)
