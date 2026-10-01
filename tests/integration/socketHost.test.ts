@@ -565,6 +565,20 @@ describe('thread detail over the socket', () => {
     return { stream, server, client, updates, pushErrors, connected: () => connected, session: () => host.pairing.signSession(paired.clientId) }
   }
 
+  it('stops materialising observed details after the peer closes while waiting for drain', async () => {
+    const { client } = await pair()
+    await client.command({ type: 'connect', provider: 'codex' })
+    const ids = client.shell().host.threads.slice(0, 2).map(thread => thread.id)
+    const details = vi.spyOn(host.service, 'threadDetail')
+    const drain = vi.spyOn(SocketFrames.prototype, 'drained').mockImplementation(function (this: SocketFrames) {
+      this.close(); return Promise.resolve()
+    })
+    try {
+      await expect(client.observe(ids)).rejects.toMatchObject({ code: 'disconnected' })
+      expect(drain).toHaveBeenCalled()
+      expect(details).not.toHaveBeenCalled()
+    } finally { drain.mockRestore(); details.mockRestore() }
+  })
   it('receives each observed detail once on reconnect', async () => {
     const { stream, server, client } = await streamingHost()
     try {

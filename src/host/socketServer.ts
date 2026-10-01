@@ -284,7 +284,7 @@ export async function startSocketServer(options: SocketServerOptions) {
       case 'receipt': return receipts.get(peer.client.clientId + ':' + request.commandId)?.receipt ?? { status: 'unknown' }
       case 'observe':
         peer.observed = new Set(request.threadIds); await observe()
-        for (const id of peer.observed) { await peer.frames.drained(); detail(peer, id) }
+        for (const id of peer.observed) { await peer.frames.drained(); if (peer.frames.isClosed) break; detail(peer, id) }
         await peer.frames.drained()
         return null
       case 'command': return command(peer, request)
