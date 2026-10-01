@@ -27,7 +27,8 @@ async function fixture(mode = 'started', options: { authenticationTimeoutMs?: nu
   const spawner: SpawnSsh = (_file, args, spawnOptions) => spawn(process.execPath, [resolve('tests/fixtures/fakeSsh.mjs'), ...args],
     { shell: false, windowsHide: true, stdio: [spawnOptions.stdin, 'pipe', 'pipe'],
       env: { ...spawnOptions.env, FAKE_SSH_MODE: mode, FAKE_SSH_RECORD: record, FAKE_SSH_ROOT: path, FAKE_SSH_START_MS: String(options.startMs ?? 0), FAKE_SSH_HOLD_MS: String(options.holdMs ?? 200), FAKE_SSH_VERSION: options.version ?? '' } })
-  const launcher = new SshHostLauncher({ spawn: spawner, authenticationTimeoutMs: options.authenticationTimeoutMs ?? 10_000, readyTimeoutMs: options.readyTimeoutMs ?? 5000,
+  // Success cases get the whole test budget; deadline assertions supply their own shorter budget.
+  const launcher = new SshHostLauncher({ spawn: spawner, authenticationTimeoutMs: options.authenticationTimeoutMs ?? 15_000, readyTimeoutMs: options.readyTimeoutMs ?? 5000,
     ...(options.approvalTimeoutMs ? { approvalTimeoutMs: options.approvalTimeoutMs } : {}),
     ...(options.platform ? { platform: options.platform } : {}) })
   launchers.push(launcher)
@@ -58,7 +59,7 @@ it.each(['started', 'discovered'])('discovers readiness, verifies the forward an
   expect(spawned.find(item => item.tunnel)?.args).toContainEqual(expect.stringMatching(/^127\.0\.0\.1:\d+:127\.0\.0\.1:4317$/u))
 })
 it('starts the sign-in deadline after the askpass helper is ready', async () => {
-  const { launcher } = await fixture('started')
+  const { launcher } = await fixture('started', { authenticationTimeoutMs: 10_000 })
   const preparing = Promise.withResolvers<void>(), ready = Promise.withResolvers<void>()
   const start = AskpassBroker.start.bind(AskpassBroker)
   const preparation = vi.spyOn(AskpassBroker, 'start').mockImplementation(async (...args) => {

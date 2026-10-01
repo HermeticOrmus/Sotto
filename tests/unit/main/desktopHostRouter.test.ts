@@ -50,6 +50,21 @@ describe('desktop host routing', () => {
     local.state.error = noProviderRefusal('desktop', false)
     expect(own.shell().error).toBe('No provider is connected on this computer. Connect one in Settings > Providers.')
   })
+  it('returns a worktree preview only to its caller and explains older host failures', async () => {
+    const router = new DesktopHostRouter(emptyDesktopState), remote = fixture(REMOTE, 'remote')
+    router.add(remote.connection)
+    const publish = vi.fn(); router.subscribe(publish); publish.mockClear()
+    const preview = { path: '/checkout', branch: 'sotto/test', dirty: false, ignored: ['.env'], items: [{ path: '.env', bytes: 10, fileCount: 1 }], repositories: [], untracked: [] }
+    remote.command.mockResolvedValueOnce({ ...remote.state, worktreeReclaimPreview: preview })
+    expect((await router.command({ type: 'preview-reclaim-thread-worktree', threadId: hostEntityKey(REMOTE, 'thread') }, desktopWindowClient())).worktreeReclaimPreview).toEqual(preview)
+    expect(router.shell().worktreeReclaimPreview).toBeUndefined()
+    expect(publish).not.toHaveBeenCalled()
+    remote.command.mockResolvedValueOnce(remote.state)
+    expect((await router.command({ type: 'preview-reclaim-thread-worktree', threadId: hostEntityKey(REMOTE, 'thread') }, desktopWindowClient())).error).toContain('Update the host')
+    remote.command.mockRejectedValueOnce(new Error('Unknown command'))
+    expect((await router.command({ type: 'preview-reclaim-thread-worktree', threadId: hostEntityKey(REMOTE, 'thread') }, desktopWindowClient())).error).toContain('update the host')
+    expect(publish).not.toHaveBeenCalled()
+  })
   it('keeps colliding IDs distinct and dispatches every thread action to its owner', async () => {
     const router = new DesktopHostRouter(emptyDesktopState), local = fixture(LOCAL, 'local'), remote = fixture(REMOTE, 'remote')
     router.add(local.connection); router.add(remote.connection)

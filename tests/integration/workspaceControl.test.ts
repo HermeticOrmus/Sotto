@@ -33,6 +33,21 @@ async function fixture(root?: string) {
 function thread(state: AgentState) { return state.host.threads.find(thread => thread.id === state.activeThreadId)! }
 
 describe('workspace controller integration', () => {
+  it('returns a worktree preview without saving or broadcasting it', async () => {
+    const f = await fixture()
+    const preview = { path: '/synthetic/worktree', branch: 'sotto/test', dirty: false, ignored: ['.env'], items: [{ path: '.env', bytes: 10, fileCount: 1 }], repositories: [], untracked: [] }
+    const previewHost = vi.spyOn(f.host, 'previewThreadWorktreeReclaim').mockResolvedValue(preview)
+    const publish = vi.fn(); const unsubscribe = f.control.subscribe(publish); publish.mockClear()
+    try {
+      const result = await f.control.command({ type: 'preview-reclaim-thread-worktree', threadId: f.control.get().host.threads[0]!.id })
+      expect(result.worktreeReclaimPreview).toEqual(preview)
+      expect(f.control.get().worktreeReclaimPreview).toBeUndefined()
+      expect(f.control.shell().worktreeReclaimPreview).toBeUndefined()
+      expect(publish).not.toHaveBeenCalled()
+      expect(await readFile(join(f.root, 'agents.json'), 'utf8')).not.toContain('synthetic/worktree')
+    } finally { previewHost.mockRestore(); unsubscribe() }
+  })
+
   it('stops native work even when the follow-up pause cannot be saved', async () => {
     const f = await fixture()
     const threadId = f.control.get().host.threads.find(thread => thread.providerId === 'codex')!.id

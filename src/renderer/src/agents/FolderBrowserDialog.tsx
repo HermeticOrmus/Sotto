@@ -8,6 +8,7 @@ import { Button } from '../components/Button'
 import { chordClaimed, chordMatches } from './branchToolbar.logic'
 import { listedHostName } from './HostBadge'
 import { projectAtFolder } from './projectFolders'
+import { isCompositionKey } from './composerKeys'
 import './newThread.css'
 import './folderBrowser.css'
 
@@ -214,6 +215,7 @@ export function FolderBrowserDialog({ state, hostId: givenHostId, heading, busy 
   const explorerLabel = mac ? 'Browse with Finder' : 'Browse with File Explorer'
 
   const onKeyDown = (event: React.KeyboardEvent): void => {
+    if (isCompositionKey(event.nativeEvent)) return
     if (event.target === nameInput.current) return
     const rows = host ? shown.length : hosts.length
     if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && rows) {
@@ -287,6 +289,7 @@ export function FolderBrowserDialog({ state, hostId: givenHostId, heading, busy 
             <input ref={nameInput} aria-label="New folder name" placeholder="Folder name" value={draftName}
               onChange={event => { setDraftName(event.target.value); setDraftNameError(null) }}
               onKeyDown={event => {
+                if (isCompositionKey(event.nativeEvent)) return
                 if (event.key === 'Enter') { event.preventDefault(); nameFolder() }
                 if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setDraftName(null); setDraftNameError(null) }
               }} />
