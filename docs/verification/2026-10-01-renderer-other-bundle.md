@@ -102,3 +102,18 @@ timeouts across threadWorktrees, socketHostContract, gitStatus, worktreeCleanup
 and headlessWorktreeCleanup. The failed files' isolated reruns and the subsequent
 main-sync checks are reported in PR #666. Their deadlines and assertions were
 preserved.
+
+
+After syncing main at 94fb4ea4, all five timeout files passed serially: 127 tests
+with their original assertions and deadlines. The affected-test run passed 531
+tests across 16 files; typecheck, lint, notices and the rebuild passed.
+[Gates (Windows) passed on c52b22e0](https://github.com/millZach/Sotto/actions/runs/36921868287).
+
+The rebuilt Electron run passed six of seven journeys. The broad Tools rail
+matrix repeated the Working changes assertion already reproduced on baseline
+2f1d74f240cbcd2b3ab6a1b0e5a212111ccc5221. Its standalone file rerun passed the
+Changes-scope journey but repeated the rail failure. The saved state still showed
+Reading the working tree when the five-second assertion expired. Changes' store,
+surface and Git comparison code are unchanged from that baseline; the assertion
+was preserved. Fresh progress, pairing and save-feedback captures were inspected.
+The later installer/adapter main sync and its checks are recorded in PR #666.
