@@ -171,6 +171,7 @@ it('explains when phone access settings could not be saved', async () => {
 it('explains cleanup when the saved record could not be read', async () => {
   show({ ...OFF, phase: 'cleanup-failed', serve: { status: 'failed', reason: 'cleanup-record' } })
   expect(await screen.findByText(/couldn’t read its saved cleanup record/)).toBeVisible()
+  expect(screen.getByText(/Remove the setting on port 8443 in Tailscale, then press Try again/)).toBeVisible()
 })
 
 

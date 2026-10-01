@@ -14,7 +14,7 @@ type Step = 'ok' | 'failed' | 'waiting'
 /** What a failed step says: what happened, that nothing was changed, and what to do. */
 export function phonesFailure(state: PhonesState): string | null {
   if (state.phase === 'cleanup-failed') return state.serve.status === 'failed' && state.serve.reason === 'cleanup-record'
-    ? 'Phones can’t connect. Sotto couldn’t read its saved cleanup record, so it can’t identify the Tailscale Serve setting. Restore the record in Sotto’s data folder, then press Try again. Sotto is still finishing cleanup.'
+    ? 'Phones can’t connect. Sotto couldn’t read its saved cleanup record, so it can’t identify the Tailscale Serve setting. Remove the setting on port 8443 in Tailscale, then press Try again. Sotto is still finishing cleanup.'
     : 'Phones can’t connect. Sotto is still finishing cleanup of its Tailscale Serve setting and will try again while it is open. Check Tailscale, then press Try again.'
   if (state.tailscale.status === 'failed') {
     return state.tailscale.reason === 'missing'
