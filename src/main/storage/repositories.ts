@@ -23,7 +23,7 @@ export function createStorageRepositories(
     }),
     history: new HistoryRepository(join(userDataPath, 'history.json'), {
       now,
-      log,
+      ...(log ? { log } : {}),
       onRecovery: (notice) => recoveryNotices.publish(notice),
     }),
   })

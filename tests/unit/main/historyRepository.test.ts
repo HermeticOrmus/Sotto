@@ -41,7 +41,7 @@ async function createRepository(
   const root = await mkdtemp(join(tmpdir(), 'sotto-history-repository-'))
   roots.push(root)
   const filePath = join(root, 'history.json')
-  return { filePath, repository: new HistoryRepository(filePath, { now, log }) }
+  return { filePath, repository: new HistoryRepository(filePath, { now, ...(log ? { log } : {}) }) }
 }
 
 async function recoverySiblingNames(filePath: string): Promise<string[]> {
