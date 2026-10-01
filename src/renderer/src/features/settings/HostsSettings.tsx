@@ -82,12 +82,13 @@ function HostRow({ host, onCommand, onAction, providers, client, bridge, job, ch
   readonly job?: HostProviderJobState | undefined
   readonly choice?: HostSetupChoice | undefined
 }): ReactNode {
-  const { dismissedQuestionKeys, resumeQuestion } = useHostQuestionDismissals(bridge)
+  const { dismissedQuestionKeys, resumeQuestion, registerAnswerTarget } = useHostQuestionDismissals(bridge)
+  const rowRef = useRef<HTMLElement>(null)
   const questionKey = hostQuestionKey(host)
   const waitingForAnswer = questionKey !== null && dismissedQuestionKeys.has(questionKey)
   const route = `SSH ${host.target}${host.sshPort ? `, port ${host.sshPort}` : ''}`
   const shown = host.phase === 'connected' && providers?.length ? providers : undefined
-  return <section className="hosts-row" aria-label={host.name} data-phase={host.phase}>
+  return <section ref={rowRef} className="hosts-row" aria-label={host.name} data-phase={host.phase}>
     <span className="hosts-row__icon" aria-hidden="true"><Server size={18} /></span>
     <div className="hosts-row__info">
       <h4>{host.name}</h4>
@@ -95,7 +96,14 @@ function HostRow({ host, onCommand, onAction, providers, client, bridge, job, ch
       {host.error ? <p className="hosts-row__error" role="alert">{host.error}</p> : null}
     </div>
     <div className="hosts-row__actions">
-      {waitingForAnswer ? <Button aria-label={`Answer ${host.name}`} data-host-question-key={questionKey}
+      {waitingForAnswer ? <Button aria-label={`Answer ${host.name}`} ref={button => {
+        if (!button) return
+        return registerAnswerTarget(questionKey, () => {
+          if (button.closest('[hidden]')) return
+          rowRef.current?.scrollIntoView?.({ block: 'center', behavior: 'instant' })
+          button.focus({ preventScroll: true })
+        })
+      }}
         onClick={() => resumeQuestion(questionKey)}>Answer</Button> : null}
       {/* Tailscale SSH holds a reconnect until it is approved, and only the browser can approve it. */}
       {host.phase === 'connecting' && host.tailscale?.waiting && host.tailscale.url ? <Button variant="secondary" aria-label={`Open the Tailscale approval page for ${host.name}`}

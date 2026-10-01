@@ -49,10 +49,10 @@ export function HostQuestionDialog({ bridge = window.sotto?.hosts }: { readonly 
     return () => { alive = false; off() }
   }, [bridge])
   /** Dismiss only this question, so other hosts and new questions can still ask. */
-  const { dismissedQuestionKeys, dismissQuestion } = useHostQuestionDismissals(bridge)
+  const { dismissedQuestionKeys, dismissQuestion, focusAnswer } = useHostQuestionDismissals(bridge)
   const saved = state?.hosts.find(item => item.prompt && !dismissedQuestionKeys.has(hostQuestionKey(item)!))
   const waiting = saved ? undefined : setupWait(state)
-  const setupKey = waiting ? waiting.prompt ? `prompt:${waiting.id}:${waiting.prompt.id}` : `tailscale:${waiting.id}` : null
+  const setupKey = waiting ? hostQuestionKey(waiting) ?? `tailscale:${waiting.id}` : null
   const savedKey = saved ? hostQuestionKey(saved) : null
   const host = saved ?? (setupKey && !dismissedQuestionKeys.has(setupKey) ? waiting : undefined)
   const prompt = host?.prompt
@@ -70,9 +70,7 @@ export function HostQuestionDialog({ bridge = window.sotto?.hosts }: { readonly 
     // The row's Answer button exists after the dismissal renders. A following dialog takes priority.
     if (savedKey) queueMicrotask(() => {
       if (document.querySelector('[role="dialog"]')) return
-      const button = [...document.querySelectorAll<HTMLElement>('[data-host-question-key]')].find(item => item.dataset.hostQuestionKey === savedKey)
-      button?.closest('.hosts-row')?.scrollIntoView?.({ block: 'center', behavior: 'instant' })
-      button?.focus({ preventScroll: true })
+      focusAnswer(savedKey)
     })
   }
   if (!saved) {

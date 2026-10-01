@@ -722,6 +722,21 @@ it('returns to a dismissed question from its host row and sends the answer', asy
   expect(within(row).queryByText('Waiting for your answer')).toBeNull()
 })
 
+it('leaves focus and scrolling on the current page when Hosts is mounted but hidden', async () => {
+  const { bridge } = fixture([host({ phase: 'connecting', prompt: { id: 'hidden-prompt', kind: 'password', text: 'Synthetic question' } })]), user = userEvent.setup()
+  render(<><button>Current page</button><div hidden><HostsSettings localHostEnabled onLocalHostChange={async () => true} bridge={bridge} /></div><HostQuestionDialog bridge={bridge} /></>)
+  const previous = screen.getByRole('button', { name: 'Current page' })
+  previous.focus()
+  await screen.findByRole('dialog')
+  const row = screen.getByRole('region', { name: 'Build box', hidden: true })
+  const scroll = vi.fn()
+  row.scrollIntoView = scroll
+  await user.keyboard('{Escape}')
+  await waitFor(() => expect(document.activeElement).toBe(previous))
+  expect(scroll).not.toHaveBeenCalled()
+  expect(screen.queryByRole('button', { name: 'Answer Build box' })).toBeNull()
+})
+
 it("waits with a saved host's SSH question while a Hosts dialog is open", async () => {
   const reconnecting = host({ name: 'forge', phase: 'connecting', reconnecting: true })
   const { bridge, push } = fixture([reconnecting]), user = userEvent.setup()

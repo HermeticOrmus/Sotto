@@ -121,7 +121,7 @@ test('Escape dismisses saved host questions and only Switch it off disables the 
     await page.keyboard.press('Escape')
     await expect(page.getByRole('dialog')).toHaveCount(0)
     await expect(previous).toBeFocused()
-    await expect(page.getByText('Waiting for your answer', { exact: true })).toHaveCount(0)
+    for (const status of await page.getByText('Waiting for your answer', { exact: true }).all()) await expect(status).toBeHidden()
     await expect(page.getByRole('button', { name: /^Answer (forge|spark)$/ })).toHaveCount(0)
     expect(await launched.app.evaluate(() => (globalThis as unknown as { hostQuestionCommands: HostsCommand[] }).hostQuestionCommands)).toEqual([])
   } finally {

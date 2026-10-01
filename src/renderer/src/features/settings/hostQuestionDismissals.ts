@@ -5,6 +5,7 @@ import type { HostsBridge, HostStatus } from '../../../../shared/hosts'
 function createDismissals() {
   let keys: ReadonlySet<string> = new Set()
   const listeners = new Set<() => void>()
+  const answerTargets = new Map<string, () => void>()
   const change = (key: string, dismissed: boolean): void => {
     const next = new Set(keys)
     if (dismissed) next.add(key); else next.delete(key)
@@ -16,6 +17,11 @@ function createDismissals() {
     subscribe: (listener: () => void): (() => void) => { listeners.add(listener); return () => { listeners.delete(listener) } },
     dismiss: (key: string) => change(key, true),
     resume: (key: string) => change(key, false),
+    registerAnswerTarget: (key: string, focus: () => void): (() => void) => {
+      answerTargets.set(key, focus)
+      return () => { answerTargets.delete(key) }
+    },
+    focusAnswer: (key: string): void => { answerTargets.get(key)?.() },
   }
 }
 
@@ -30,5 +36,5 @@ export function useHostQuestionDismissals(bridge: HostsBridge | undefined) {
   let store = bridge ? connections.get(bridge) : unavailable
   if (!store) { store = createDismissals(); connections.set(bridge!, store) }
   const dismissedQuestionKeys = useSyncExternalStore(store.subscribe, store.snapshot)
-  return { dismissedQuestionKeys, dismissQuestion: store.dismiss, resumeQuestion: store.resume }
+  return { dismissedQuestionKeys, dismissQuestion: store.dismiss, resumeQuestion: store.resume, registerAnswerTarget: store.registerAnswerTarget, focusAnswer: store.focusAnswer }
 }
