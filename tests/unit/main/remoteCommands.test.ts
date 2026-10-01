@@ -5,7 +5,7 @@ import { agentCommandSchema, type AgentCommand } from '../../../src/shared/agent
 import { hostRequestSchema } from '../../../src/shared/hostProtocol'
 
 /** Commands that stay on the host machine. A new command type must land here or in REMOTE_COMMANDS. */
-const HOST_LOCAL = ['credential', 'check-reasoning', 'update-client', 'preview-voice', 'utterance', 'voice', 'voice-state', 'open-thread-folder', 'membership', 'compose', 'send', 'cancel-draft', 'pause-draft', 'cancel-request']
+const HOST_LOCAL = ['credential', 'check-reasoning', 'update-client', 'preview-voice', 'utterance', 'voice', 'voice-state', 'open-thread-folder', 'compose', 'send', 'cancel-draft', 'pause-draft', 'cancel-request']
 type Option = { shape: { type: { value?: string; options?: string[] } } & Record<string, unknown> }
 const schemaFields = new Map((agentCommandSchema.options as unknown as Option[]).flatMap(option => {
   const types = option.shape.type.options ?? [option.shape.type.value!]
@@ -20,7 +20,7 @@ describe('remote command allow-list', () => {
     expect([...REMOTE_CONFIGURATION_FIELDS].sort()).toEqual(['defaultModelId', 'enabled', 'enabledProviders', 'followupLimit', 'orbColor', 'provider',
       'reasoning', 'reasoningEffort', 'reasoningModel', 'speak'])
     for (const patch of [{ speak: false }, { followupLimit: 3 }]) expect(refuse({ type: 'configure', patch }), Object.keys(patch)[0]).toBeNull()
-    for (const patch of [{ speechVoice: 'F2' }, { speechProvider: 'grok' }, { wakeModelDirectory: '/tmp' }, { membershipEndpoint: 'https://untrusted.example' }])
+    for (const patch of [{ speechVoice: 'F2' }, { speechProvider: 'grok' }, { wakeModelDirectory: '/tmp' }])
       expect(refuse({ type: 'configure', patch } as AgentCommand, true), Object.keys(patch)[0]).toBe('forbidden')
   })
   it('decides every command type and every field the schema knows, so nothing new is remote by default', () => {
@@ -46,11 +46,10 @@ describe('remote command allow-list', () => {
   })
   it('refuses host-local commands and fields outside the list', () => {
     for (const command of [
-      { type: 'credential', slot: 'reasoning', value: 'not-a-real-key' }, { type: 'membership', action: 'signin' },
+      { type: 'credential', slot: 'reasoning', value: 'not-a-real-key' },
       { type: 'open-thread-folder', threadId: 'thread' }, { type: 'update-client', provider: 'codex' }, { type: 'voice', action: 'mute' },
     ] as AgentCommand[]) expect(refuse(command, true), command.type).toBe('forbidden')
     expect(refuse({ type: 'interrupt', threadId: 'thread', extra: true } as unknown as AgentCommand, true)).toBe('forbidden')
-    expect(refuse({ type: 'configure', patch: { membershipEndpoint: 'https://untrusted.example' } } as AgentCommand, true)).toBe('forbidden')
     expect(refuse({ type: 'interrupt', threadId: 'thread' })).toBeNull()
     expect(remoteCommandRefusal({ type: 'send' }, { mayAnswer: false, draftRequestId: 'request' })).toBe('forbidden')
     expect(remoteCommandRefusal({ type: 'send' }, { mayAnswer: true, draftRequestId: 'request' })).toBe('forbidden')

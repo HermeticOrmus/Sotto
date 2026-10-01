@@ -48,10 +48,25 @@ describe('authenticated host socket', () => {
   it('pairs once, negotiates a shell and revokes a live session immediately', async () => {
     const { client, result } = await pair()
     expect(client.shell().hostId).toBe(result.hostId)
+    const shell = await client.readShell()
+    expect(shell).not.toHaveProperty('membership')
+    expect(shell.configuration).not.toHaveProperty('membershipEndpoint')
     expect((await client.connect()).capabilities.mayAnswer).toBe(false)
     await client.revokePairing()
     expect(host.pairing.verifyToken(result.token)).toBeUndefined()
     await expect(client.connect()).rejects.toMatchObject({ code: 'unauthenticated' })
+  })
+  it('keeps the retired account fields on raw protocol v1 shell frames', async () => {
+    const paired = await host.pairing.redeem(host.pairing.issuePairingCode().code, 'Older desktop')
+    const session = host.pairing.signSession(paired.clientId)
+    const peer = await rawPeer(host.descriptor!.port, session)
+    try {
+      const reply = await peer.call('shell-v1', { op: 'shell' })
+      expect(reply).toMatchObject({ v: 1, ok: true, result: {
+        membership: { status: 'beta', label: '', expiresAt: null },
+        configuration: { membershipEndpoint: '' },
+      } })
+    } finally { peer.frames.close() }
   })
   it('pushes each client answer authority when the host policy changes', async () => {
     const first = await pair('First'), second = await pair('Second')
@@ -97,7 +112,6 @@ describe('authenticated host socket', () => {
     const { client } = await pair()
     await expect(client.command({ type: 'configure-thread', threadId: 'missing', runtimeMode: 'full-access' })).rejects.toMatchObject({ code: 'forbidden' })
     await expect(client.command({ type: 'create-thread', projectId: 'project', title: 'Bypass', modelId: 'fixture-model', runtimeMode: 'full-access' })).rejects.toMatchObject({ code: 'forbidden' })
-    await expect(client.command({ type: 'configure', patch: { membershipEndpoint: 'https://untrusted.example' } })).rejects.toMatchObject({ code: 'forbidden' })
     await expect(client.command({ type: 'credential', slot: 'reasoning', value: 'not-a-real-key' })).rejects.toMatchObject({ code: 'forbidden' })
     // Devin's Bypass permissions stops Sotto asking at all, and discarding uncommitted work answers a confirmation.
     await expect(client.command({ type: 'create-thread', projectId: 'project', title: 'Bypass', modelId: 'fixture-model', providerMode: 'bypass' })).rejects.toMatchObject({ code: 'forbidden' })
@@ -218,7 +232,6 @@ describe('authenticated host socket', () => {
   })
 })
 
-
 describe('socket client isolation and reconnect', () => {
   it('carries a thread\'s Git status to a paired client through the shell it already receives', async () => {
     // The host reads the folder; the client only reads the record, over the socket, the way any other field arrives.
@@ -321,7 +334,6 @@ describe('socket client isolation and reconnect', () => {
     } finally { frames.close(); await server.close() }
   })
 })
-
 
 it('negotiates message aliases without breaking legacy event pages or cursors', async () => {
   const rows: import('../../src/shared/threadEvents').StoredThreadEvent[] = [{ seq: 1, threadId: 'synthetic',

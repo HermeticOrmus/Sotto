@@ -45,7 +45,6 @@ function stateFixture(): AgentState {
     speech: { id: 0, text: '' }, voice: { status: 'off', error: null, action: 'none', revision: 0 },
     credentials: { reasoning: false, grokSpeech: false, secure: true },
     reasoningAccounts: [],
-    membership: { status: 'beta', label: 'Development beta', expiresAt: null },
   }
 }
 
@@ -646,7 +645,6 @@ describe('sidebar foot rooms', () => {
     expect(rooms()).toEqual(['Dictate', 'Agents', 'Threads'])
   })
 })
-
 
 describe('monitoring in the thread composer', () => {
   beforeEach(() => {
