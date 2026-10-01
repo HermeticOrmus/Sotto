@@ -33,6 +33,13 @@ test('Codex shows a refused child approval without approving or routing it', asy
     await page.reload(); await openThreads(page)
     await page.getByRole('button', { name: 'Child approval', exact: true }).click()
     await expect(page.getByLabel('Thread transcript')).toContainText('Ready for the next request.')
+    // A previous command error must not mask the later refused-approval notice.
+    await page.evaluate(async () => {
+      const agents = window.sotto!.agents!
+      const state = await agents.get()
+      const result = await agents.command({ type: 'configure-thread', threadId: state.activeThreadId!, modelId: 'missing-model' })
+      if (!result.error) throw new Error('The synthetic invalid model was not refused')
+    })
     const native = Object.values(JSON.parse(await readFile(join(root, 'codex', 'state.json'), 'utf8')).threads)[0] as { id: string }
     await writeFile(join(root, 'codex', 'control.json'), JSON.stringify({ id: randomUUID(), threadId: native.id,
       type: 'permission', text: 'Build?', params: { threadId: 'unknown-child' } }))

@@ -84,7 +84,7 @@ export interface ThreadPaneProps {
  * One thread's view: header and controls, its own transcript position and its own composer.
  * Everything here acts on `row.thread.id`; a split workspace mounts one per open thread.
  */
-export function ThreadPane({ row, state, command, store, focused, promptId, error: commandError, onOpenThread, onClose, onFocusPane, onOpenBeside, workingCopy, actions, notice, now }: ThreadPaneProps): ReactNode {
+export function ThreadPane({ row, state, command, store, focused, promptId, error, onOpenThread, onClose, onFocusPane, onOpenBeside, workingCopy, actions, notice, now }: ThreadPaneProps): ReactNode {
   const [followSignal, setFollowSignal] = useState(0)
   const [handingOff, setHandingOff] = useState(false)
   const [renaming, setRenaming] = useState(false)
@@ -106,7 +106,6 @@ export function ThreadPane({ row, state, command, store, focused, promptId, erro
   // Management is the voice coordinator's own work, so with it hidden a managed thread still composes by hand.
   const coordinated = useVoiceCoordinatorEnabled()
   const thread = row.thread
-  const error = commandError ?? thread.requestNotice ?? null
   const closed = isThreadClosed(thread)
   const connected = state.connection === 'connected'
   const assigned = coordinated ? row.assignment : undefined
@@ -255,7 +254,8 @@ export function ThreadPane({ row, state, command, store, focused, promptId, erro
       {onClose ? <button type="button" className="pane-action thread-pane__close tt-focusable" data-pane-close aria-label={`Close ${thread.title} pane`} title="Close pane" onClick={onClose}><X size={16} aria-hidden="true" /></button> : null}
     </header>
     {settleDialog}
-    {error && !deliveryExplains && !answerExplains && !settingsExplains && error !== toolbarExplained && error !== gitExplained ? <p className="agent-error thread-workspace__error" role="alert">{error}</p> : null}
+    {thread.requestNotice ? <p className="agent-error thread-workspace__error" role="alert">{thread.requestNotice}</p> : null}
+    {error && error !== thread.requestNotice && !deliveryExplains && !answerExplains && !settingsExplains && error !== toolbarExplained && error !== gitExplained ? <p className="agent-error thread-workspace__error" role="alert">{error}</p> : null}
     <ThreadWebLinks threadId={thread.id} threadTitle={thread.title} focused={focused}><ThreadTranscript row={row} state={state} command={command} store={store} followSignal={followSignal}>
       <ThreadRequests kind="permission" row={row} state={state} command={command} blocked={threadBusy ? 'Waiting for Sotto…' : !rowConnected ? `Reconnect ${row.provider} to answer.` : null}
         onAnswer={focusAnswerComposer} />

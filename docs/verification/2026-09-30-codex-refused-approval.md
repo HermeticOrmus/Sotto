@@ -26,6 +26,11 @@ motion retained the notice. The kept screenshots were inspected:
 - `artifacts/review-644/refusal-dark-1280.png`
 - `artifacts/review-644/refusal-light-820.png`
 
+Spec review found that an earlier command error could hide the refusal notice.
+The notice now renders independently of command-error suppression. The Electron
+journey leaves a refused model change's error in place before the child approval
+arrives and verifies that the refusal notice still reaches the user.
+
 The five existing `phase-three-requests.spec.ts` journeys passed as well, covering
 explicit native choices, refused/held answers, independent prompt drafts and
 short stacked panes. No design baselines were regenerated. No live provider turn
