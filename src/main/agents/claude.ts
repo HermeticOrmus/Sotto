@@ -192,7 +192,8 @@ export class ClaudeStreamJsonHost implements AgentHost {
   private readonly assistantErrors = new Map<string, string>()
   private readonly logOrigins = new Map<string, Set<string>>()
   private readonly lastLogDigest = new Map<string, string>()
-  private readonly staleContexts = new Set<string>()
+  private readonly staleMemoryContexts = new Set<string>()
+  private readonly nativeTakeovers = new Set<string>()
   private readonly completedOrigins = new Set<string>()
   /** The prompt each thread's running turn answers when Claude Code gave it to itself; its result need not name it. */
   private readonly selfTurns = new Map<string, string>()
@@ -318,7 +319,7 @@ export class ClaudeStreamJsonHost implements AgentHost {
       threadId: id, messages: this.messageLog.messages(id), activities: thread.activities ?? [], ...(thread.historyEpoch ? { historyEpoch: thread.historyEpoch } : {}),
     }]))
     this.messageLog.forgetAll()
-    this.threads.clear(); this.logs.clear(); this.activity.clear(); this.subagentModels.clear(); this.logOrigins.clear(); this.lastLogDigest.clear(); this.staleContexts.clear(); this.completedOrigins.clear(); this.selfTurns.clear(); this.queries.clear(); this.interrupting.clear(); this.assistantBlocks.clear()
+    this.threads.clear(); this.logs.clear(); this.activity.clear(); this.subagentModels.clear(); this.logOrigins.clear(); this.lastLogDigest.clear(); this.staleMemoryContexts.clear(); this.nativeTakeovers.clear(); this.completedOrigins.clear(); this.selfTurns.clear(); this.queries.clear(); this.interrupting.clear(); this.assistantBlocks.clear()
     for (const [id, stored] of Object.entries(aliases)) {
       let alias = stored
       if (alias.rollbackPending?.targetSessionId) {
@@ -512,7 +513,7 @@ export class ClaudeStreamJsonHost implements AgentHost {
       const next = await this.finishRollback(id, alias)
       // A confirmed rewind is the one change that takes words back: the thread's record starts again.
       this.messageLog.reset(id, next.historyEpoch)
-      this.logs.delete(id); this.activity.delete(id); this.subagentModels.delete(id); this.logOrigins.delete(id); this.lastLogDigest.delete(id); this.staleContexts.delete(id)
+      this.logs.delete(id); this.activity.delete(id); this.subagentModels.delete(id); this.logOrigins.delete(id); this.lastLogDigest.delete(id); this.staleMemoryContexts.delete(id); this.nativeTakeovers.delete(id)
       for (const key of this.assistantBlocks.keys()) if (key.startsWith(`${id}:`)) this.assistantBlocks.delete(key)
       this.ensureThread(id, next); await this.log(id).poll()
       if (generation !== this.generation || !this.state.connected) return { accepted: false, uncertain: true }
@@ -562,7 +563,7 @@ export class ClaudeStreamJsonHost implements AgentHost {
   async sendPersonalConversation(command: Extract<AgentHostCommand, { type: 'send' }>, memories: readonly PersonalMemory[]): Promise<AgentHostResult> {
     if (this.aliases[command.threadId]?.kind !== 'personal') throw new Error('This is not an owned personal conversation.')
     const context = personalContext(memories)
-    if (this.personalContexts.get(command.threadId) !== context) this.staleContexts.add(command.threadId)
+    if (this.personalContexts.get(command.threadId) !== context) this.staleMemoryContexts.add(command.threadId)
     this.personalMemories.set(command.threadId, [...memories])
     this.personalContexts.set(command.threadId, context)
     return this.execute(command)
@@ -573,7 +574,7 @@ export class ClaudeStreamJsonHost implements AgentHost {
     for (const [id, memories] of this.personalMemories) {
       const remaining = memories.filter(memory => !deleted.has(memory.id))
       if (remaining.length !== memories.length) {
-        this.personalMemories.set(id, remaining); this.personalContexts.set(id, personalContext(remaining)); this.staleContexts.add(id)
+        this.personalMemories.set(id, remaining); this.personalContexts.set(id, personalContext(remaining)); this.staleMemoryContexts.add(id)
       }
       if ([...(this.runtimes.get(id)?.contextMemoryIds ?? [])].some(memoryId => deleted.has(memoryId))) this.revokedContexts.add(id)
     }
@@ -645,10 +646,10 @@ export class ClaudeStreamJsonHost implements AgentHost {
       if (thread.requests.length) throw new Error('Answer the pending Claude request before sending another prompt.')
       this.dispatching.add(id)
       try {
-        if (this.revokedContexts.has(id) || this.staleContexts.has(id) && !thread.backgroundWork?.length) {
+        if (this.nativeTakeovers.has(id) || this.revokedContexts.has(id) || this.staleMemoryContexts.has(id) && !thread.backgroundWork?.length) {
           const stale = this.runtimes.get(id)
           if (stale) { await this.denyPending(id, stale); await this.stopRuntime(id, stale) }
-          this.staleContexts.delete(id); this.revokedContexts.delete(id)
+          this.staleMemoryContexts.delete(id); this.revokedContexts.delete(id); this.nativeTakeovers.delete(id)
         }
         const runtime = await this.start(id)
         verifyFileMentions(command.text, command.files)
@@ -1152,7 +1153,7 @@ export class ClaudeStreamJsonHost implements AgentHost {
       origin ??= alias.origins.find(value => !consumed.has(value.uuid) && value.digest === digest)
       if (origin) { consumed.add(origin.uuid); this.lastLogDigest.set(id, digest) }
       else if (this.lastLogDigest.get(id) === digest) return
-      else { this.lastLogDigest.delete(id); this.staleContexts.add(id) }
+      else { this.lastLogDigest.delete(id); this.nativeTakeovers.add(id) }
     }
     const providerId = frame.type === 'assistant' && typeof message?.id === 'string' ? message.id : uuid || `native-${digest}`
     if (frame.type === 'assistant') {

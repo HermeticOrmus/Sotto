@@ -198,6 +198,8 @@ describe('Claude recovery and safety', () => {
     await expect.poll(async () => (await thread()).requests).toEqual([])
   })
   it('resumes the native context after CLI takeover before another prompt', async () => {
+    await f.driver.backgroundWork!.completeLeaving(id, 'Still working.', 'Build')
+    await expect.poll(async () => (await thread()).backgroundWork?.length).toBe(1)
     await f.driver.typeInProvider(id, 'Typed outside Sotto')
     await f.host.execute({ type: 'send', commandId: 'next', messageId: 'next', threadId: id, text: 'Continue' })
     expect((await f.driver.requests()).filter(record => record.method === 'resume')).toHaveLength(1)
