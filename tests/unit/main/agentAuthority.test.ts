@@ -150,6 +150,33 @@ describe('authority at dispatch', () => {
     expect(execute).toHaveBeenCalledOnce()
   })
 
+  it.each([
+    { accepted: true, requestLeaves: false, completion: false },
+    { accepted: true, requestLeaves: true, completion: false },
+    { accepted: false, requestLeaves: true, completion: false },
+    { accepted: false, requestLeaves: false, completion: true },
+  ])('keeps a phone answer uncertainty private to its caller: %j', async ({ accepted, requestLeaves, completion }) => {
+    const f = await fixture({ authorizes: () => ({ allowed: false, reason: 'no-policy' }),
+      mayGrant: () => ({ allowed: true, reason: 'paired-client' }) })
+    f.permission()
+    const before = f.control.get().speech
+    const publishedErrors: Array<string | null> = []
+    const off = f.control.subscribe(state => { publishedErrors.push(state.error) })
+    const execute = f.host.execute.bind(f.host)
+    vi.spyOn(f.host, 'execute').mockImplementationOnce(async command => {
+      if (requestLeaves) await execute(command)
+      return { accepted, uncertain: true, ...(completion ? { answerCompletion: Promise.resolve(false) } : {}) }
+    })
+    try {
+      const result = await f.control.command({ type: 'answer', threadId: 'workshop', requestId: 'permission', answer: 'Allow', approved: true },
+        { clientId: 'phone', user: 'Fixture client', transport: 'socket' })
+      expect(result.error).toBeTruthy()
+      expect(f.control.get().error).toBeNull()
+      expect(publishedErrors.every(error => error === null)).toBe(true)
+      expect(f.control.get().speech.id).toBe(before.id)
+    } finally { off() }
+  })
+
   it('leaves a definitively refused answer without attribution', async () => {
     const f = await fixture()
     const recordAnswer = vi.fn()
