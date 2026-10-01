@@ -41,6 +41,12 @@ async function request(path: string) {
 }
 
 describe('thread-bound Files service', () => {
+  it('reports an asynchronous clipboard failure to the copy caller', async () => {
+    await writeFile(join(root, 'z.md'), 'copy target')
+    copied.mockRejectedValueOnce(new Error('clipboard unavailable'))
+    expect(await service.copyPath(await request('z.md'))).toMatchObject({ ok: false })
+  })
+
   it('allows source previews for an unsent worktree but never exposes that preview to mutating tools', async () => {
     binding = { ...binding!, previewOnly: true }
     await writeFile(join(root, 'source.txt'), 'unfinished source')
