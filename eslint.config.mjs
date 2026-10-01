@@ -4,6 +4,7 @@ import tseslint from 'typescript-eslint'
 export default tseslint.config(
   {
     ignores: [
+      'artifacts/pkg-18-e2e/**',
       'artifacts/windows-askpass/**',
       'artifacts/codex-restored-replies/**',
       'artifacts/workspace-picker/**',
