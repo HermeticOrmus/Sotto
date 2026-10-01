@@ -18,6 +18,7 @@ it.each([
   ['Cannot write file:///C:/Users/John Smith/codex.exe: Permission denied', 'Cannot write file://…: Permission denied'],
   ['Cannot write /home/Smith: John/client: Permission denied', 'Cannot write …: Permission denied'],
   ['Cannot write /home/John (Work)/client: Permission denied', 'Cannot write ……: Permission denied'],
+  [String.raw`Cannot write C:\Users\John)Smith\client: Permission denied`, 'Cannot write …: Permission denied'],
 ])('preserves diagnostics while redacting unquoted paths: %s', (line, expected) => {
   for (const format of [installerDetail, installerOutput]) {
     const shown = format(line)
