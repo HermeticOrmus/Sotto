@@ -10,7 +10,7 @@ import { isAbsolute, join, relative, sep } from 'node:path'
 import { z } from 'zod'
 import { agentHostSnapshotSchema, EMPTY_AGENT_HOST, isThreadProviderConnected, RESTORE_BRANCH_NEEDS_CONFIRMATION, summarizeThread, type WorktreeReclaimPreview, type AgentWorkingCopyOptions, type AgentWorkingCopySelection, type AgentHostSnapshot, type AgentMessage, type AgentThread, type AgentThreadSummary, type AgentWorktree, type ProviderId } from '../../shared/agents'
 import type { AgentSkillReference } from '../../shared/agentSkills'
-import type { AnswerGivenEvent, StoredThreadEvent, ThreadEvent } from '../../shared/threadEvents'
+import { threadEventSchema, type AnswerGivenEvent, type StoredThreadEvent, type ThreadEvent } from '../../shared/threadEvents'
 import { AtomicJsonStore } from '../storage/atomicJsonStore'
 import { confirmedSettingsSnapshot, type AgentHost, type AgentHostCommand, type AgentHostResult, type ShortTextPrompt, type StoredMessageIdentity, type ThreadReadPurpose } from './host'
 import { FIRST_WINDOW_TURNS, LATER_WINDOW_TURNS, ThreadStore } from './threadStore'
@@ -29,6 +29,18 @@ import type { GitChangedFiles, GitChangedFilesRequest } from '../../shared/gitCh
 import { branchPullRequestUrl, GIT_PULL_REQUEST_LINKS_MAX, parsePullRequestReference, type GitPullRequestAction, type GitPullRequestDetail, type GitPullRequestLink, type GitPullRequestLinkSource, type GitPullRequestMergeMethod, type GitPullRequestRequest } from '../../shared/gitPullRequests'
 import { GitPullRequestRefusal, PULL_REQUEST_ACTION_DONE, pullRequestAddress, pullRequestKey, type GitPullRequests, type GitPullRequestView } from './gitPullRequests'
 import { MAX_AGENT_ACTIVITIES, isTerminalActivity, mergeAgentActivities, type AgentActivity } from '../../shared/agentActivity'
+
+/** Keep a Unicode character whole at an event boundary so SQLite preserves its text. */
+function historyTextChunks(text: string): string[] {
+  const chunks: string[] = []
+  for (let offset = 0; offset < text.length;) {
+    let end = Math.min(offset + 100_000, text.length)
+    if (end < text.length && /[\uD800-\uDBFF]/u.test(text[end - 1]!)) end--
+    chunks.push(text.slice(offset, end))
+    offset = end
+  }
+  return chunks
+}
 
 /** Milliseconds a burst of tool activity is left to settle before the worktree is read again. */
 const WORKTREE_REFRESH_DELAY_MS = 1_500
@@ -206,6 +218,7 @@ export class WorkspaceHost implements AgentHost {
   private pendingEventsPrivate = false
   /** Failed batches stay ahead of later events; organization saves cannot acknowledge their warning. */
   private readonly failedEventThreads = new Set<string>()
+  private readonly invalidEventThreads = new Set<string>()
   private historyRetryTimer: ReturnType<typeof setTimeout> | undefined
   private historyRetryDelay = 1_000
   /** The threads whose window and summary the next publish has to read again. */
@@ -984,7 +997,27 @@ export class WorkspaceHost implements AgentHost {
     // Another store may have stopped privacyChanged before this connection could be replaced.
     // The setting already forbids durable text, including a timer or shutdown retry.
     if (!this.threadStore.ephemeral && (!this.historyEnabled() || this.pendingEventsPrivate)) return
-    for (const [threadId, events] of this.pendingEvents) {
+    for (const [threadId, pending] of this.pendingEvents) {
+      const events: ThreadEvent[] = []
+      for (const event of pending) {
+        const parts: ThreadEvent[] = []
+        if ((event.kind === 'message-added' || event.kind === 'message-replaced') && typeof event.message?.text === 'string' && event.message.text.length > 100_000) {
+          const chunks = historyTextChunks(event.message.text)
+          parts.push({ ...event, message: { ...event.message, text: chunks[0]! } })
+          for (const appendText of chunks.slice(1)) {
+            parts.push({ kind: 'message-text-appended', at: event.at, messageId: event.message.id, appendText, ...(event.redacted ? { redacted: event.redacted } : {}) })
+          }
+        } else if (event.kind === 'message-text-appended' && typeof event.appendText === 'string' && event.appendText.length > 100_000) {
+          for (const appendText of historyTextChunks(event.appendText)) parts.push({ ...event, appendText })
+        } else parts.push(event)
+        const parsed = parts.map(part => threadEventSchema.safeParse(part))
+        if (parsed.every(part => part.success)) events.push(...parsed.map(part => part.data!))
+        else {
+          this.invalidEventThreads.add(threadId)
+          console.warn('thread-history-event-invalid')
+        }
+      }
+      this.pendingEvents.set(threadId, events)
       if (!force && this.historyRetryTimer && this.failedEventThreads.has(threadId)) continue
       try {
         // appendMany commits the entire transaction or rolls it back. Remove only a committed batch.
@@ -1327,9 +1360,15 @@ export class WorkspaceHost implements AgentHost {
   workspaceSnapshot(): AgentHostSnapshot {
     this.applyEvents()
     const snapshot = cloneHostSnapshot(this.state.snapshot)
+    this.historyNotices(snapshot)
     if (this.failedEventThreads.size) snapshot.error = HISTORY_SAVE_ERROR
     else if (this.saveError) snapshot.error = this.saveError
     return snapshot
+  }
+  private historyNotices(snapshot: AgentHostSnapshot): void {
+    for (const thread of snapshot.threads) {
+      if (this.invalidEventThreads.has(thread.id)) thread.historySaveNotice = 'Part of this thread’s history could not be saved. Other messages were kept. Copy any missing text before closing Sotto.'
+    }
   }
   private publish(): void {
     for (const listener of this.listeners) listener(this.workspaceSnapshot())
@@ -1337,6 +1376,7 @@ export class WorkspaceHost implements AgentHost {
       this.applyEvents()
       for (const listener of this.activityListeners) {
         const snapshot = cloneActivitySnapshot(this.state.snapshot)
+        this.historyNotices(snapshot)
         if (this.failedEventThreads.size) snapshot.error = HISTORY_SAVE_ERROR
         else if (this.saveError) snapshot.error = this.saveError
         listener(snapshot)
