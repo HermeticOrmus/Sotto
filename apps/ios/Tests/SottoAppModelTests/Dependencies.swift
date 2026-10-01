@@ -2,14 +2,25 @@ import Foundation
 import SottoCore
 
 /// Scripted dependencies for the real AppModel.swift, compiled into this test target only.
-@MainActor final class KeychainStore {
-    static let failure = ClientError.rejected("Secure storage unavailable")
+@MainActor enum TestKeychain {
     static var items: [String: Data] = [:]
-    func read<T: Decodable>(_ type: T.Type, account: String) throws -> T? {
-        try Self.items[account].map { try JSONDecoder().decode(type, from: $0) }
+    static var locked = false
+    static var unreadableAccount: String?
+    static var store: KeychainStore {
+        KeychainStore(readData: { account in
+            if locked || account == unreadableAccount { throw KeychainStore.failure }
+            return items[account]
+        }, writeData: { data, account in
+            if locked { throw KeychainStore.failure }
+            items[account] = data
+        }, removeItem: { account in
+            if locked { throw KeychainStore.failure }
+            items[account] = nil
+        }, listAccounts: {
+            if locked { throw KeychainStore.failure }
+            return Array(items.keys)
+        })
     }
-    func write<T: Encodable>(_ value: T, account: String) throws { Self.items[account] = try JSONEncoder().encode(value) }
-    func remove(account: String) throws { Self.items[account] = nil }
 }
 
 struct HostRefusal: Error, LocalizedError {
@@ -24,8 +35,10 @@ struct HostRefusal: Error, LocalizedError {
     static var shell: JSONValue = .null
     static var detail: JSONValue = .null
     static var afterGreeting: ((HostConnection) -> Void)?
-    static var shells: [String: JSONValue] = [:]
     static var mayAnswer = false
+    static var receipt: JSONValue = .object(["status": .string("unknown")])
+    static var loseAcknowledgement = false
+    static var shells: [String: JSONValue] = [:]
     static var features = ["host-folders"]
     static var commandHandler: ((String, JSONValue, String) async throws -> JSONValue)?
     static var folderHandler: ((String, JSONValue) async throws -> JSONValue)?
@@ -60,6 +73,7 @@ struct HostRefusal: Error, LocalizedError {
     func call(_ operation: [String: JSONValue], id: String = UUID().uuidString) async throws -> JSONValue {
         let op = operation["op"]?.string ?? ""
         operations.append(op)
+
         if op == "observe", case .array(let ids) = operation["threadIds"], let id = ids.first?.string {
             if Self.failDetail { throw ClientError.rejected("Thread read refused") }
             push(.detail(threadID: id, value: try Self.detail.decode(ThreadDetail.self)))
@@ -74,11 +88,12 @@ struct HostRefusal: Error, LocalizedError {
         }
         if op == "command" {
             let command = operation["command"] ?? .null; commands.append(command)
+            if Self.loseAcknowledgement { throw ClientError.uncertain }
             if let handler = Self.commandHandler { return try await handler(hostID, command, id) }
             return Self.shells[hostID] ?? Self.shell
         }
         if op == "shell" { return Self.shells[hostID] ?? Self.shell }
-        if op == "receipt" { return Self.receipts[operation["commandId"]?.string ?? ""] ?? .object(["status": .string("unknown")]) }
+        if op == "receipt" { return Self.receipts[operation["commandId"]?.string ?? ""] ?? Self.receipt }
         if op == "host-folders", let handler = Self.folderHandler { return try await handler(hostID, operation["request"] ?? .null) }
         return .null
     }

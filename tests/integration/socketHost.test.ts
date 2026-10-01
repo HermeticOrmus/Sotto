@@ -16,6 +16,7 @@ import { execFileSync } from 'node:child_process'
 import { SCREENSHOT_NOT_ITS_TYPE, type AgentCommand, type AgentThreadDetail, type AgentThreadDetailDelta, type AgentThreadDetailUpdate } from '../../src/shared/agents'
 import { hostVersionMismatch } from '../../src/shared/hostProtocol'
 import { version as packageVersion } from '../../package.json'
+import { rawPeer } from '../fixtures/rawHostPeer'
 import { HOST_BUSY, HOST_EVENT_PAGE_SIZE } from '../../src/shared/hostProtocol'
 
 let root: string
@@ -69,6 +70,23 @@ describe('authenticated host socket', () => {
     await client.revokePairing()
     expect(host.pairing.verifyToken(result.token)).toBeUndefined()
     await expect(client.connect()).rejects.toMatchObject({ code: 'unauthenticated' })
+  })
+  it('pushes each client answer authority when the host policy changes', async () => {
+    const first = await pair('First'), second = await pair('Second')
+    const peers = await Promise.all([first, second].map(({ result }) => rawPeer(host.descriptor!.port, host.pairing.signSession(result.clientId))))
+    const descriptor = JSON.parse(await readFile(join(root, 'host-listener.json'), 'utf8')) as { adminToken: string }
+    try {
+      for (const peer of peers) await peer.call('hello', { op: 'hello' })
+      for (const allowed of [true, false]) {
+        for (const peer of peers) peer.messages.length = 0
+        const response = await fetch(url + '/v1/admin/' + (allowed ? 'allow-answers' : 'deny-answers'), {
+          method: 'POST', headers: { Authorization: 'Bearer ' + descriptor.adminToken, 'Content-Type': 'application/json' }, body: JSON.stringify({ clientId: first.result.clientId }),
+        })
+        expect(response.status).toBe(200)
+        await expect.poll(() => peers[0]!.messages.find(message => message.event === 'shell')).toMatchObject({ state: { clientCapabilities: { mayAnswer: allowed } } })
+        await expect.poll(() => peers[1]!.messages.find(message => message.event === 'shell')).toMatchObject({ state: { clientCapabilities: { mayAnswer: false } } })
+      }
+    } finally { for (const peer of peers) peer.frames.close() }
   })
   it('deduplicates commands by authenticated client and refuses a changed payload', async () => {
     const { client } = await pair()
@@ -125,13 +143,75 @@ describe('authenticated host socket', () => {
     expect((await client.connect()).capabilities.mayAnswer).toBe(true)
     native.event({ type: 'permission', threadId: 'workshop', requestId: 'permission-one', text: 'Build?' })
     await expect.poll(() => client.shell().host.threads.find(thread => thread.id === threadId)?.requests.length).toBe(1)
-    expect((await client.command({ type: 'answer', threadId, requestId: 'permission-one', answer: '', approved: true })).error).toBeNull()
+    const answerId = randomUUID()
+    expect((await client.command({ type: 'answer', threadId, requestId: 'permission-one', answer: '', approved: true }, undefined, answerId)).error).toBeNull()
+    expect(await client.receipt(answerId)).toEqual({ status: 'completed', answerDelivered: true })
     expect(host.service.events(0, threadId)).toContainEqual(expect.objectContaining({ event: expect.objectContaining({ kind: 'answer-given', attribution: expect.objectContaining({ clientId: result.clientId, transport: 'socket' }) }) }))
     await policy('deny-answers')
     native.event({ type: 'permission', threadId: 'workshop', requestId: 'permission-two', text: 'Again?' })
     await expect.poll(() => client.shell().host.threads.find(thread => thread.id === threadId)?.requests.some(request => request.id === 'permission-two')).toBe(true)
     await expect(client.command({ type: 'answer', threadId, requestId: 'permission-two', answer: '', approved: true })).rejects.toMatchObject({ code: 'forbidden' })
     expect(host.service.shell().host.threads.find(thread => thread.id === threadId)?.requests).toContainEqual(expect.objectContaining({ id: 'permission-two' }))
+  })
+  it.each([
+    { name: 'refused', result: { accepted: false }, requestLeaves: false },
+    { name: 'uncertain', result: { accepted: true, uncertain: true }, requestLeaves: false },
+    { name: 'uncertain after desktop resolution', result: { accepted: true, uncertain: true }, requestLeaves: true },
+    { name: 'unaccepted and uncertain after desktop resolution', result: { accepted: false, uncertain: true }, requestLeaves: true },
+  ])('records a $name answer receipt from the real coordinator outcome', async ({ result: outcome, requestLeaves }) => {
+    const { client, result } = await pair()
+    await client.command({ type: 'configure', patch: { provider: 'codex', enabledProviders: ['codex'] } })
+    await client.command({ type: 'connect', provider: 'codex' })
+    const threadId = client.shell().host.threads.find(thread => thread.title === 'Workshop')!.id
+    const descriptor = JSON.parse(await readFile(join(root, 'host-listener.json'), 'utf8')) as { adminToken: string }
+    expect((await fetch(url + '/v1/admin/allow-answers', { method: 'POST', headers: { Authorization: 'Bearer ' + descriptor.adminToken, 'Content-Type': 'application/json' }, body: JSON.stringify({ clientId: result.clientId }) })).status).toBe(200)
+    native.event({ type: 'permission', threadId: 'workshop', requestId: 'permission-receipt', text: 'Build?' })
+    await expect.poll(() => client.shell().host.threads.find(thread => thread.id === threadId)?.requests.length).toBe(1)
+    const execute = native.execute.bind(native)
+    const spy = vi.spyOn(native, 'execute').mockImplementation(async command => {
+      if (command.type !== 'answer') return execute(command)
+      // A desktop denial can remove the request without confirming the phone's Allow.
+      if (requestLeaves) await execute({ ...command, approved: false })
+      return outcome
+    })
+    try {
+      const commandId = randomUUID()
+      // Preserve v1's shell response even on coordinator failure; the receipt owns its outcome.
+      await client.command({ type: 'answer', threadId, requestId: 'permission-receipt', answer: '', approved: true }, undefined, commandId)
+      expect(await client.receipt(commandId)).toMatchObject({ status: 'completed', answerDelivered: false, error: { code: 'unavailable' } })
+      expect(host.service.shell().host.threads.find(thread => thread.id === threadId)?.requests).toHaveLength(requestLeaves ? 0 : 1)
+    } finally { spy.mockRestore() }
+  })
+  it('confirms a successful answer receipt despite another command failing while it runs', async () => {
+    const { client, result } = await pair()
+    await client.command({ type: 'configure', patch: { provider: 'codex', enabledProviders: ['codex'] } })
+    await client.command({ type: 'connect', provider: 'codex' })
+    const threadId = client.shell().host.threads.find(thread => thread.title === 'Workshop')!.id
+    const descriptor = JSON.parse(await readFile(join(root, 'host-listener.json'), 'utf8')) as { adminToken: string }
+    expect((await fetch(url + '/v1/admin/allow-answers', { method: 'POST', headers: { Authorization: 'Bearer ' + descriptor.adminToken, 'Content-Type': 'application/json' }, body: JSON.stringify({ clientId: result.clientId }) })).status).toBe(200)
+    native.event({ type: 'permission', threadId: 'workshop', requestId: 'permission-receipt', text: 'Build?' })
+    await expect.poll(() => client.shell().host.threads.find(thread => thread.id === threadId)?.requests.length).toBe(1)
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    let started = false
+    const execute = native.execute.bind(native)
+    const spy = vi.spyOn(native, 'execute').mockImplementation(async command => {
+      if (command.type === 'answer') { started = true; await gate }
+      return execute(command)
+    })
+    let answer: Promise<unknown> | undefined
+    try {
+      const commandId = randomUUID()
+      answer = client.command({ type: 'answer', threadId, requestId: 'permission-receipt', answer: '', approved: true }, undefined, commandId)
+      await expect.poll(() => started).toBe(true)
+      const failed = await client.command({ type: 'configure-thread', threadId: 'missing', runtimeMode: 'approval-required' })
+      expect(failed.error).toBeTruthy()
+      release()
+      await answer
+      // Published shared errors are unchanged; the answer receipt uses its command-local outcome.
+      expect(host.service.shell().error).toBe(failed.error)
+      expect(await client.receipt(commandId)).toEqual({ status: 'completed', answerDelivered: true })
+    } finally { release(); await answer; spy.mockRestore() }
   })
   it.each(['shell', 'question', 'saved', 'queue'] as const)('preserves command admission context for composition: %s', async source => {
     const { client } = await pair()
@@ -489,25 +569,6 @@ it('coalesces a burst of shell changes and answers a thread or an event page too
   } finally { await client.close(); await server.close() }
 })
 
-/** A peer speaking the wire directly, the way a client of another codebase (the iPhone app) would. */
-async function rawPeer(port: number, session: string) {
-  const key = randomBytes(16).toString('base64')
-  const messages: Record<string, unknown>[] = []
-  const frames = await new Promise<SocketFrames>((resolve, reject) => {
-    const request = httpRequest('http://127.0.0.1:' + port + '/v1/socket', { headers: { Upgrade: 'websocket', Connection: 'Upgrade', 'Sec-WebSocket-Version': '13', 'Sec-WebSocket-Key': key, Authorization: 'Bearer ' + session } })
-    request.on('error', reject)
-    request.on('upgrade', (_response, stream, head) => {
-      const socket = new SocketFrames(stream, true, text => messages.push(JSON.parse(text) as Record<string, unknown>))
-      socket.feed(head); resolve(socket)
-    }); request.end()
-  })
-  const call = async (id: string, operation: Record<string, unknown>) => {
-    frames.send({ v: 1, id, session, ...operation })
-    await expect.poll(() => messages.some(message => message.id === id)).toBe(true)
-    return messages.find(message => message.id === id)!
-  }
-  return { frames, messages, call }
-}
 
 describe('thread detail over the socket', () => {
   const message = (text: string) => ({ id: 'reply', role: 'assistant' as const, text, createdAt: '2026-09-23T00:00:00.000Z' })
