@@ -48,11 +48,11 @@ test('Phones and Hosts explain real failed saves beside the affected control and
         await block()
         await name.fill('My computer')
         await page.keyboard.press('Enter')
-        await expect(page.locator('.phones-name').getByRole('alert')).toHaveText('The name could not be saved. Phones still use the previous name. Try again.')
+        await expect(page.locator('.phones-name .tt-field__error')).toHaveText('The name could not be saved. Phones still use the previous name. Try again.')
         await expect(name).toHaveValue('My computer')
         await unblock()
         await page.keyboard.press('Enter')
-        await expect(page.locator('.phones-name').getByRole('alert')).toHaveCount(0)
+        await expect(page.locator('.phones-name .tt-field__error')).toHaveCount(0)
         expect((await page.evaluate(() => window.sotto!.getSettings())).phoneAccessName).toBe('My computer')
 
         await page.getByRole('tab', { name: 'Hosts', exact: true }).click()
