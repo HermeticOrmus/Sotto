@@ -72,6 +72,10 @@ let initialized = false
 // settings-<session>.json on every change so a test reads what the running CLI would use for its next turn.
 const bypassAllowed = args.includes('--allow-dangerously-skip-permissions')
 const settings = { model: value('--model'), effort: args.includes('--effort') ? value('--effort') : null, mode: value('--permission-mode') }
+// What system/init reports. A launch override stands in for a wrapper that rewrote --permission-mode;
+// a settings change Sotto sends replaces it, the way the running CLI would.
+let reportedMode = settings.mode
+let toolStopped = false
 const saveSettings = () => { if (!metadata) writeFileSync(join(root, `settings-${session}.json`), JSON.stringify({ ...settings, pid: process.pid })) }
 saveSettings()
 const timer = setInterval(() => {
@@ -145,12 +149,15 @@ lines.on('line', line => {
       const script = !metadata && existsSync(scriptPath) ? JSON.parse(readFileSync(scriptPath, 'utf8')) : {}
       const respond = () => {
         initialized = !script.fail
+        if (typeof script.permissionMode === 'string') reportedMode = script.permissionMode
         output({ type: 'control_response', response: script.fail
           ? { subtype: 'error', request_id: frame.request_id, error: 'Synthetic initialization rejected' }
           : { subtype: 'success', request_id: frame.request_id, response: { models, commands: existsSync(join(root, 'skills.json')) ? JSON.parse(readFileSync(join(root, 'skills.json'), 'utf8')) : [], session_state: 'idle' } } })
         // A started session announces its tools, and AskUserQuestion is in that list only where someone
         // can answer it. `approvalSurface: false` is the CLI that took the flag and offered no surface.
+        // permissionMode is the mode the process is actually in, which a wrapper may have changed.
         if (!script.fail && !metadata) output({ type: 'system', subtype: 'init', session_id: session, ...(installed !== undefined ? { claude_code_version: installed } : {}),
+          permissionMode: reportedMode,
           tools: ['Task', 'Bash', 'Edit', 'Glob', 'Grep', 'Read', 'Write', ...(script.approvalSurface === false ? [] : ['AskUserQuestion'])] })
       }
       if (script.gate) {
@@ -184,12 +191,15 @@ lines.on('line', line => {
         // The native CLI refuses bypassPermissions unless bypassing was allowed at launch.
         if (request.mode === 'bypassPermissions' && !bypassAllowed) { refuse('Cannot set permission mode to bypassPermissions'); return }
         settings.mode = request.mode
+        reportedMode = request.mode
       }
       saveSettings()
       // A success with no body, which the SDK reads as empty.
       output({ type: 'control_response', response: { subtype: 'success', request_id: frame.request_id } })
     }
     else if (frame.request.subtype === 'interrupt') {
+      // A turn that was stopped before its tool armed never arms it.
+      toolStopped = true
       // interrupt-script.json `error`: close the stopped turn as Claude Code does, with an error result.
       const error = existsSync(join(root, 'interrupt-script.json')) && JSON.parse(readFileSync(join(root, 'interrupt-script.json'), 'utf8')).error === true
       output({ type: 'control_response', response: { subtype: 'success', request_id: frame.request_id, response: {} } })
@@ -202,7 +212,27 @@ lines.on('line', line => {
     const scriptPath = join(root, 'script.json')
     const script = existsSync(scriptPath) ? JSON.parse(readFileSync(scriptPath, 'utf8')) : {}
     if (script.writeCwd) writeFileSync(join(process.cwd(), 'native-cwd-proof.txt'), typeof frame.message.content === 'string' ? frame.message.content : frame.message.content.find(item => item.type === 'text')?.text ?? '')
-    if (script.delay) { writeFileSync(scriptPath, '{}'); setTimeout(() => output(reply), script.delay) } else output(reply)
+    // A turn opens with system/init, as the real CLI does, before any tool. script.permissionMode is a
+    // mode the process reports that Sotto did not ask for. script.tool arms a Bash ask unless the turn
+    // was interrupted first, so a test can see that the tool never ran.
+    const openTurn = () => {
+      output(reply)
+      if (metadata) return
+      toolStopped = false
+      const turnMode = typeof script.permissionMode === 'string' ? script.permissionMode : reportedMode
+      output({ type: 'system', subtype: 'init', session_id: session, permissionMode: turnMode,
+        tools: ['Task', 'Bash', 'Edit', 'Glob', 'Grep', 'Read', 'Write', 'AskUserQuestion'] })
+      if (script.tool !== true) return
+      const request_id = randomUUID()
+      const request = { subtype: 'can_use_tool', tool_name: 'Bash', tool_use_id: randomUUID(), input: { command: 'echo ran', description: 'Ran' } }
+      pending.set(request_id, request)
+      setTimeout(() => {
+        if (toolStopped) { record('tool-skipped', { request_id }); return }
+        record('tool-armed', { request_id })
+        output({ type: 'control_request', request_id, request })
+      }, typeof script.toolDelayMs === 'number' ? script.toolDelayMs : 80)
+    }
+    if (script.delay) { writeFileSync(scriptPath, '{}'); setTimeout(openTurn, script.delay) } else openTurn()
   } else if (frame.type === 'control_response') {
     const envelope = frame.response; const request = pending.get(envelope?.request_id); const answer = envelope?.response
     if (envelope?.subtype === 'error' && typeof envelope.error === 'string') { pending.delete(envelope.request_id); return }

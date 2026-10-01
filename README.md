@@ -34,7 +34,7 @@ If Codex asks for an approval Sotto cannot show, Sotto refuses it and tells you.
 
 Thread drafts save automatically while you type, including while other threads are working.
 
-Claude Code keeps background work running when remembered preferences change. Messages continue with the chat's previous context while that work runs. The first send after it ends refreshes the context. Deleting a memory the client is using forces a restart on the next send and stops that background work. After you type in the Claude CLI, the next send from Sotto resumes the updated native history, even if the restart stops background work.
+Claude Code keeps background work running when remembered preferences change. Messages continue with the chat's previous context while that work runs. The first send after it ends refreshes the context. Deleting a memory the client is using forces a restart on the next send and stops that background work. After you type in the Claude CLI, the next send from Sotto resumes the updated native history, even if the restart stops background work. If Claude Code starts in a different permission mode from the one the thread asked for, the turn stops before any tool runs and the thread says so.
 
 If a Claude Code answer is unconfirmed, **Check again** checks the request without sending anything. A delayed write keeps your original choice; another answer is allowed only after the write fails outright or the client is gone.
 Pressing the dictation shortcut again while the microphone is connecting cancels the session as soon as it is ready. No audio is kept or transcribed.

@@ -354,6 +354,8 @@ Pressing Stop or the dictation shortcut again while the microphone is connecting
 
 **Approval surface.** The place a provider client sends the requests only a person can answer. Sotto claims it at launch, per thread, in every runtime mode, and a client that does not grant it answers those requests itself: Claude Code denies them and withholds its question tool, so a thread keeps working while nothing reaches the user. Because that looks exactly like a model choosing not to ask, an adapter that finds the surface missing, or that receives a request for the user it cannot read, says so on the provider instead of staying quiet. See ADR-0043. Avoid: "permission channel", "prompt host".
 
+**Permission-mode check.** The comparison Sotto makes when Claude Code's init frame names the permission mode the process is running. It has to be the mode the thread asked for, including a mode change Sotto itself sent. When it is not, the turn stops before any tool runs, and the thread names both modes and says a wrapper script or managed settings may have changed it. See ADR-0045. Avoid: "mode drift", "permission override".
+
 ## Memory evaluation
 
 **SottoMemEval.** The product-specific memory benchmark in `scripts/memeval/`: labelled memory cases run against a pluggable backend, scored per category (recall, abstention, temporal adaptation, temporary exception, project leak, authority leak), printed as a table and saved with the backend name and case-set version. Run it with `npm run memeval`.

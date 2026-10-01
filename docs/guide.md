@@ -45,6 +45,8 @@ A new thread's model follows **New threads start with** in Settings → Agents u
 
 Claude Code model, effort and permission changes reach the thread's running session and wait for Claude Code to confirm them, so the session keeps going. When no session is running, when Claude Code refuses a change, or when the thread enters or leaves full access, Sotto starts the session again with the new settings instead. Choosing a model without a level uses that model's own default level. If Claude Code does not answer, Sotto stops that session and says the change is unconfirmed; the next start carries it, and nothing is sent twice. Stopping the session ends any background agents or commands it was running, so the message names them and the thread shows an error; ask Claude to start them again if you still need them.
 
+If Claude Code starts in a permission mode other than the one this thread asked for, the turn stops before any tool runs. The thread names the mode it asked for and the mode Claude Code started in, and says a wrapper script or managed settings may have changed it. Nothing ran. A permission change you make in Sotto is the mode Sotto then expects, so that change does not raise the notice.
+
 Codex model, effort and permission changes use its native settings update and wait for confirmation. An interrupted change does not disconnect the provider. If Codex cannot confirm it, the affected thread asks you to choose its settings again before sending. Other threads remain available; reconnecting does not replay the settings change.
 
 ### The voice coordinator (off for the beta)
