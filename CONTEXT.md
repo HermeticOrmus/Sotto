@@ -86,7 +86,7 @@ Sotto is a desktop dictation app that is becoming a voice development coordinato
 
 **Thread pane.** A view of one thread within the Threads page, with its own reading position and input. Closing a pane leaves the thread and its running work intact.
 
-**Unreadable-request notice.** A line in the owning thread's pane saying that a native request could not be shown and was refused. It is neither a pending request nor the user's answer, and grants no approval. Codex can attach it by the thread's own process even when the request names an unknown child; routing that request into the child still needs a known payload.
+**Unreadable-request notice.** A line in the owning thread's pane saying that a native request could not be shown and was refused. It is neither a pending request nor the user's answer, and grants no approval.
 
 **Thread activity.** Provider-reported work alongside a thread's messages, including commands, file changes, visible summaries, tool results and subagent states. Activity is observational history, not a user message, an assignment or permission to act.
 
