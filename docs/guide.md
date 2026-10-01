@@ -66,6 +66,8 @@ In Terminal mode, **Close** releases the terminal's output and keeps its row on 
 
 ### Sending, steering and screenshots
 
+If a permission arrives while you type, the composer keeps focus and your draft. It becomes read-only until you allow or deny the request above. Tab still reaches the other controls.
+
 While a thread is running, **Steer now** beside a queued message sends that message into the current turn when the provider supports steering. The rest of the queue and any newer composer draft stay in place. An unconfirmed message cannot be steered again; use **Check again** to reconcile its delivery.
 
 Paste a screenshot into a thread's prompt, drag it in, or choose **Attach screenshots**. Codex models that accept images and Claude Code models support screenshots; text-only models keep the control unavailable. Send an image on its own or alongside text, with up to eight images, 10 MB per image and 20 MB total. Grok Build currently cannot receive screenshots through its native client.

@@ -401,7 +401,7 @@ function ThreadComposerEditor({ row, state, command, store, composerId, editable
     {/* Screenshots still being staged when the user moves to another thread join this thread's draft as it is then. */}
     <ScreenshotInput key={threadId} target={threadId} attachments={draft.attachments} disabled={!editable} supported={supported}
       reads={screenshotReads} onChange={attachments => edit({ attachments })}>
-      <textarea ref={textarea} id={composerId} rows={3} value={draft.text} disabled={!editable} spellCheck
+      <textarea ref={textarea} id={composerId} rows={3} value={draft.text} disabled={Boolean(row.thread.archivedAt)} readOnly={!editable} spellCheck
         aria-describedby={statusId}
         aria-autocomplete={menus ? 'list' : undefined}
         aria-controls={picker.open && picker.options.length ? listId : files.open && files.options.length ? fileListId : undefined}
@@ -409,7 +409,7 @@ function ThreadComposerEditor({ row, state, command, store, composerId, editable
         aria-activedescendant={picker.open && picker.activeIndex !== null ? skillOptionId(listId, picker.activeIndex)
           : files.open && files.activeIndex !== null ? fileOptionId(fileListId, files.activeIndex) : undefined}
         placeholder={placeholder}
-        onChange={event => { editText(event.target.value); picker.track(event.target); files.track(event.target) }}
+        onChange={event => { if (!editable) return; editText(event.target.value); picker.track(event.target); files.track(event.target) }}
         onSelect={event => { picker.track(event.currentTarget); files.track(event.currentTarget) }}
         onKeyDown={event => {
           // Without the skills list, an open menu is still told by aria-expanded.
