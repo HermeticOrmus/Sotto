@@ -7,6 +7,8 @@ import { ZodError } from 'zod'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { HistoryRepository } from '../../../src/main/storage/historyRepository'
+import { createStorageRepositories } from '../../../src/main/storage/repositories'
+import { RecoveryNoticeCenter } from '../../../src/main/storage/recoveryNoticeCenter'
 import type { HistoryEntry } from '../../../src/shared/history'
 
 vi.mock('node:fs/promises', async importOriginal => {
@@ -34,11 +36,12 @@ function createEntry(id: string, createdAt: number, text = `Transcript ${id}`): 
 
 async function createRepository(
   now: () => number = Date.now,
+  log?: (event: 'history-temp-cleanup-failed') => void,
 ): Promise<{ filePath: string; repository: HistoryRepository }> {
   const root = await mkdtemp(join(tmpdir(), 'sotto-history-repository-'))
   roots.push(root)
   const filePath = join(root, 'history.json')
-  return { filePath, repository: new HistoryRepository(filePath, { now }) }
+  return { filePath, repository: new HistoryRepository(filePath, { now, log }) }
 }
 
 async function recoverySiblingNames(filePath: string): Promise<string[]> {
@@ -61,19 +64,19 @@ describe('HistoryRepository', () => {
     await writeFile(filePath, JSON.stringify([saved]), 'utf8')
     await writeFile(temporary, 'private abandoned transcript')
     await writeFile(removable, 'other abandoned transcript')
-    const log = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const log = vi.fn()
     vi.mocked(unlink).mockImplementation(async path => {
       if (path === temporary) throw Object.assign(new Error('private path and transcript'), { code })
       await nativeFs.unlink(path)
     })
-    const repository = new HistoryRepository(filePath)
+    const repository = new HistoryRepository(filePath, { log })
     vi.useFakeTimers()
     const startup = repository.initialize()
     const loaded = repository.list()
     await vi.advanceTimersByTimeAsync(1_000)
     await expect(startup).resolves.toBeUndefined()
     await expect(loaded).resolves.toEqual([saved])
-    expect(log.mock.calls).toEqual([['[Sotto] history-temp-cleanup-failed']])
+    expect(log.mock.calls).toEqual([['history-temp-cleanup-failed']])
     expect(await nativeFs.readdir(dirname(filePath))).toContain(basename(temporary))
     expect(await nativeFs.readdir(dirname(filePath))).not.toContain(basename(removable))
     expect(vi.mocked(unlink).mock.calls.filter(([path]) => path === temporary)).toHaveLength(
@@ -83,10 +86,10 @@ describe('HistoryRepository', () => {
 
   it.runIf(process.platform === 'win32').each(['unlink', 'readdir'] as const)(
     'retries a transient Windows %s lock and cleans the abandoned file', async operation => {
-      const { filePath, repository } = await createRepository()
+      const log = vi.fn()
+      const { filePath, repository } = await createRepository(Date.now, log)
       const temporary = `${filePath}.tmp-123-12345678-1234-1234-1234-123456789abc`
       await writeFile(temporary, 'abandoned transcript')
-      const log = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
       const locked = Object.assign(new Error('private lock details'), { code: 'EBUSY' })
       if (operation === 'unlink') vi.mocked(unlink).mockRejectedValueOnce(locked)
       else vi.mocked(readdir).mockRejectedValueOnce(locked)
@@ -97,14 +100,17 @@ describe('HistoryRepository', () => {
   )
 
   it('continues startup when the history directory cannot be swept', async () => {
-    const { filePath, repository } = await createRepository()
+    const { filePath } = await createRepository()
     const saved = createEntry('saved', 1)
     await writeFile(filePath, JSON.stringify([saved]))
-    const log = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const log = vi.fn()
+    const { history: repository } = createStorageRepositories(
+      dirname(filePath), new RecoveryNoticeCenter(), Date.now, undefined, log,
+    )
     vi.mocked(readdir).mockRejectedValueOnce(Object.assign(new Error('private directory'), { code: 'EACCES' }))
     await expect(repository.initialize()).resolves.toBeUndefined()
     await expect(repository.list()).resolves.toEqual([saved])
-    expect(log.mock.calls).toEqual([['[Sotto] history-temp-cleanup-failed']])
+    expect(log.mock.calls).toEqual([['history-temp-cleanup-failed']])
   })
 
 

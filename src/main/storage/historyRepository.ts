@@ -22,6 +22,7 @@ export interface HistoryRepositoryOptions {
   now?: () => number
   store?: AtomicJsonStore<HistoryEntry[]>
   onRecovery?: (notice: RecoveryNotice) => void
+  log?: (event: 'history-temp-cleanup-failed') => void
 }
 
 export interface AddHistoryOptions {
@@ -70,7 +71,7 @@ export class HistoryRepository {
 
   constructor(
     private readonly filePath: string,
-    options: HistoryRepositoryOptions = {},
+    private readonly options: HistoryRepositoryOptions = {},
   ) {
     this.store =
       options.store ??
@@ -176,7 +177,7 @@ export class HistoryRepository {
       }
 
       if (includeRecovery) throw error
-      console.warn('[Sotto] history-temp-cleanup-failed')
+      this.options.log?.('history-temp-cleanup-failed')
       return
     }
 
@@ -190,7 +191,7 @@ export class HistoryRepository {
           } catch (error) {
             if (!hasErrorCode(error, 'ENOENT')) {
               if (includeRecovery) throw error
-              console.warn('[Sotto] history-temp-cleanup-failed')
+              this.options.log?.('history-temp-cleanup-failed')
             }
           }
         }),

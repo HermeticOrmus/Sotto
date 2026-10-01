@@ -238,6 +238,7 @@ type NativeDiagnostic =
   | 'settings-update-failed'
   | 'secure-key-migration-unavailable'
   | 'memory-store-open-failed'
+  | 'history-temp-cleanup-failed'
   | 'checkpoint-unavailable'
   | 'worktree-cleanup-reclaimed'
   | 'worktree-cleanup-skipped'
@@ -513,6 +514,7 @@ async function createRuntime(): Promise<NativeRuntimeController> {
     recoveryNotices,
     Date.now,
     platformDefaults,
+    logOperational,
   )
   await history.initialize()
   const credentials = new AgentCredentials(userDataPath, safeStorage)
