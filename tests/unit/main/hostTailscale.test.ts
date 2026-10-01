@@ -127,6 +127,21 @@ describe('what Add host cannot use: this computer and Git services', () => {
     ], ['127.0.0.1', '::1', 'localhost'])
     expect(devices.map(device => device.unavailable)).toEqual([undefined, undefined, undefined])
   })
+  it('keeps a jump to an address on this computer selectable, and still greys a direct alias to this computer', () => {
+    const devices = mergeDevices(readTailscaleStatus(TAILSCALE_RUNNING), [
+      // HostName is an address on this computer, but SSH connects to it from the bastion.
+      { alias: 'through-bastion', source: 'config', hostname: '192.168.1.10', jump: true },
+      { alias: 'this-box', source: 'config', hostname: '192.168.1.10' },
+      // The full tailnet name still names this computer, whichever path SSH takes to it.
+      { alias: 'named', source: 'config', hostname: 'laptop-russh2j5.tail5728ca.ts.net', jump: true },
+    ], ['192.168.1.10'])
+    const picked = ['through-bastion', 'this-box', 'named'].map(target => devices.find(device => device.target === target))
+    expect(picked.map(device => [device?.target, device?.unavailable])).toEqual([
+      ['through-bastion', undefined],
+      ['this-box', 'this-computer'],
+      ['named', 'this-computer'],
+    ])
+  })
   it('greys out an SSH entry that goes to a Git service, which is not a computer', () => {
     const devices = mergeDevices(readTailscaleStatus(TAILSCALE_STOPPED), [
       { alias: 'github-hermetic', source: 'config', detail: 'git@github.com', hostname: 'github.com' },
@@ -134,6 +149,21 @@ describe('what Add host cannot use: this computer and Git services', () => {
       { alias: 'forge', source: 'config', detail: 'zach@forge.tail5728ca.ts.net', hostname: 'forge.tail5728ca.ts.net' },
     ])
     expect(devices.map(device => [device.target, device.unavailable])).toEqual([['forge', undefined], ['github-hermetic', 'git-service'], ['gitlab.com', 'git-service']])
+  })
+  it('greys a Git service by the host SSH connects to, so an alias named github.com can still be a computer', () => {
+    const devices = mergeDevices(readTailscaleStatus(TAILSCALE_STOPPED), [
+      { alias: 'github.com', source: 'config', detail: 'zach@spark.lan', hostname: 'spark.lan' },
+      { alias: 'github-personal', source: 'config', detail: 'git@github.com', hostname: 'github.com' },
+      // No HostName: SSH connects to the alias itself, which is the service.
+      { alias: 'gitlab.com', source: 'config' },
+      { alias: 'gh-via-bastion', source: 'config', hostname: 'github.com', jump: true },
+    ])
+    expect(devices.map(device => [device.target, device.unavailable])).toEqual([
+      ['github.com', undefined],
+      ['github-personal', 'git-service'],
+      ['gitlab.com', 'git-service'],
+      ['gh-via-bastion', 'git-service'],
+    ])
   })
   it('hands Add host the addresses this computer has', async () => {
     const tailscale = new HostTailscale({ invoke: async () => 'missing', suggestions: async () => [{ alias: 'sun', source: 'config', hostname: '10.10.100.235' }], openExternal: vi.fn(), thisComputer: () => ['10.10.100.235'] })

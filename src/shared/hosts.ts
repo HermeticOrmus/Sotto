@@ -163,6 +163,11 @@ export interface SshHostSuggestion {
   readonly detail?: string
   /** The configuration's `HostName` for the alias, when it has one Sotto can read. */
   readonly hostname?: string
+  /**
+   * SSH reaches that host through a jump: `ProxyJump`, or a `ProxyCommand` that forwards with `ssh` the same way.
+   * The `HostName` is then an address on the jump host's network, not on this computer.
+   */
+  readonly jump?: boolean
   /** A known host recorded on a port other than 22. */
   readonly port?: number
   readonly source: 'config' | 'known-hosts'
