@@ -34,6 +34,8 @@ If Codex asks for an approval Sotto cannot show, Sotto refuses it and tells you.
 
 Thread drafts save automatically while you type, including while other threads are working.
 
+Pressing the dictation shortcut again while the microphone is connecting cancels the session as soon as it is ready. No audio is kept or transcribed.
+
 Settings → Application sets the working-copy default for new threads. Expand **Project defaults** to choose a different default for one project. Previously saved project choices are kept when Sotto updates.
 
 New threads open in Unsettled with the defaults saved in Settings → Agents. An existing empty thread is reused only while it is unsettled, its known model, effort and permission choices match those defaults, and no setting change is pending.
