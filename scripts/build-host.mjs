@@ -6,7 +6,7 @@ import { build } from 'vite'
 
 const root = resolve(import.meta.dirname, '..')
 
-export async function buildHost(outDir = resolve(root, 'out/host')) {
+export async function buildHost(outDir = resolve(root, process.env.SOTTO_HOST_OUT_DIR || 'out/host')) {
   await build({
     root,
     configFile: false,
