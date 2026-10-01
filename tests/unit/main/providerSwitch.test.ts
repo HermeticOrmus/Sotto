@@ -53,7 +53,7 @@ async function coordinator(f: Awaited<ReturnType<typeof fixture>>, decide: Agent
   await credentials.load()
   const control = new AgentControl({ schedule: immediatePublishScheduler, directory: f.root, host: f.host, credentials,
     reasoner: { intent: async () => ({ type: 'clarify', text: 'Choose a thread' }), decide },
-    membership: { status: async () => ({ status: 'beta', label: 'Fixture', expiresAt: null }), action: async () => ({ status: 'beta', label: 'Fixture', expiresAt: null }) } })
+  })
   control.subscribe(state => f.configuration(state.configuration))
   await control.start(); f.configuration(control.get().configuration)
   cleanup.push(async () => { control.dispose() })

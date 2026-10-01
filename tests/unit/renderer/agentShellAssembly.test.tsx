@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { handleOf } from '../../fixtures/stagedImages'
 
 import { useAgentConnection } from '../../../src/renderer/src/agents/AgentContext'
+import { requestAnswerStore } from '../../../src/renderer/src/agents/requests/requestAnswers'
 import { SHELL_CACHE_KEY, cacheableShell, readShellCache, writeShellCache } from '../../../src/renderer/src/agents/shellCache'
 import { agentShell, defaultAgentConfiguration, EMPTY_AGENT_HOST, summarizeThread,
   type AgentBridge, type AgentMessage, type AgentModel, type AgentState, type AgentThread, type AgentThreadDetail,
@@ -28,7 +29,7 @@ function fullState(threads: AgentThread[], activeThreadId: string | null = null)
     globalLaneBusy: false, notice: '', error: null, speech: { id: 0, text: '' },
     voice: { status: 'off', error: null, action: 'none', revision: 0 },
     credentials: { reasoning: false, grokSpeech: false, secure: false }, reasoningAccounts: [],
-    membership: { status: 'beta', label: 'Test', expiresAt: null }, historyEnabled: true,
+     historyEnabled: true,
   }
 }
 
@@ -64,6 +65,26 @@ function shellBridge(state: AgentState, options: { detail?: boolean } = {}) {
 }
 
 describe('assembling the window state from the shell', () => {
+  it('prunes departed requests even when their thread has no pane, including removed threads', async () => {
+    const first = { ...thread('prune-first', []), requests: [{ id: 'reused', kind: 'permission' as const, text: 'Allow?', options: [] }] }
+    const second = { ...thread('prune-second', []), requests: [{ id: 'reused', kind: 'permission' as const, text: 'Allow?', options: [] }] }
+    const state = fullState([first, second])
+    const wire = shellBridge(state, { detail: false })
+    const { result } = renderHook(() => useAgentConnection(wire.bridge))
+    await waitFor(() => expect(result.current.state).not.toBeNull())
+    await act(async () => {
+      await requestAnswerStore.submit(first.id, 'reused', null, async () => ({ error: null }))
+      await requestAnswerStore.submit(second.id, 'reused', null, async () => ({ error: null }))
+    })
+    expect(requestAnswerStore.get(first.id, 'reused').phase).toBe('sent')
+    act(() => wire.publish(fullState([{ ...first, requests: [] }, second])))
+    await waitFor(() => expect(requestAnswerStore.get(first.id, 'reused').phase).toBe('idle'))
+    expect(requestAnswerStore.get(second.id, 'reused').phase).toBe('sent')
+    act(() => wire.publish(fullState([first])))
+    await waitFor(() => expect(requestAnswerStore.get(second.id, 'reused').phase).toBe('idle'))
+    expect(requestAnswerStore.get(first.id, 'reused').phase).toBe('idle')
+  })
+
   it('does not walk retained history again for unrelated shell updates', async () => {
     let reads = 0
     const messages = Array.from({ length: 200 }, (_, index) => ({

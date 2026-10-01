@@ -20,7 +20,7 @@ vi.mock('../../../src/renderer/src/e2e/agentVoiceEffects', () => ({ createE2EAge
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
 function stateFixture(): AgentState {
-  return { configuration: { ...defaultAgentConfiguration(), enabled: true, speak: true }, connection: 'connected', host: structuredClone(EMPTY_AGENT_HOST), assignments: [], queue: [], activeThreadId: null, activeProjectId: null, draft: '', draftThreadId: null, draftRequestId: null, composing: false, pendingRequest: '', globalLaneBusy: false, notice: '', error: null, speech: { id: 0, text: '' }, voice: { status: 'off', error: null, action: 'none', revision: 0 }, credentials: { reasoning: false, grokSpeech: false, secure: true }, reasoningAccounts: [], membership: { status: 'beta', label: 'Test', expiresAt: null } }
+  return { configuration: { ...defaultAgentConfiguration(), enabled: true, speak: true }, connection: 'connected', host: structuredClone(EMPTY_AGENT_HOST), assignments: [], queue: [], activeThreadId: null, activeProjectId: null, draft: '', draftThreadId: null, draftRequestId: null, composing: false, pendingRequest: '', globalLaneBusy: false, notice: '', error: null, speech: { id: 0, text: '' }, voice: { status: 'off', error: null, action: 'none', revision: 0 }, credentials: { reasoning: false, grokSpeech: false, secure: true }, reasoningAccounts: [],  }
 }
 
 describe('speech interruption from the renderer', () => {
@@ -29,9 +29,7 @@ describe('speech interruption from the renderer', () => {
     const host = new E2EAgentHost()
     const execute = vi.spyOn(host, 'execute')
     const credentials = new AgentCredentials(root, { isEncryptionAvailable: () => false, encryptString: text => Buffer.from(text), decryptString: value => value.toString() })
-    const control = new AgentControl({ schedule: immediatePublishScheduler, directory: root, host, credentials, reasoner: e2eAgentReasoner, membership: {
-      status: async () => ({ status: 'beta', label: 'Test', expiresAt: null }), action: async () => ({ status: 'beta', label: 'Test', expiresAt: null }),
-    } })
+    const control = new AgentControl({ schedule: immediatePublishScheduler, directory: root, host, credentials, reasoner: e2eAgentReasoner, })
     try {
       await credentials.load(); await control.start(); await control.command({ type: 'connect' })
       await control.command({ type: 'assign', threadId: 'workshop' })

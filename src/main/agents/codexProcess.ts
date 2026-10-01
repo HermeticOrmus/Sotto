@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { z } from 'zod'
 
 const MAX_OUTPUT_BYTES = 1024 * 1024
+const OUTPUT_DRAIN_GRACE_MS = 300
 // Legacy history and completed turns can echo multiple screenshot batches. Keep a
 // separate history budget rather than limiting a frame to one submitted prompt.
 const MAX_FRAME_BYTES = 128 * 1024 * 1024
@@ -61,6 +62,11 @@ export class CodexProcess {
     this.child = child
     let buffer: string[] = []; let bufferedBytes = 0; let stderrBytes = 0; let queuedBytes = 0
     this.closed = new Promise<void>(resolve => child.once('close', () => { this.fail(); resolve() }))
+    // Let final output drain, then release handles a descendant may still hold.
+    child.once('exit', () => {
+      const timer = setTimeout(() => { child.stdout.destroy(); child.stderr.destroy() }, OUTPUT_DRAIN_GRACE_MS)
+      timer.unref(); child.once('close', () => clearTimeout(timer))
+    })
     child.on('error', () => this.abort())
     child.stdin.on('error', () => this.abort())
     child.stdout.setEncoding('utf8')

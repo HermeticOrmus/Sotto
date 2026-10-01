@@ -41,9 +41,11 @@ Codex model, effort and permission changes use its native settings update and wa
 
 The **Agents** room coordinates threads by voice. It collects prompts until you say **“send it,”** supervises only the threads you assign, queues questions one at a time, and yields a thread to manual control when you send directly in the native client. Replies can be spoken: Grok Altair sends reply text to xAI on a separately saved xAI key, Kokoro Heart sends it through OpenRouter on your existing key, and the natural voice runs on this computer after a one-time download. The voice coordinator and memory are switched off for the beta, so the Agents room, the reply voices and the Memory page stay hidden until they are turned back on.
 
-Native clients retain their own subscription sign-in and model catalogs. Wake control requires separately supplied compatible local model/runtime files; their distribution, real microphone acceptance, and macOS live checks remain release gates. Production sign-in, checkout, and billing webhooks are not deployed. Until a membership service is configured, every build, installed or unpackaged, labels access **Private beta** and allows agent actions; that is not a paid entitlement.
+Native clients retain their own subscription sign-in and model catalogs. Wake control requires separately supplied compatible local model/runtime files; their distribution, real microphone acceptance, and macOS live checks remain release gates. Sotto has no account or subscription. Agent actions use your connected provider accounts.
 
 ### Questions and permissions
+
+In split threads, **Ctrl+Shift+M** zooms the focused pane or returns to all panes. If dictation uses that shortcut, use the pane's **Zoom** or **Show all panes** button instead.
 
 Model questions with choices appear above the thread's message bar. Pick an answer or type in **Write my own answer**, then press **Send answer**. The model's suggested option is marked **(recommended)** when it supplies one; nothing is selected for you. Enter adds a line to a custom answer. Escape collapses the question, and reopening it keeps your answer. Prepared choices also survive restarting Sotto. Long forms scroll inside the panel, while your message draft stays separate. In a very short split pane, collapse the question to return to reading the thread. Pending permissions and saved-answer recovery remain reachable by scrolling the pane. Questions without supplied choices keep their text-answer path.
 
@@ -65,6 +67,10 @@ Ask for it by name ("use Computer Use to…") or with Codex's `$computer-use` sk
 In Terminal mode, **Close** releases the terminal's output and keeps its row on **Closed** until Sotto quits. **Reopen** starts the same command with fresh output. **Stop**, a command finishing, or hiding its pane keeps the output readable. Up to 64 terminals can be open at once; Closed rows do not count toward that limit.
 
 ### Sending, steering and screenshots
+
+If a permission arrives while you type, the composer keeps focus and your draft. It becomes read-only until you allow or deny the request above. Tab still reaches the other controls.
+
+If a question answer fails, its text comes back to the composer unless you have written a newer draft. The error stays with that thread when you switch away and return, until you edit or retry the answer or close the window.
 
 While a thread is running, **Steer now** beside a queued message sends that message into the current turn when the provider supports steering. The rest of the queue and any newer composer draft stay in place. An unconfirmed message cannot be steered again; use **Check again** to reconcile its delivery.
 
@@ -337,14 +343,20 @@ Settings:
 - Transcription: MAI-Transcribe-2 through OpenRouter (the only model), your OpenRouter API key with a verify button, language, and conservative whitespace formatting
 - Cleanup: optional AI cleanup with quality tiers and the personal dictionary that also feeds transcription spelling hints; and the switches for generated thread titles, commit messages and pull request text. The dictionary holds up to 4,000 characters and saves when you leave its field or Settings. The field explains the limit when you reach it and tells you when a paste is cut to fit. Editing back below the limit clears that message. An older save finishing while you type keeps your newer draft in place; if a save fails, leave the field again to retry. If saving fails after Settings closes, an app notice asks you to return to Cleanup and enter the unsaved edits again.
 - Output: mandatory clipboard safety copy, optional automatic paste, paste delay, and success-message duration. The delay and duration save only when their value changes; tabbing through an unchanged field is quiet.
-- Appearance: the color scheme (Light, Dark, or match the system), then one theme for light mode and one for dark, chosen in two columns. Sotto ships six themes of its own: Sotto, Hush, Linen, Nocturne, Tropic and Citrine. Sotto is the default, with an almost-black dark room and the app icon's teal (a deeper teal in light mode, so text and links stay readable). You can create a theme, import a T3 Code or VS Code theme file, or install one from Open VSX. Below the themes: the effort color, contrast and glass.
+- Appearance: the color scheme (Light, Dark, or match the system), then one theme for light mode and one for dark, chosen in two columns. Sotto ships six themes of its own: Sotto, Hush, Linen, Nocturne, Tropic and Citrine. Sotto is the default, with an almost-black dark room and the app icon's teal (a deeper teal in light mode, so text and links stay readable). You can create a theme, import a T3 Code or VS Code theme file, or install one from Open VSX. Below the themes: the effort color, contrast and glass. Diagrams keep their current colors while you drag a theme color and update after you pause.
 - Updates: the version you are running and, on Windows, an automatic GitHub release check that is on by default and can be turned off, plus a manual check
 - Application and privacy: launch at login, start minimized, local history, retention, clear history, and reset settings; for threads, the working-copy default and the worktree cleanup rules
 - Git: every Git setting, grouped under when it acts: the Commit and pull request style with its example; Follow pull request templates, Default merge method and Auto-settle merged threads; the diff defaults for Changes and Proactive panels; the Git fetch interval and Automatically pull
 
 Turning **Keep local history** off stops saving new dictation transcripts. Older dictation transcripts stay on disk until you delete them or clear history. **Delete** removes a retained transcript from this computer even while history is off; turning history back on does not restore it.
 
+**Clear history** also removes dictation history backups and temporary files left by an interrupted save. Sotto removes those temporary files when it starts, without changing saved history.
+
 Automatic paste is best effort. Windows blocks synthetic input into elevated applications, password fields, protected desktops, and some custom editors. macOS blocks it in secure input fields and until both the Automation and Accessibility grants exist. When paste is rejected, Sotto shows **Copied — paste manually** and leaves the complete text in the clipboard. If a Windows target app is running as administrator, either paste manually or run both apps at the same integrity level.
+
+Sotto finishes each automatic paste before copying or pasting the next transcript. Copying from History while a dictation is waiting to paste waits for that delivery to finish.
+
+If the Windows paste helper does not become ready, the fallback can paste up to about 10 seconds after dictation ends, into whichever window has focus then. Once a paste has been dispatched, if the helper stops or does not confirm in time, Sotto keeps the copied result and does not repeat the paste. Check the target before pasting manually: the text may already have arrived.
 
 ## Updates
 
@@ -391,6 +403,8 @@ Dictation audio is uploaded to OpenRouter and transcribed by Microsoft MAI-Trans
 Optional AI cleanup is off by default. When you enable it, the finished transcript (never audio) is sent to OpenRouter with the same key for punctuation and self-correction cleanup. If the network is slow or offline, Sotto delivers the raw transcript instead. Optional agent control also sends the prompts you submit to the connected harness and, when configured, sends assignment text and relevant thread context to your selected reasoning provider: `openrouter.ai` for an OpenRouter account, `api.openai.com` for an OpenAI one. Agent replies default to Grok Altair, which sends reply text to xAI using a separately saved xAI API key. Kokoro Heart is a lower-cost choice that sends reply text through OpenRouter using the existing OpenRouter key. Voice previews incur the same provider usage charges; neither option silently falls back to another provider. The optional natural voice is generated on this computer after a one-time voice download. Provider usage is billed separately from Sotto access. Credentials are encrypted using the operating system credential store and are not returned to the UI.
 
 Sotto has no analytics or crash upload. Dictation audio is never persisted. Transcript history is local, optional, bounded, searchable, and clearable. Two small diagnostic files in Sotto's data folder help explain a lost dictation: `polish-diagnostics.jsonl` records word counts around AI cleanup, and `transcription-diagnostics.jsonl` records why a transcription request failed (reason, HTTP status, attempts, clip length and time taken). They hold no words, audio or keys, each starts over past 256 KB with one older copy kept, and neither leaves this computer.
+
+Spellcheck stays enabled, but Sotto blocks dictionary downloads in its windows and browser. The OS spellchecker remains available on Windows and macOS. A language that needs a downloaded dictionary may have no spelling suggestions.
 
 ### Thread titles, branch names and Git
 
@@ -509,7 +523,7 @@ If Sotto cannot read its saved keys, it preserves the encrypted file and shows a
 - **Thread messages could not be saved:** Restore access to local storage and refresh. Sotto keeps failed messages in order and retries while it is open, waiting longer between repeated failures. Saving a thread name does not clear this warning. Quitting makes one final attempt, but messages still unsaved cannot survive a restart. Turning Keep local history off keeps pending messages only for this run; turning it back on does not save words from while it was off.
 - **Terminal view could not load:** Press **Reload window** to try again. Terminals keep running and retain their output. Sotto saves thread drafts first and keeps the window open if any thread draft or question answer is not saved. Save those drafts, then try again.
 - **Window disappeared:** Sotto is probably hidden in the Windows notification area or the macOS menu bar. Open it from that icon or start Sotto again; the existing instance will be shown.
-- **A thread never asks:** The provider says a request only you can answer was declined without reaching you. Its client is not routing those requests, so it answers them itself and the thread keeps working. Nothing in the thread is lost. Answer in that client meanwhile, and check **Settings → Providers** for a client update and Sotto for its own.
+- **A thread never asks:** If a provider asks for something Sotto cannot read, Sotto refuses the request and tells you it did not reach you. Codex also reports an approval with an unknown child thread ID on a thread's own process; Sotto cannot route that approval into the child thread. Nothing is approved. Answer in the provider's client meanwhile, and check **Settings → Providers** for a client update and Sotto for its own.
 
 ### Windows
 

@@ -21,7 +21,8 @@ import type { GrokSpeechService } from './grokSpeech'
 import type { KokoroSpeechService } from './kokoroSpeech'
 
 export interface AgentIpcOptions {
-  readonly wakeControl: Pick<AgentControl, 'configuration' | 'membershipStatus'>
+  readonly voiceCoordinatorEnabled: boolean
+  readonly wakeControl: Pick<AgentControl, 'configuration'>
   /** Encodes a command's reply as a command receipt (issue #323): `AgentStateBroadcaster.encodeReceipt`,
    * so the receipt names each catalog by the revision the broadcast uses. */
   readonly encodeReceipt: (state: AgentState) => AgentCommandReceipt
@@ -78,7 +79,7 @@ export function registerAgentIpc(ipc: IpcMainAdapter, control: Pick<AgentControl
     ]).parse(payload)
     if (request.type === 'release') { wake.dispose(); return { detected: false, endSeconds: 0 } }
     const configuration = options.wakeControl.configuration()
-    if (!configuration.enabled || !['active', 'beta'].includes(options.wakeControl.membershipStatus())) throw new Error('Agent voice control is not enabled.')
+    if (!options.voiceCoordinatorEnabled || !configuration.enabled) throw new Error('Agent voice control is not enabled.')
     await wake.prepare(configuration.wakeModelDirectory, configuration.wakeRuntimeDirectory || undefined)
     return request.type === 'detect' ? wake.detect(request.audio) : { detected: false, endSeconds: 0 }
   })

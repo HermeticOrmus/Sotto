@@ -317,12 +317,14 @@ describe('durable project/thread organization', () => {
     await git(repository, ['add', '.'])
     await git(repository, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'Baseline'])
     let finish!: (name: string) => void
-    const writer = vi.fn(() => new Promise<string>(resolve => { finish = resolve }))
+    const started = Promise.withResolvers<void>()
+    const writer = vi.fn(() => new Promise<string>(resolve => { finish = resolve; started.resolve() }))
     f.host.setWorkingCopyDefaults(() => 'independent')
     f.host.setBranchNameWriter(writer)
     await local(f)
     await f.host.execute(send())
-    await vi.waitFor(() => expect(writer).toHaveBeenCalledOnce())
+    await started.promise
+    expect(writer).toHaveBeenCalledOnce()
     const thread = f.host.workspaceSnapshot().threads.find(thread => thread.id === 'local')!
     const rename = vi.spyOn(ThreadWorktrees.prototype, 'renameTemporaryBranch')
     f.host.disconnect()
@@ -344,12 +346,14 @@ describe('durable project/thread organization', () => {
     await git(repository, ['add', '.'])
     await git(repository, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'Baseline'])
     let finish!: (name: string | null) => void
-    const writer = vi.fn(() => new Promise<string | null>(resolve => { finish = resolve }))
+    const started = Promise.withResolvers<void>()
+    const writer = vi.fn(() => new Promise<string | null>(resolve => { finish = resolve; started.resolve() }))
     f.host.setWorkingCopyDefaults(() => 'independent')
     f.host.setBranchNameWriter(writer)
     await local(f)
     await f.host.execute(send())
-    await vi.waitFor(() => expect(writer).toHaveBeenCalledTimes(1))
+    await started.promise
+    expect(writer).toHaveBeenCalledTimes(1)
     // The branch is named by the thread whose first prompt it is, so its own provider is the one asked.
     expect(writer).toHaveBeenCalledWith('local', send().text)
     const thread = f.host.workspaceSnapshot().threads.find(thread => thread.id === 'local')!
