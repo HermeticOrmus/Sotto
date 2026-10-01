@@ -112,7 +112,7 @@ describe('authenticated host socket', () => {
     await expect(client.command({ type: 'reclaim-thread-worktree', threadId: 'missing', withUncommittedChanges: false })).resolves.toBeDefined()
   })
   it('accepts an explicitly authorized answer and refuses the same device after policy revocation', async () => {
-    const { client, result } = await pair()
+    const { client, result } = await pair('  Studio\n\u202e laptop\u0000  ')
     await client.command({ type: 'configure', patch: { provider: 'codex', enabledProviders: ['codex'] } })
     await client.command({ type: 'connect', provider: 'codex' })
     const threadId = client.shell().host.threads.find(thread => thread.title === 'Workshop')!.id
@@ -128,7 +128,7 @@ describe('authenticated host socket', () => {
     const answerId = randomUUID()
     expect((await client.command({ type: 'answer', threadId, requestId: 'permission-one', answer: '', approved: true }, undefined, answerId)).error).toBeNull()
     expect(await client.receipt(answerId)).toEqual({ status: 'completed', answerDelivered: true })
-    expect(host.service.events(0, threadId)).toContainEqual(expect.objectContaining({ event: expect.objectContaining({ kind: 'answer-given', attribution: expect.objectContaining({ clientId: result.clientId, transport: 'socket' }) }) }))
+    expect(host.service.events(0, threadId)).toContainEqual(expect.objectContaining({ event: expect.objectContaining({ kind: 'answer-given', attribution: expect.objectContaining({ clientId: result.clientId, user: 'Studio laptop', transport: 'socket' }) }) }))
     await policy('deny-answers')
     native.event({ type: 'permission', threadId: 'workshop', requestId: 'permission-two', text: 'Again?' })
     await expect.poll(() => client.shell().host.threads.find(thread => thread.id === threadId)?.requests.some(request => request.id === 'permission-two')).toBe(true)

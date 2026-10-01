@@ -152,3 +152,7 @@ Remote navigation belongs to each client and never selects the coordinator’s o
 The listener pings each peer every 25 seconds and closes it when the previous ping has no matching pong. The iPhone also pings every 25 seconds, giving a pong ten seconds to arrive. This frees abandoned listener slots and turns a silent network drop into an explicit disconnected state. A full listener answers an authenticated upgrade with 503, leaving the pairing intact.
 
 While active, the iPhone retries a dropped connection with waits of one, two, four, eight, sixteen and then thirty seconds, opening a fresh signed session on every attempt. Success resets the wait. Backgrounding or removing a computer cancels retries; activation connects again. Invalid identity, incompatible protocol and refused pairing stop retries for the user to resolve. Reconnecting refreshes observed details and reconciles pending commands through receipts; it never resends them (#524).
+
+## September 30 amendment: device names in attribution
+
+Pairing records a plain, bounded device name: Unicode compatibility normalisation, control and formatting characters removed, and whitespace collapsed. Existing saved names receive the same normalisation when read for display or attribution. An answer records the permanent paired client ID beside that name, as it already does, so the chosen name is a label rather than an identity (#582).
