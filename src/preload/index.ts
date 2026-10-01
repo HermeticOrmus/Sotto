@@ -31,6 +31,7 @@ import {
   APP_RELOAD,
   APP_TOGGLE_MAXIMIZE,
   APP_MAXIMIZED,
+  APP_WINDOW_HIDDEN,
   APP_QUIT,
   APP_SHOW,
   EXTERNAL_LINK_OPEN,
@@ -416,6 +417,7 @@ export function createSottoBridge(
     toggleMaximizeApp: () => invokeParsed(renderer, APP_TOGGLE_MAXIMIZE, voidSchema),
     getWindowMaximized: () => invokeParsed(renderer, APP_MAXIMIZED, z.boolean()),
     onWindowMaximized: listener => subscribe(renderer, APP_MAXIMIZED, z.boolean(), listener),
+    onWindowHidden: listener => subscribe(renderer, APP_WINDOW_HIDDEN, z.null(), () => listener()),
     quitApp: () => invokeParsed(renderer, APP_QUIT, voidSchema),
   }
   return hostClientBridge(bridge)
