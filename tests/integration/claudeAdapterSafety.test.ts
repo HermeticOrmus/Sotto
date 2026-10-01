@@ -442,7 +442,7 @@ describe('Claude recovery and safety', () => {
     const recordAnswer = vi.fn()
     Object.assign(wrapped, { recordAnswer })
     const control = new AgentControl({ schedule: immediatePublishScheduler, directory: f.root, host: wrapped, credentials, reasoner: e2eAgentReasoner,
-      membership: { status: async () => ({ status: 'beta', label: 'Test', expiresAt: null }), action: async () => ({ status: 'beta', label: 'Test', expiresAt: null }) } })
+    })
     let delayed: ReturnType<typeof delayStdin> | undefined
     try {
       await control.start(); await control.command({ type: 'connect' })
@@ -480,7 +480,7 @@ describe('Claude recovery and safety', () => {
     await credentials.load()
     const registry = new ThreadRegistry(f.root), wrapped = new SottoThreadHost('claude', f.adapter, registry)
     const control = new AgentControl({ schedule: immediatePublishScheduler, directory: f.root, host: wrapped, credentials, reasoner: e2eAgentReasoner,
-      membership: { status: async () => ({ status: 'beta', label: 'Test', expiresAt: null }), action: async () => ({ status: 'beta', label: 'Test', expiresAt: null }) } })
+    })
     try {
       await control.start(); await control.command({ type: 'connect' })
       const threadId = registry.all().find(binding => binding.sessionId === id)!.threadId
