@@ -10,9 +10,9 @@ Windows verification for package 19, from `origin/main` at `2f1d74f240cbcd2b3ab6
 
 The existing List and tick removal question was inspected at 1600×1000, 1280×800 and 820×560, with light, dark and reduced motion. No restyle or design-baseline regeneration was intended. Retained captures:
 
-- [Sidebar settle question](../../artifacts/bh-pkg-19/settle-asks.png): the row has moved to Settled and the separate question is still visible.
-- [Minimum window, light and reduced motion](../../artifacts/bh-pkg-19/ignored-items-820x560-light-reduce.png): the ignored item, separate acknowledgement and actions fit.
-- [Large window, dark](../../artifacts/bh-pkg-19/ignored-items-1600x1000-dark.png): the same List and tick question in the dark theme.
+- [Sidebar settle question](../../artifacts/renderer-thread-recovery/settle-asks.png): the row has moved to Settled and the separate question is still visible.
+- [Minimum window, light and reduced motion](../../artifacts/renderer-thread-recovery/ignored-items-820x560-light-reduce.png): the ignored item, separate acknowledgement and actions fit.
+- [Large window, dark](../../artifacts/renderer-thread-recovery/ignored-items-1600x1000-dark.png): the same List and tick question in the dark theme.
 
 The owner prototype named by ADR-0041 is absent from this checkout; the accepted ADR and existing real components supplied its behavior and copy. A throwaway state walkthrough is retained on the published `prototype/bh-19-recovery` branch, commit `de1a26953b9f263fd6a064dcaa58a38c523878df`, outside the implementation branch. It records queued questions and separately restorable overflow using the existing surfaces.
 

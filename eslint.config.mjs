@@ -4,7 +4,6 @@ import tseslint from 'typescript-eslint'
 export default tseslint.config(
   {
     ignores: [
-      'artifacts/bh-pkg-19/**',
       'artifacts/main-infra-bundle/**',
       'artifacts/pkg-18-e2e/**',
       'artifacts/windows-askpass/**',
