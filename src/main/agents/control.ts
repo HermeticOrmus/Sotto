@@ -42,7 +42,7 @@ import { isSottoRequest, withSottoRequests, type SottoThreadRequests } from './s
 /** One shared empty array stands in for every shell thread's history; the clone that follows copies nothing. */
 const EMPTY_MESSAGES: AgentMessage[] = []
 
-/** Its error is published before observing completion, so the command catch must not publish it again. */
+/** Tracks late answer completion and keeps socket uncertainty in the calling client’s receipt. */
 class AnswerDeliveryUnconfirmed extends Error {
   delivered = false
 }
@@ -1628,7 +1628,7 @@ export class AgentControl {
         failure = error instanceof AnswerDeliveryUnconfirmed && error.delivered ? undefined
           : error instanceof Error ? error.message : 'Sotto could not complete this action.'
         if (!(error instanceof AnswerDeliveryUnconfirmed)) this.setCommandError(error, failure!)
-        if (failure !== undefined) this.say(failure)
+        if (failure !== undefined && !(error instanceof AnswerDeliveryUnconfirmed && client.transport === 'socket')) this.say(failure)
       }
       if ((command.type === 'manual-send' || command.type === 'steer') && command.draftId) {
         const delivery = this.state.deliveries?.find(item => item.threadId === command.threadId && item.draftId === command.draftId)
@@ -2580,10 +2580,10 @@ export class AgentControl {
       this.recordAnswerAttribution(command, client)
     }
     // An adapter that knows more about what an unconfirmed action cost says it; the intent is kept either way.
-    const uncertaintyError = command.type === 'answer' && result.uncertain && result.answerCompletion
+    const uncertaintyError = command.type === 'answer' && result.uncertain && (result.answerCompletion || client.transport === 'socket')
       ? new AnswerDeliveryUnconfirmed(result.error ?? PROVIDER_RESULT_UNCONFIRMED)
       : new Error(result.error ?? PROVIDER_RESULT_UNCONFIRMED)
-    if (uncertaintyError instanceof AnswerDeliveryUnconfirmed) this.setCommandError(uncertaintyError, uncertaintyError.message)
+    if (uncertaintyError instanceof AnswerDeliveryUnconfirmed && client.transport !== 'socket') this.setCommandError(uncertaintyError, uncertaintyError.message)
     if (command.type === 'answer' && result.answerCompletion) {
       void result.answerCompletion.then(async delivered => {
         if (!delivered) return

@@ -240,7 +240,7 @@ describe('authenticated host socket', () => {
     const finalize = vi.spyOn(TurnRecorder.prototype, 'finish').mockImplementation(async function (this: TurnRecorder, turn, outcome) {
       if (turn?.commandType === 'answer') {
         expect(outcome).toBe('failed')
-        expect(host.service.shell().error).not.toBeNull()
+        expect(host.service.shell().error).toBeNull()
         settledDuringFinish = true
         complete(true)
         await completion
