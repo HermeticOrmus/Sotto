@@ -35,6 +35,22 @@ function fake(initial: BrowserTask[] = [task()]) {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.useRealTimers() })
 
 describe('the browser player', () => {
+  it('keeps the live page mounted across task events and changes it only when the page changes', async () => {
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(DOMRect.fromRect({ x: 800, y: 300, width: 340, height: 200 }))
+    const browser = fake(), store = new ToolsPanelStore(), playerStore = new BrowserPlayerStore()
+    render(<BrowserPlayer state={threadsStateFixture()} focusedThreadId="visual-gate" bridge={browser.bridge} store={store} playerStore={playerStore} />)
+    await waitFor(() => expect(browser.bridge.mount).toHaveBeenCalledWith(expect.objectContaining({ pageId: page.id, bounds: expect.any(Object) })))
+    vi.mocked(browser.bridge.mount).mockClear()
+    act(() => browser.emit({ type: 'task', task: task({ summary: 'Checked the form', updatedAt: 2 }) }))
+    expect(browser.bridge.mount).not.toHaveBeenCalled()
+    const nextPage = { ...page, id: '33333333-3333-4333-8333-333333333333' }
+    act(() => {
+      browser.emit({ type: 'page', page: nextPage })
+      browser.emit({ type: 'task', task: task({ pageId: nextPage.id, updatedAt: 3 }) })
+    })
+    expect(browser.bridge.mount).toHaveBeenCalledWith(expect.objectContaining({ pageId: page.id, bounds: null }))
+    expect(browser.bridge.mount).toHaveBeenCalledWith(expect.objectContaining({ pageId: nextPage.id, bounds: expect.any(Object) }))
+  })
   it('asks for no remote host thread\'s tasks, and survives a bridge that refuses a thread outright', async () => {
     const browser = fake(); const store = new ToolsPanelStore(); const playerStore = new BrowserPlayerStore()
     const state = threadsStateFixture()
