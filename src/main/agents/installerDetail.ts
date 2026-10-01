@@ -4,8 +4,10 @@ import { homedir, userInfo } from 'node:os'
 // consume another path's prefix and leave a private relative suffix behind.
 // URLs and package names such as aqua:openai/codex are not absolute paths.
 const ABSOLUTE_START = /(?<=file:\/\/)\/(?:[A-Za-z]:[\\/])?|(?<![\w/\\~])(?:[A-Za-z]:[\\/]|\\\\|\/(?=[^\s/]))|(?<![\w:/\\~])\/\//gu
+const NON_FILE_URL = /\b(?!file:)[a-z][a-z\d+.-]*:\/\/[^\s"'<>]+/giu
 function redactPaths(line: string): string {
-  const paths = Array.from(line.matchAll(ABSOLUTE_START), match => {
+  const urls = Array.from(line.matchAll(NON_FILE_URL), match => ({ start: match.index, end: match.index + match[0].length }))
+  const paths = Array.from(line.matchAll(ABSOLUTE_START)).filter(match => !urls.some(url => match.index >= url.start && match.index < url.end)).map(match => {
     const start = match.index
     const prefixStart = line.slice(start - 7, start) === 'file://' ? start - 7 : start
     const preceding = line[prefixStart - 1]
@@ -35,7 +37,7 @@ function redactPaths(line: string): string {
       // more path segments is still private, even across an identified prefix.
       const continues = next && line[next.start] === '/' && !/\s/u.test(line[next.start - 1]!)
       const diagnostic = Array.from(span.slice(path.prefixLength).matchAll(boundary))
-        .find(match => path.windows || !continues && !/[\\/]/u.test(span.slice(path.prefixLength + match.index)))
+        .find(match => path.windows || !continues && !/[\\/]/u.test(span.slice(path.prefixLength + match.index).replace(NON_FILE_URL, '')))
       const separator = next ? /\s+(?:->|to)\s*$/u.exec(span) : null
       const suffixStart = Math.min(diagnostic ? path.prefixLength + diagnostic.index : span.length, separator?.index ?? span.length)
       suffix = span.slice(suffixStart)
