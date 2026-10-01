@@ -15,7 +15,7 @@ import { providerIdSchema, type ProviderClientUpdate } from './agents'
  */
 export const HOST_PROTOCOL_VERSION = 1 as const
 /** Retired account fields stay on v1's wire for desktops that still require them. */
-export function shellForProtocolV1(state: AgentState) {
+export function shellForProtocolV1<T extends AgentState>(state: T) {
   return { ...state, membership: { status: 'beta' as const, label: '', expiresAt: null },
     configuration: { ...state.configuration, membershipEndpoint: '' } }
 }
