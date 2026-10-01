@@ -320,6 +320,7 @@ export class AgentControl {
     this.attachmentPreviews = new AttachmentPreviews(dependencies.directory, this.attachments, () => dependencies.historyEnabled?.() !== false)
   }
   async start(): Promise<void> {
+    await this.dependencies.turns?.initialize()
     // Remove retired ciphertext without decrypting it, including while the vault is locked.
     for (const slot of ['membership', 'membership-cache']) {
       try {
@@ -328,6 +329,7 @@ export class AgentControl {
         console.warn('retired-credential-clear-failed')
       }
     }
+
     try {
       await retireLegacyProvider({ directory: this.dependencies.directory, parse: savedSchema.parse,
         historyEnabled: this.dependencies.historyEnabled?.() !== false, credentials: this.dependencies.credentials })
@@ -1619,7 +1621,8 @@ export class AgentControl {
       else this.state.globalLaneBusy = false
       this.updateCredentials()
       await this.persist().catch(error => {
-        // The user sees the fixed guidance; the raw storage error goes to the turn record only.
+        // The user sees fixed guidance; diagnostics keep only the storage failure category.
+        if (turn) turn.failureCode = 'storage-failed'
         failure = error instanceof Error ? error.message : 'Could not save agent state.'
         this.state.error = 'Could not save agent state. Pause management until storage is available.'
         this.state.assignments.forEach(a => { a.paused = true })
@@ -1884,7 +1887,7 @@ export class AgentControl {
   private async finishTurn(turn: ActiveTurn | undefined, error?: string): Promise<void> {
     if (!turn) return
     try {
-      await this.dependencies.turns?.finish(turn, error !== undefined ? 'failed' : turn.clarified ? 'clarified' : 'completed', error)
+      await this.dependencies.turns?.finish(turn, error !== undefined ? 'failed' : turn.clarified ? 'clarified' : 'completed')
     } catch { /* recording must never throw into the command path */ }
   }
   private async navigate(threadId: string): Promise<AgentState> {
@@ -2017,6 +2020,8 @@ export class AgentControl {
       case 'dismiss-client-updates': this.state.clientUpdatesDismissedAt = new Date().toISOString(); return
       case 'utterance': await this.utterance(command.text.trim(), turn, selectionRevision); return
       case 'compose': {
+        const requestId = this.state.composing ? this.state.draftRequestId : this.draftRequestId(this.state.activeThreadId)
+        if (requestId) this.guardClientGrant(client)
         if (!this.state.composing) this.startDraft()
         const previous = this.state.threadDrafts?.find(item => item.threadId === this.state.draftThreadId && item.requestId === this.state.draftRequestId)
         if (command.attachments !== undefined) this.state.draftAttachments = agentAttachmentHandlesSchema.parse(command.attachments)
@@ -2516,7 +2521,13 @@ export class AgentControl {
       // The images become the adapter's to read here, at the provider boundary, and not before (ADR-0031).
       const hostCommand = (prompt?.attachments?.length
         ? { ...prompt, attachments: prompt.attachments.map(image => this.promptImage(image)) } : command) as AgentHostCommand
-      try { this.canAct(undefined, draftKept); result = await this.dependencies.host.execute(hostCommand) }
+      try {
+        this.canAct(undefined, draftKept)
+        result = await this.dependencies.host.execute(hostCommand).catch(error => {
+          if (turn) turn.failureCode = 'provider-failed'
+          throw error
+        })
+      }
       finally { providerLatencyMs = Math.max(0, Date.now() - providerStartedAt) }
     } catch (error) {
       this.outbox = this.outbox.filter(o => o.id !== command.commandId)
@@ -2568,7 +2579,10 @@ export class AgentControl {
     }
     this.outbox = this.outbox.filter(o => o.id !== command.commandId)
     await this.persist()
-    if (!result.accepted && !result.uncertain) throw new Error(PROVIDER_REJECTED_ACTION)
+    if (!result.accepted && !result.uncertain) {
+      if (turn) turn.failureCode = 'provider-failed'
+      throw new Error(PROVIDER_REJECTED_ACTION)
+    }
     this.acceptSnapshot(await this.readThread(threadId, provider))
     // Another client or a cancellation can remove the request during this send. That reconciles
     // the waiting request, but never upgrades this adapter's uncertain answer into a confirmation.
@@ -2687,17 +2701,22 @@ export class AgentControl {
     this.say(`Sent to ${thread.title}.`)
     this.presentQueue(true, selectionRevision)
   }
+  private draftRequestId(threadId: string | null): string | null {
+    const thread = this.thread(threadId)
+    const saved = !this.hasDraft() ? this.state.threadDrafts?.find(item => item.threadId === thread.id) : undefined
+    return saved ? saved.requestId : this.state.queue.find(item => item.threadId === thread.id && item.kind === 'question' && item.requestId)?.requestId ?? null
+  }
   private startDraft(threadId = this.state.activeThreadId): void {
     const thread = this.thread(threadId)
     this.coordinatorConversation = false
     this.manualDraftId = null
-    const question = this.state.queue.find(item => item.threadId === thread.id && item.kind === 'question' && item.requestId)
+    const requestId = this.draftRequestId(threadId)
     const saved = !this.hasDraft() ? this.state.threadDrafts?.find(item => item.threadId === thread.id) : undefined
     if (saved) {
       this.state.draft = saved.text; this.state.draftAttachments = structuredClone(saved.attachments); this.manualDraftId = saved.draftId
     }
     this.state.draftThreadId = thread.id
-    this.state.draftRequestId = saved ? saved.requestId : question?.requestId ?? null
+    this.state.draftRequestId = requestId
     this.state.composing = true
   }
   private clearDraft(): void {
@@ -2793,6 +2812,9 @@ export class AgentControl {
     try {
       intent = await this.dependencies.reasoner.intent(request, this.state.host, this.state.activeProjectId, defaultNewThreadModelId(this.state.configuration, this.state.host.models, this.state.reasoningAccounts), this.state.activeThreadId, preferences)
       if (turn) turn.intentResolvedAtMs = Date.now()
+    } catch (error) {
+      if (turn) turn.failureCode = 'reasoning-failed'
+      throw error
     } finally {
       if (turn) turn.intentMs += Date.now() - intentStarted
     }
@@ -2824,12 +2846,16 @@ export class AgentControl {
     if (provider && snapshot.providers?.find(status => status.id === provider)?.connection !== 'connected') return true
     return isLiveAttention(item, snapshot.threads)
   }
+  private processedAssignmentThreads = new Set<string>()
+
   private acceptSnapshot(incoming: AgentHostSnapshot): void {
     if (this.disposed) return
     const connecting = this.state.connection === 'connecting'
     // Sotto's own requests join the provider's before anything below reads the threads, so the attention queue
     // takes and keeps them the same way (ADR-0035).
     const snapshot = this.withSottoRequests(incoming)
+    const previousProcessed = this.processedAssignmentThreads
+    this.processedAssignmentThreads = new Set()
     const previousThreads = new Map(this.state.host.threads.map(thread => [thread.id, thread]))
     this.state.host = snapshot
     this.scheduleProviderReconnects()
@@ -2894,7 +2920,8 @@ export class AgentControl {
     for (const assignment of this.state.assignments) {
       const thread = snapshot.threads.find(t => t.id === assignment.threadId)
       if (!thread || isThreadClosed(thread) || !isThreadProviderConnected(snapshot, thread)) continue
-      const previousMessages = previousThreads.get(thread.id)?.messages ?? []
+      this.processedAssignmentThreads.add(thread.id)
+      const previousMessages = previousProcessed.has(thread.id) ? previousThreads.get(thread.id)?.messages ?? [] : []
       const restoredBoundary = previousMessages.length === 0 ? assignment.seenMessageIds.at(-1) : undefined
       const boundary = this.earlierMessageBoundaries.get(thread.id)
         ?? (restoredBoundary && thread.messages.some(message => message.id === restoredBoundary) ? restoredBoundary : undefined)
@@ -3000,7 +3027,10 @@ export class AgentControl {
       const retrievalStarted = Date.now()
       const preferences = this.readPreferences(assignment.instruction, thread.projectId, thread.id, turn)
       const intentStarted = Date.now()
-      const decision = await this.dependencies.reasoner.decide(assignment.instruction, structuredClone(thread), preferences)
+      const decision = await this.dependencies.reasoner.decide(assignment.instruction, structuredClone(thread), preferences).catch(error => {
+        if (turn) turn.failureCode = 'reasoning-failed'
+        throw error
+      })
         .finally(() => { if (turn) turn.intentMs = Date.now() - intentStarted })
       const current = this.state.assignments.find(a => a.threadId === thread.id)
       const latest = this.state.host.threads.find(t => t.id === thread.id)
@@ -3064,6 +3094,7 @@ export class AgentControl {
         if (assignment.stopReason === 'none') {
           assignment.stopReason = 'error'; assignment.stoppedAt = new Date().toISOString()
         }
+        if (turn) turn.failureCode = 'storage-failed'
         failure = error instanceof Error ? error.message : 'Could not save agent state.'
         this.enqueue(thread, 'blocked', failure)
       })

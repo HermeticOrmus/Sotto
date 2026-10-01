@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
-import { appendFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { setTimeout as delay } from 'node:timers/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
 import type { AgentVoiceTiming } from '../../shared/agents'
@@ -29,8 +30,7 @@ export const turnRecordSchema = z.object({
   retrievedMemoryIds: z.array(z.string()),
   contextTokenEstimate: z.number().int().nonnegative(),
   outcome: z.enum(['completed', 'clarified', 'failed']),
-  text: z.string(),
-  error: z.string(),
+  failureCode: z.enum(['action-failed', 'reasoning-failed', 'provider-failed', 'storage-failed', 'unknown']).nullable().default(null),
 })
 export type TurnRecord = z.infer<typeof turnRecordSchema>
 
@@ -54,6 +54,7 @@ export interface ActiveTurn {
   projectId: string | null | undefined
   text: string
   clarified: boolean
+  failureCode?: NonNullable<TurnRecord['failureCode']>
 }
 
 /** A local estimate: one token per four characters across all turn context. */
@@ -76,21 +77,20 @@ function hasErrorCode(error: unknown, code: string): boolean {
 
 /** Append-only coordinator turn log. Writes never throw into the command path. */
 export class TurnRecorder {
+  private scrubbed = false
+  private lane: Promise<void> = Promise.resolve()
   private readonly directory: string
-  private readonly historyEnabled: () => boolean
   private readonly resolveSession: (threadId: string) => { provider: string; sessionId: string } | undefined
   private readonly maxBytes: number
   private readonly maxLines: number
 
   constructor(options: {
     directory: string
-    historyEnabled: () => boolean
     resolveSession: (threadId: string) => { provider: string; sessionId: string } | undefined
     maxBytes?: number
     maxLines?: number
   }) {
     this.directory = options.directory
-    this.historyEnabled = options.historyEnabled
     this.resolveSession = options.resolveSession
     this.maxBytes = options.maxBytes ?? 2 * 1024 * 1024
     this.maxLines = options.maxLines ?? 1000
@@ -136,11 +136,10 @@ export class TurnRecorder {
     }
   }
 
-  async finish(turn: ActiveTurn | undefined, outcome: TurnRecord['outcome'], error?: string): Promise<void> {
+  async finish(turn: ActiveTurn | undefined, outcome: TurnRecord['outcome']): Promise<void> {
     if (!turn) return
     try {
       const finishedAtMs = Date.now()
-      const retain = this.historyEnabled()
       const threadId = turn.threadId ?? null
       const record: TurnRecord = {
         id: randomUUID(),
@@ -167,27 +166,90 @@ export class TurnRecorder {
         retrievedMemoryIds: turn.retrievedMemoryIds,
         contextTokenEstimate: turn.contextTokenEstimate,
         outcome,
-        text: retain ? turn.text : '',
-        error: retain ? error ?? '' : '',
+        failureCode: outcome === 'failed' ? turn.failureCode ?? 'action-failed' : null,
       }
-      await mkdir(this.directory, { recursive: true })
-      const filePath = this.path()
-      await appendFile(filePath, `${JSON.stringify(record)}\n`, 'utf8')
-      if ((await stat(filePath)).size > this.maxBytes) {
-        const lines = (await readFile(filePath, 'utf8')).split(/\r?\n/u).filter(line => line.length > 0)
-        // Keep the newest lines, then drop the oldest until the file sits at half the cap,
-        // so the next append does not trigger another full rewrite.
-        const newest = lines.slice(-this.maxLines)
-        let bytes = newest.reduce((total, line) => total + Buffer.byteLength(line, 'utf8') + 1, 0)
-        while (newest.length > 1 && bytes > this.maxBytes / 2) bytes -= Buffer.byteLength(newest.shift()!, 'utf8') + 1
-        await writeFile(filePath, newest.length > 0 ? `${newest.join('\n')}\n` : '', 'utf8')
-      }
+      await this.enqueue(async () => {
+        await this.scrub()
+        await mkdir(this.directory, { recursive: true })
+        const filePath = this.path()
+        await appendFile(filePath, `${JSON.stringify(record)}\n`, 'utf8')
+        if ((await stat(filePath)).size > this.maxBytes) {
+          const lines = (await readFile(filePath, 'utf8')).split(/\r?\n/u).filter(line => line.length > 0)
+          // Keep the newest lines, then drop the oldest until the file sits at half the cap,
+          // so the next append does not trigger another full rewrite.
+          const newest = lines.slice(-this.maxLines)
+          let bytes = newest.reduce((total, line) => total + Buffer.byteLength(line, 'utf8') + 1, 0)
+          while (newest.length > 1 && bytes > this.maxBytes / 2) bytes -= Buffer.byteLength(newest.shift()!, 'utf8') + 1
+          await this.replace(newest.length > 0 ? `${newest.join('\n')}\n` : '')
+        }
+      })
     } catch {
       // Recording must never throw into the command path.
     }
   }
 
+  /** Remove legacy content before the recorder is used, even when no new turn finishes. */
+  async initialize(): Promise<void> {
+    await this.enqueue(() => this.scrub())
+  }
+
+  private async retryLocked<T>(operation: () => Promise<T>): Promise<T> {
+    for (let attempt = 0; ; attempt += 1) {
+      try { return await operation() } catch (error) {
+        if (attempt >= 3 || (!hasErrorCode(error, 'EPERM') && !hasErrorCode(error, 'EBUSY'))) throw error
+        await delay(50)
+      }
+    }
+  }
+
+  private async scrub(): Promise<void> {
+    if (this.scrubbed) return
+    try {
+      let contents: string
+      try { contents = await this.retryLocked(() => readFile(this.path(), 'utf8')) } catch (error) {
+        if (!hasErrorCode(error, 'ENOENT')) throw error
+        this.scrubbed = true
+        return
+      }
+      const lines: string[] = []
+      for (const line of contents.split(/\r?\n/u)) {
+        if (!line) continue
+        try {
+          const record = turnRecordSchema.safeParse(JSON.parse(line))
+          if (record.success) {
+            if (record.data.outcome === 'failed' && record.data.failureCode === null) record.data.failureCode = 'unknown'
+            lines.push(JSON.stringify(record.data))
+          }
+        } catch { /* Discard corrupt legacy lines rather than retaining unknown content. */ }
+      }
+      const cleaned = lines.length ? `${lines.join('\n')}\n` : ''
+      if (cleaned !== contents) await this.retryLocked(() => this.replace(cleaned))
+    } catch {
+      try { await rm(this.path(), { force: true }) } catch {
+        throw new Error('Sotto could not remove text from old turn records or delete the file. Close other apps using turns.jsonl, then restart Sotto. Diagnostic records may be lost.')
+      }
+    }
+    this.scrubbed = true
+  }
+
+  private enqueue(operation: () => Promise<void>): Promise<void> {
+    const pending = this.lane.then(operation)
+    this.lane = pending.catch(() => {})
+    return pending
+  }
+
+  private async replace(contents: string): Promise<void> {
+    const temporary = `${this.path()}.${randomUUID()}.tmp`
+    try {
+      await writeFile(temporary, contents, 'utf8')
+      await rename(temporary, this.path())
+    } finally {
+      await rm(temporary, { force: true })
+    }
+  }
+
   async recent(limit: number): Promise<TurnRecord[]> {
+    await this.initialize()
     let contents: string
     try {
       contents = await readFile(this.path(), 'utf8')

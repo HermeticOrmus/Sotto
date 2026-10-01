@@ -646,6 +646,23 @@ describe('supervision event ordering', () => {
     expect(f.control.get().assignments[0]).toMatchObject({ mode: 'managed', paused: false })
     expect(f.control.get().queue.some(item => item.text === failure.message)).toBe(false)
   })
+  it('detects a manual prompt after restarting before takeover was saved', async () => {
+    const f = await fixture()
+    await f.control.command({ type: 'assign', threadId: 'workshop', instruction: 'Keep watching' })
+    const file = join(f.root, 'agents.json')
+    const saved = await readFile(file, 'utf8')
+    f.host.event({ type: 'manual', threadId: 'workshop', text: 'I will handle this myself.' })
+    expect(f.control.get().assignments[0]?.mode).toBe('manual')
+    await f.control.command({ type: 'refresh' })
+    f.control.dispose()
+    await writeFile(file, saved)
+    const startup = await f.host.snapshot()
+    Object.assign(f.host, { workspaceSnapshot: () => structuredClone(startup) })
+    await f.restart()
+    expect(f.control.get().assignments[0]?.mode).toBe('manual')
+    expect(f.decisions).toEqual([])
+  })
+
   it.each([1, 2001])('keeps management and context age when %s earlier messages are loaded', async count => {
     const f = await fixture()
     f.host.event({ type: 'history', threadId: 'workshop', text: '', messages: [
