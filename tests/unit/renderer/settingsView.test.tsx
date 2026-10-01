@@ -722,6 +722,17 @@ describe('SettingsView', () => {
     expect(await screen.findByText(others ? 'The chosen microphone is not connected. Plug it in or choose another.' : 'No microphone was found.')).toBeVisible()
   })
 
+  it('does not call the chosen microphone disconnected while it is still listed', async () => {
+    render(<SettingsView {...baseProps({ settings: { ...DEFAULT_SETTINGS, microphoneId: 'desk' },
+      mediaDevices: createMediaDevices([device('desk', 'Desk microphone')]),
+      createMicrophoneTest: () => ({ start: vi.fn(async () => 'missing' as const), stop: vi.fn(async () => undefined) }),
+    })} />)
+    await screen.findByRole('option', { name: 'Desk microphone' })
+    await userEvent.click(screen.getByRole('button', { name: 'Test microphone' }))
+    expect(await screen.findByText('No microphone was found.')).toBeVisible()
+    expect(screen.queryByText('The chosen microphone is not connected. Plug it in or choose another.')).not.toBeInTheDocument()
+  })
+
   it('keeps the skip when the Settings test cannot reach a microphone', async () => {
     const user = userEvent.setup()
     const onUpdateSettings = vi.fn(async () => true)

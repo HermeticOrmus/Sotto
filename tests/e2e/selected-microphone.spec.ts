@@ -99,6 +99,13 @@ test('Settings tests the selected input and clears its result when the choice ch
     expect(await page.evaluate(() => window.selectedMicrophoneFixture.requests.at(-1))).toMatchObject({ audio: { deviceId: { exact: 'desk' } } })
     await page.evaluate(() => window.selectedMicrophoneFixture.streams.at(-1)!.getTracks()[0]!.dispatchEvent(new Event('ended')))
     await expect(state).toHaveAttribute('data-state', 'missing')
+    await expect(state).toContainText('No microphone was found.')
+    await page.evaluate(() => {
+      navigator.mediaDevices.enumerateDevices = async () => ['headset', 'missing', 'denied', 'held'].map(id => ({
+        deviceId: id, groupId: 'synthetic', kind: 'audioinput' as const, label: `Test ${id}`, toJSON: () => ({}),
+      }))
+      navigator.mediaDevices.dispatchEvent(new Event('devicechange'))
+    })
     await expect(state).toContainText('The chosen microphone is not connected. Plug it in or choose another.')
     expect(await page.evaluate(() => window.selectedMicrophoneFixture.streams.at(-1)!.getTracks().every(track => track.readyState === 'ended'))).toBe(true)
     await page.screenshot({ path: resolve(evidence, 'microphone-unplugged.png') })
