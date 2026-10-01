@@ -174,7 +174,8 @@ export function PhonesSettings({ phoneAccess, phoneAccessName, onUpdateSettings,
         return <div key="code" ref={codeBox} className="phones-code" role="group" aria-label="Pairing code" tabIndex={-1}
           onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); void run({ type: 'cancel-code' }) } }}>
           <p>Pairing code</p>
-          <span className="phones-code__value" role="img" aria-label={`Pairing code ${[...code.code].join(' ')}`}>{code.code.slice(0, 4)}<i aria-hidden="true" />{code.code.slice(4)}</span>
+          <span className="phones-code__value" aria-hidden="true">{code.code.slice(0, 4)}<i />{code.code.slice(4)}</span>
+          <span className="tt-visually-hidden">Pairing code {[...code.code].join(' ')}</span>
           <span className="phones-count">
             <span className="phones-count__bar" aria-hidden="true"><i style={{ width: `${left.fraction * 100}%` }} /></span>
             <span>Works once. Expires in <b>{left.text}</b></span>
