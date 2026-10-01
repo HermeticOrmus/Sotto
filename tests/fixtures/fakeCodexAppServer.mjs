@@ -356,7 +356,11 @@ function control(action) {
   const thread = state.threads[action.threadId]
   if (action.type === 'release-reply') {
     const reply = heldReplies.get(action.method)
-    if (reply) { heldReplies.delete(action.method); emit(reply) }
+    if (reply) {
+      heldReplies.delete(action.method)
+      // Persist the action marker before the parent sees the reply and can retire this app-server.
+      globalThis.queueMicrotask(() => emit(reply))
+    }
     return
   }
   if (!thread) return
