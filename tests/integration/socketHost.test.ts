@@ -55,6 +55,18 @@ describe('authenticated host socket', () => {
     expect(host.pairing.verifyToken(result.token)).toBeUndefined()
     await expect(client.connect()).rejects.toMatchObject({ code: 'unauthenticated' })
   })
+  it('keeps the retired account fields on raw protocol v1 shell frames', async () => {
+    const paired = await host.pairing.redeem(host.pairing.issuePairingCode().code, 'Older desktop')
+    const session = host.pairing.signSession(paired.clientId)
+    const peer = await rawPeer(host.descriptor!.port, session)
+    try {
+      const reply = await peer.call('shell-v1', { op: 'shell' })
+      expect(reply).toMatchObject({ v: 1, ok: true, result: {
+        membership: { status: 'beta', label: '', expiresAt: null },
+        configuration: { membershipEndpoint: '' },
+      } })
+    } finally { peer.frames.close() }
+  })
   it('deduplicates commands by authenticated client and refuses a changed payload', async () => {
     const { client } = await pair()
     const commandId = randomUUID()
