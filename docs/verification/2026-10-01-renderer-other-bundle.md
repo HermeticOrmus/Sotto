@@ -3,11 +3,14 @@
 Package pkg-37 covers #564, #596, #597 and #600 on Windows.
 
 The regression tests were run against the old behavior before each fix. Dictate
-checks both daylight-saving transitions in America/Los_Angeles. Phones and Hosts
+checks both daylight-saving transitions in America/Los_Angeles only after
+verifying the dates have different UTC offsets. A worker that ignores the
+runtime timezone skips with an explicit reason. Phones and Hosts
 check rejected saves, retained values and successful retries. Files holds the
 first root listing, retries a failed listing for a nested file and closes a
-preview while its root is pending. Accessibility tests find the pairing code and
-questionnaire progress by semantic role and accessible name.
+preview while its root is pending. Accessibility tests check hidden readable text for the pairing code and
+questionnaire progress, with their visual forms hidden from screen readers.
+Neither label uses an image role or live region.
 
 `renderer-save-feedback.spec.ts` ran the built Electron app. It replaced only its
 owned profile's settings file with a directory to force real save failures, then
@@ -45,3 +48,22 @@ started. Files now queues its reads and path actions within that same limit,
 shared with main as a constant. A controlled bridge holds each read and rejects a
 fifth concurrent request. Both deep-path regressions failed before this correction
 and pass after it, with every expanded folder and the preview ready without Retry.
+
+## Rework checks
+
+The stalled-queue regression failed before the deadline was added and passed
+afterward. It holds all four slots, advances fake timers through the ten-second
+wait for a root listing, preview and Retry, then releases the reads and checks
+that expired waiters do not obstruct recovery. The deep-path tests still pass.
+The accessibility regressions also failed before their labels were changed.
+
+The normal DST regression executed and passed. Starting the threads pool in UTC
+produced 19 passed and one explicitly skipped test, confirming that the offset
+guard prevents a vacuous DST pass. Field errors again use their existing input
+description without making unrelated fields live regions.
+
+The throwaway semantics demo is retained on
+`prototype/readable-progress-pairing-text`. It preserves the visual count and
+code and shows the readable text separately, without a live region. The wording
+was a reversible assumption after clarification was requested; no user choice
+was recorded.
