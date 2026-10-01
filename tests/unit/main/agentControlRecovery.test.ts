@@ -247,6 +247,20 @@ describe('reasoning account route isolation', () => {
     expect(f.credentials.has('membership')).toBe(false)
   })
 
+  it('completes startup when each retired credential write fails', async () => {
+    const f = await fixture()
+    await f.credentials.set('membership', 'retired-token')
+    await f.credentials.set('membership-cache', 'retired-cache')
+    const write = vi.spyOn(f.credentials, 'set').mockRejectedValue(new Error('Private fixture failure'))
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      await expect(f.restart()).resolves.toBeUndefined()
+      expect(f.control.get().host.connected).toBe(true)
+      expect(write.mock.calls).toEqual([['membership', ''], ['membership-cache', '']])
+      expect(warning.mock.calls).toEqual([['retired-credential-clear-failed'], ['retired-credential-clear-failed']])
+    } finally { write.mockRestore(); warning.mockRestore() }
+  })
+
   it('reads older hosts and sends retired v1 fields required by older desktops', async () => {
     const f = await fixture()
     const current = f.control.shell()
