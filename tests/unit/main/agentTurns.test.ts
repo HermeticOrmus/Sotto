@@ -59,10 +59,6 @@ async function fixture() {
   const host = new E2EAgentHost()
   binding.control = new AgentControl({ schedule: immediatePublishScheduler,
     directory: root, host, credentials, reasoner, turns: recorder,
-    membership: {
-      status: async () => ({ status: 'beta', label: 'Fixture beta', expiresAt: null }),
-      action: async () => ({ status: 'beta', label: 'Fixture beta', expiresAt: null }),
-    },
   })
   const control = binding.control
   controls.push(control)

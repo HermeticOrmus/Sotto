@@ -3,7 +3,7 @@ import { request as httpRequest } from 'node:http'
 import { request as httpsRequest } from 'node:https'
 import type { z } from 'zod'
 import { SocketFrames } from '../../host/socketFrames'
-import { agentAttachmentHandleSchema, agentStateSchema, agentThreadDetailResultSchema, agentAttachmentPreviewResultSchema, type AgentAttachmentContent, type AgentAttachmentHandle, type AgentAttachmentUpload, type AgentCommand, type AgentState, type AgentThreadDetail, type AgentThreadDetailDelta, type AgentThreadDetailUpdate, type AgentAttachmentPreviewRequest, type AgentAttachmentPreviewResult } from '../../shared/agents'
+import { agentAttachmentHandleSchema, agentThreadDetailResultSchema, agentAttachmentPreviewResultSchema, type AgentAttachmentContent, type AgentAttachmentHandle, type AgentAttachmentUpload, type AgentCommand, type AgentState, type AgentThreadDetail, type AgentThreadDetailDelta, type AgentThreadDetailUpdate, type AgentAttachmentPreviewRequest, type AgentAttachmentPreviewResult } from '../../shared/agents'
 import { applyAgentThreadDetailDelta } from '../../shared/agentThreadDetail'
 import type { StoredThreadEvent } from '../../shared/threadEvents'
 import { gitRefsPageSchema, type GitRefsPage, type GitRefsRequest } from '../../shared/gitRefs'
@@ -12,7 +12,7 @@ import { gitPullRequestResultSchema, type GitPullRequestDetail, type GitPullRequ
 import { hostFoldersResultSchema, type HostFoldersRequest, type HostFoldersResult } from '../../shared/hostFolders'
 import { hostSignInSchema, type HostSignIn } from '../../shared/hostProviders'
 import type { ProviderId } from '../../shared/agents'
-import { HOST_BUSY, hostAttachmentContentSchema, hostIsNewer, hostVersionMismatch, hostHealthFeatures, hostPairingSchema, hostSessionSchema, hostHelloSchema, hostEventPageSchema, hostResponseSchema, hostPushSchema, hostReceiptSchema } from '../../shared/hostProtocol'
+import { protocolAgentStateSchema, HOST_BUSY, hostAttachmentContentSchema, hostIsNewer, hostVersionMismatch, hostHealthFeatures, hostPairingSchema, hostSessionSchema, hostHelloSchema, hostEventPageSchema, hostResponseSchema, hostPushSchema, hostReceiptSchema } from '../../shared/hostProtocol'
 import type { HostHello, HostOperation, HostPairing, HostSession, HostResponse, HostPush, HostEventPage, HostReceipt, HostErrorCode } from '../../shared/hostProtocol'
 import type { HostService, ClientIdentity } from './hostService'
 import { version as clientVersion } from '../../../package.json'
@@ -140,7 +140,7 @@ export class SocketHostService implements HostService {
       const hello = this.read(hostHelloSchema, await this.call({ op: 'hello', afterSeq: this.catchesUp ? this.latestSeq : NO_EVENTS_AFTER, ...accepts }))
       if (hello.hostId !== session.hostId) throw new HostConnectionError('The host identity changed. Connect again.', 'unauthenticated')
       this.hostVersion = hello.sottoVersion; this.features = hello.features
-      this.publish(this.read(agentStateSchema, hello.shell))
+      this.publish(this.read(protocolAgentStateSchema, hello.shell))
       if (this.catchesUp) {
         this.cacheEvents(hello)
         let page: HostEventPage = hello
@@ -173,7 +173,7 @@ export class SocketHostService implements HostService {
     const message: HostResponse | HostPush = parsed.data
     try {
       if ('event' in message) {
-        if (message.event === 'shell') { if (message.eventPage && this.catchesUp) { this.cacheEvents(message.eventPage); if (message.eventPage.hasMore) this.catchUp() } this.publish(this.read(agentStateSchema, message.state)) }
+        if (message.event === 'shell') { if (message.eventPage && this.catchesUp) { this.cacheEvents(message.eventPage); if (message.eventPage.hasMore) this.catchUp() } this.publish(this.read(protocolAgentStateSchema, message.state)) }
         else if (message.event === 'detail') this.cacheDetail(message.threadId, agentThreadDetailResultSchema.parse(message.detail))
         else if (message.event === 'detail-delta') this.applyDelta(message.threadId, message.delta)
         else { this.pushErrorThread = message.threadId ?? null; if (message.threadId) this.tooLarge.add(message.threadId); this.options.onPushError?.(message.error.message) }
@@ -300,7 +300,7 @@ export class SocketHostService implements HostService {
   events(afterSeq: number, threadId?: string): StoredThreadEvent[] { return structuredClone([...this.storedEvents.values()].filter(event => event.seq > afterSeq && (!threadId || event.threadId === threadId)).sort((a, b) => a.seq - b.seq)) }
   subscribe(listener: (state: AgentState) => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener) }
   subscribeThreadDetail(listener: (detail: AgentThreadDetailUpdate) => void): () => void { this.detailListeners.add(listener); return () => this.detailListeners.delete(listener) }
-  async readShell(): Promise<AgentState> { const generation = this.generation; const state = this.read(agentStateSchema, await this.call({ op: 'shell' })); this.sameGeneration(generation); this.publish(state); return this.shell() }
+  async readShell(): Promise<AgentState> { const generation = this.generation; const state = this.read(protocolAgentStateSchema, await this.call({ op: 'shell' })); this.sameGeneration(generation); this.publish(state); return this.shell() }
   async readThreadDetail(threadId: string): Promise<AgentThreadDetail | null> { const generation = this.generation; const detail = this.read(agentThreadDetailResultSchema, await this.call({ op: 'detail', threadId })); this.sameGeneration(generation); this.cacheDetail(threadId, detail); return this.threadDetail(threadId) }
   async readEvents(afterSeq: number, threadId?: string): Promise<HostEventPage> { const page = this.read(hostEventPageSchema, await this.call({ op: 'events', afterSeq, ...(threadId ? { threadId } : {}) })); this.cacheEvents(page, threadId === undefined); return page }
   /** Observing a thread again lets one the host found too large be tried again: the host sends each observed thread whole. */
@@ -308,7 +308,7 @@ export class SocketHostService implements HostService {
   async command(command: AgentCommand, _client?: ClientIdentity, commandId?: string): Promise<AgentState> {
     if (command.type === 'observe-threads') { await this.observe(command.threadIds); return this.state() }
     const generation = this.generation
-    const state = this.read(agentStateSchema, await this.call({ op: 'command', command }, commandId)); this.sameGeneration(generation)
+    const state = this.read(protocolAgentStateSchema, await this.call({ op: 'command', command }, commandId)); this.sameGeneration(generation)
     if (command.type === 'preview-reclaim-thread-worktree') { this.validateState(state); return state }
     this.publish(state)
     const acknowledged = this.state()

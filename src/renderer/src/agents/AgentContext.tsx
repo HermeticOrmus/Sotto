@@ -408,7 +408,6 @@ export function AgentProvider({ children, settings, dictation }: {
     && settings?.voiceCoordinatorEnabled === true
     && settings?.onboardingComplete === true
     && settings?.microphoneSkipped !== true
-    && ['active', 'beta'].includes(connection.state?.membership.status ?? '')
   const dictationActive = dictation.status === 'requesting-permission'
     || dictation.status === 'listening' || dictation.status === 'processing'
   useEffect(() => {

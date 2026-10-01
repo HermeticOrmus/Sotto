@@ -65,7 +65,6 @@ async function coordinator(host: ThreeClients, run: (executable: string, args: r
       fetchImpl: async url => new Response(JSON.stringify({ version: PUBLISHED[IDS.find(id => url.includes(encodeURIComponent(CLIENT_PACKAGES[id]!.split('/')[0]!)))!] }), { status: 200 }) }),
     locateClient: async provider => join(prefix, `${provider}.exe`),
     reasoner: { intent: async () => ({ type: 'clarify', text: '' }), decide: async () => ({ decision: 'human', text: '' }) },
-    membership: { status: async () => ({ status: 'beta', label: 'Fixture', expiresAt: null }), action: async () => ({ status: 'beta', label: 'Fixture', expiresAt: null }) },
   })
   await control.start()
   await control.command({ type: 'connect' })
@@ -239,7 +238,7 @@ describe('the client update line', () => {
     await credentials.load()
     const control = new AgentControl({ schedule: immediatePublishScheduler, directory, host, credentials, clients, locateClient: async () => undefined,
       reasoner: { intent: async () => ({ type: 'clarify', text: '' }), decide: async () => ({ decision: 'human', text: '' }) },
-      membership: { status: async () => ({ status: 'beta', label: 'Fixture', expiresAt: null }), action: async () => ({ status: 'beta', label: 'Fixture', expiresAt: null }) } })
+    })
     await control.start()
     try {
       await control.command({ type: 'connect' })

@@ -96,6 +96,7 @@ artifacts/screenshot-resize-run/
 artifacts/workflow-agent-rows-run/
 
 artifacts/review-*/
+artifacts/review-644/
 
 # Workspace menu layout verification
 artifacts/workspace-picker/
@@ -114,3 +115,6 @@ artifacts/forge-hand-test/
 
 # Native iPhone thread-creation captures; force-add only images cited by the note.
 artifacts/iphone-new-threads/
+
+# Composer recovery captures; retain only the images cited by the verification note.
+artifacts/crossing/pkg-43-*.png

@@ -15,8 +15,6 @@ import { DEFAULT_SETTINGS, type AppSettings } from '../../../src/shared/settings
 import { immediatePublishScheduler } from '../../fixtures/publishScheduler'
 import { workspaceFixture } from '../../fixtures/workspaceFixture'
 
-const membership = { status: async () => ({ status: 'beta' as const, label: 'Test', expiresAt: null }), action: async () => ({ status: 'beta' as const, label: 'Test', expiresAt: null }) }
-
 const opened: { control: AgentControl; stop: () => Promise<void> }[] = []
 const removals: (() => Promise<void>)[] = []
 
@@ -35,7 +33,7 @@ async function coordinator(options: {
   const writer = settings ? threadTitleWriter(new ShortTextWriter({ write: (threadId, prompt) => workspace.host.writeShortText(threadId, prompt) }), () => settings) : undefined
   const titles = vi.fn<(threadId: string, exchange: ThreadTitleExchange) => Promise<string | null>>(options.writeThreadTitle ?? writer ?? (async () => 'Dark theme contrast'))
   const control = new AgentControl({
-    schedule: immediatePublishScheduler, directory: workspace.root, host: workspace.host, credentials, reasoner: e2eAgentReasoner, membership,
+    schedule: immediatePublishScheduler, directory: workspace.root, host: workspace.host, credentials, reasoner: e2eAgentReasoner,
     writeThreadTitle: titles,
     ...(options.historyEnabled ? { historyEnabled: options.historyEnabled } : {}),
   })
