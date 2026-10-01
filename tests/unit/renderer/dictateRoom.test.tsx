@@ -53,6 +53,24 @@ function barHeights(container: HTMLElement): number[] {
 }
 
 describe('DictateRoom', () => {
+  it('uses local calendar days for Yesterday across both daylight-saving changes', () => {
+    const previousTimezone = process.env.TZ
+    process.env.TZ = 'America/Los_Angeles'
+    try {
+      for (const [today, yesterday, dayBefore] of [
+        ['2026-03-09T12:00:00', '2026-03-08T00:00:00', '2026-03-07T23:30:00'],
+        ['2026-11-02T12:00:00', '2026-11-01T00:00:00', '2026-10-31T23:30:00'],
+      ]) {
+        const now = new Date(today!).valueOf()
+        expect(transcriptStamp(new Date(yesterday!).valueOf(), now).label).toBe('Yesterday')
+        expect(transcriptStamp(new Date(dayBefore!).valueOf(), now).label).not.toBe('Yesterday')
+      }
+    } finally {
+      if (previousTimezone === undefined) delete process.env.TZ
+      else process.env.TZ = previousTimezone
+    }
+  })
+
   it('keeps selectable completed text and normal controls through failed and successful Copy retries', async () => {
     const onCopy = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true)
     const onDismissRecovery = vi.fn()
