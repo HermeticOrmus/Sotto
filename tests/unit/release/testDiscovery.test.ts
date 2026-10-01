@@ -24,7 +24,7 @@ it('collects only repository tests and leaves external backups and top-level e2e
 
 it('gives every separate Playwright test tree an npm runner', () => {
   const scripts = Object.values(JSON.parse(readFileSync('package.json', 'utf8')).scripts) as string[]
-  for (const config of globSync('tests/**/playwright.config.{ts,mjs}')) {
+  for (const config of globSync('tests/**/playwright.config.{ts,mts,cts,js,mjs,cjs}')) {
     const path = config.split(sep).join('/')
     expect(scripts.some(script => script.includes(`--config=${path}`) || script.includes(`--config ${path}`)), path).toBe(true)
   }
