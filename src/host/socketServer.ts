@@ -1,6 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { Duplex } from 'node:stream'
+import { isIP } from 'node:net'
 import { z } from 'zod'
 import type { HostService, ClientIdentity } from '../main/agents/hostService'
 import { PairedClients, originAllowed, SESSION_LIFETIME_MS } from '../main/agents/pairing'
@@ -89,7 +90,7 @@ const EVENT_PAGES_PER_SECOND = 100
 /**
  * HTTP requests a minute, per endpoint class, so no caller can spend another's budget. Health is not
  * counted: refusing it costs as much as answering it, and the launch script polls it while a host starts.
- * Failed pairing redemptions have a small bucket of their own; a valid code remains usable. The administrative path, and sessions and revocations per paired
+ * Failed pairing redemptions have a small bucket per caller, checked before redemption. The administrative path, and sessions and revocations per paired
  * client, are counted only after their token is checked, so a loop on a bad token spends nobody's budget.
  */
 const HTTP_BUDGETS = { pair: 10, admin: 120, client: 120 } as const
@@ -126,12 +127,14 @@ export async function startSocketServer(options: SocketServerOptions) {
   let closing = false
   const httpBudgets = new Map<string, { window: number; count: number }>()
   /** Counts one request against a bucket, dropping buckets whose minute has passed, and refuses past its limit. */
-  const spend = (bucket: string, limit: number): void => {
+  const spend = (bucket: string, limit: number): (() => void) => {
     const now = Date.now()
     for (const [key, entry] of httpBudgets) if (now - entry.window >= HTTP_WINDOW_MS) httpBudgets.delete(key)
     const entry = httpBudgets.get(bucket) ?? { window: now, count: 0 }
     httpBudgets.set(bucket, entry)
-    if (++entry.count > limit) throw new Refusal('busy')
+    if (entry.count >= limit) throw new Refusal('busy')
+    entry.count++
+    return () => { entry.count-- }
   }
   const identity = (clientId: string): ClientIdentity => ({ clientId, user: pairing.list().find(client => client.clientId === clientId)?.name ?? 'Paired client', transport: 'socket' })
   const shell = (peer: Peer) => {
@@ -400,8 +403,14 @@ export async function startSocketServer(options: SocketServerOptions) {
         }
         if (request.url === '/v1/pair') {
           const input = z.object({ v: z.literal(1), code: z.string().min(1).max(32), name: z.string().min(1).max(256) }).strict().parse(await body(request))
+          // This listener binds only loopback. Serve replaces this header with the device address;
+          // direct connections use loopback's budget. Neither address grants client authority.
+          const forwarded = request.headers['x-forwarded-for']
+          const address = typeof forwarded === 'string' && isIP(forwarded) ? forwarded : request.socket.remoteAddress ?? 'loopback'
+          const refund = spend('pair:' + address, HTTP_BUDGETS.pair)
           let paired: Awaited<ReturnType<PairedClients['redeem']>>
-          try { paired = await pairing.redeem(input.code, input.name) } catch { spend('pair', HTTP_BUDGETS.pair); throw new Refusal('unauthenticated') }
+          try { paired = await pairing.redeem(input.code, input.name) } catch { throw new Refusal('unauthenticated') }
+          refund()
           respond(response, 200, { v: 1, hostId, ...paired }); options.onPaired?.(paired.clientId); return
         }
         if (request.url === '/v1/revoke') {

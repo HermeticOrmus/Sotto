@@ -782,12 +782,32 @@ describe('request budgets', () => {
     await expect(first.client.connect()).rejects.toMatchObject({ code: 'busy', message: HOST_BUSY, pairingRequired: false })
     await expect(second.client.connect()).resolves.toMatchObject({ clientId: second.result.clientId })
   })
-  it('gives pairing a small bucket of its own that sessions do not share', async () => {
+  it('keeps failed pairing budgets separate and checks them before redemption', async () => {
     const { client } = await pair()
-    for (let index = 0; index < 10; index++) await expect(SocketHostService.pair(url, 'WRONG' + index, 'Guess')).rejects.toMatchObject({ code: 'unauthenticated', message: expect.stringContaining('pairing code could not be used') })
-    await expect(SocketHostService.pair(url, 'WRONG-LAST', 'Late')).rejects.toMatchObject({ code: 'busy', message: HOST_BUSY })
-    await expect(SocketHostService.pair(url, host.pairing.issuePairingCode().code, 'Ready')).resolves.toBeDefined()
+    const redeem = (code: string, address: string) => fetch(url + '/v1/pair', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': address },
+      body: JSON.stringify({ v: 1, code, name: 'Phone' }),
+    })
+    const checked = vi.spyOn(host.pairing, 'redeem')
+    for (let index = 0; index < 10; index++) expect((await redeem('WRONG' + index, '100.64.0.1')).status).toBe(401)
+    const code = host.pairing.issuePairingCode().code
+    expect((await redeem(code, '100.64.0.1')).status).toBe(429)
+    expect(checked).toHaveBeenCalledTimes(10)
+    expect((await redeem(code, '100.64.0.2')).status).toBe(200)
+    expect(checked).toHaveBeenCalledTimes(11)
     await expect(client.connect()).resolves.toBeDefined()
+  })
+  it('uses the local pairing budget for a forwarded address that is not one IP', async () => {
+    const redeem = (address: string) => fetch(url + '/v1/pair', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': address },
+      body: JSON.stringify({ v: 1, code: 'WRONG', name: 'Phone' }),
+    })
+    for (let index = 0; index < 10; index++) expect((await redeem('100.64.0.1, 100.64.0.2')).status).toBe(401)
+    expect((await redeem('not-an-address')).status).toBe(429)
+    await expect(SocketHostService.pair(url, host.pairing.issuePairingCode().code, 'Phone')).rejects.toMatchObject({ code: 'busy' })
+  })
+  it('does not spend the failed pairing budget on successful redemptions', async () => {
+    for (let index = 0; index < 12; index++) await expect(SocketHostService.pair(url, host.pairing.issuePairingCode().code, 'Phone')).resolves.toBeDefined()
   })
   it('paces a client paging through a long log instead of closing it at the per-second cutoff', async () => {
     // The hello carries the first page and 101 event pages follow: one more than a peer may send of anything
