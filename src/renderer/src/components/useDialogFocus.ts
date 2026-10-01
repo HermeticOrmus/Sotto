@@ -34,7 +34,7 @@ export function useDialogFocus({ onEscape, initialFocus, fallbackFocus }: {
       queueMicrotask(() => {
         const active = document.activeElement
         if (active && active !== document.body && active.isConnected) return
-        if (previous?.isConnected) previous.focus()
+        if (previous?.isConnected && previous !== document.body) previous.focus()
         else fallbackFocus?.current?.focus()
       })
     }

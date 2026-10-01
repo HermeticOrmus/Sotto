@@ -13,6 +13,7 @@ export default tseslint.config(
       'artifacts/ios-focus/**',
       'artifacts/iphone-new-threads/**',
       'artifacts/review-*/**',
+      'artifacts/renderer-other-bundle-run/**',
       'artifacts/review-644/**',
       'artifacts/phase-three-themes/**',
       'artifacts/thread-browser-player/**',
