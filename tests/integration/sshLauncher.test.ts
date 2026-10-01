@@ -27,8 +27,10 @@ async function fixture(mode = 'started', options: { authenticationTimeoutMs?: nu
   const spawner: SpawnSsh = (_file, args, spawnOptions) => spawn(process.execPath, [resolve('tests/fixtures/fakeSsh.mjs'), ...args],
     { shell: false, windowsHide: true, stdio: [spawnOptions.stdin, 'pipe', 'pipe'],
       env: { ...spawnOptions.env, FAKE_SSH_MODE: mode, FAKE_SSH_RECORD: record, FAKE_SSH_ROOT: path, FAKE_SSH_START_MS: String(options.startMs ?? 0), FAKE_SSH_HOLD_MS: String(options.holdMs ?? 200), FAKE_SSH_VERSION: options.version ?? '' } })
-  // Success cases get the whole test budget; deadline assertions supply their own shorter budget.
-  const launcher = new SshHostLauncher({ spawn: spawner, authenticationTimeoutMs: options.authenticationTimeoutMs ?? 15_000, readyTimeoutMs: options.readyTimeoutMs ?? 5000,
+  // Ordinary connection tests use production budgets; only deadline tests shorten them deliberately.
+  const launcher = new SshHostLauncher({ spawn: spawner,
+    ...(options.authenticationTimeoutMs !== undefined ? { authenticationTimeoutMs: options.authenticationTimeoutMs } : {}),
+    ...(options.readyTimeoutMs !== undefined ? { readyTimeoutMs: options.readyTimeoutMs } : {}),
     ...(options.approvalTimeoutMs ? { approvalTimeoutMs: options.approvalTimeoutMs } : {}),
     ...(options.platform ? { platform: options.platform } : {}) })
   launchers.push(launcher)
@@ -250,7 +252,7 @@ it('lets OpenSSH 8.4 through', async () => {
 it('gives the host its own time to start however long signing in took', async () => {
   // Sign-in has 4 s and the host 5 s. A password answered after 1 s and a host that then needs 4 s to
   // start take longer than sign-in's budget together, and still connect.
-  const { launcher } = await fixture('password', { authenticationTimeoutMs: 4000, startMs: 4000 })
+  const { launcher } = await fixture('password', { authenticationTimeoutMs: 4000, readyTimeoutMs: 5000, startMs: 4000 })
   const status: string[] = []
   const connection = await launcher.connect(configuration, { onStatus: value => status.push(value),
     onPrompt: prompt => { if (prompt) setTimeout(() => launcher.answerPrompt(prompt.id, 'test-secret'), 1000) } })

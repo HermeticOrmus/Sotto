@@ -90,7 +90,8 @@ export function BrowserPlayer({ state, focusedThreadId, bridge, store, autoShow 
   useEffect(() => { setProblem(null) }, [taskId])
   const playerRoot = useRef<HTMLElement>(null)
 
-  const mount = useCallback((bounds: BrowserBounds | null) => { if (threadId && task) store.browser.mount(bridge, threadId, task.pageId, bounds) }, [store, bridge, threadId, task])
+  const pageId = task?.pageId
+  const mount = useCallback((bounds: BrowserBounds | null) => { if (threadId && pageId) store.browser.mount(bridge, threadId, pageId, bounds) }, [store, bridge, threadId, pageId])
 
   if (!task || !threadId) return null
   const thread = state.host.threads.find(item => item.id === threadId)
