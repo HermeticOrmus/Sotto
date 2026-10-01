@@ -17,6 +17,8 @@ export interface ConfirmationDialogProps {
   readonly failureMessage?: ReactNode
   readonly pendingStatus?: ReactNode
   readonly fallbackFocusRef?: RefObject<HTMLElement | null>
+  /** Host questions start at their answer; other confirmations keep their secondary action focused. */
+  readonly initialFocus?: 'confirm' | RefObject<HTMLElement | null>
 }
 
 export function ConfirmationDialog({
@@ -32,10 +34,12 @@ export function ConfirmationDialog({
   failureMessage,
   pendingStatus,
   fallbackFocusRef,
+  initialFocus,
 }: ConfirmationDialogProps): ReactNode {
   const [submitting, setSubmitting] = useState(false)
   const [failed, setFailed] = useState(false)
   const cancelRef = useRef<HTMLButtonElement>(null)
+  const confirmRef = useRef<HTMLButtonElement>(null)
   const submittingRef = useRef(false)
   const onDismissRef = useRef(onDismiss)
   const titleId = useId()
@@ -44,7 +48,7 @@ export function ConfirmationDialog({
   onDismissRef.current = onDismiss
   submittingRef.current = submitting
   // Escape dismisses, except while the confirmation is under way.
-  const dialogRef = useDialogFocus({ onEscape: () => { if (!submittingRef.current) onDismissRef.current() }, initialFocus: cancelRef, fallbackFocus: fallbackFocusRef })
+  const dialogRef = useDialogFocus({ onEscape: () => { if (!submittingRef.current) onDismissRef.current() }, initialFocus: initialFocus === 'confirm' ? confirmRef : initialFocus ?? cancelRef, fallbackFocus: fallbackFocusRef })
 
   const confirm = async (): Promise<void> => {
     if (submittingRef.current) return
@@ -88,7 +92,7 @@ export function ConfirmationDialog({
           <Button ref={cancelRef} variant="secondary" disabled={submitting} onClick={onCancel}>
             {cancelLabel}
           </Button>
-          <Button variant={danger ? 'danger' : 'primary'} disabled={submitting || confirmDisabled} onClick={() => void confirm()}>
+          <Button ref={confirmRef} variant={danger ? 'danger' : 'primary'} disabled={submitting || confirmDisabled} onClick={() => void confirm()}>
             {confirmLabel}
           </Button>
         </div>
