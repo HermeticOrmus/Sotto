@@ -98,6 +98,23 @@ describe('bounded WebSocket framing', () => {
     expect(client.messages).toEqual(['{"ok":true}'])
     client.frames.close(); server.frames.close()
   })
+  it('keeps a responsive peer open and closes one that misses a pong', () => {
+    vi.useFakeTimers()
+    const h = harness()
+    try {
+      h.frames.startHeartbeat()
+      vi.advanceTimersByTime(25_000)
+      const ping = h.writes[0]!
+      expect(ping[0]).toBe(137)
+      h.frames.feed(masked(ping.subarray(2), 10))
+      vi.advanceTimersByTime(25_000)
+      expect(h.stream.destroyed).toBe(false)
+      h.frames.feed(masked(Buffer.from('different'), 10))
+      vi.advanceTimersByTime(25_000)
+      expect(h.stream.destroyed).toBe(true)
+      expect(vi.getTimerCount()).toBe(0)
+    } finally { h.frames.close(); vi.useRealTimers() }
+  })
   it('waits for drain before continuing a detail batch and releases a wait on close', async () => {
     const h = harness()
     Object.defineProperty(h.stream, 'writableNeedDrain', { value: true, configurable: true })

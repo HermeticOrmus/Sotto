@@ -146,3 +146,9 @@ Older hosts omit the field. The iPhone keeps their still-waiting answers unconfi
 ## September 30 amendment: implicit draft commands stay local
 
 Remote navigation belongs to each client and never selects the coordinator’s own thread. Compose, send, cancel-draft, pause-draft and cancel-request therefore stay host-local. A paired client uses the existing explicit-thread prompt and draft commands instead; even remote-answer authority does not admit an implicit target. This narrows the remote command list to preserve client-owned navigation (#489).
+
+## September 30 amendment: connection liveness and phone recovery
+
+The listener pings each peer every 25 seconds and closes it when the previous ping has no matching pong. The iPhone also pings every 25 seconds, giving a pong ten seconds to arrive. This frees abandoned listener slots and turns a silent network drop into an explicit disconnected state. A full listener answers an authenticated upgrade with 503, leaving the pairing intact.
+
+While active, the iPhone retries a dropped connection with waits of one, two, four, eight, sixteen and then thirty seconds, opening a fresh signed session on every attempt. Success resets the wait. Backgrounding or removing a computer cancels retries; activation connects again. Invalid identity, incompatible protocol and refused pairing stop retries for the user to resolve. Reconnecting refreshes observed details and reconciles pending commands through receipts; it never resends them (#524).

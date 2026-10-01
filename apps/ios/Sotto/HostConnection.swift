@@ -25,6 +25,7 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
     }
     private var socket: URLSessionWebSocketTask?
     private var reader: Task<Void, Never>?
+    private var heartbeat: Task<Void, Never>?
     private var pending: [String: CheckedContinuation<Received<JSONValue>, Error>] = [:]
     private var received = 0
     private var deadlines: [String: Task<Void, Never>] = [:]
@@ -82,6 +83,30 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
                 }
             }
         }
+        heartbeat = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(nanoseconds: 25_000_000_000) } catch { return }
+                guard let self, self.generation == current else { return }
+                let deadline = Task { [weak self] in
+                    do { try await Task.sleep(nanoseconds: 10_000_000_000) } catch { return }
+                    guard let self, self.generation == current else { return }
+                    self.disconnect(); self.onDisconnect?()
+                }
+                do {
+                    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                        task.sendPing { error in
+                            if let error { continuation.resume(throwing: error) }
+                            else { continuation.resume() }
+                        }
+                    }
+                    deadline.cancel()
+                } catch {
+                    deadline.cancel()
+                    guard self.generation == current else { return }
+                    self.disconnect(); self.onDisconnect?(); return
+                }
+            }
+        }
         let helloResult = try await callReceived(Wire.snapshotHello)
         let hello = try await Wire.readValue(helloResult.value, as: Hello.self)
         guard hello.hostId == pairing.hostId, hello.clientId == pairing.clientId else { disconnect(); throw ClientError.invalidIdentity }
@@ -94,6 +119,7 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
     }
     func disconnect() {
         generation = UUID(); received = 0; reader?.cancel(); reader = nil
+        heartbeat?.cancel(); heartbeat = nil
         socket?.cancel(with: .goingAway, reason: nil); socket = nil; session = ""
         let waiting = pending; pending.removeAll()
         deadlines.values.forEach { $0.cancel() }; deadlines.removeAll()

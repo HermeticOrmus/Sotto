@@ -32,3 +32,27 @@ it('closes refused streams cleanly and handles listener errors after startup', a
   expect(stream.destroyed).toBe(true)
   expect(() => captured.server!.emit('error', new Error('Listener error'))).not.toThrow()
 })
+
+it('answers a full listener with a temporary capacity refusal and releases idle peers', async () => {
+  directory = await mkdtemp(join(tmpdir(), 'sotto-listener-'))
+  const pairing = new PairedClients(directory); await pairing.load()
+  const paired = await pairing.redeem(pairing.issuePairingCode().code, 'Phone')
+  const session = pairing.signSession(paired.clientId)
+  const service = { shell: () => ({ hostId: 'host' }), subscribe: () => () => {}, command: async () => ({}) } as unknown as HostService
+  listener = await startSocketServer({ service, pairing })
+  const headers = { authorization: 'Bearer ' + session, 'sec-websocket-version': '13', 'sec-websocket-key': 'AAAAAAAAAAAAAAAAAAAAAA==' }
+  vi.useFakeTimers()
+  try {
+    const streams = Array.from({ length: 33 }, () => {
+      const writes: string[] = []
+      const stream = new Duplex({ read() {}, write(chunk, _encoding, done) { writes.push(String(chunk)); done() } })
+      captured.server!.emit('upgrade', { headers, url: '/v1/socket' }, stream, Buffer.alloc(0))
+      return { stream, writes }
+    })
+    expect(listener.peers()).toBe(32)
+    expect(streams[32]!.writes[0]).toContain('503 Service Unavailable')
+    vi.advanceTimersByTime(50_000)
+    expect(listener.peers()).toBe(0)
+    for (const { stream } of streams) stream.destroy()
+  } finally { vi.useRealTimers() }
+})

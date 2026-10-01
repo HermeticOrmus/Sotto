@@ -401,7 +401,11 @@ When you connect a remote host, Sotto sends your thread reads, prompts and expli
 
 If Sotto cannot read secure storage at launch, unlock the iPhone and return to the app. It tries again when active. If a saved pairing came from a build this one cannot read, add that computer again.
 
+Remote clients send prompts and save drafts with an explicit Sotto thread ID. The host refuses commands that use its own selected thread or spoken draft: compose, send, cancel draft, pause draft and cancel request. Those controls belong to the host computer.
+
 ### Phones
+
+While Sotto is open on the iPhone, a dropped connection reconnects with waits of one, two, four, eight, sixteen and then thirty seconds. A fresh connection refreshes threads and checks unconfirmed actions; it never resends them. Backgrounding stops connection attempts, and returning to Sotto connects again. A changed computer identity or lost pairing still asks you to add the computer again.
 
 With phone access on, your threads, and the replies and answers you send from a phone, travel between this computer and the iPhones you paired, over your tailnet through Tailscale Serve. Sotto's listener binds this computer's loopback address only; Serve carries tailnet traffic to it, and Funnel, which would reach the internet, is never used. Sotto runs the `tailscale` command with fixed arguments and reads what it prints; that command talks to the local Tailscale service, so no new host is contacted. Pairing codes and tokens are never logged, and the listener has no administrative routes: codes, answers and removals are handled inside Sotto, from the Phones page.
 
@@ -524,5 +528,3 @@ Builds are ad-hoc signed and not notarized, so anyone installing the disk image 
   ```
 
 - **Sotto quits immediately after launching:** Check that the Mac has Apple silicon (Apple menu → About This Mac). Intel Macs are not supported and the arm64 build cannot run on them.
-
-Remote clients send prompts and save drafts with an explicit Sotto thread ID. The host refuses commands that use its own selected thread or spoken draft: compose, send, cancel draft, pause draft and cancel request. Those controls belong to the host computer.

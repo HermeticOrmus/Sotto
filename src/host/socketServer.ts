@@ -429,15 +429,17 @@ export async function startSocketServer(options: SocketServerOptions) {
   server.headersTimeout = 5000; server.requestTimeout = 10000; server.keepAliveTimeout = 1000
   server.on('upgrade', (request, stream: Duplex, head) => {
     stream.on('error', () => stream.destroy())
-    const reject = (): void => { stream.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n') }
+    const reject = (status = '401 Unauthorized'): void => { stream.end('HTTP/1.1 ' + status + '\r\nConnection: close\r\n\r\n') }
     const session = bearer(request), clientId = pairing.verifySession(session)
     const key = request.headers['sec-websocket-key']
-    if (closing || peers.size >= 32 || request.url !== '/v1/socket' || !clientId || request.headers['sec-websocket-version'] !== '13' || typeof key !== 'string' || !/^[A-Za-z0-9+/]{22}==$/.test(key) || (request.headers.origin && !originAllowed(request.headers.origin, options.origins))) { reject(); return }
+    if (request.url !== '/v1/socket' || !clientId || request.headers['sec-websocket-version'] !== '13' || typeof key !== 'string' || !/^[A-Za-z0-9+/]{22}==$/.test(key) || (request.headers.origin && !originAllowed(request.headers.origin, options.origins))) { reject(); return }
+    if (closing || peers.size >= 32) { reject('503 Service Unavailable'); return }
     const accept = createHash('sha1').update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64')
     stream.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' + accept + '\r\n\r\n')
     const frames = new SocketFrames(stream, false, text => onMessage(peer, text))
     const peer: Peer = { frames, client: identity(clientId), session, observed: new Set(), inFlight: 0, window: Date.now(), count: 0, pageWindow: 0, pages: 0, preview: false, afterSeq: 0, selectedThreadId: null, selectedProjectId: null, messageAliases: false, deltas: false, clientUpdates: false }
     peers.add(peer)
+    frames.startHeartbeat()
     frames.onClose(() => { peers.delete(peer); if (!closing) { track(observe().catch(() => undefined)); options.onPeersChanged?.() } })
     frames.feed(head)
     options.onPeersChanged?.()

@@ -43,7 +43,7 @@ The admin bearer is in the host's private `host-listener.json`, which holds the 
 
 ## The socket
 
-`GET /v1/socket` upgrades to a WebSocket (RFC 6455, version 13) with `Authorization: Bearer <session>`. Every message is one UTF-8 JSON text frame of at most 16 MiB. The host allows 32 clients, 100 requests a second and 32 unanswered requests per client, and closes a client that goes over.
+`GET /v1/socket` upgrades to a WebSocket (RFC 6455, version 13) with `Authorization: Bearer <session>`. Every message is one UTF-8 JSON text frame of at most 16 MiB. The host allows 32 clients, 100 requests a second and 32 unanswered requests per client, and closes a client that goes over. An authenticated upgrade at capacity receives 503; its pairing stays valid. The host pings every 25 seconds and closes a peer whose previous ping has no matching pong.
 
 ### Requests
 
@@ -55,7 +55,7 @@ Each request is `{ v: 1, id, session, op, ... }`: `id` is the client's own (at m
 | `shell` | none | The shell: the published state without any thread's history, with this client's own selection. |
 | `detail` | `threadId` | One thread's whole detail `{ threadId, revision, messages, activities?, earlierAvailable? }`, or `null`. |
 | `events` | `afterSeq`, `threadId?` | `{ events, latestSeq, hasMore }`, at most 256 events after that sequence number. |
-| `observe` | `threadIds` (at most 100) | `null`. Replaces this client's observed threads; the host pushes each one's detail. |
+| `observe` | `threadIds` (at most 100) | `null`. Replaces this client's observed threads; the host pushes each one's detail before acknowledging, pacing the batch on socket drain. A client keeps those details instead of reading them again. |
 | `command` | `command` | The shell after the command. Only the commands and fields on the list in `src/host/remoteCommands.ts` are accepted. The request `id` is the command ID: sending the same one again replays the result for five minutes instead of acting twice. `queue-client-updates` (`providers`) puts clients in the host's one-at-a-time update line and answers at once; `cancel-client-updates` (`providers`) takes one that is still waiting out of it. Both only on a host that lists `client-updates`; how each update goes is in the shell's `clientUpdates` and `clientUpdateRun`. `update-client`, which waits for the installer, is never accepted. A client that lists `client-updates` in hello's `accepts` is sent the `mise` channel and the `queued` state as they are; any other client, such as one from before them, is sent `unknown` and `idle` in their place, so its shell stays readable. |
 | `receipt` | `commandId` | `{ status: "pending" \| "completed" \| "unknown", error?, answerDelivered? }` for a command this client sent. `answerDelivered` is optional v1 evidence for this answer command alone: true only when its coordinator outcome succeeded, false with an error when refused or uncertain. Older hosts omit it; completion alone cannot confirm an answer. |
 | `preview` | `request` | One attachment preview, or `null`. |

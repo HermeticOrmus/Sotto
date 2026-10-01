@@ -9,12 +9,23 @@ export class SocketFrames {
   private fragments: Buffer[] = []
   private fragmentedBytes = 0
   private ended = false
+  private heartbeat: ReturnType<typeof setInterval> | undefined
+  private awaitingPong: Buffer | undefined
   private readonly closedListeners = new Set<() => void>()
   constructor(private readonly stream: Duplex, private readonly client: boolean, private readonly message: (text: string) => void) {
     stream.on('data', (data: Buffer) => this.receive(data))
     stream.on('error', () => this.close())
     stream.on('close', () => this.closed())
     stream.on('end', () => this.close())
+  }
+  startHeartbeat(): void {
+    if (this.heartbeat || this.ended) return
+    this.heartbeat = setInterval(() => {
+      if (this.awaitingPong) { this.close(); return }
+      this.awaitingPong = randomBytes(8)
+      this.write(9, this.awaitingPong)
+    }, 25_000)
+    this.heartbeat.unref()
   }
   feed(data: Buffer): void { if (data.length) this.receive(data) }
   onClose(listener: () => void): () => void { this.closedListeners.add(listener); return () => this.closedListeners.delete(listener) }
@@ -32,6 +43,7 @@ export class SocketFrames {
   private closed(): void {
     if (this.ended) return
     this.ended = true
+    clearInterval(this.heartbeat); this.heartbeat = undefined; this.awaitingPong = undefined
     this.chunks = []; this.bufferedBytes = 0; this.fragments = []
     for (const listener of this.closedListeners) listener()
     this.closedListeners.clear()
@@ -78,7 +90,7 @@ export class SocketFrames {
       if (masked) for (let index = 0; index < size; index++) payload[index] = payload[index]! ^ header[maskOffset + index % 4]!
       if (opcode === 8) { if (this.write(8, payload)) { this.stream.end(); this.closed() } return }
       if (opcode === 9) { this.write(10, payload); continue }
-      if (opcode === 10) continue
+      if (opcode === 10) { if (this.awaitingPong?.equals(payload)) this.awaitingPong = undefined; continue }
       if ((opcode === 0 && this.fragments.length === 0) || (opcode === 1 && this.fragments.length > 0)) { this.close(); return }
       this.fragmentedBytes += payload.length
       if (this.fragmentedBytes > HOST_MAX_FRAME_BYTES) { this.close(); return }

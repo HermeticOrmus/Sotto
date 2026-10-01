@@ -67,6 +67,9 @@ struct Live {
     private var generations: [String: UUID] = [:]
     private var connecting: Set<String> = []
     private var active = false
+    private var retries: [String: Task<Void, Never>] = [:]
+    private var retryAttempts: [String: Int] = [:]
+    private let retrySleep: @Sendable (UInt64) async throws -> Void
     private var pairGeneration = UUID()
     private var detailVersion = 0
     private var detailReload: Task<Void, Never>?
@@ -193,8 +196,10 @@ struct Live {
 
     // MARK: Starting and stopping
 
-    init(keychain: KeychainStore = KeychainStore()) {
+    init(keychain: KeychainStore = KeychainStore(),
+         retrySleep: @escaping @Sendable (UInt64) async throws -> Void = { try await Task.sleep(nanoseconds: $0) }) {
         self.keychain = keychain
+        self.retrySleep = retrySleep
         #if DEBUG && os(iOS)
         if ProcessInfo.processInfo.arguments.contains("--ui-fixture") {
             loadUIFixture()
@@ -279,6 +284,7 @@ struct Live {
             Task { await reconnectAll() }
         } else if phase == .background {
             cancelDetailReload()
+            retries.values.forEach { $0.cancel() }; retries.removeAll(); retryAttempts.removeAll()
             active = false; pairGeneration = UUID(); working = false; openDetail = nil
             for (hostID, connection) in connections { generations[hostID] = UUID(); connection.disconnect() }
             connecting.removeAll()
@@ -309,6 +315,7 @@ struct Live {
         if isUIFixture { return }
         #endif
         guard storageReady, active, !connecting.contains(hostID), let saved = computer(hostID) else { return }
+        retries.removeValue(forKey: hostID)?.cancel()
         let current = UUID(); generations[hostID] = current; connecting.insert(hostID)
         shellSequences[hostID] = 0
         defer { if generations[hostID] == current { connecting.remove(hostID) } }
@@ -330,12 +337,34 @@ struct Live {
             guard generations[hostID] == current else { return }
             update(hostID) { $0.status = .unreachable; $0.mayAnswer = false; $0.problem = error.localizedDescription }
             connections[hostID]?.disconnect()
+            if let error = error as? ClientError {
+                switch error {
+                case .invalidIdentity, .invalidProtocol, .invalidHost, .rejected: return
+                default: break
+                }
+            }
+            scheduleRetry(hostID)
             return
         }
+        retryAttempts[hostID] = nil
+        retries.removeValue(forKey: hostID)?.cancel()
         // A refused or slow thread read does not mean the computer's connection was lost.
         do { try await observeAndRead(hostID) }
         catch { if generations[hostID] == current { detailProblem = "This thread could not be loaded. Nothing was lost. Try again." } }
         await checkDelivery(hostID)
+    }
+    private func scheduleRetry(_ hostID: String) {
+        guard active, computer(hostID) != nil, retries[hostID] == nil else { return }
+        let attempt = retryAttempts[hostID] ?? 0
+        retryAttempts[hostID] = min(attempt + 1, 5)
+        let delay = UInt64(min(30, 1 << min(attempt, 5))) * 1_000_000_000
+        let sleep = retrySleep
+        retries[hostID] = Task { [weak self] in
+            do { try await sleep(delay) } catch { return }
+            guard !Task.isCancelled, let self, self.active, self.computer(hostID) != nil else { return }
+            self.retries[hostID] = nil
+            await self.connect(hostID)
+        }
     }
     private func connection(_ hostID: String) -> HostConnection {
         if let existing = connections[hostID] { return existing }
@@ -345,6 +374,7 @@ struct Live {
             self?.generations[hostID] = UUID(); self?.connecting.remove(hostID)
             if self?.selected?.hostID == hostID { self?.cancelDetailReload() }
             self?.update(hostID) { $0.status = .unreachable; $0.mayAnswer = false; $0.problem = ClientError.disconnected.localizedDescription }
+            self?.scheduleRetry(hostID)
         }
         connections[hostID] = made
         return made
@@ -443,6 +473,7 @@ struct Live {
         let markers = pending.filter { $0.hostID != hostID }
         if let computerIndexAccount { try? keychain.write(rest.map(\.hostID), account: computerIndexAccount) }
         try? keychain.write(markers, account: ComputerStore.pendingAccount)
+        retries.removeValue(forKey: hostID)?.cancel(); retryAttempts[hostID] = nil
         generations[hostID] = UUID(); connecting.remove(hostID)
         connections[hostID]?.close(); connections[hostID] = nil
         let gone = Set(pending.filter { $0.hostID == hostID }.map(\.id))

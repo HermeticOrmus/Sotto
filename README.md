@@ -88,6 +88,10 @@ The iPhone app opens on **Threads**: questions and permissions first, working th
 
 **New thread** on iPhone lets you choose a connected computer, one of its projects or another folder on it, and that computer's model and effort. The thread uses the shared project folder and starts work when you send its first message. Permissions start by asking; a mode that allows actions without asking needs **Can answer** on that computer. Folder names and paths travel over the same private connection, and a creation the computer did not confirm is shown without being sent again.
 
+Remote clients send prompts and save drafts with an explicit Sotto thread ID. The host refuses commands that use its own selected thread or spoken draft: compose, send, cancel draft, pause draft and cancel request. Those controls belong to the host computer.
+
+The iPhone checks each connection while Sotto is open and reconnects after a drop, waiting longer between attempts up to thirty seconds. It refreshes threads and checks unconfirmed actions without sending them again. Returning from the background opens a fresh connection.
+
 ## Build from source
 
 With Node.js 24:
@@ -110,5 +114,3 @@ npm run dev
 ## License
 
 [MIT](LICENSE.md). Third-party licenses are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
-
-Remote clients send prompts and save drafts with an explicit Sotto thread ID. The host refuses commands that use its own selected thread or spoken draft: compose, send, cancel draft, pause draft and cancel request. Those controls belong to the host computer.
