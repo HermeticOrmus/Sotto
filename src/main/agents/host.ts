@@ -31,6 +31,8 @@ export type AgentHostCommand =
 export interface AgentHostResult {
   readonly accepted: boolean
   readonly uncertain?: boolean
+  /** Local answer delivery after its deadline; observes the original write and never sends another. */
+  readonly answerCompletion?: Promise<boolean>
   /**
    * For `configure-thread`: the snapshot the adapter emitted once the provider confirmed the change, carrying
    * the thread's effective settings. The coordinator accepts it in place of reading the thread again, and
@@ -61,6 +63,8 @@ export function confirmedSettingsSnapshot(result: AgentHostResult): [Omit<AgentH
  */
 export interface ThreadReadPurpose {
   readonly beforeSend?: boolean
+  /** An explicit Check again may reopen an uncertain Claude answer for a fresh user choice. */
+  readonly retryUncertainAnswers?: boolean
   /**
    * The reader keeps each thread's history from the host's `subscribeEvents` and reads none from what the read
    * hands back, as an activity subscriber that asks for it does. A host that publishes events then hands back
