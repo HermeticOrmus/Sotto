@@ -21,6 +21,8 @@ export interface ConfirmationDialogProps {
   readonly initialFocus?: 'confirm' | RefObject<HTMLElement | null>
   /** Reach the affirmative action first from an answer, preserving the buttons' visual layout. */
   readonly confirmFirst?: boolean
+  /** Credential questions may submit their answer field with Enter. Other confirmations opt out. */
+  readonly submitOnEnter?: boolean
 }
 
 export function ConfirmationDialog({
@@ -38,6 +40,7 @@ export function ConfirmationDialog({
   fallbackFocusRef,
   initialFocus,
   confirmFirst = false,
+  submitOnEnter = false,
 }: ConfirmationDialogProps): ReactNode {
   const [submitting, setSubmitting] = useState(false)
   const [failed, setFailed] = useState(false)
@@ -87,7 +90,7 @@ export function ConfirmationDialog({
         aria-describedby={descriptionId}
         aria-busy={submitting || undefined}
         onKeyDown={event => {
-          if (event.key !== 'Enter' || event.nativeEvent.isComposing || !(event.target instanceof HTMLInputElement)) return
+          if (!submitOnEnter || event.key !== 'Enter' || event.nativeEvent.isComposing || !(event.target instanceof HTMLInputElement)) return
           event.preventDefault()
           event.stopPropagation()
           void confirm()

@@ -83,7 +83,7 @@ export function HostQuestionDialog({ bridge = window.sotto?.hosts }: { readonly 
       {...(error ? { failureMessage: error } : {})}
       description={<p>{`An agent is setting up ${name}, and Tailscale SSH asks you to approve this computer's connection before the setup goes on. Open the approval page and approve it in your browser.${putOff}`}</p>} />
     const hostKey = prompt.kind === 'host-key'
-    return <ConfirmationDialog key={setupKey} danger={false} confirmFirst initialFocus={hostKey ? hostKeyRef : answerRef} fallbackFocusRef={fallbackFocusRef}
+    return <ConfirmationDialog key={setupKey} danger={false} confirmFirst submitOnEnter={!hostKey} initialFocus={hostKey ? hostKeyRef : answerRef} fallbackFocusRef={fallbackFocusRef}
       title={hostKey ? `Trust the SSH host ${name}?` : `Unlock the SSH connection to ${name}`}
       confirmLabel={hostKey ? 'Trust host' : 'Continue'} cancelLabel="Not now" onCancel={dismiss}
       // The dialog stays until main clears the question, which it does once SSH has the answer.
@@ -99,7 +99,7 @@ export function HostQuestionDialog({ bridge = window.sotto?.hosts }: { readonly 
   }
   if (!prompt) return null
   const hostKey = prompt.kind === 'host-key'
-  return <ConfirmationDialog key={savedKey} danger={false} confirmFirst initialFocus={hostKey ? hostKeyRef : answerRef} fallbackFocusRef={fallbackFocusRef}
+  return <ConfirmationDialog key={savedKey} danger={false} confirmFirst submitOnEnter={!hostKey} initialFocus={hostKey ? hostKeyRef : answerRef} fallbackFocusRef={fallbackFocusRef}
     title={hostKey ? `Trust the SSH host ${host.name}?` : `Unlock the SSH connection to ${host.name}`}
     confirmLabel={hostKey ? 'Trust host' : 'Continue'} cancelLabel="Switch it off"
     onDismiss={dismiss}
