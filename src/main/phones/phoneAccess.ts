@@ -332,11 +332,13 @@ export class PhoneAccess {
     if (!this.record.mapped) return true
     try {
       if (this.recordUncertain) {
+        let readable = false
         try {
           const recovered = await this.store.peek()
+          readable = true
           if (recovered.port !== null) { this.record = { ...recovered, mapped: true }; this.recordUncertain = false; await this.reservePort() }
         } catch { /* Still check Serve, even when the saved record remains unreadable. */ }
-        if (this.recordUncertain) await this.save(this.record)
+        if (this.recordUncertain && readable) await this.save(this.record)
       }
       const owner = servePortOwner(await this.options.tailscale.serveStatus(), PHONE_ACCESS_SERVE_PORT, this.ourPorts())
       if (owner === 'ours' && !await this.options.tailscale.unserve(PHONE_ACCESS_SERVE_PORT)) { this.options.log?.('phone-access-serve-remove-failed'); return false }

@@ -12,4 +12,4 @@ Turning the setting off during pending setup stops the listener immediately. A l
 
 Final local gates: typecheck, lint, notices and build passed. The full suite with one worker passed 6,487 tests and skipped 145; its 24 failures and one unhandled rejection are confined to the eight Linux baseline files listed in the task brief.
 
-The second review adds coverage for a refused recovery-marker write followed by a fresh start with phone access off. Invalid records are read without removing the primary; each uncertain cleanup attempt retries the atomic marker write. The Phones message now asks the user to remove the setting on port 8443 in Tailscale and press Try again.
+The second review adds coverage for a refused recovery-marker write followed by a fresh start with phone access off. Invalid records are read without removing the primary; each uncertain cleanup attempt retries the atomic marker write after a successful read. Read failures preserve the original ownership record until read access returns. The Phones message now asks the user to remove the setting on port 8443 in Tailscale and press Try again.

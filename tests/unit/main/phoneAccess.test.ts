@@ -349,6 +349,29 @@ it('keeps cleanup pending after a setup failure while the setting remains on', a
   } finally { await access.close() }
 })
 
+it('preserves a valid cleanup record until read access returns', async () => {
+  const port = await freePort()
+  await writeFile(join(root, 'phone-access.json'), JSON.stringify({ port, mapped: true }))
+  const fake = fakeTailscale({ other: serveTarget(port) })
+  const { access } = create({ tailscale: fake.tailscale }, { phoneAccess: false, phoneAccessName: '' })
+  const peek = vi.spyOn(AtomicJsonStore.prototype, 'peek').mockRejectedValue(Object.assign(new Error('unavailable'), { code: 'EACCES' }))
+  // Writes remain available while reads are refused.
+  const write = vi.spyOn(AtomicJsonStore.prototype, 'write')
+  try {
+    await access.start()
+    await access.command({ type: 'retry' })
+    expect(access.get()).toMatchObject({ phase: 'cleanup-failed', serve: { reason: 'cleanup-record' } })
+    expect(await record()).toEqual({ port, mapped: true })
+    expect(write.mock.calls.some(([value]) => typeof value === 'object' && value !== null && 'mapped' in value)).toBe(false)
+    expect(fake.tailscale.unserve).not.toHaveBeenCalled()
+    peek.mockRestore()
+    await access.command({ type: 'retry' })
+    expect(fake.tailscale.unserve).toHaveBeenCalledOnce()
+    expect(access.get().phase).toBe('off')
+    expect(await record()).toEqual({ port, mapped: false })
+  } finally { peek.mockRestore(); write.mockRestore(); await access.close() }
+})
+
 it('preserves pending cleanup across restart when a recovery write is refused', async () => {
   const path = join(root, 'phone-access.json')
   await writeFile(path, 'not json')
