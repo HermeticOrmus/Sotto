@@ -2,6 +2,15 @@
 
 `.github/workflows/ci.yml` runs the same gates a developer runs by hand, on a `windows-latest` runner, for every push to `main` and every pull request against `main`. It never builds desktop installers, never publishes, and uses no secrets. A separate Linux job builds and verifies the plain Node host archive, and a macOS job tests and compiles the native iOS client.
 
+## When each job runs
+
+Gates (Windows) runs for every push to `main` and every pull request, and is the check a merge waits for. A push to `main` also runs the other two jobs every time. On a pull request, a short Linux job, Changed areas, reads the files the pull request changes and decides whether the two slower jobs are needed:
+
+- **Host archive and socket contract (Linux)** runs unless every changed file is in the renderer (`src/renderer/`, `src/preload/`), the iOS client, `docs/`, `artifacts/`, `design/`, `handoff/`, the e2e, renderer-unit or perf tests, or a Markdown file at the root other than `THIRD_PARTY_NOTICES.md`. A path that list does not name runs the job, so a new area is covered until someone decides otherwise.
+- **Native iOS client (macOS)** runs only when `apps/ios/`, `src/shared/hostProtocol.ts` (which the client's wire types mirror) or this workflow changed. Its Swift tests and simulator build read nothing outside `apps/ios/`.
+
+A job that is not needed reports as skipped, not failed. A change that should have run a skipped job still gets it on the push to `main` after merging.
+
 ## What the job runs
 
 | Step | Command | Why it exists |
@@ -10,8 +19,10 @@
 | Prepare runtime assets | `npm run runtime:prepare` | Copies the hash-locked ONNX WASM files out of `node_modules/onnxruntime-web` into `resources/runtime`, which the checkout does not carry. No network access, about a second. |
 | Typecheck | `npm run typecheck` | `tsc --noEmit` over the node, web and renderer-test projects. |
 | Lint | `npm run lint` | `eslint .`. |
-| Unit and integration tests | `npm test -- --maxWorkers=2` | `vitest run` — the whole suite except the Playwright end-to-end specs, which the vitest config excludes. The worker cap keeps the jsdom and child-process heavy files inside a small runner's memory; unpinned parallelism has produced "Worker exited unexpectedly" crashes on a loaded machine. Main-process and integration files run under node rather than jsdom, declared by a `@vitest-environment node` header on each file; a file in those folders that needs a DOM says `jsdom` instead. |
+| Unit and integration tests | `npm test -- --maxWorkers=2` | `vitest run` — test files under `tests/` only, excluding `tests/e2e/`. Ignored cache and backup suites outside `tests/` are never collected. The worker cap keeps the jsdom and child-process heavy files inside a small runner's memory; unpinned parallelism has produced "Worker exited unexpectedly" crashes on a loaded machine. Main-process and integration files run under node rather than jsdom, declared by a `@vitest-environment node` header on each file; a file in those folders that needs a DOM says `jsdom` instead. |
 | Third-party notices | `npm run notices:verify` | Checks `THIRD_PARTY_NOTICES.md` against the installed dependency tree. |
+
+`tests/unit/release/trackedFileEncoding.test.ts` checks every Git-tracked file for a UTF-8 byte order mark in the normal test gate. Files stay UTF-8 without a BOM.
 
 Each gate is its own named step, so a red check names the gate that failed.
 
@@ -45,6 +56,53 @@ The job cancels a superseded run on the same ref (`concurrency` with `cancel-in-
   ```
 - **Wall-clock budgets.** See below.
 - **Desktop packaging and all publishing.** Desktop releases are still cut by hand on the Windows PC and the Apple silicon Mac. The Linux host archive is built and verified in its separate job, then published manually.
+
+The historical `tests/review/composer-polish` capture harness was removed (#605).
+It had no npm runner and used fixed sleeps. Its retained captures and verdicts
+remain recorded in `docs/verification/phase-2-implementation.md`. Some composer
+regressions run through `tests/e2e/composer-short-window.spec.ts` in the normal
+Playwright tree. Current tests do not cover the deleted harness's skill picker
+over a split pane at 1600x900, 1280x800 and 1280x560, the queue composer at the
+760x560 stress size or at 1280x800 with 125% and 150% zoom, or a failed working
+folder keeping its draft. Every separate
+Playwright config under `tests/` must have an npm runner;
+`tests/unit/release/testDiscovery.test.ts` checks that boundary.
+
+## Opt-in appearance and theme captures
+
+`npm run test:e2e` builds and runs the ordinary Electron suite with one worker.
+Four appearance and theme capture specs skip unless their evidence variable is
+set. These captures are developer evidence, not part of the ordinary suite or CI.
+Build first with `npm run build`, then enable the spec you want to capture:
+
+```sh
+SOTTO_THEMES_E2E=1 npx playwright test tests/e2e/phase-three-themes.spec.ts
+SOTTO_APPEARANCE_EVIDENCE=1 npx playwright test tests/e2e/appearance-evidence.spec.ts
+SOTTO_THEME_EVIDENCE=1 npx playwright test tests/e2e/theme-palettes-evidence.spec.ts
+SOTTO_THEME_BRANDING_EVIDENCE=1 npx playwright test tests/e2e/phase-three-theme-branding.spec.ts
+```
+
+In PowerShell, set the matching variable before the command and remove it after:
+
+```powershell
+$env:SOTTO_THEMES_E2E = '1'
+try { npx playwright test tests/e2e/phase-three-themes.spec.ts }
+finally { Remove-Item Env:SOTTO_THEMES_E2E }
+```
+
+| Spec | Capture folder |
+| --- | --- |
+| `phase-three-themes.spec.ts` | `artifacts/phase-three-themes/` |
+| `appearance-evidence.spec.ts` | `artifacts/verification/phase-1-appearance/` |
+| `theme-palettes-evidence.spec.ts` | `artifacts/verification/sotto-palettes/` |
+| `phase-three-theme-branding.spec.ts` | `artifacts/phase-three-theme-branding/` |
+
+The appearance spec's optional whole-screen capture additionally needs
+`SOTTO_APPEARANCE_SCREEN_CAPTURE=1` and an otherwise clear desktop. Leave it unset
+for app-window captures. Run Electron captures serially on an interactive desktop;
+inspect their images before claiming visual verification. These commands write
+evidence files, so inspect the working tree afterward and keep only intended
+captures. They do not regenerate the design comparison baselines.
 
 ## Devin native verification
 
@@ -243,6 +301,14 @@ The job retains `Sotto-host-*-linux-x64.tar.gz` and its checksum sidecar as a wo
 
 Run `npm run package:host` locally for the same extraction and startup check. The filename records the actual platform. `npm run host:verify -- <extracted-directory>` verifies an existing extracted archive against its manifest and provenance; `node scripts/smoke-host-archive.mjs <extracted-directory>` additionally starts and stops it. On Windows only, smoke shutdown exercises the signal handler through IPC, since Windows cannot deliver a graceful POSIX SIGTERM. The Linux CI run and a real Forge SSH connection remain separate evidence from a local Windows pass.
 
+The host build and package scripts anchor their source and output paths to the
+checkout that contains the script. Calling `node <checkout>/scripts/build-host.mjs`
+or `node <checkout>/scripts/package-host.mjs` from another folder still writes to
+that checkout's `out/host` and `release`. Packaging passes tar a relative archive
+filename from `release`, so GNU tar cannot mistake a Windows drive letter for a
+remote host. `tests/integration/hostBuildScripts.test.ts` runs both scripts from an
+owned scratch folder and checks the archive round trip with local archive names.
+
 The real OpenSSH journey is skipped unless `SOTTO_REAL_SSHD=1` is set, so the Windows gates and a plain `npm test` report it as skipped. To run it on a Linux or macOS machine with openssh-server and Node 24, use `SOTTO_REAL_SSHD=1 npx vitest run tests/integration/realSshd.test.ts --maxWorkers=1`. Without `SOTTO_REAL_SSHD_INSTALL` it builds and stages the host itself; `SOTTO_SSHD` names an sshd other than `/usr/sbin/sshd`. It uses its own keys, client configuration and known_hosts file and never touches the account's `~/.ssh`. It proves the transport on this machine's OpenSSH; Windows' own ssh.exe and a real remote host are still proved by hand.
 
 ## Browser provider and desktop verification
@@ -331,7 +397,7 @@ The Claude fixture's stopped check reads its current child ownership marker and 
 
 `apps/ios/Tests/SottoUITests/FocusJourneyTests.swift` launches the real SwiftUI app with a Debug-only in-memory host fixture. It checks the default Threads tab, foreground and background work, search including settled threads, collapsed/expanded Settled, conversation and question navigation, and persisted appearance/larger-text settings. The fixture returns before Keychain reads or any connection and refuses pairing, rename, removal, and transport actions. Release builds contain no fixture entry point.
 
-Run `sh apps/ios/Scripts/verify-ui.sh` on a Mac with Xcode selected. The script creates disposable iPhone SE (3rd generation) and iPhone 16 Pro Max simulators using the latest installed iOS runtime, then deletes only those simulators. The large phone also has the simulator's Reduce Motion preference enabled. Kept XCTest screenshot attachments cover dark, light, larger text, the keyboard, a request, messages, activity, and Computers. CI retains both result bundles and exported attachments as `ios-focus-journeys` for 14 days, including failures. The job has a 35-minute safety timeout. These checks exercise native layout and navigation against fixture data; they do not establish live-host or physical-device compatibility. Inspect the exported images before calling the design verified.
+Run `sh apps/ios/Scripts/verify-ui.sh` on a Mac with Xcode selected. The script creates disposable iPhone SE (3rd generation) and iPhone 16 Pro Max simulators using the latest installed iOS runtime, then deletes only those simulators. The large phone also has the simulator's Reduce Motion preference enabled. Kept XCTest screenshot attachments cover dark, light, larger text, the keyboard, a request, messages, activity, Computers, and recovery feedback. CI retains both result bundles and exported attachments as `ios-focus-journeys` for 14 days, including failures. The job has a 45-minute safety timeout. [Run 36782409656](https://github.com/millZach/Sotto/actions/runs/36782409656) passed the native package tests and all four journeys on each phone, then exceeded the former 35-minute limit while completing the job. The larger window covers simulator startup, real interaction and evidence retention; test assertions and their deadlines are unchanged. These checks exercise native layout and navigation against fixture data; they do not establish live-host or physical-device compatibility. Inspect the exported images before calling the design verified.
 
 
 ## Native test launch

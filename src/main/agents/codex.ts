@@ -408,7 +408,7 @@ export class CodexAppServerHost implements AgentHost {
     this.emit()
   }
   /**
-   * The client on disk was replaced while Sotto stayed connected (ADR-0021). Every thread runs its own app-server,
+   * The client on disk was replaced while Sotto stayed connected (ADR-0042). Every thread runs its own app-server,
    * so nothing is disconnected: the client is found again (an update may have moved it), a new provider app-server
    * reads its version and models, and each thread moves to it as it goes idle. An idle thread's app-server stops
    * now the way the reaper stops one, and its next action starts the new client; a busy one finishes on the old
@@ -1364,11 +1364,16 @@ export class CodexAppServerHost implements AgentHost {
         this.fileSummaries.get(z.object({ itemId: z.string().optional() }).parse(frame.params).itemId ?? '')) : undefined
       if (!parsed) {
         try { server.write({ id: frame.id, error: { code: -32601, message: 'Sotto does not handle this request.' } }) } catch { /* A closed process asks nothing more. */ }
-        // Codex treats the refusal as the answer, so a renamed or reshaped approval would otherwise read
-        // as the user declining. Requests Sotto never answers, and foreign threads, stay quiet.
-        if (id && needsPerson(frame.method) && this.state.error !== unreadableRequest('Codex')) {
-          this.state.error = unreadableRequest('Codex')
-          this.emit()
+        // A session's app-server can ask for a child whose ID Sotto cannot resolve. Its ownership
+        // establishes where the refusal came from, without assuming the child's request payload.
+        const owner = id ?? [...this.runtimes].find(([, runtime]) => runtime.server === server)?.[0]
+        if (owner && needsPerson(frame.method)) {
+          const notice = id ? unreadableRequest('Codex')
+            : 'Codex asked for an approval Sotto could not show. The request was refused. Nothing was approved. Answer it in Codex, and check for a Sotto or Codex update.'
+          const thread = this.ensureThread(owner)
+          if (this.state.error !== notice || thread.requestNotice !== notice) {
+            thread.requestNotice = notice; this.state.error = notice; this.emit()
+          }
         }
         return
       }

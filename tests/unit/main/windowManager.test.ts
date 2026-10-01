@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { APP_MAXIMIZED, WIDGET_VISIBILITY } from '../../../src/shared/channels'
+import { APP_MAXIMIZED, APP_WINDOW_HIDDEN, WIDGET_VISIBILITY } from '../../../src/shared/channels'
 import type { WidgetPresentation } from '../../../src/shared/contracts'
 import {
   parseDevelopmentRendererSources,
@@ -14,7 +14,7 @@ import {
 import type { StoredWidgetPlacement } from '../../../src/main/storage/widgetPlacementRepository'
 import { platformProfile } from '../../../src/main/platformProfile'
 
-type WindowEvent = 'maximize' | 'unmaximize' | 'close' | 'closed' | 'moved'
+type WindowEvent = 'maximize' | 'unmaximize' | 'close' | 'closed' | 'moved' | 'hide' | 'minimize'
 
 class FakeWindow implements BrowserWindowLike {
   readonly webContents = {
@@ -1247,6 +1247,21 @@ describe('WindowManager lifecycle', () => {
     expect(windows).toHaveLength(2)
   })
 
+  it('notifies the main renderer when its native window hides or minimizes', async () => {
+    const { manager, windows } = createHarness()
+    await manager.createWindows()
+    const main = windows[0]!
+    const widget = windows[1]!
+    main.emit('hide')
+    main.emit('minimize')
+    expect(main.webContents.send.mock.calls.filter(([channel]) => channel === APP_WINDOW_HIDDEN)).toEqual([
+      [APP_WINDOW_HIDDEN, null], [APP_WINDOW_HIDDEN, null],
+    ])
+    expect(widget.webContents.send).not.toHaveBeenCalledWith(APP_WINDOW_HIDDEN, null)
+    main.emit('closed')
+    expect(main.removedListeners).toEqual(expect.arrayContaining(['hide', 'minimize']))
+  })
+
   it('toggles only the main window and publishes native maximize changes', async () => {
     const { manager, windows } = createHarness()
     await manager.createWindows()
@@ -2320,7 +2335,7 @@ describe('WindowManager lifecycle', () => {
 
     expect(windows[0]!.destroy).toHaveBeenCalledOnce()
     expect(windows[1]!.destroy).toHaveBeenCalledOnce()
-    expect(windows[0]!.removedListeners).toStrictEqual(['maximize', 'unmaximize', 'close', 'closed'])
+    expect(windows[0]!.removedListeners).toStrictEqual(['maximize', 'unmaximize', 'hide', 'minimize', 'close', 'closed'])
     expect(windows[0]!.webContents.removeListener).toHaveBeenCalledTimes(3)
     expect(windows[1]!.removedListeners).toStrictEqual(['closed', 'moved'])
     expect(windows[1]!.webContents.removeListener).toHaveBeenCalledTimes(3)
@@ -2396,7 +2411,7 @@ describe('WindowManager lifecycle', () => {
     crashed.emitRenderProcessGone()
 
     expect(crashed.destroy).toHaveBeenCalledOnce()
-    expect(crashed.removedListeners).toStrictEqual(['maximize', 'unmaximize', 'close', 'closed'])
+    expect(crashed.removedListeners).toStrictEqual(['maximize', 'unmaximize', 'hide', 'minimize', 'close', 'closed'])
     expect(crashed.webContents.removeListener).toHaveBeenCalledTimes(3)
     expect(crashed.removeRenderProcessGoneListener).toHaveBeenCalledOnce()
     expect(manager.getMainWebContents()).toBeNull()

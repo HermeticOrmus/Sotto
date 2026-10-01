@@ -5,7 +5,9 @@ import { recoveryNoticeSchema, recoveryNoticesSchema } from '../../../src/shared
 
 const ALL_CODES = [
   { code: 'SETTINGS_RECOVERED' },
+  { code: 'OPENROUTER_KEY_MIGRATION_FAILED' },
   { code: 'HISTORY_RECOVERED' },
+  { code: 'CREDENTIALS_RECOVERED' },
   { code: 'ACCESSIBILITY_PERMISSION_REQUIRED' },
 ] as const
 

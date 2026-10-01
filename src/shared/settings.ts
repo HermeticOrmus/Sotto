@@ -29,7 +29,7 @@ export type HistoryRetention = 25 | 100 | 500 | 'unlimited'
 export type LlmQuality = 'low' | 'medium' | 'value' | 'high'
 
 /**
- * The rules under which Sotto reclaims a thread's worktree on its own (ADR-0019), the same four
+ * The rules under which Sotto reclaims a thread's worktree on its own (ADR-0041), the same four
  * T3 Code offers. `afterDays` counts idle days since the thread's last activity; `null` is never.
  * `unchanged` means the folder's commits are all in the repository's default branch already;
  * `merged` means GitHub reports the branch's pull request merged; `onSettle` reclaims when the
@@ -125,7 +125,7 @@ export interface AppSettings {
   /** Explicit project overrides; an absent key inherits the global default. */
   projectThreadWorkingCopyDefaults: Record<string, 'shared' | 'independent'>
   /**
-   * When Sotto may reclaim a thread's worktree on its own (ADR-0019). Every rule
+   * When Sotto may reclaim a thread's worktree on its own (ADR-0041). Every rule
    * is off by default, and none of them ever removes uncommitted work.
    */
   worktreeCleanup: WorktreeCleanupRules
@@ -233,8 +233,10 @@ export interface AppSettings {
 }
 
 export type SettingsPatch = Partial<
-  Omit<AppSettings, 'hotkey' | 'launchAtStartup'>
+  Omit<AppSettings, 'hotkey' | 'launchAtStartup' | 'worktreeCleanup'>
 > & {
+  /** Merge only the supplied cleanup rules with the latest saved settings. */
+  worktreeCleanup?: Partial<WorktreeCleanupRules>
   /**
    * @deprecated The accent was replaced by themes (ADR-0011). A patch that
    * still carries it is accepted and the value ignored, so an older caller

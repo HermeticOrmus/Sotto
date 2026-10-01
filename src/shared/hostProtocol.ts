@@ -30,7 +30,7 @@ export const HOST_PROTOCOL_VERSION = 1 as const
  * it: the desktop's phone listener does not. `message-aliases`: event pages may carry
  * message-aliased only after the client explicitly accepts it; other clients read the repaired detail.
  * `client-updates`: the host's shell carries its client updates for the client to show, and the host takes the
- * `queue-client-updates` command, which updates its clients one at a time (ADR-0021, #480). Only a headless host offers
+ * `queue-client-updates` command, which updates its clients one at a time (ADR-0042, #480). Only a headless host offers
  * it, and a client shows a host's client updates only when the host lists it.
  */
 export const HOST_FEATURES = ['message-aliases', 'detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders', 'provider-sign-in', 'client-updates'] as const
@@ -133,15 +133,20 @@ export type HostErrorCode = 'unauthenticated' | 'invalid_request' | 'stale_reque
 export interface HostProtocolError { code: HostErrorCode; message: string }
 export type HostResponse = { v: 1; id: string; ok: true; result: unknown } | { v: 1; id: string; ok: false; error: HostProtocolError }
 /** `error` stands in for a push that would not fit in one frame, instead of the host closing the socket. */
-export type HostPush = { v: 1; event: 'shell'; state: AgentState; eventPage?: HostEventPage | undefined } | { v: 1; event: 'detail'; detail: AgentThreadDetail | null; threadId: string }
+export type HostClientShell = AgentState & { clientCapabilities?: { mayAnswer: boolean } | undefined }
+export type HostPush = { v: 1; event: 'shell'; state: HostClientShell; eventPage?: HostEventPage | undefined } | { v: 1; event: 'detail'; detail: AgentThreadDetail | null; threadId: string }
   | { v: 1; event: 'detail-delta'; threadId: string; delta: AgentThreadDetailDelta }
   | { v: 1; event: 'error'; threadId?: string | undefined; error: HostProtocolError }
 export interface HostEventPage { events: StoredThreadEvent[]; latestSeq: number; hasMore: boolean }
 /** `capabilities` is what this client may do on this host; `features` is what the host's protocol offers. */
-export interface HostHello extends HostEventPage { hostId: string; clientId: string; shell: AgentState; capabilities: { mayAnswer: boolean }; sottoVersion: string; features: string[] }
+export interface HostHello extends HostEventPage { hostId: string; clientId: string; shell: HostClientShell; capabilities: { mayAnswer: boolean }; sottoVersion: string; features: string[] }
 export interface HostSession { v: 1; hostId: string; clientId: string; session: string; expiresAt: string }
 export interface HostPairing { v: 1; hostId: string; clientId: string; token: string }
-export interface HostReceipt { status: 'pending' | 'completed' | 'unknown'; error?: HostProtocolError | undefined }
+export interface HostReceipt {
+  status: 'pending' | 'completed' | 'unknown'; error?: HostProtocolError | undefined
+  /** This answer command's own successful outcome. Older hosts omit it; completion alone proves none. */
+  answerDelivered?: boolean | undefined
+}
 /** Written to host-listener.json and served, with `status`, as /v1/health. */
 export interface HostDescriptor { v: 1; pid: number; hostId: string; port: number; sottoVersion: string; features: string[] }
 export interface HostHealth extends HostDescriptor {
@@ -158,7 +163,8 @@ const eventPageShape = { events: z.array(z.object({ seq: z.number().int().nonneg
 export const hostEventPageSchema = z.object(eventPageShape)
 export const hostPairingSchema = z.object({ v: z.literal(1), hostId: z.uuid(), clientId: id, token: z.string().regex(/^[A-Za-z0-9_-]{43}$/) })
 export const hostSessionSchema = z.object({ v: z.literal(1), hostId: z.uuid(), clientId: id, session: z.string().min(1).max(2048), expiresAt: z.iso.datetime() })
-export const hostHelloSchema = z.object({ ...eventPageShape, hostId: z.uuid(), clientId: id, shell: agentStateSchema, capabilities: z.object({ mayAnswer: z.boolean() }), sottoVersion, features: featureList })
+const hostClientShellSchema = agentStateSchema.extend({ clientCapabilities: z.object({ mayAnswer: z.boolean() }).optional() })
+export const hostHelloSchema = z.object({ ...eventPageShape, hostId: z.uuid(), clientId: id, shell: hostClientShellSchema, capabilities: z.object({ mayAnswer: z.boolean() }), sottoVersion, features: featureList })
 export const hostHealthSchema = z.object({ v: z.literal(1), status: z.literal('ready'), hostId: z.uuid(), pid: z.number().int().positive(), port: z.number().int().min(1).max(65535), sottoVersion, features: featureList })
 /**
  * The Sotto version and features a host's health advertises, or null when the host does not speak the
@@ -174,9 +180,9 @@ export const hostResponseSchema = z.discriminatedUnion('ok', [
   z.object({ v: z.literal(1), id, ok: z.literal(false), error: hostProtocolErrorSchema }),
 ])
 export const hostPushSchema = z.discriminatedUnion('event', [
-  z.object({ v: z.literal(1), event: z.literal('shell'), state: agentStateSchema, eventPage: hostEventPageSchema.optional() }),
+  z.object({ v: z.literal(1), event: z.literal('shell'), state: hostClientShellSchema, eventPage: hostEventPageSchema.optional() }),
   z.object({ v: z.literal(1), event: z.literal('detail'), threadId: id, detail: agentThreadDetailResultSchema }),
   z.object({ v: z.literal(1), event: z.literal('detail-delta'), threadId: id, delta: agentThreadDetailDeltaSchema }),
   z.object({ v: z.literal(1), event: z.literal('error'), threadId: id.optional(), error: hostProtocolErrorSchema }),
 ])
-export const hostReceiptSchema = z.object({ status: z.enum(['pending', 'completed', 'unknown']), error: hostProtocolErrorSchema.optional() })
+export const hostReceiptSchema = z.object({ status: z.enum(['pending', 'completed', 'unknown']), error: hostProtocolErrorSchema.optional(), answerDelivered: z.boolean().optional() })

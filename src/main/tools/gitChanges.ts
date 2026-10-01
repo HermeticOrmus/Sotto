@@ -14,7 +14,7 @@ import { parseNameStatusZ, parseNumstatZ, sectionIsBinary, sectionPath, splitPat
 
 interface GitDependencies {
   files: FilesService
-  copyPath(path: string): void
+  copyPath(path: string): void | Promise<void>
   reveal(path: string): void
   emit(event: ToolTarget & { revision: string }): void
   pollMs?: number
@@ -251,7 +251,7 @@ export class GitChangesService extends ToolOperations {
     const owner = await workspace(this.dependencies.files, request.threadId, request.workspaceId)
     const info = await this.safePath(owner, request.path)
     await workspace(this.dependencies.files, request.threadId, request.workspaceId)
-    this.dependencies[action](action === 'copyPath' ? info.absolutePath : info.existing)
+    await this.dependencies[action](action === 'copyPath' ? info.absolutePath : info.existing)
     return { workspace: owner, path: request.path, absolutePath: info.absolutePath }
   }) }
   copyPath(payload: unknown) { return this.pathAction(payload, 'copyPath') }

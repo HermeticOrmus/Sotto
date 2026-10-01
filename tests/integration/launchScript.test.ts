@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import { HOST_STOP_DRAIN_MS, LAUNCH_SCRIPT_SOURCE, NODE_CHECK_SOURCE, NODE_PROBE_SOURCE, type LaunchOperation } from '../../src/main/hosts/launchScript'
+import { readBootId } from '../../src/host/lock'
 import { MemoryStore } from '../../src/main/memory/store'
 import { PolicyStore } from '../../src/main/memory/policies'
 import { PairedClients } from '../../src/main/agents/pairing'
@@ -192,6 +193,17 @@ it('starts a host over a lock whose holder is gone', async () => {
   await new Promise(resolve => gone.once('exit', resolve))
   await writeFile(join(configuration.dataDirectory, 'host-listener.lock'), JSON.stringify({ pid: gone.pid, nonce: 'stale' }))
   expect(await launch(configuration)).toMatchObject({ type: 'ready', owned: true })
+})
+it('starts over a previous-boot lock even when its PID now belongs to a live process', async () => {
+  const configuration = await fixture()
+  await mkdir(configuration.dataDirectory, { recursive: true })
+  const boot = await readBootId()
+  expect(boot).toBeDefined()
+  // The installed fixture stands in for the host's boot-aware reclaim, without ever signalling this PID.
+  await writeFile(join(configuration.dataDirectory, 'host-listener.lock'), JSON.stringify({ pid: process.pid, nonce: 'stale', boot: 'previous-boot' }))
+  const ready = await launch(configuration, { ...process.env, FAKE_HOST_BOOT: boot })
+  expect(ready).toMatchObject({ type: 'ready', owned: true })
+  expect(() => process.kill(process.pid, 0)).not.toThrow()
 })
 it('treats a lock held by another account (EPERM) as held, the way the host does', () => {
   expect(LAUNCH_SCRIPT_SOURCE).toContain("error.code === 'EPERM'")

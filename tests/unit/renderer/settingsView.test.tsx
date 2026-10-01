@@ -82,6 +82,127 @@ async function selectCategory(name: string): Promise<void> {
 }
 
 describe('SettingsView', () => {
+  it('does not save or announce unchanged shortcut and numeric fields on blur', async () => {
+    const props = baseProps()
+    render(<SettingsView {...props} />)
+    const hotkey = screen.getByRole('textbox', { name: 'Global shortcut' })
+    fireEvent.blur(hotkey)
+    fireEvent.change(hotkey, { target: { value: 'Control+Shift+Space' } })
+    fireEvent.blur(hotkey)
+    await selectCategory('Output')
+    for (const name of ['Paste delay', 'Success message duration']) {
+      const input = screen.getByRole('textbox', { name })
+      fireEvent.blur(input)
+      fireEvent.change(input, { target: { value: ` ${String((input as HTMLInputElement).value)} ` } })
+      fireEvent.blur(input)
+    }
+    expect(props.onReplaceHotkey).not.toHaveBeenCalled()
+    expect(props.onUpdateSettings).not.toHaveBeenCalled()
+    expect(document.querySelector('.settings-notice')).not.toBeInTheDocument()
+  })
+
+  it('preserves quick cleanup changes before their settings publications arrive', async () => {
+    const update = vi.fn(async () => true)
+    render(<SettingsView {...baseProps({ onUpdateSettings: update })} />)
+    await selectCategory('Application')
+    await userEvent.click(screen.getByRole('switch', { name: 'Remove a worktree when its thread is settled' }))
+    await userEvent.click(screen.getByRole('switch', { name: 'Remove a worktree when its pull request is merged' }))
+    expect(update.mock.calls).toEqual([
+      [{ worktreeCleanup: { onSettle: true } }],
+      [{ worktreeCleanup: { merged: true } }],
+    ])
+  })
+
+  it.each(['denied', 'missing', 'error'] as const)('keeps a %s test result after category changes and hiding', async outcome => {
+    render(<SettingsView {...baseProps({ createMicrophoneTest: () => ({ start: vi.fn(async () => outcome), stop: vi.fn(async () => undefined) }) })} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Test microphone' }))
+    await waitFor(() => expect(document.querySelector('.settings-microphone-test')).toHaveAttribute('data-state', outcome))
+    await selectCategory('Output')
+    await selectCategory('Dictation')
+    vi.spyOn(document, 'hidden', 'get').mockReturnValue(true)
+    fireEvent(document, new Event('visibilitychange'))
+    try { expect(document.querySelector('.settings-microphone-test')).toHaveAttribute('data-state', outcome) } finally { vi.restoreAllMocks() }
+  })
+
+  it('replaces listening with missing when the running input ends', async () => {
+    let ended!: () => void
+    render(<SettingsView {...baseProps({ createMicrophoneTest: () => ({
+      start: vi.fn(async (_level, _id, onEnded) => { ended = () => onEnded?.('missing'); return 'ready' as const }),
+      stop: vi.fn(async () => undefined),
+    }) })} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Test microphone' }))
+    await screen.findByRole('button', { name: 'Stop test' })
+    act(() => ended())
+    expect(document.querySelector('.settings-microphone-test')).toHaveAttribute('data-state', 'missing')
+    expect(screen.queryByText('Listening. Say something.')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Stop test' })).not.toBeInTheDocument()
+    await selectCategory('Output')
+    await selectCategory('Dictation')
+    expect(document.querySelector('.settings-microphone-test')).toHaveAttribute('data-state', 'missing')
+  })
+
+  it.each([0, 0.01, 0.02, 0.021, 0.7])('judges the peak input level on Stop and resets it for the next test (%s)', async peak => {
+    let publishLevel!: (level: number) => void
+    const stop = vi.fn(async () => undefined)
+    render(<SettingsView {...baseProps({ createMicrophoneTest: () => ({
+      start: vi.fn(async onLevel => { publishLevel = onLevel; return 'ready' as const }), stop,
+    }) })} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Test microphone' }))
+    await screen.findByRole('button', { name: 'Stop test' })
+    act(() => { publishLevel(peak); publishLevel(0) })
+    await userEvent.click(screen.getByRole('button', { name: 'Stop test' }))
+    expect(screen.getByText(peak > 0.02 ? 'Sotto heard you. The microphone is closed.' : 'Sotto did not hear anything. Check that the microphone is not muted.')).toBeVisible()
+    expect(stop).toHaveBeenCalledOnce()
+    await userEvent.click(screen.getByRole('button', { name: 'Test again' }))
+    await screen.findByRole('button', { name: 'Stop test' })
+    await userEvent.click(screen.getByRole('button', { name: 'Stop test' }))
+    expect(screen.getByText('Sotto did not hear anything. Check that the microphone is not muted.')).toBeVisible()
+    expect(stop).toHaveBeenCalledTimes(2)
+  })
+
+  it('closes a listening microphone with the keyboard Stop test control', async () => {
+    const user = userEvent.setup()
+    const stop = vi.fn(async () => undefined)
+    render(<SettingsView {...baseProps({ createMicrophoneTest: () => ({
+      start: vi.fn(async onLevel => { onLevel(0.3); return 'ready' as const }), stop,
+    }) })} />)
+    await user.click(screen.getByRole('button', { name: 'Test microphone' }))
+    const button = await screen.findByRole('button', { name: 'Stop test' })
+    expect(screen.getByText('Listening. Say something.')).toBeVisible()
+    button.focus()
+    await user.keyboard('{Enter}')
+    expect(stop).toHaveBeenCalledOnce()
+    expect(await screen.findByText('Sotto heard you. The microphone is closed.')).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Test again' })).toBeEnabled()
+  })
+
+  it.each(['ready', 'requesting'] as const)('stops a %s microphone when the window becomes hidden', async state => {
+    const outcome = deferred<'ready'>()
+    const stop = vi.fn(async () => undefined)
+    const props = baseProps({ settings: { ...DEFAULT_SETTINGS, microphoneSkipped: true },
+      createMicrophoneTest: () => ({ start: vi.fn(() => state === 'ready' ? Promise.resolve('ready' as const) : outcome.promise), stop }) })
+    render(<SettingsView {...props} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Test microphone' }))
+    if (state === 'ready') await screen.findByRole('button', { name: 'Stop test' })
+    vi.spyOn(document, 'hidden', 'get').mockReturnValue(true)
+    fireEvent(document, new Event('visibilitychange'))
+    expect(stop).toHaveBeenCalledOnce()
+    await act(async () => { outcome.resolve('ready') })
+    expect(screen.queryByRole('button', { name: 'Stop test' })).not.toBeInTheDocument()
+    if (state === 'requesting') expect(props.onUpdateSettings).not.toHaveBeenCalled()
+    vi.restoreAllMocks()
+  })
+
+  it('stops the microphone when its Settings category is left', async () => {
+    const stop = vi.fn(async () => undefined)
+    render(<SettingsView {...baseProps({ createMicrophoneTest: () => ({ start: vi.fn(async () => 'ready' as const), stop }) })} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Test microphone' }))
+    await selectCategory('Output')
+    expect(stop).toHaveBeenCalledOnce()
+    await selectCategory('Dictation')
+    expect(screen.getByRole('button', { name: 'Test again' })).toBeEnabled()
+  })
+
   it('exposes exactly one category at a time with keyboard navigation into its controls', async () => {
     const user = userEvent.setup()
     render(<SettingsView {...baseProps()} />)
@@ -555,7 +676,7 @@ describe('SettingsView', () => {
 
     expect(start).toHaveBeenCalledOnce()
     await waitFor(() => expect(onUpdateSettings).toHaveBeenCalledWith({ microphoneSkipped: false }))
-    expect(await screen.findByText(/microphone ready/i)).toBeVisible()
+    expect(await screen.findByText(/Listening\. Say something\./i)).toBeVisible()
   })
 
   it('tests the selected input and discards its late result after the selection changes', async () => {
@@ -567,11 +688,11 @@ describe('SettingsView', () => {
       createMicrophoneTest: () => ({ start, stop }) })
     const rendered = render(<SettingsView {...props} />)
     await userEvent.click(screen.getByRole('button', { name: 'Test microphone' }))
-    expect(start).toHaveBeenCalledWith(expect.any(Function), 'headset')
+    expect(start).toHaveBeenCalledWith(expect.any(Function), 'headset', expect.any(Function))
     rendered.rerender(<SettingsView {...props} settings={{ ...props.settings, microphoneId: 'desk' }} />)
     await waitFor(() => expect(stop).toHaveBeenCalledOnce())
     await act(async () => { publishLevel(0.8); outcome.resolve('ready') })
-    expect(screen.queryByText(/microphone ready/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Listening\. Say something\./i)).not.toBeInTheDocument()
     expect(props.onUpdateSettings).not.toHaveBeenCalled()
     expect(screen.getByRole('button', { name: 'Test microphone' })).toBeEnabled()
   })
@@ -582,14 +703,34 @@ describe('SettingsView', () => {
     const props = baseProps({ createMicrophoneTest: () => ({ start, stop }) })
     const rendered = render(<SettingsView {...props} />)
     await userEvent.click(screen.getByRole('button', { name: 'Test microphone' }))
-    expect(await screen.findByText(/microphone ready/i)).toBeVisible()
+    expect(await screen.findByText(/Listening\. Say something\./i)).toBeVisible()
     rendered.rerender(<SettingsView {...props} settings={{ ...props.settings, microphoneId: 'desk' }} />)
     await waitFor(() => expect(stop).toHaveBeenCalledOnce())
-    expect(screen.queryByText(/microphone ready/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Listening\. Say something\./i)).not.toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'Test microphone' }))
-    expect(start).toHaveBeenLastCalledWith(expect.any(Function), 'desk')
+    expect(start).toHaveBeenLastCalledWith(expect.any(Function), 'desk', expect.any(Function))
     rendered.unmount()
     expect(stop).toHaveBeenCalledTimes(2)
+  })
+
+  it.each([true, false])('explains a missing selected input with other inputs available: %s', async others => {
+    render(<SettingsView {...baseProps({ settings: { ...DEFAULT_SETTINGS, microphoneId: 'unplugged' },
+      mediaDevices: createMediaDevices(others ? [device('desk', 'Desk microphone')] : []),
+      createMicrophoneTest: () => ({ start: vi.fn(async () => 'missing' as const), stop: vi.fn(async () => undefined) }),
+    })} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Test microphone' }))
+    expect(await screen.findByText(others ? 'The chosen microphone is not connected. Plug it in or choose another.' : 'No microphone was found.')).toBeVisible()
+  })
+
+  it('does not call the chosen microphone disconnected while it is still listed', async () => {
+    render(<SettingsView {...baseProps({ settings: { ...DEFAULT_SETTINGS, microphoneId: 'desk' },
+      mediaDevices: createMediaDevices([device('desk', 'Desk microphone')]),
+      createMicrophoneTest: () => ({ start: vi.fn(async () => 'missing' as const), stop: vi.fn(async () => undefined) }),
+    })} />)
+    await screen.findByRole('option', { name: 'Desk microphone' })
+    await userEvent.click(screen.getByRole('button', { name: 'Test microphone' }))
+    expect(await screen.findByText('No microphone was found.')).toBeVisible()
+    expect(screen.queryByText('The chosen microphone is not connected. Plug it in or choose another.')).not.toBeInTheDocument()
   })
 
   it('keeps the skip when the Settings test cannot reach a microphone', async () => {
@@ -1091,7 +1232,11 @@ describe('Project thread defaults in Application settings', () => {
     const state = withProjects('11111111-1111-4111-8111-111111111111')
     state.host.models = [{ id: 'codex:model', name: 'Model', provider: 'Codex', providerId: 'codex', ready: true }]
     let settings: SettingsViewProps['settings'] = { ...DEFAULT_SETTINGS, projectThreadWorkingCopyDefaults: { missing: 'shared' } }
-    const onUpdateSettings = vi.fn<SettingsViewProps['onUpdateSettings']>(async patch => { settings = { ...settings, ...patch }; return true })
+    const onUpdateSettings = vi.fn<SettingsViewProps['onUpdateSettings']>(async patch => {
+      const { worktreeCleanup, ...fields } = patch
+      settings = { ...settings, ...fields, worktreeCleanup: { ...settings.worktreeCleanup, ...worktreeCleanup } }
+      return true
+    })
     vi.stubGlobal('sotto', { getSettings: async () => settings })
     try {
       const { rerender } = render(<SettingsView {...baseProps({ settings, onUpdateSettings })} />)
@@ -1176,6 +1321,97 @@ describe('Project thread defaults in Application settings', () => {
 
 
 describe('Personal dictionary draft acknowledgements', () => {
+  it('keeps the paste status mounted and clears it when edits return below the limit', async () => {
+    render(<SettingsView {...baseProps()} />)
+    await selectCategory('Cleanup')
+    const input = screen.getByRole('textbox', { name: 'Personal dictionary' }) as HTMLTextAreaElement
+    const status = screen.getByRole('status')
+    expect(status).toBeEmptyDOMElement()
+    fireEvent.change(input, { target: { value: 'a'.repeat(3990) } })
+    input.setSelectionRange(3990, 3990)
+    fireEvent.paste(input, { clipboardData: { getData: () => 'b'.repeat(20) } })
+    fireEvent.change(input, { target: { value: 'a'.repeat(3990) + 'b'.repeat(10) } })
+    expect(screen.getByRole('status')).toBe(status)
+    expect(status).toHaveTextContent('The pasted text was cut to fit the 4,000-character limit.')
+    fireEvent.change(input, { target: { value: 'a'.repeat(3999) } })
+    expect(screen.getByRole('status')).toBe(status)
+    expect(status).toBeEmptyDOMElement()
+  })
+
+  it('clears the cut-paste message after deleting text below the limit', async () => {
+    render(<SettingsView {...baseProps()} />)
+    await selectCategory('Cleanup')
+    const input = screen.getByRole('textbox', { name: 'Personal dictionary' }) as HTMLTextAreaElement
+    fireEvent.change(input, { target: { value: 'a'.repeat(4000) } })
+    input.setSelectionRange(4000, 4000)
+    fireEvent.paste(input, { clipboardData: { getData: () => 'extra' } })
+    expect(screen.getByText('The pasted text was cut to fit the 4,000-character limit.')).toBeVisible()
+    fireEvent.change(input, { target: { value: 'a'.repeat(3999) } })
+    expect(screen.queryByText('The pasted text was cut to fit the 4,000-character limit.')).not.toBeInTheDocument()
+  })
+
+  it('announces only pastes cut by the dictionary limit, accounting for the selection', async () => {
+    render(<SettingsView {...baseProps()} />)
+    await selectCategory('Cleanup')
+    const input = screen.getByRole('textbox', { name: 'Personal dictionary' }) as HTMLTextAreaElement
+    fireEvent.change(input, { target: { value: 'a'.repeat(3990) } })
+    input.setSelectionRange(3990, 3990)
+    fireEvent.paste(input, { clipboardData: { getData: () => 'b'.repeat(20) } })
+    expect(screen.getByRole('status')).toHaveTextContent('The pasted text was cut to fit the 4,000-character limit.')
+    input.setSelectionRange(0, 20)
+    fireEvent.paste(input, { clipboardData: { getData: () => 'b'.repeat(20) } })
+    expect(screen.queryByText('The pasted text was cut to fit the 4,000-character limit.')).not.toBeInTheDocument()
+  })
+
+  it('limits the dictionary to 4000 characters and explains the limit when reached', async () => {
+    render(<SettingsView {...baseProps()} />)
+    await selectCategory('Cleanup')
+    const input = screen.getByRole('textbox', { name: 'Personal dictionary' })
+    expect(input).toHaveAttribute('maxlength', '4000')
+    fireEvent.change(input, { target: { value: 'a'.repeat(4000) } })
+    expect(input).toHaveAccessibleDescription(/4,000 characters maximum\./u)
+  })
+
+  it('flushes a changed dictionary draft on unmount without a blur', async () => {
+    const update = vi.fn(async () => true)
+    const view = render(<SettingsView {...baseProps({ onUpdateSettings: update })} />)
+    await selectCategory('Cleanup')
+    fireEvent.change(screen.getByRole('textbox', { name: 'Personal dictionary' }), { target: { value: 'Sotto\nZach' } })
+    view.unmount()
+    expect(update).toHaveBeenCalledExactlyOnceWith({ llmDictionary: 'Sotto\nZach' })
+  })
+
+  it('keeps an older failed save quiet when a newer dictionary save is pending after close', async () => {
+    const older = deferred<boolean>()
+    const newer = deferred<boolean>()
+    const onNotice = vi.fn()
+    const update = vi.fn().mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise)
+    const view = render(<SettingsView {...baseProps({ onUpdateSettings: update, onNotice })} />)
+    await selectCategory('Cleanup')
+    const input = screen.getByRole('textbox', { name: 'Personal dictionary' })
+    fireEvent.change(input, { target: { value: 'Older' } })
+    fireEvent.blur(input)
+    fireEvent.change(input, { target: { value: 'Newer' } })
+    view.unmount()
+    await act(async () => older.resolve(false))
+    expect(onNotice).not.toHaveBeenCalled()
+    await act(async () => newer.resolve(true))
+    expect(onNotice).toHaveBeenCalledExactlyOnceWith(null)
+  })
+
+  it('does not duplicate an in-flight dictionary blur save on unmount', async () => {
+    const pending = deferred<boolean>()
+    const update = vi.fn(() => pending.promise)
+    const view = render(<SettingsView {...baseProps({ onUpdateSettings: update })} />)
+    await selectCategory('Cleanup')
+    const input = screen.getByRole('textbox', { name: 'Personal dictionary' })
+    fireEvent.change(input, { target: { value: 'Sotto' } })
+    fireEvent.blur(input)
+    view.unmount()
+    expect(update).toHaveBeenCalledExactlyOnceWith({ llmDictionary: 'Sotto' })
+    await act(async () => { pending.resolve(true) })
+  })
+
   async function dictionary() {
     const answers: Array<ReturnType<typeof deferred<boolean>>> = []
     const update = vi.fn<SettingsViewProps['onUpdateSettings']>(() => { const answer = deferred<boolean>(); answers.push(answer); return answer.promise })
@@ -1202,7 +1438,7 @@ describe('Personal dictionary draft acknowledgements', () => {
     f.publish('Sotto\nZach')
     await act(async () => f.answers[1]!.resolve(true))
     expect(f.input).toHaveValue('Sotto\nZach')
-    expect(screen.getByRole('status')).toHaveTextContent('Dictionary saved.')
+    expect(screen.getByText('Dictionary saved.')).toHaveAttribute('role', 'status')
   })
 
   it('retains the latest draft through repeated blur and refocus while earlier saves are queued', async () => {
@@ -1376,4 +1612,19 @@ it('rolls back to a successful explicit numeric return even when its setting val
   await act(async () => { answers[2]!.resolve(false) })
   expect(input).toHaveValue('300')
   expect(update.mock.calls).toEqual([[{ pasteDelayMs: 300 }], [{ pasteDelayMs: 300 }], [{ pasteDelayMs: 450 }]])
+})
+
+it('explains a failed secure key migration beside the Settings key field until a key is saved', () => {
+  const props = baseProps({ openRouterKeyMigrationFailed: true })
+  const view = render(<SettingsView {...props} />)
+  expect(screen.getByText('The OpenRouter key could not be stored securely. Enter it again.')).toBeInTheDocument()
+  view.rerender(<SettingsView {...props} settings={{ ...DEFAULT_SETTINGS, llmApiKey: 'Saved in your operating system credential store' }} />)
+  expect(screen.queryByText('The OpenRouter key could not be stored securely. Enter it again.')).not.toBeInTheDocument()
+})
+
+it('says reset preserves the saved OpenRouter key before confirmation', async () => {
+  render(<SettingsView {...baseProps()} />)
+  await selectCategory('Application')
+  await userEvent.click(screen.getByRole('button', { name: 'Reset settings' }))
+  expect(screen.getByText('Defaults will be restored and first-run setup will reopen. Your saved OpenRouter key and history are preserved.')).toBeVisible()
 })

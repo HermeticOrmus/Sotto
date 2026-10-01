@@ -55,7 +55,7 @@ Some commands on the list are the user's answer to a question in another form, s
 
 ## September 23 amendment: the host reclaims its own worktrees
 
-A headless host owns worktrees as the desktop's local host does, so it reclaims them the same way (ADR-0019, #245). The worktree cleanup is built by the shared agent runtime rather than by the desktop's entry, and both entries start it once they are up; closing the runtime drains a sweep in progress, letting it finish the worktree in hand and start no other, before the coordinator and the workspace close. A host follows the cleanup rules in its own data folder's settings, read at start and all off by default, and asks GitHub through the host machine's own `gh` sign-in only when the merged rule is on there. A paired client cannot change those rules yet; they are not on the remote command list.
+A headless host owns worktrees as the desktop's local host does, so it reclaims them the same way (ADR-0041, #245). The worktree cleanup is built by the shared agent runtime rather than by the desktop's entry, and both entries start it once they are up; closing the runtime drains a sweep in progress, letting it finish the worktree in hand and start no other, before the coordinator and the workspace close. A host follows the cleanup rules in its own data folder's settings, read at start and all off by default, and asks GitHub through the host machine's own `gh` sign-in only when the merged rule is on there. A paired client cannot change those rules yet; they are not on the remote command list.
 
 ## September 23 amendment: what a reconnect downloads, and the listener's budgets
 
@@ -130,3 +130,15 @@ The approval page is opened only on the user's press and only by main: the windo
 The statement above that the phone consumes events was inaccurate: its lists and conversations use only the shell and observed thread detail. Its hello nevertheless started at sequence zero, downloading retained events and decoding their bodies without using them. The phone now makes the same snapshot-only hello as desktop. Saving an event cursor would preserve a download it does not need; making events authoritative would add a second state model for no displayed behavior.
 
 The phone also accepts the existing v1 `detail-delta` extension. A full observed detail starts the conversation; subsequent updates carry changed messages and activities. A missing base or append target causes one full detail read, and stale revisions and prior connections cannot replace the selected thread. Older hosts may continue sending full details. Frame decoding runs outside the UI actor, in receive order. This changes no protocol version, host, credential, permission authority or delivery retry policy. A failure to read a thread is reported on that thread without disconnecting an otherwise online computer.
+
+## September 30 amendment: live answer authority
+
+The optional v1 shell field `clientCapabilities.mayAnswer` reports the policy for the authenticated client receiving that shell. A Can answer change publishes it immediately, on the desktop phone listener and the headless host. The iPhone refreshes its controls only from a newer shell; an older host without the field keeps hello behavior. This grants no authority: dispatch still checks the host policy for the authenticated client, and no answer is sent automatically.
+
+## September 30 amendment: an answer receipt records its own outcome
+
+A completed transport receipt did not establish answer delivery: the coordinator catches a provider failure into its published shared error and still resolves the command. Inspecting that shared error is also unsafe when another thread fails at the same time.
+
+For a socket answer, the coordinator returns the command-local failure as the response's error, separately from the published shell. The socket uses that outcome to add optional `answerDelivered` evidence to the existing v1 receipt. Only a completed receipt with no error and `answerDelivered: true` confirms the phone's answer. Refusal or uncertainty records false with a generic error. The command still answers with the existing shell, and neither a receipt nor its replay sends another answer.
+
+Older hosts omit the field. The iPhone keeps their still-waiting answers unconfirmed and clears a vanished request with neutral copy, never claiming the phone's answer arrived. This adds evidence rather than authority: the user's explicit answer and the host's policy remain the only grants. No additional host, network request or permission is introduced.

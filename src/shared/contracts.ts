@@ -251,7 +251,7 @@ export const updatePhaseSchema = z.discriminatedUnion('phase', [
   z.object({ phase: z.literal('checking') }).strict(),
   z.object({ phase: z.literal('up-to-date') }).strict(),
   z
-    .object({ phase: z.literal('available'), version: updateVersionSchema, problem: updateProblemSchema.nullable() })
+    .object({ phase: z.literal('available'), version: updateVersionSchema, problem: updateProblemSchema.nullable(), failedStep: z.enum(['check', 'download']).optional() })
     .strict(),
   z
     .object({
@@ -365,6 +365,7 @@ export interface SottoBridge {
   toggleMaximizeApp(): Promise<void>
   getWindowMaximized(): Promise<boolean>
   onWindowMaximized(listener: (maximized: boolean) => void): () => void
+  onWindowHidden(listener: () => void): () => void
   quitApp(): Promise<void>
 }
 

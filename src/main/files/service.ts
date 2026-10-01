@@ -11,7 +11,7 @@ export interface FilesBinding { threadId: string; projectId: string; workingDire
 export interface FilesDependencies {
   /** Resolve from current main-owned thread state, never a renderer-provided root. */
   resolveBinding(threadId: string): FilesBinding | null
-  copyPath(path: string): void
+  copyPath(path: string): void | Promise<void>
   reveal(path: string): void
 }
 class FilesFailure extends Error {
@@ -171,7 +171,7 @@ export class FilesService {
       const target = await this.target(workspace, request.path)
       if (!target.stats.isFile() && !target.stats.isDirectory()) return fail('path-unavailable', 'Select a regular file or directory.')
       await this.verify(workspace, request.path, target)
-      this.dependencies[action](target.absolutePath)
+      await this.dependencies[action](target.absolutePath)
       return { workspace: workspace.value, path: request.path, absolutePath: target.absolutePath }
     })
   }
