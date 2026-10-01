@@ -120,7 +120,12 @@ it('keeps the terminal selection until copying succeeds and explains a failed co
   view.dispose()
 })
 
-it.each(['new selection', 'terminal selection'])('keeps a newer selection (%s) when an earlier copy completes', async selection => {
+it.each([
+  { selection: 'new selection', change: 'selection' },
+  { selection: 'terminal selection', change: 'selection' },
+  { selection: 'drag selection', change: 'mousedown' },
+  { selection: 'pointer selection', change: 'pointerdown' },
+])('keeps a newer $change selection when an earlier copy completes', async ({ selection, change }) => {
   vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} }))
   const pending = Promise.withResolvers<string>()
   const deliverOutput = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValue('copied')
@@ -128,10 +133,13 @@ it.each(['new selection', 'terminal selection'])('keeps a newer selection (%s) w
   const onNotice = vi.fn(), onInterrupt = vi.fn()
   const view = createXtermView({ onInput() {}, onInterrupt, onNotice }, { resolveColor: value => value })
   view.setInputEnabled(true)
+  const host = document.createElement('div')
+  view.mount(host)
   const terminal = xterm.instances[0]!
   terminal.key(new KeyboardEvent('keydown', { key: 'c', ctrlKey: true }))
   xterm.selection = selection
-  terminal.selectionChange()
+  if (change === 'selection') terminal.selectionChange()
+  else host.firstElementChild!.dispatchEvent(new MouseEvent(change, { bubbles: true }))
   pending.resolve('copied')
   await vi.waitFor(() => expect(onNotice).toHaveBeenCalledWith(null))
   expect(terminal.clearSelection).not.toHaveBeenCalled()

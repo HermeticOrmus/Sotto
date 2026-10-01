@@ -133,6 +133,10 @@ export const createXtermView = (handlers: TerminalViewHandlers, { resolveColor =
   let disposed = false
   let selectionRevision = 0
   const selectionChanges = terminal.onSelectionChange(() => { selectionRevision++ })
+  // xterm reports a dragged selection on release. Protect it from queued copies from the first press.
+  const startSelection = (): void => { selectionRevision++ }
+  element.addEventListener('pointerdown', startSelection, true)
+  element.addEventListener('mousedown', startSelection, true)
   let renderer: WebglAddon | undefined
   const releaseRenderer = (): void => {
     const current = renderer
@@ -234,7 +238,17 @@ export const createXtermView = (handlers: TerminalViewHandlers, { resolveColor =
       return { cols: terminal.cols, rows: terminal.rows }
     },
     focus() { terminal.focus() },
-    dispose() { disposed = true; selectionChanges.dispose(); retheme.disconnect(); systemMotion.removeEventListener('change', followMotion); releaseRenderer(); terminal.dispose(); element.remove() },
+    dispose() {
+      disposed = true
+      selectionChanges.dispose()
+      element.removeEventListener('pointerdown', startSelection, true)
+      element.removeEventListener('mousedown', startSelection, true)
+      retheme.disconnect()
+      systemMotion.removeEventListener('change', followMotion)
+      releaseRenderer()
+      terminal.dispose()
+      element.remove()
+    },
   }
   return view
 }
