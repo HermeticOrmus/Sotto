@@ -61,7 +61,7 @@ async function fixture() {
   const reasoner = new ConfiguredAgentReasoner(() => binding.control.get().configuration, credentials)
   const host = new E2EAgentHost()
   binding.control = new AgentControl({ schedule: immediatePublishScheduler,
-    directory: root, host, credentials, reasoner, turns: recorder,
+    directory: root, host, credentials, reasoner, turns: recorder, historyEnabled: () => historyEnabled,
     membership: {
       status: async () => ({ status: 'beta', label: 'Fixture beta', expiresAt: null }),
       action: async () => ({ status: 'beta', label: 'Fixture beta', expiresAt: null }),
@@ -322,7 +322,8 @@ describe('coordinator turn records', () => {
       const record = (await f.recorder.recent(1))[0]!
       expect(record.failureCode).toBe(`${source}-failed`)
       expect(turnRecordSchema.safeParse({ ...record, failureCode: 'Private error' }).success).toBe(false)
-      const { failureCode: _code, ...legacy } = record
+      const legacy: Partial<typeof record> = { ...record }
+      delete legacy.failureCode
       await writeFile(f.recorder.path(), `${JSON.stringify(legacy)}\n`)
       const upgraded = new TurnRecorder({ directory: f.root, resolveSession: () => undefined })
       await upgraded.initialize()
