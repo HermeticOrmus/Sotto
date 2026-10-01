@@ -99,6 +99,7 @@ describe('ThreadDraftStore revisions and saves', () => {
     store.restoreRefusedCreation('target', 'project')
     expect(store.draft('target')).toMatchObject(first)
     const retained = store.submissions().filter(item => item.threadId === 'target')
+    expect(retained.every(item => item.error === 'This prompt was kept after a new thread was refused. Use Restore prompt to bring it back. Nothing was sent.')).toBe(true)
     expect(retained).toHaveLength(2)
     expect(retained[0]).toMatchObject(first)
     expect(retained[1]).toMatchObject(second)

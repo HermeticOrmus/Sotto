@@ -252,7 +252,7 @@ export class ThreadDraftStore {
   draft(threadId: string): ComposerDraft { return this.entries.get(threadId)?.draft ?? EMPTY }
 
   /** Nothing reached a refused creation: carry submitted revisions and newer typing back as one draft. */
-  carryRefusedCreation(threadId: string, projectId: string): void {
+  carryRefusedCreation(threadId: string, projectId: string): boolean {
     const draft = this.draft(threadId)
     const submissions = this.submissionList.filter(item => item.threadId === threadId)
     const kept = submissions.filter(item => item.restoredAs !== draft.draftId
@@ -260,6 +260,8 @@ export class ThreadDraftStore {
     const sent = [...kept.filter(item => !item.recovered), ...kept.filter(item => item.recovered)]
     this.refusedDrafts.set(threadId, [...sent.map(item => ({ ...item, files: item.files ?? [], requestId: null })), draft])
     this.projectRecoveries.set(projectId, [...new Set([...(this.projectRecoveries.get(projectId) ?? []), threadId])])
+    return this.refusedDrafts.get(threadId)!.some(item => Boolean(item.text.trim() || item.attachments.length || item.skills.length || item.files?.length))
+      || this.screenshotReads(threadId).pending > 0
   }
 
   /** Move recovery and any screenshot reads to the next thread, even after leaving the Threads page. */
@@ -305,7 +307,7 @@ export class ThreadDraftStore {
       const draftId = this.uuid()
       this.submissionList = [...this.submissionList, { ...batch, threadId, draftId, mode: 'send', submittedAt: 0,
         startedAt: new Date().toISOString(), resolved: true, notSent: true, recovered: true,
-        error: 'This prompt was kept after a new thread was refused. Restore it separately. Nothing was sent.',
+        error: 'This prompt was kept after a new thread was refused. Use Restore prompt to bring it back. Nothing was sent.',
         ...(index === 0 ? { restoredAs } : {}) }]
     }
     this.emit(new Set([threadId]))

@@ -155,6 +155,7 @@ export function ThreadsView({ onOpenAgents, now: fixedNow, updateControl, tools,
   // The pane and its composer are on screen before the command is answered; main catches up under the same ID.
   // Shared by every instant-creation entry point: the pen, the empty page's button and the chooser.
   const handleCreationStart = useCallback((start: ThreadCreationStart): void => {
+    const projectTitle = publishedRef.current?.host.projects.find(project => project.id === start.thread.projectId)?.title
     draftThreads.open(start.thread, start.created)
     setPending({ threadId: start.thread.id })
     store.restoreRefusedCreation(start.thread.id, start.thread.projectId)
@@ -163,9 +164,11 @@ export function ThreadsView({ onOpenAgents, now: fixedNow, updateControl, tools,
       if (creationError === null) return
       // A broadcast can confirm creation and release sends before the command's reply is lost.
       if (publishedRef.current?.host.threads.some(thread => thread.id === start.thread.id)) return
-      setNewThreadError(creationError)
       // The pane is gone and gated sends never left the window; retain all its content, not just unsent text.
-      store.carryRefusedCreation(start.thread.id, start.thread.projectId)
+      const kept = store.carryRefusedCreation(start.thread.id, start.thread.projectId)
+      setNewThreadError(kept
+        ? `${creationError} Your prompt and screenshots are kept. Open New thread in ${projectTitle ?? 'the same project'} to get them back.`
+        : creationError)
     })
   }, [store])
   // The pen and the empty page's button already know their project: the thread opens at once, on the defaults

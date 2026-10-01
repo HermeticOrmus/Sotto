@@ -561,6 +561,7 @@ describe('a thread created without a round trip', () => {
     await waitFor(() => expect(screen.getByRole('heading', { name: 'New thread' })).toBeVisible())
     expect(screen.queryByRole('dialog', { name: 'New thread' })).not.toBeInTheDocument()
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Send or clear your draft before creating another thread.'))
+    expect(screen.getByRole('alert')).not.toHaveTextContent('are kept')
     expect(screen.queryByRole('heading', { name: 'New thread' })).not.toBeInTheDocument()
     expect(draftThreads.get()).toEqual([])
     // The selection returns to the thread that had it, and creation is never repeated on its own.
@@ -592,6 +593,7 @@ describe('a thread created without a round trip', () => {
     }
     await act(async () => { settle({ ...state, error: 'That model is unavailable.' }) })
     await screen.findByRole('alert')
+    expect(screen.getByRole('alert')).toHaveTextContent('That model is unavailable. Your prompt and screenshots are kept. Open New thread in workshop to get them back.')
     expect(screen.queryByRole('heading', { name: 'New thread' })).not.toBeInTheDocument()
     if (mode === 'sent after navigation') { view.unmount(); renderThreads(state, command) }
     if (mode === 'sent into reused thread') {
@@ -662,6 +664,7 @@ describe('a thread created without a round trip', () => {
     fireEvent.change(screen.getByLabelText('Screenshot files'), { target: { files: [new File([bytes], 'late.png', { type: 'image/png' })] } })
     await waitFor(() => expect(stageAttachment).toHaveBeenCalledOnce())
     await act(async () => { refuse({ ...state, error: 'That model is unavailable.' }) })
+    expect(await screen.findByRole('alert')).toHaveTextContent('Your prompt and screenshots are kept. Open New thread in workshop to get them back.')
     await screen.findByRole('alert')
     if (reopenFirst) {
       createThread()

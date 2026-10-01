@@ -20,7 +20,7 @@ Sotto runs the Claude Code, Codex, Grok Build and Devin clients you already have
 
 Saved Codex conversations keep both sides after a restart. Opening a thread also repairs repeated prompts saved by earlier versions.
 
-If creating a thread fails, its prompt returns in the next new thread opened in that project, while this window stays open. Staged screenshots come with it while available; unused screenshots are kept for an hour. Prompts that cannot fit together stay as **Not sent** messages with **Restore prompt**.
+If creating a thread fails, the error names the project where you can recover its prompt and screenshots. Its prompt returns in the next new thread opened in that project, while this window stays open. Staged screenshots come with it while available; unused screenshots are kept for an hour. Prompts that cannot fit together stay as **Not sent** messages with **Restore prompt**.
 
 ## What it does
 
