@@ -42,6 +42,7 @@ export class ClaudeProtocol {
     let fragments: string[] = []; let pendingBytes = 0
     this.child.stdout.setEncoding('utf8')
     this.child.stdout.on('data', (chunk: string) => {
+      if (this.ended) return
       pendingBytes += Buffer.byteLength(chunk)
       if (pendingBytes > CLAUDE_MAX_FRAME_BYTES) { fragments = []; this.abort(); return }
       let start = 0
@@ -66,6 +67,8 @@ export class ClaudeProtocol {
           }
           onFrame(frame)
         }
+      } catch {
+        this.abort()
       } finally {
         // Whatever this chunk did not consume stays pending, as the rest of the old buffer did, even
         // when a malformed line or a throwing listener ends the loop early.
