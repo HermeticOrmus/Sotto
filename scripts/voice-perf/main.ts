@@ -29,7 +29,6 @@ app.whenReady().then(async () => {
   control = new AgentControl({ directory: isolated, credentials, turns: recorder, historyEnabled: () => false,
     host: new E2EAgentHost(),
     reasoner: { async intent() { throw new Error('Fixture unexpectedly requested reasoning') }, async decide() { throw new Error('Fixture unexpectedly requested supervision') } },
-    membership: { async status() { return { status: 'beta', label: 'Isolated benchmark', expiresAt: null } }, async action() { return { status: 'beta', label: 'Isolated benchmark', expiresAt: null } } },
   })
   await control.start()
   await control.command({ type: 'connect' })

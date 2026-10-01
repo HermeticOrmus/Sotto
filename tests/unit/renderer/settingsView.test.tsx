@@ -1166,7 +1166,6 @@ describe('SettingsView', () => {
       draftRequestId: null, pendingRequest: '', globalLaneBusy: false, notice: '', error: null, speech: { id: 0, text: '' },
       voice: { status: 'off', error: null, action: 'none', revision: 0 },
       credentials: { reasoning: false, grokSpeech: false, secure: true }, reasoningAccounts: [],
-      membership: { status: 'beta', label: 'Test', expiresAt: null },
     }
     vi.mocked(useOptionalAgents).mockReturnValue(agentContextFixture(state, vi.fn(async () => state)))
     const { container } = render(<SettingsView {...baseProps()} />)
@@ -1190,7 +1189,6 @@ describe('SettingsView', () => {
       draftRequestId: null, pendingRequest: '', globalLaneBusy: false, notice: '', error: null, speech: { id: 0, text: '' },
       voice: { status: 'off', error: null, action: 'none', revision: 0 },
       credentials: { reasoning: false, grokSpeech: false, secure: true }, reasoningAccounts: [],
-      membership: { status: 'beta', label: 'Test', expiresAt: null },
     }
     vi.mocked(useOptionalAgents).mockReturnValue(agentContextFixture(state, vi.fn(async () => state)))
     const { container, rerender } = render(<SettingsView {...baseProps()} />)
@@ -1220,7 +1218,6 @@ function withProjects(hostId?: string): AgentState {
     draftRequestId: null, pendingRequest: '', globalLaneBusy: false, notice: '', error: null, speech: { id: 0, text: '' },
     voice: { status: 'off', error: null, action: 'none', revision: 0 },
     credentials: { reasoning: false, grokSpeech: false, secure: true }, reasoningAccounts: [],
-    membership: { status: 'beta', label: 'Test', expiresAt: null },
   }
   const clientState = hostId ? clientAgentState({ ...state, hostId }) : state
   vi.mocked(useOptionalAgents).mockReturnValue(agentContextFixture(clientState, vi.fn(async () => clientState)))
@@ -1318,7 +1315,6 @@ describe('Project thread defaults in Application settings', () => {
     expect(screen.getByText('Add a project in Threads to set its default working copy.')).toBeVisible()
   })
 })
-
 
 describe('Personal dictionary draft acknowledgements', () => {
   it('keeps the paste status mounted and clears it when edits return below the limit', async () => {
