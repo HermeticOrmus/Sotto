@@ -71,3 +71,16 @@ final class StreamingTests: XCTestCase {
         XCTAssertEqual(ThreadGroups.waiting([computer]).count, 1, "Settlement never hides a waiting question")
     }
 }
+
+final class LivenessProgressTests: XCTestCase {
+    func testPartialLargeMessageKeepsConnectionAlivePastPongDeadline() {
+        let ping = LivenessProgress(bytes: 100, messages: 1)
+        XCTAssertTrue(ping.isAlive(bytes: 1_250_100, messages: 1, pong: false))
+        XCTAssertTrue(ping.isAlive(bytes: 100, messages: 2, pong: false))
+    }
+    func testSilentConnectionExpiresAndPongKeepsItAlive() {
+        let ping = LivenessProgress(bytes: 100, messages: 1)
+        XCTAssertFalse(ping.isAlive(bytes: 100, messages: 1, pong: false))
+        XCTAssertTrue(ping.isAlive(bytes: 100, messages: 1, pong: true))
+    }
+}

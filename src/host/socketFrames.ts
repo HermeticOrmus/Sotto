@@ -11,6 +11,8 @@ export class SocketFrames {
   private ended = false
   private heartbeat: ReturnType<typeof setInterval> | undefined
   private awaitingPong: Buffer | undefined
+  private lastReceived = Date.now()
+  get isClosed(): boolean { return this.ended }
   private readonly closedListeners = new Set<() => void>()
   constructor(private readonly stream: Duplex, private readonly client: boolean, private readonly message: (text: string) => void) {
     stream.on('data', (data: Buffer) => this.receive(data))
@@ -21,6 +23,11 @@ export class SocketFrames {
   startHeartbeat(): void {
     if (this.heartbeat || this.ended) return
     this.heartbeat = setInterval(() => {
+      if (this.stream.writableLength > 0) return
+      if (!this.client) {
+        if (Date.now() - this.lastReceived >= 75_000) this.close()
+        return
+      }
       if (this.awaitingPong) { this.close(); return }
       this.awaitingPong = randomBytes(8)
       this.write(9, this.awaitingPong)
@@ -67,7 +74,7 @@ export class SocketFrames {
   }
   private receive(data: Buffer): void {
     if (this.ended) return
-    if (data.length) { this.chunks.push(data); this.bufferedBytes += data.length }
+    if (data.length) { this.lastReceived = Date.now(); this.awaitingPong = undefined; this.chunks.push(data); this.bufferedBytes += data.length }
     while (this.bufferedBytes >= 2 && !this.ended) {
       const header = this.header()
       const first = header[0]!, second = header[1]!, opcode = first & 15

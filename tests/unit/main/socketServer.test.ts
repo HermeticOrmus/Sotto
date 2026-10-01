@@ -51,7 +51,7 @@ it('answers a full listener with a temporary capacity refusal and releases idle 
     })
     expect(listener.peers()).toBe(32)
     expect(streams[32]!.writes[0]).toContain('503 Service Unavailable')
-    vi.advanceTimersByTime(50_000)
+    vi.advanceTimersByTime(75_000)
     expect(listener.peers()).toBe(0)
     for (const { stream } of streams) stream.destroy()
   } finally { vi.useRealTimers() }

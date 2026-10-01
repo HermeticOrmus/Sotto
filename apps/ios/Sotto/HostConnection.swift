@@ -10,6 +10,8 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
 @MainActor final class HostConnection {
     var onPush: ((IncomingFrame, Int) -> Void)?
     var onDisconnect: (() -> Void)?
+    var onLiveness: (() -> Void)?
+    private var answeredPing: UUID?
     private let redirects = NoRedirects()
     private var made: URLSession?
     /// Made on first use. A session holds its delegate until it is invalidated, so `close()` ends it.
@@ -84,27 +86,25 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
             }
         }
         heartbeat = Task { [weak self] in
+            var interval: UInt64 = 25_000_000_000
             while !Task.isCancelled {
-                do { try await Task.sleep(nanoseconds: 25_000_000_000) } catch { return }
+                do { try await Task.sleep(nanoseconds: interval) } catch { return }
                 guard let self, self.generation == current else { return }
-                let deadline = Task { [weak self] in
-                    do { try await Task.sleep(nanoseconds: 10_000_000_000) } catch { return }
-                    guard let self, self.generation == current else { return }
-                    self.disconnect(); self.onDisconnect?()
-                }
-                do {
-                    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                        task.sendPing { error in
-                            if let error { continuation.resume(throwing: error) }
-                            else { continuation.resume() }
-                        }
+                let ping = UUID()
+                let progress = LivenessProgress(bytes: task.countOfBytesReceived, messages: self.received)
+                task.sendPing { [weak self] error in
+                    Task { @MainActor in
+                        guard let self, self.generation == current, error == nil else { return }
+                        self.answeredPing = ping
                     }
-                    deadline.cancel()
-                } catch {
-                    deadline.cancel()
-                    guard self.generation == current else { return }
+                }
+                do { try await Task.sleep(nanoseconds: 10_000_000_000) } catch { return }
+                guard self.generation == current else { return }
+                guard progress.isAlive(bytes: task.countOfBytesReceived, messages: self.received, pong: self.answeredPing == ping) else {
                     self.disconnect(); self.onDisconnect?(); return
                 }
+                self.onLiveness?()
+                interval = 15_000_000_000
             }
         }
         let helloResult = try await callReceived(Wire.snapshotHello)
@@ -118,7 +118,7 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
         disconnect(); made?.invalidateAndCancel(); made = nil
     }
     func disconnect() {
-        generation = UUID(); received = 0; reader?.cancel(); reader = nil
+        generation = UUID(); received = 0; answeredPing = nil; reader?.cancel(); reader = nil
         heartbeat?.cancel(); heartbeat = nil
         socket?.cancel(with: .goingAway, reason: nil); socket = nil; session = ""
         let waiting = pending; pending.removeAll()

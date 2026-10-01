@@ -128,6 +128,7 @@ export class SocketHostService implements HostService {
         stream.setTimeout(0)
         const frames = new SocketFrames(stream, true, text => this.receive(text))
         frames.onClose(() => this.disconnected(frames))
+        frames.startHeartbeat()
         frames.feed(head)
         resolve(frames)
       })
