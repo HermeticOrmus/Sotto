@@ -10,6 +10,8 @@
 .hosts-local { display: flex; align-items: flex-start; gap: 14px; padding-bottom: 20px; border-bottom: 1px solid var(--tt-hairline); }
 .hosts-local__copy { flex: 1; min-width: 0; max-width: 470px; }
 .hosts-local .tt-toggle { width: auto; flex: 0 0 auto; align-self: center; }
+.hosts-local > div:last-child { min-width: 0; max-width: 270px; align-self: center; }
+.hosts-settings .tt-field__error { color: var(--tt-error); }
 
 .hosts-list { display: grid; }
 .hosts-row { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; min-width: 0; border-bottom: 1px solid var(--tt-hairline); padding: 14px 0; }
