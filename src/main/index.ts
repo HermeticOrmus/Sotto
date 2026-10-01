@@ -512,7 +512,7 @@ async function createRuntime(): Promise<NativeRuntimeController> {
   // electron-builder; an unpackaged run has to name the repository icon itself.
   const unpackagedIconPath = app.isPackaged
     ? null
-    : join(__dirname, '../../build/icon.ico')
+    : join(__dirname, '../../build', process.platform === 'win32' ? 'icon.ico' : 'icon.png')
   const recoveryNotices = new RecoveryNoticeCenter()
   const { settings: plainSettings, history } = createStorageRepositories(
     userDataPath,
