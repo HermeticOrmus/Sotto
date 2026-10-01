@@ -357,15 +357,16 @@ export class RequestAnswerStore {
   }
 
   /** Forget answers for requests the owner no longer has. */
-  prune(ownerId: string, liveRequestIds: readonly string[]): void {
+  prune(ownerId: string, live: readonly AgentRequest[]): void {
     const prefix = `${ownerId}\0`
     let changed = false
     for (const key of [...this.entries.keys()]) {
       // Renderer snapshots are not authoritative. Durable records are retired only by main.
-      if (!this.bindings.has(key) && key.startsWith(prefix) && !liveRequestIds.includes(key.slice(prefix.length))) { this.entries.delete(key); changed = true }
+      if (!this.bindings.has(key) && key.startsWith(prefix) && !live.some(request => request.id === key.slice(prefix.length))) { this.entries.delete(key); changed = true }
     }
     for (const [key, binding] of this.bindings) {
-      if (binding.target.kind !== 'thread' || binding.target.ownerId !== ownerId || liveRequestIds.includes(binding.target.requestId) || binding.retiring) continue
+      if (binding.target.kind !== 'thread' || binding.target.ownerId !== ownerId || binding.retiring
+        || live.some(request => request.id === binding.target.requestId && sameRequestQuestions(requestDraftQuestions(request), binding.target.questions))) continue
       // A missing card alone retires nothing. Main must confirm that its saved draft is gone.
       binding.retiring = this.retire(key, binding).finally(() => { binding.retiring = null })
     }

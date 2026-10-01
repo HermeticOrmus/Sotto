@@ -27,3 +27,5 @@ The first permission journey run reached its final outbox assertion before the p
 ## Review
 
 The standards and issue-spec reviews were run separately with the code-review skill. The spec review identified retained structured bindings and delayed-reply races; all were fixed and covered by regression tests. Both final reviews reported no remaining findings. README, CONTEXT and the ADRs still describe the same product behavior and authority; the guide adds the shortcut conflict and delayed diagram-color behavior.
+
+A later PR review found same-ID question replacement without an intervening empty snapshot. The A → B → A regression reproduced the stale `sent` phase with the original ID-only pruning API. Snapshot pruning now compares the original question definition as well as its ID, while unchanged forms keep their phase and retirement still requires main to confirm the saved draft is gone. Both review axes checked this follow-up and reported no remaining findings.

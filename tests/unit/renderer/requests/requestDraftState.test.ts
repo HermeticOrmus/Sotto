@@ -23,6 +23,27 @@ function gate<T>() { let resolve!: (value: T) => void; let reject!: (reason: unk
 function bridge(): RequestDraftBridge { return { list: vi.fn(async () => []), discard: vi.fn(async () => false), get: vi.fn(async () => null), save: vi.fn(async value => value), check: vi.fn(async () => null) } }
 
 describe('request draft renderer ordering', () => {
+  it('retires an accepted form when the same request ID changes questions and returns without an empty snapshot', async () => {
+    const api = bridge(), store = new RequestAnswerStore(() => api)
+    const first = { id: target.requestId, kind: 'question' as const, text: 'Notes', options: [], questions: target.questions }
+    const replacement = { ...first, questions: [{ ...target.questions[0]!, question: 'Different notes' }] }
+    const replacementTarget = { ...target, questions: replacement.questions }
+    const firstOwner = requestAnswerOwnerKey(target.ownerId, first, target)
+    const replacementOwner = requestAnswerOwnerKey(target.ownerId, replacement, target)
+    await store.connect(firstOwner, target.requestId, target)
+    await store.submit(firstOwner, target.requestId, null, async () => ({ error: null }))
+    expect(store.get(firstOwner, target.requestId).phase).toBe('sent')
+    store.prune(target.ownerId, [first])
+    await store.connect(firstOwner, target.requestId, target)
+    expect(store.get(firstOwner, target.requestId).phase).toBe('sent')
+    expect(api.get).toHaveBeenCalledOnce()
+    store.prune(target.ownerId, [replacement])
+    await store.connect(replacementOwner, target.requestId, replacementTarget)
+    store.prune(target.ownerId, [first])
+    await store.connect(firstOwner, target.requestId, target)
+    expect(store.get(firstOwner, target.requestId)).toMatchObject({ phase: 'idle', selections: {} })
+  })
+
   it('retires a departed structured answer only after main confirms it is gone, before reconnecting a reused ID', async () => {
     const api = bridge(), store = new RequestAnswerStore(() => api)
     const request = { id: target.requestId, kind: 'question' as const, text: 'Notes', options: [], questions: target.questions }

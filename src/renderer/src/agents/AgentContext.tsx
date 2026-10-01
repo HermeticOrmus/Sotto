@@ -90,7 +90,7 @@ export function useAgentConnection(bridge: AgentBridge | undefined): AgentConnec
     if (next.stale !== true) {
       const owners = new Set(next.host.threads.map(thread => thread.id))
       for (const owner of session.requestOwners) if (!owners.has(owner)) requestAnswerStore.prune(owner, [])
-      for (const thread of next.host.threads) requestAnswerStore.prune(thread.id, thread.requests.map(request => request.id))
+      for (const thread of next.host.threads) requestAnswerStore.prune(thread.id, thread.requests)
       session.requestOwners = owners
     }
     arrived.current = performance.now()
