@@ -651,8 +651,8 @@ export class ClaudeStreamJsonHost implements AgentHost {
           if (stale) {
             await this.denyPending(id, stale)
             const ended = await this.stopRuntime(id, stale)
-            if (ended.length) this.report(workStopped(this.revokedContexts.has(id) ? 'A memory in this session was deleted' : 'The native conversation changed', ended,
-              'The session resumes with the updated context before this message is sent.'))
+            if (ended.length) this.report(workStopped(this.revokedContexts.has(id) ? 'A memory in this provider session was deleted' : 'The native conversation changed', ended,
+              'The provider session resumes with the updated context before this message is sent.'))
           }
           this.staleMemoryContexts.delete(id); this.revokedContexts.delete(id); this.nativeTakeovers.delete(id)
         }
