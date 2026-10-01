@@ -57,6 +57,53 @@ The job cancels a superseded run on the same ref (`concurrency` with `cancel-in-
 - **Wall-clock budgets.** See below.
 - **Desktop packaging and all publishing.** Desktop releases are still cut by hand on the Windows PC and the Apple silicon Mac. The Linux host archive is built and verified in its separate job, then published manually.
 
+The historical `tests/review/composer-polish` capture harness was removed (#605).
+It had no npm runner and used fixed sleeps. Its retained captures and verdicts
+remain recorded in `docs/verification/phase-2-implementation.md`. Some composer
+regressions run through `tests/e2e/composer-short-window.spec.ts` in the normal
+Playwright tree. Current tests do not cover the deleted harness's skill picker
+over a split pane at 1600x900, 1280x800 and 1280x560, the queue composer at the
+760x560 stress size or at 1280x800 with 125% and 150% zoom, or a failed working
+folder keeping its draft. Every separate
+Playwright config under `tests/` must have an npm runner;
+`tests/unit/release/testDiscovery.test.ts` checks that boundary.
+
+## Opt-in appearance and theme captures
+
+`npm run test:e2e` builds and runs the ordinary Electron suite with one worker.
+Four appearance and theme capture specs skip unless their evidence variable is
+set. These captures are developer evidence, not part of the ordinary suite or CI.
+Build first with `npm run build`, then enable the spec you want to capture:
+
+```sh
+SOTTO_THEMES_E2E=1 npx playwright test tests/e2e/phase-three-themes.spec.ts
+SOTTO_APPEARANCE_EVIDENCE=1 npx playwright test tests/e2e/appearance-evidence.spec.ts
+SOTTO_THEME_EVIDENCE=1 npx playwright test tests/e2e/theme-palettes-evidence.spec.ts
+SOTTO_THEME_BRANDING_EVIDENCE=1 npx playwright test tests/e2e/phase-three-theme-branding.spec.ts
+```
+
+In PowerShell, set the matching variable before the command and remove it after:
+
+```powershell
+$env:SOTTO_THEMES_E2E = '1'
+try { npx playwright test tests/e2e/phase-three-themes.spec.ts }
+finally { Remove-Item Env:SOTTO_THEMES_E2E }
+```
+
+| Spec | Capture folder |
+| --- | --- |
+| `phase-three-themes.spec.ts` | `artifacts/phase-three-themes/` |
+| `appearance-evidence.spec.ts` | `artifacts/verification/phase-1-appearance/` |
+| `theme-palettes-evidence.spec.ts` | `artifacts/verification/sotto-palettes/` |
+| `phase-three-theme-branding.spec.ts` | `artifacts/phase-three-theme-branding/` |
+
+The appearance spec's optional whole-screen capture additionally needs
+`SOTTO_APPEARANCE_SCREEN_CAPTURE=1` and an otherwise clear desktop. Leave it unset
+for app-window captures. Run Electron captures serially on an interactive desktop;
+inspect their images before claiming visual verification. These commands write
+evidence files, so inspect the working tree afterward and keep only intended
+captures. They do not regenerate the design comparison baselines.
+
 ## Devin native verification
 
 The scripted adapter tests exercise each advertised permission mode in its own fixture. Combining all six sends in one test accumulated six provider processes against one test deadline and intermittently timed out on Windows, including on `main`. Each case still checks the complete advertised mode list, its selected mode and the accepted send; the separate simultaneous-thread test covers concurrency. The normal deadlines remain unchanged.
@@ -253,6 +300,14 @@ The **Host archive and socket contract (Linux)** job runs on `ubuntu-latest` wit
 The job retains `Sotto-host-*-linux-x64.tar.gz` and its checksum sidecar as a workflow artifact for 14 days. It does not publish them. The archive contains zod and no native modules; a new dependency or native binary fails the packaging check until its runtime/release path is reviewed. The desktop's Windows node-pty installation is never copied into a Linux archive.
 
 Run `npm run package:host` locally for the same extraction and startup check. The filename records the actual platform. `npm run host:verify -- <extracted-directory>` verifies an existing extracted archive against its manifest and provenance; `node scripts/smoke-host-archive.mjs <extracted-directory>` additionally starts and stops it. On Windows only, smoke shutdown exercises the signal handler through IPC, since Windows cannot deliver a graceful POSIX SIGTERM. The Linux CI run and a real Forge SSH connection remain separate evidence from a local Windows pass.
+
+The host build and package scripts anchor their source and output paths to the
+checkout that contains the script. Calling `node <checkout>/scripts/build-host.mjs`
+or `node <checkout>/scripts/package-host.mjs` from another folder still writes to
+that checkout's `out/host` and `release`. Packaging passes tar a relative archive
+filename from `release`, so GNU tar cannot mistake a Windows drive letter for a
+remote host. `tests/integration/hostBuildScripts.test.ts` runs both scripts from an
+owned scratch folder and checks the archive round trip with local archive names.
 
 The real OpenSSH journey is skipped unless `SOTTO_REAL_SSHD=1` is set, so the Windows gates and a plain `npm test` report it as skipped. To run it on a Linux or macOS machine with openssh-server and Node 24, use `SOTTO_REAL_SSHD=1 npx vitest run tests/integration/realSshd.test.ts --maxWorkers=1`. Without `SOTTO_REAL_SSHD_INSTALL` it builds and stages the host itself; `SOTTO_SSHD` names an sshd other than `/usr/sbin/sshd`. It uses its own keys, client configuration and known_hosts file and never touches the account's `~/.ssh`. It proves the transport on this machine's OpenSSH; Windows' own ssh.exe and a real remote host are still proved by hand.
 
