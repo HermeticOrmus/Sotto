@@ -75,10 +75,10 @@ const backgroundWorkRunning = (work: readonly AgentBackgroundWork[], action: str
  * Stopping a thread's CLI ends the background work and watches it was running, so a stop Sotto makes on its own
  * account names what ended with it: the user started that work, and it does not come back by itself.
  */
-function workStopped(reason: string, work: readonly { label: string }[], next = 'The session starts again with the new settings the next time you use the thread.'): string {
+function workStopped(reason: string, work: readonly { label: string }[], next = 'The provider session starts again with the new settings the next time you use the thread.'): string {
   const what = work.length === 1 ? `"${work[0]!.label}"` : `${work.length} background tasks`
   const them = work.length === 1 ? 'it' : 'them'
-  return `${reason}, so Sotto stopped this thread's session, and ${what} stopped with it. ${next} Ask Claude to start ${them} again if you still need ${them}.`
+  return `${reason}, so Sotto stopped this provider session, and ${what} stopped with it. ${next} Ask Claude to start ${them} again if you still need ${them}.`
 }
 type ConfigureCommand = Extract<AgentHostCommand, { type: 'configure-thread' }>
 const SETTINGS_UNCONFIRMED = 'Claude Code did not confirm the settings change'

@@ -296,7 +296,7 @@ describe('Claude recovery and safety', () => {
       expect(await f.sessions!.starts(personal)).toBe(2)
       expect((await f.liveSettings.effective(personal)).process).not.toBe(process)
       expect(f.adapter.personalSnapshot().find(thread => thread.id === personal)?.backgroundWork ?? []).toEqual([])
-      expect((await f.host.snapshot()).error).toContain('A memory in this provider session was deleted, so Sotto stopped this thread\'s session, and "Build" stopped with it.')
+      expect((await f.host.snapshot()).error).toContain('A memory in this provider session was deleted, so Sotto stopped this provider session, and "Build" stopped with it.')
       expect((await f.host.snapshot()).error).toContain('Ask Claude to start it again if you still need it.')
       const launch = (await f.driver.requests()).filter(record => record.method === 'resume').at(-1)!
       expect((launch.params!.frame as { args: string[] }).args.join(' ')).not.toContain(memories[0]!.content)
