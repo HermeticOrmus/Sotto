@@ -343,7 +343,7 @@ Automatic paste is best effort. Windows blocks synthetic input into elevated app
 
 Sotto finishes each automatic paste before copying or pasting the next transcript. Copying from History while a dictation is waiting to paste waits for that delivery to finish.
 
-If the Windows paste helper stops or does not confirm in time, Sotto keeps the copied result and does not repeat the paste. Check the target before pasting manually: the text may already have arrived.
+If the Windows paste helper does not become ready, the fallback can paste up to about 10 seconds after dictation ends, into whichever window has focus then. Once a paste has been dispatched, if the helper stops or does not confirm in time, Sotto keeps the copied result and does not repeat the paste. Check the target before pasting manually: the text may already have arrived.
 
 ## Updates
 

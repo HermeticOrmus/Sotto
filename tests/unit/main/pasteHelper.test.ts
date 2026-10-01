@@ -6,7 +6,7 @@ import {
   createWarmPasteAdapter,
   type HelperProcessLike,
 } from '../../../src/main/output/pasteHelper'
-import type { PasteProcessAdapter } from '../../../src/main/output/outputService'
+import { OutputService, PASTE_SETTLE_MS, type PasteProcessAdapter } from '../../../src/main/output/outputService'
 
 const windowsCommands = createPasteCommands('win32')
 const buildPasteInvocation = windowsCommands.oneShot
@@ -98,6 +98,50 @@ describe('warm helper invocation', () => {
 })
 
 describe('createWarmPasteAdapter', () => {
+  it.each(['exit', 'fail', 'timeout'] as const)(
+    'holds a queued copy and widget restoration until an unconfirmed paste settles: %s', async failure => {
+      vi.useFakeTimers()
+      const helper = new FakeHelperProcess()
+      const fallback = fallbackAdapter()
+      const adapter = createWarmPasteAdapter({ spawnHelper: () => helper, fallback })
+      try {
+        adapter.start()
+        helper.emit('ready\n')
+        const writes: string[] = []
+        const showWidget = vi.fn()
+        const service = new OutputService({
+          clipboard: { writeText: text => { writes.push(text) } },
+          widget: { hideWidget: vi.fn(), showWidget },
+          delay: ms => new Promise(resolve => setTimeout(resolve, ms)),
+          process: adapter,
+          buildPasteInvocation,
+        })
+        const paste = service.deliver('dictation', { autoPaste: true, pasteDelayMs: 0, restoreWidget: true })
+        const copy = service.deliver('history', { autoPaste: false, pasteDelayMs: 0 })
+        await vi.advanceTimersByTimeAsync(0)
+        expect(helper.writes).toEqual(['paste\n'])
+        if (failure === 'exit') helper.exit(0)
+        else if (failure === 'fail') helper.emit('fail\n')
+        else await vi.advanceTimersByTimeAsync(5_000)
+        await vi.advanceTimersByTimeAsync(0)
+        expect(writes).toEqual(['dictation'])
+        expect(showWidget).not.toHaveBeenCalled()
+        await vi.advanceTimersByTimeAsync(PASTE_SETTLE_MS - 1)
+        expect(writes).toEqual(['dictation'])
+        expect(showWidget).not.toHaveBeenCalled()
+        await vi.advanceTimersByTimeAsync(1)
+        await expect(paste).resolves.toBe('copied')
+        await expect(copy).resolves.toBe('copied')
+        expect(writes).toEqual(['dictation', 'history'])
+        expect(showWidget).toHaveBeenCalledOnce()
+        expect(fallback.calls).toBe(0)
+      } finally {
+        adapter.dispose()
+        vi.useRealTimers()
+      }
+    },
+  )
+
   it.each(['exit', 'error', 'timeout'] as const)('falls back when the helper fails before ready: %s', async failure => {
     vi.useFakeTimers()
     try {

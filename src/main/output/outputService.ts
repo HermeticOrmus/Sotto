@@ -143,10 +143,14 @@ export class OutputService {
       await this.dependencies.widget.hideWidget()
       hidForPaste = true
       await this.dependencies.delay(options.pasteDelayMs)
-      const pasted = await this.dependencies.process.run(
-        this.dependencies.buildPasteInvocation(),
-      )
-      if (pasted) await this.dependencies.delay(PASTE_SETTLE_MS)
+      const invocation = this.dependencies.buildPasteInvocation()
+      let pasted: boolean
+      try {
+        pasted = await this.dependencies.process.run(invocation)
+      } finally {
+        // A failed or lost acknowledgement can still follow dispatched input.
+        await this.dependencies.delay(PASTE_SETTLE_MS)
+      }
       return pasted ? 'pasted' : 'copied'
     } catch {
       return 'copied'
