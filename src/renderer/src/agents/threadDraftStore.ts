@@ -444,7 +444,12 @@ export class ThreadDraftStore {
       this.replace(entry, published ?? EMPTY, status)
       changed.add(threadId)
     }
-    const pruned = this.submissionList.filter(item => item.mode === 'queue' ? queueAdmissionOpen(item, state) : submissionStatus(item, state).visible)
+    const pruned = this.submissionList.filter(item => {
+      // Voice can send main's saved composer without a renderer submission. Its exact ownership
+      // retires the retained alias too; failure or newer typing keeps the original recoverable.
+      if (item.recovered && item.restoredAs && this.accepted.has(key(item.threadId, item.restoredAs))) return false
+      return item.mode === 'queue' ? queueAdmissionOpen(item, state) : submissionStatus(item, state).visible
+    })
     // Refused is the one outcome that proves nothing was sent, so the prompt comes back to an empty
     // composer. It is offered back once; typing since the press is never replaced without being asked.
     const returned = pruned.map(item => submissionStatus(item, state).status === 'failed' ? this.returnPrompt(item, changed) : item)

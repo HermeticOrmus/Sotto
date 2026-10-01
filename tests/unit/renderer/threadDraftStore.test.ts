@@ -34,6 +34,30 @@ beforeEach(() => { vi.useFakeTimers() })
 afterEach(() => { vi.useRealTimers() })
 
 describe('ThreadDraftStore revisions and saves', () => {
+  it.each(['receipt', 'delivery', 'queue'] as const)('retires a recovered alias on exact %s ownership without a renderer submission', evidence => {
+    const store = new ThreadDraftStore(heldCommand().command, 250, uuids())
+    store.edit('source', { text: 'A'.repeat(60_000) })
+    store.submit('source', 1)
+    store.edit('source', { text: 'B'.repeat(60_000) })
+    store.carryRefusedCreation('source', 'project')
+    store.restoreRefusedCreation('target', 'project')
+    const [first, overflow] = store.submissions()
+    const draft = store.draft('target')
+    const at = new Date().toISOString()
+    const receipt = { threadId: 'target', draftId: draft.draftId }
+    // A voice send uses main's saved composer directly; failure or another revision proves no ownership.
+    store.receive(baseState({ deliveries: [{ ...receipt, status: 'failed', createdAt: at, updatedAt: at }] }))
+    store.receive(baseState({ deliveredDrafts: [{ ...receipt, draftId: 'another-revision' }] }))
+    expect(store.submissions().map(item => item.draftId)).toEqual([first!.draftId, overflow!.draftId])
+    store.receive(baseState(evidence === 'receipt' ? { deliveredDrafts: [receipt] }
+      : evidence === 'queue' ? { followupReceipts: [receipt] }
+      : { deliveries: [{ ...receipt, status: 'accepted', createdAt: at, updatedAt: at }] }))
+    expect(store.submissions().map(item => item.draftId)).toEqual([overflow!.draftId])
+    expect(store.retry('target', first!.draftId, 3)).toBeNull()
+    store.restore('target', overflow!.draftId)
+    expect(store.draft('target').text).toBe('B'.repeat(60_000))
+  })
+
   it.each(['receipt', 'delivery', 'queue'] as const)('retires recovered content when its restored revision has %s ownership', evidence => {
     const store = new ThreadDraftStore(heldCommand().command, 250, uuids())
     const images = Array.from({ length: 8 }, (_, index) => ({ id: `shot-${index}`, name: `shot-${index}.png`, mimeType: 'image/png' as const, sizeBytes: 8, digest: 'e'.repeat(64) }))
