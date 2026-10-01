@@ -108,11 +108,12 @@ export interface AttachmentOrigin { readonly threadId: string; readonly messageI
 
 // Published state carries markers alone; cache fetched images within count and byte bounds.
 const fetchedPreviews = new Map<string, { source: Promise<string | null>; size: number }>()
+const pendingPreviews = new Map<string, { source: Promise<string | null>; size: number }>()
 const FETCHED_PREVIEW_CACHE = 64
 
 function requestPreview(origin: AttachmentOrigin, attachmentId: string): Promise<string | null> {
   const key = JSON.stringify([origin.threadId, origin.messageId, attachmentId])
-  const cached = fetchedPreviews.get(key)
+  const cached = fetchedPreviews.get(key) ?? pendingPreviews.get(key)
   if (cached) return cached.source
   const bridge = window.sotto?.agents ?? window.sottoWidget?.agents
   const pending: Promise<string | null> = bridge?.attachmentPreview
@@ -120,17 +121,22 @@ function requestPreview(origin: AttachmentOrigin, attachmentId: string): Promise
       .then(result => trustedPreviewSource(result?.dataUrl), () => null)
     : Promise.resolve(null)
   const entry = { source: pending, size: key.length * 2 }
-  fetchedPreviews.set(key, entry)
-  evictPreviews(fetchedPreviews, FETCHED_PREVIEW_CACHE)
+  // Deduplicate reads separately: an unknown result cannot evict a retained image yet.
+  if (entry.size <= PREVIEW_CACHE_BYTES) {
+    pendingPreviews.set(key, entry)
+    evictPreviews(pendingPreviews, FETCHED_PREVIEW_CACHE)
+  }
   // A preview main could not hand over may exist later; only the bytes themselves are worth keeping.
   void pending.then(source => {
     // An evicted request may finish after another request for the same image was cached.
-    if (fetchedPreviews.get(key) !== entry) return
-    if (source === null) fetchedPreviews.delete(key)
-    else {
+    if (pendingPreviews.get(key) !== entry) return
+    pendingPreviews.delete(key)
+    if (source !== null) {
       entry.size += source.length
-      if (entry.size > PREVIEW_CACHE_BYTES) fetchedPreviews.delete(key)
-      else evictPreviews(fetchedPreviews, FETCHED_PREVIEW_CACHE)
+      if (entry.size <= PREVIEW_CACHE_BYTES) {
+        fetchedPreviews.set(key, entry)
+        evictPreviews(fetchedPreviews, FETCHED_PREVIEW_CACHE)
+      }
     }
   })
   return pending

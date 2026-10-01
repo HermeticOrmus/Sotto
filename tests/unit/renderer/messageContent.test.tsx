@@ -323,6 +323,17 @@ describe('attachment previews', () => {
     expect(validate.mock.calls.filter(([value]) => (value as { dataUrl: string }).dataUrl === normal)).toHaveLength(1)
   })
 
+  it('keeps all 64 fetched previews when an oversized request completes', async () => {
+    const attachmentPreview = vi.fn(async ({ attachmentId }: { attachmentId: string }) => ({
+      dataUrl: largePreview(Number(attachmentId), attachmentId === '65' ? 9 * 1024 * 1024 : 1024),
+    }))
+    ;(window as { sotto?: unknown }).sotto = { agents: { attachmentPreview } }
+    const show = (id: string) => render(<AttachmentPreviews origin={{ threadId: 'full-cache-oversized', messageId: 'message' }} attachments={[{ id, name: `${id}.png`, preview: { available: true } }]} />)
+    for (let id = 1; id <= 65; id++) { show(String(id)); await screen.findByRole('img'); cleanup() }
+    for (let id = 1; id <= 64; id++) { show(String(id)); await screen.findByRole('img'); cleanup() }
+    expect(attachmentPreview).toHaveBeenCalledTimes(65)
+  })
+
   it('shows a validated submitted image with readable name, type and size', () => {
     render(<AttachmentPreviews attachments={[{ id: 'a', name: 'footer.png', mimeType: 'image/png', sizeBytes: 1_468_006, preview: { dataUrl: PNG } }]} />)
     const image = screen.getByRole('img', { name: 'footer.png' })
