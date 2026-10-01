@@ -30,6 +30,28 @@ function show(state: PhonesState, options: { answer?: (command: PhonesCommand, s
 }
 const step = (name: string) => screen.getByText(name, { selector: 'b' }).closest('li')!
 
+it('shows failed setting saves beside each control and clears them after a successful retry', async () => {
+  const { bridge } = fixture(OFF)
+  const update = vi.fn(async () => false)
+  const user = userEvent.setup()
+  const { container } = render(<PhonesSettings phoneAccess={false} phoneAccessName="" onUpdateSettings={update} onOpenHosts={vi.fn()} bridge={bridge} />)
+  const toggle = screen.getByRole('switch', { name: 'Let phones connect' })
+  await user.click(toggle)
+  expect(await within(container.querySelector('.phones-switch')!).findByRole('alert')).toHaveTextContent('Phone access could not be saved. Nothing was changed. Try again.')
+  expect(toggle).toHaveAttribute('aria-checked', 'false')
+  const input = await screen.findByRole('textbox', { name: 'Name on phones' })
+  await user.type(input, 'My computer{Enter}')
+  expect(await within(container.querySelector('.phones-name')!).findByText('The name could not be saved. Phones still use the previous name. Try again.')).toBeInTheDocument()
+  expect(input).toHaveAccessibleDescription(/The name could not be saved\. Phones still use the previous name\. Try again\./)
+  expect(within(container.querySelector('.phones-name')!).queryByRole('alert')).toBeNull()
+  expect(input).toHaveValue('My computer')
+  update.mockResolvedValue(true)
+  await user.keyboard('{Enter}')
+  await waitFor(() => expect(within(container.querySelector('.phones-name')!).queryByText('The name could not be saved. Phones still use the previous name. Try again.')).toBeNull())
+  await user.click(toggle)
+  await waitFor(() => expect(within(container.querySelector('.phones-switch')!).queryByRole('alert')).toBeNull())
+})
+
 it('copies the phone address through main when browser clipboard access is denied', async () => {
   const user = userEvent.setup()
   const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockRejectedValue(new Error('Permission denied'))
@@ -80,7 +102,10 @@ it('code: shows eight characters with a countdown, spelled out for a screen read
   await user.click(screen.getByRole('button', { name: 'Show a pairing code' }))
   const box = await screen.findByRole('group', { name: 'Pairing code' })
   expect(box).toBe(document.activeElement)
-  expect(within(box).getByLabelText('Pairing code K 7 M X 3 Q P D').textContent).toBe('K7MX3QPD')
+  expect(within(box).getByText('Pairing code K 7 M X 3 Q P D')).toHaveClass('tt-visually-hidden')
+  expect(within(box).getByText('K7MX3QPD')).toHaveAttribute('aria-hidden', 'true')
+  expect(within(box).queryByRole('img')).not.toBeInTheDocument()
+  expect(within(box).queryByRole('status')).not.toBeInTheDocument()
   expect(box.textContent).toMatch(/Works once\. Expires in 4:5\d/u)
   expect(within(box).getByRole('button', { name: 'Make a new code' })).toBeTruthy()
   await user.keyboard('{Escape}')
