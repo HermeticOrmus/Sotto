@@ -62,8 +62,9 @@ It had no npm runner and used fixed sleeps. Its retained captures and verdicts
 remain recorded in `docs/verification/phase-2-implementation.md`. Some composer
 regressions run through `tests/e2e/composer-short-window.spec.ts` in the normal
 Playwright tree. Current tests do not cover the deleted harness's skill picker
-over a split pane at 1600x900, 1280x800 and 1280x560, the queue composer at stress
-and zoomed sizes, or a failed working folder keeping its draft. Every separate
+over a split pane at 1600x900, 1280x800 and 1280x560, the queue composer at the
+760x560 stress size or at 1280x800 with 125% and 150% zoom, or a failed working
+folder keeping its draft. Every separate
 Playwright config under `tests/` must have an npm runner;
 `tests/unit/release/testDiscovery.test.ts` checks that boundary.
 
