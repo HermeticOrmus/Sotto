@@ -59,7 +59,7 @@ describe('thread draft recovery through the real connection and disk', () => {
         store.edit('workshop', { text: 'Sent while the coordinator refreshes' })
         sending = sendThreadRevision(store, row, result.current.command, 1)
         store.edit('workshop', { text: 'Keep editing while busy' }); store.flush('workshop')
-    })
+      })
       await act(async () => { await sending })
       expect(f.control.get().globalLaneBusy).toBe(true)
       expect(execute.mock.calls.filter(([request]) => request.type === 'send')).toEqual([[expect.objectContaining({ text: 'Sent while the coordinator refreshes' })]])
@@ -153,7 +153,7 @@ describe('thread draft recovery through the real connection and disk', () => {
       act(() => {
         store.edit('workshop', { text: 'Send revision A' })
         sending = sendThreadRevision(store, row, result.current.command, 1)
-    })
+      })
       // Admission is synchronous even though the earlier bridge reply is held.
       expect(f.control.get().deliveries).toContainEqual(expect.objectContaining({ threadId: 'workshop', status: 'queued' }))
       act(() => { store.edit('workshop', { text: 'Keep newer revision B' }); store.flush('workshop') })
@@ -188,7 +188,7 @@ describe('thread draft recovery through the real connection and disk', () => {
           writing = true; await gate; throw new Error('Injected disk failure')
         }
         return original.call(this, value)
-    })
+      })
       fireEvent.change(screen.getByRole('textbox', { name: 'Prompt' }), { target: { value: 'Keep this unsaved draft' } })
       act(() => { store.edit('workshop', { attachments: [image] }); store.flush('workshop') })
       await waitFor(() => expect(writing).toBe(true))
@@ -307,7 +307,7 @@ describe('thread navigation through the real renderer connection and controller'
       const { result } = renderHook(() => {
         const connection = useAgentConnection(bridge)
         return { ...connection, title: connection.state?.host.threads.find(thread => thread.id === connection.state?.activeThreadId)?.title }
-    })
+      })
       await waitFor(() => expect(result.current.title).toBe('Workshop'))
       if (pending === 'refresh') vi.spyOn(host, 'snapshot').mockImplementationOnce(async () => { await gate; return cached.host })
       else reasoner.intent.mockImplementationOnce(async () => { await gate; return { type: 'compose', threadId: 'workshop', text: 'For A' } })
@@ -384,14 +384,14 @@ describe('thread navigation through the real renderer connection and controller'
             refusedToolbar = true
             await f.control.command({ type: 'refresh-thread-worktree', threadId: 'workshop' })
           }
-    })
+        })
         // Model the published shell not having committed yet; the command reply still carries exact ownership.
         const receive = controls.threadDrafts.receive.bind(controls.threadDrafts)
         let pending: AgentState | undefined
         const observation = vi.spyOn(controls.threadDrafts, 'receive').mockImplementation(state => {
           if (state.followups?.some(item => item.text === 'And then post the link')) { pending = state; return }
           receive(state)
-    })
+        })
         releaseObservation = () => { observation.mockRestore(); if (pending) receive(pending) }
       }
       act(() => controls.threadDrafts.edit('workshop', { text: 'And then post the link' }))

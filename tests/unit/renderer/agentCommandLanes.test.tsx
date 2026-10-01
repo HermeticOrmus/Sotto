@@ -86,7 +86,7 @@ describe('thread commands in the window', () => {
       executed.push(command.type)
       if (command.type === 'configure-thread') await provider
       return execute(command)
-  })
+    })
     let configuring: Promise<AgentState | null> | undefined, sending: Promise<AgentState | null> | undefined
     try {
       const { result } = renderHook(() => useAgentConnection(f.bridge))
@@ -94,7 +94,7 @@ describe('thread commands in the window', () => {
       act(() => {
         configuring = result.current.command({ type: 'configure-thread', threadId: 'workshop', runtimeMode: 'full-access' })
         sending = result.current.command({ type: 'manual-send', threadId: 'workshop', draftId: randomUUID(), text: 'After the settings' })
-    })
+      })
       expect(f.arrived).toEqual(['configure-thread:workshop', 'manual-send:workshop'])
       await waitFor(() => expect(executed).toEqual(['configure-thread']))
       // The send waits in the thread's lane behind the settings it followed.
@@ -120,7 +120,7 @@ describe('thread commands in the window', () => {
       executed.push(command.type === 'send' ? `send on ${mode}` : command.type)
       if (command.type === 'configure-thread') await provider
       return execute(command)
-  })
+    })
     let connection!: AgentConnection
     function Chips(): React.ReactElement | null {
       connection = useAgentConnection(f.bridge)

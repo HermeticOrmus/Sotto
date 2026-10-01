@@ -48,7 +48,7 @@ describe('fresh renderer draft durability with a live main controller', () => {
         if (recovery !== 'original success') throw new Error('Injected disk failure')
       }
       return original.call(this, value)
-  })
+    })
     try {
       const first = renderHook(() => useAgentConnection(f.bridge))
       await waitFor(() => expect(first.result.current.state).not.toBeNull())
@@ -101,7 +101,7 @@ describe('fresh renderer draft durability with a live main controller', () => {
       if (text === 'Older revision') { ++started; await oldGate }
       if (text === 'Newer revision') { ++started; await newGate; throw new Error('New write failed') }
       return original.call(this, value)
-  })
+    })
     try {
       const first = renderHook(() => useAgentConnection(f.bridge))
       await waitFor(() => expect(first.result.current.state).not.toBeNull())
