@@ -1612,11 +1612,13 @@ export class AgentControl {
             : (command.type === 'manual-send' || command.type === 'steer') ? command.text : command.type === 'send' ? this.state.draft : command.type === 'answer' ? command.answer : '',
         }) : undefined
       let failure: string | undefined
+      let unconfirmedAnswer: AnswerDeliveryUnconfirmed | undefined
       try {
         const admissionError = admission ? await admission : undefined
         if (admissionError instanceof Error) throw admissionError
         await this.execute(command, turn, manualRetryId, selectionRevision, client)
       } catch (error) {
+        if (error instanceof AnswerDeliveryUnconfirmed) unconfirmedAnswer = error
         failure = error instanceof AnswerDeliveryUnconfirmed && error.delivered ? undefined
           : error instanceof Error ? error.message : 'Sotto could not complete this action.'
         if (!(error instanceof AnswerDeliveryUnconfirmed)) this.setCommandError(error, failure!)
@@ -1634,6 +1636,7 @@ export class AgentControl {
       await this.persist().catch(error => {
         // The user sees fixed guidance; diagnostics keep only the storage failure category.
         if (turn) turn.failureCode = 'storage-failed'
+        unconfirmedAnswer = undefined
         failure = error instanceof Error ? error.message : 'Could not save agent state.'
         this.state.error = 'Could not save agent state. Pause management until storage is available.'
         this.state.assignments.forEach(a => { a.paused = true })
@@ -1644,7 +1647,9 @@ export class AgentControl {
       }
       this.publish()
       if (turn) turn.firstFeedbackAtMs ??= Date.now()
-      await this.finishTurn(turn, failure)
+      await this.finishTurn(turn, unconfirmedAnswer?.delivered ? undefined : failure)
+      // Completion can settle during persistence or diagnostics, after the catch observed uncertainty.
+      if (unconfirmedAnswer?.delivered) failure = undefined
       // The socket receipt needs this answer's outcome, not a shared error another lane can change.
       // Keep the published shell and desktop response as they are.
       return command.type === 'answer' && client.transport === 'socket'

@@ -17,6 +17,7 @@ import { SCREENSHOT_NOT_ITS_TYPE, type AgentCommand, type AgentThreadDetail, typ
 import { hostVersionMismatch } from '../../src/shared/hostProtocol'
 import { version as packageVersion } from '../../package.json'
 import { rawPeer } from '../fixtures/rawHostPeer'
+import { TurnRecorder } from '../../src/main/agents/turns'
 import { HOST_BUSY, HOST_EVENT_PAGE_SIZE } from '../../src/shared/hostProtocol'
 
 let root: string
@@ -199,6 +200,42 @@ describe('authenticated host socket', () => {
       expect(host.service.shell().error).toBeNull()
       expect(host.service.shell().host.threads.find(thread => thread.id === threadId)?.requests).toHaveLength(0)
     } finally { spy.mockRestore() }
+  })
+  it('settles socket delivery confirmed while the failed command is being finalized', async () => {
+    const { client, result } = await pair()
+    await client.command({ type: 'configure', patch: { provider: 'codex', enabledProviders: ['codex'] } })
+    await client.command({ type: 'connect', provider: 'codex' })
+    const threadId = client.shell().host.threads.find(thread => thread.title === 'Workshop')!.id
+    const descriptor = JSON.parse(await readFile(join(root, 'host-listener.json'), 'utf8')) as { adminToken: string }
+    expect((await fetch(url + '/v1/admin/allow-answers', { method: 'POST', headers: { Authorization: 'Bearer ' + descriptor.adminToken, 'Content-Type': 'application/json' }, body: JSON.stringify({ clientId: result.clientId }) })).status).toBe(200)
+    native.event({ type: 'permission', threadId: 'workshop', requestId: 'permission-receipt', text: 'Build?' })
+    await expect.poll(() => client.shell().host.threads.find(thread => thread.id === threadId)?.requests.length).toBe(1)
+    let complete!: (delivered: boolean) => void
+    const completion = new Promise<boolean>(resolve => { complete = resolve })
+    const execute = native.execute.bind(native)
+    const spy = vi.spyOn(native, 'execute').mockImplementation(command => {
+      if (command.type !== 'answer') return execute(command)
+      return Promise.resolve({ accepted: false, uncertain: true, answerCompletion: completion })
+    })
+    const finish = TurnRecorder.prototype.finish
+    let settledDuringFinish = false
+    const finalize = vi.spyOn(TurnRecorder.prototype, 'finish').mockImplementation(async function (this: TurnRecorder, turn, outcome) {
+      if (turn?.commandType === 'answer') {
+        expect(outcome).toBe('failed')
+        expect(host.service.shell().error).not.toBeNull()
+        settledDuringFinish = true
+        complete(true)
+        await completion
+      }
+      return finish.call(this, turn, outcome)
+    })
+    try {
+      const commandId = randomUUID()
+      await client.command({ type: 'answer', threadId, requestId: 'permission-receipt', answer: '', approved: true }, undefined, commandId)
+      expect(settledDuringFinish).toBe(true)
+      expect(await client.receipt(commandId)).toEqual({ status: 'completed', answerDelivered: true })
+      expect(host.service.shell().error).toBeNull()
+    } finally { finalize.mockRestore(); spy.mockRestore() }
   })
   it('confirms a successful answer receipt despite another command failing while it runs', async () => {
     const { client, result } = await pair()
