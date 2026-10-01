@@ -92,14 +92,16 @@ export class WorktreeCleanup {
   private autoSettleOn(): boolean {
     try { return this.dependencies.autoSettleMerged?.() === true && Boolean(this.dependencies.pullRequestMerged && this.dependencies.host.setWorkspaceSettled) } catch { return false }
   }
-  private merged(repositoryRoot: string, branch: string): Promise<boolean> {
-    const key = `${repositoryRoot}\0${branch}`
+  private async merged(repositoryRoot: string, branch: string): Promise<boolean> {
+    const tip = await this.git(repositoryRoot, ['rev-parse', '--verify', '--end-of-options', `refs/heads/${branch}^{commit}`]).then(value => value.trim(), () => '')
+    if (!tip) return false
+    const key = `${repositoryRoot}\0${branch}\0${tip}`
     let answer = this.mergedAnswers.get(key)
     if (!answer) {
       answer = this.dependencies.pullRequestMerged ? this.dependencies.pullRequestMerged(repositoryRoot, branch).catch(() => false) : Promise.resolve(false)
       this.mergedAnswers.set(key, answer)
     }
-    return answer
+    return await answer && await this.git(repositoryRoot, ['rev-parse', '--verify', '--end-of-options', `refs/heads/${branch}^{commit}`]).then(value => value.trim() === tip, () => false)
   }
   /**
    * Auto-settle merged threads: a thread at rest whose branch's pull request GitHub reports merged is settled,
@@ -189,12 +191,19 @@ export class WorktreeCleanup {
 }
 
 /** Asks GitHub through `gh`, as the Git status reader and the Pull request surface do, whether this branch's pull request is merged. */
-export function githubPullRequestMerged(cwd: string, branch: string): Promise<boolean> {
-  return new Promise((accept, reject) => {
+export async function githubPullRequestMerged(cwd: string, branch: string): Promise<boolean> {
+  const tip = await runWorktreeGit(cwd, ['rev-parse', '--verify', '--end-of-options', `refs/heads/${branch}^{commit}`]).then(value => value.trim(), () => '')
+  if (!tip) return false
+  const merged = await new Promise<boolean>((accept, reject) => {
     const env = { ...process.env, GIT_TERMINAL_PROMPT: '0', GH_PROMPT_DISABLED: '1', GCM_INTERACTIVE: 'never' }
-    execFile('gh', ['pr', 'list', '--head', branch, '--state', 'merged', '--limit', '1', '--json', 'number'], { cwd, env, windowsHide: true, timeout: 30_000, maxBuffer: 200_000, encoding: 'utf8' }, (error, stdout) => {
+    execFile('gh', ['pr', 'list', '--head', branch, '--state', 'merged', '--limit', '100', '--json', 'headRefOid'], { cwd, env, windowsHide: true, timeout: 30_000, maxBuffer: 200_000, encoding: 'utf8' }, (error, stdout) => {
       if (error) { reject(error); return }
-      try { accept(Array.isArray(JSON.parse(stdout)) && JSON.parse(stdout).length > 0) } catch (parseError) { reject(parseError) }
+      try {
+        const prs: unknown = JSON.parse(stdout)
+        accept(Array.isArray(prs) && prs.some(pr => pr && typeof pr === 'object' && pr.headRefOid === tip))
+      } catch (parseError) { reject(parseError) }
     })
   })
+  // A branch moved while GitHub was answering is current work, even if its previous tip was merged.
+  return merged && await runWorktreeGit(cwd, ['rev-parse', '--verify', '--end-of-options', `refs/heads/${branch}^{commit}`]).then(value => value.trim() === tip, () => false)
 }

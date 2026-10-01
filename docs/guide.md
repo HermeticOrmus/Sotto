@@ -151,6 +151,8 @@ Select an element or region, add a comment, and attach it to the thread's editab
 
 ## Git, branches and worktrees
 
+The merged-pull-request cleanup rule and Auto-settle merged threads require the merged pull request to match the branch's current commit. A reused branch name or another branch in a fork does not count by name alone.
+
 Git actions, branch restores and checkpoint reverts hold the whole checkout until they finish. Other threads in that checkout cannot send during them. Git changes wait for active or pending thread work; separate worktrees remain independent. Desktop and headless hosts use the same guard.
 
 Clearing **Search refs** restores the full branch list. Enter waits for the current search to finish; changing the search cancels that choice. Press Enter again to choose from the new results.
