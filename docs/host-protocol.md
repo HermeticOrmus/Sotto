@@ -43,7 +43,7 @@ The admin bearer is in the host's private `host-listener.json`, which holds the 
 
 ## The socket
 
-`GET /v1/socket` upgrades to a WebSocket (RFC 6455, version 13) with `Authorization: Bearer <session>`. Every message is one UTF-8 JSON text frame of at most 16 MiB. The host allows 32 clients, 100 requests a second and 32 unanswered requests per client, and closes a client that goes over. An authenticated upgrade at capacity receives 503; its pairing stays valid. The host pings every 25 seconds and closes a peer whose previous ping has no matching pong.
+`GET /v1/socket` upgrades to a WebSocket (RFC 6455, version 13) with `Authorization: Bearer <session>`. Every message is one UTF-8 JSON text frame of at most 16 MiB. The host allows 32 clients, 100 requests a second and 32 unanswered requests per client, and closes a client that goes over. An authenticated upgrade at capacity receives 503; its pairing stays valid. Clients ping every 25 seconds; the host answers without sending its own pings. The host counts incoming bytes as liveness, including partial frames and pings, and closes only after 75 seconds without traffic while no output is buffered. The phone allows ten seconds for a pong, any message, or growth in received bytes, so a large frame may finish before its queued pong. Node clients clear pending pongs on received bytes and defer missed-pong closure while output is buffered. An upgrade 401 from an older host does not imply revoked pairing; `/v1/session` checks that.
 
 ### Requests
 
@@ -111,3 +111,5 @@ Every `message` is plain copy for the user. None is logged with a prompt, a tran
 ### Message identity repairs
 
 A client that includes `message-aliases` in hello's `accepts` may receive `message-aliased` events in hello, event pages and shell pushes. Each carries `at`, `messageId` and `canonicalId`; only the duplicate projection row is removed, after comparing the saved content. Original events remain. Without this opt-in the host omits these events and advances `latestSeq` over them, even when a page becomes empty. Such clients read the corrected history from thread detail; the original version 1 event union is unchanged for them.
+
+The active iPhone reconnects with exponential delays starting at about one second, a 0.8–1.2 random multiplier and a thirty-second cap. Only a successful liveness round resets the delay. Reconnecting reads fresh state and reconciles receipts without resending commands; backgrounding cancels retries. Compose, send and draft controls use the receiving peer’s selected Sotto thread ID. They preserve drafts for other threads, and question answers still require the remote-answer policy.

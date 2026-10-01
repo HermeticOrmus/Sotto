@@ -147,15 +147,15 @@ For a socket answer, the coordinator returns the command-local failure as the re
 
 Older hosts omit the field. The iPhone keeps their still-waiting answers unconfirmed and clears a vanished request with neutral copy, never claiming the phone's answer arrived. This adds evidence rather than authority: the user's explicit answer and the host's policy remain the only grants. No additional host, network request or permission is introduced.
 
-## September 30 amendment: implicit draft commands stay local
+## October 1 amendment: draft commands follow client selection
 
-Remote navigation belongs to each client and never selects the coordinator’s own thread. Compose, send, cancel-draft, pause-draft and cancel-request therefore stay host-local. A paired client uses the existing explicit-thread prompt and draft commands instead; even remote-answer authority does not admit an implicit target. This narrows the remote command list to preserve client-owned navigation (#489).
+Remote navigation belongs to each client and never selects the coordinator’s own thread. The listener passes that client’s selected Sotto thread ID to the host service for compose, send, cancel-draft, pause-draft and cancel-request. Drafts on other threads stay intact. The v1 allow-list retains these commands; question drafts and sends still require remote-answer authority (#489). This replaces the September 30 narrowing, which broke the managed composer and contradicted v1’s additive compatibility rule.
 
 ## September 30 amendment: connection liveness and phone recovery
 
-The listener pings each peer every 25 seconds and closes it when the previous ping has no matching pong. The iPhone also pings every 25 seconds, giving a pong ten seconds to arrive. This frees abandoned listener slots and turns a silent network drop into an explicit disconnected state. A full listener answers an authenticated upgrade with 503, leaving the pairing intact.
+Clients initiate keep-alive pings every 25 seconds; the listener only answers. The phone allows ten seconds for a pong, any received message, or growth in the WebSocket task’s received-byte count. Partial large frames count as progress. The listener counts all incoming bytes, including pings, as liveness and closes a peer only after 75 seconds without traffic and with no buffered output. Node desktop clients also initiate pings, clearing a pending pong on any incoming bytes and deferring missed-pong closure while output remains buffered. A full listener answers an authenticated upgrade with 503, leaving pairing intact. An older host’s upgrade 401 likewise does not discard pairing: `/v1/session` detects revocation.
 
-While active, the iPhone retries a dropped connection with waits of one, two, four, eight, sixteen and then thirty seconds, opening a fresh signed session on every attempt. Success resets the wait. Backgrounding or removing a computer cancels retries; activation connects again. Invalid identity, incompatible protocol and refused pairing stop retries for the user to resolve. Reconnecting refreshes observed details and reconciles pending commands through receipts; it never resends them (#524).
+While active, the iPhone retries a dropped connection with exponential waits starting at one second and capped at thirty seconds, with a 0.8–1.2 random multiplier before the cap. A successful liveness round resets the wait; hello alone does not. Backgrounding or removing a computer cancels retries; activation connects again. Invalid identity, incompatible protocol and refused pairing stop retries for the user to resolve. Reconnecting refreshes observed details and reconciles pending commands through receipts; it never resends them (#524). Pairing pacing retains at most 1,024 source buckets, evicts the oldest on insertion at capacity, and expires buckets after a minute.
 
 ## September 30 amendment: device names in attribution
 

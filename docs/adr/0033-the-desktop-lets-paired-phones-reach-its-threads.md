@@ -41,3 +41,9 @@ This choice grants no permission to an agent and writes no policy record. Answer
 - Tailscale often starts after Sotto at sign-in. When Tailscale is not running, the page says so and Sotto looks again every 30 seconds while phone access is on, besides the Try again button.
 - The switch shows the setting, not whether the last attempt worked: a failed step is shown on its own row with what to do, and the owner does not have to turn the switch off and on again. The prototype drew the switch off in those states; keeping the setting on is what lets a reboot race with Tailscale recover by itself.
 - A second desktop on the same tailnet can do the same on its own computer; each serves its own threads on its own 8443.
+
+## October 1 amendment: slow connections and recovery
+
+Only the phone initiates keep-alive pings on its connection, every 25 seconds. A pong, any received message, or growth in received bytes within ten seconds confirms liveness, including a large frame still arriving. The listener answers pings, counts all incoming bytes as progress and closes a silent peer after 75 seconds only when output is no longer buffered. This avoids cutting off slow thread downloads while still releasing abandoned connections.
+
+The active phone reconnects with exponential waits from about one second to a thirty-second cap, with a small random variation (0.8–1.2 before the cap). Hello does not reset the delay; the first successful liveness round does. Reconnect reads threads and reconciles receipts without sending an unconfirmed command again. Backgrounding cancels retries. Physical-device network changes remain a separate verification from simulator tests.
