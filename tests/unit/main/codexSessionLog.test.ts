@@ -3,7 +3,7 @@ import { appendFile, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/prom
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { CodexSessionLogWatcher } from '../../../src/main/agents/codexSessionLog'
+import { CodexSessionLogWatcher, promptDigest } from '../../../src/main/agents/codexSessionLog'
 import { rolloutLine } from '../../fixtures/codexFixture'
 import type { AgentMessage } from '../../../src/shared/agents'
 
@@ -25,6 +25,35 @@ afterEach(async () => {
   }
 })
 describe('Codex session log', () => {
+  it.each(['sent', 'sentDigest'] as const)('resets missing-rollout discovery after %s', async method => {
+    const root = await mkdtemp(join(tmpdir(), 'sotto-codex-log-')); roots.push(root)
+    const messages: AgentMessage[] = []
+    const watcher = new CodexSessionLogWatcher({ codexHome: root, onMessage: (_id, message) => messages.push(message) })
+    watchers.push(watcher); watcher.observe('thread')
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(0)
+    const reads = vi.mocked(readdir)
+    for (const now of [0, 2000, 6000, 14000, 30000, 62000]) {
+      clock.mockReturnValue(now)
+      await watcher.poll()
+    }
+    clock.mockReturnValue(63000)
+    watcher[method]('thread', 'own-client', method === 'sent' ? 'Own input' : promptDigest('Own input'))
+    reads.mockClear()
+    await watcher.poll()
+    expect(reads).toHaveBeenCalledTimes(1)
+    // A miss after sending starts again at two seconds, not one minute.
+    const directory = join(root, 'sessions'); await mkdir(directory)
+    await writeFile(join(directory, 'rollout-thread.jsonl'),
+      rolloutLine(1, { type: 'user_message', id: 'own', client_id: 'own-client', message: 'Own input' }) +
+      rolloutLine(2, { type: 'user_message', id: 'native', message: 'Native input' }))
+    clock.mockReturnValue(64999)
+    await watcher.poll()
+    expect(messages).toHaveLength(0)
+    clock.mockReturnValue(65000)
+    await watcher.poll()
+    expect(messages.map(message => message.id)).toEqual(['native'])
+  })
+
   it('does not let repeated guarded misses postpone background discovery', async () => {
     const root = await mkdtemp(join(tmpdir(), 'sotto-codex-log-')); roots.push(root)
     const messages: AgentMessage[] = []

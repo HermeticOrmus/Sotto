@@ -31,7 +31,12 @@ export class CodexSessionLogWatcher {
   }
   identities(threadId: string, turnId: string): readonly RolloutIdentity[] { return this.tails.get(threadId)?.identities.get(turnId) ?? [] }
   sent(threadId: string, messageId: string, text: string): void { this.sentDigest(threadId, messageId, promptDigest(text)) }
-  sentDigest(threadId: string, messageId: string, digest: string): void { this.observe(threadId); this.tails.get(threadId)!.own.set(messageId, digest) }
+  sentDigest(threadId: string, messageId: string, digest: string): void {
+    this.observe(threadId)
+    const tail = this.tails.get(threadId)!
+    tail.own.set(messageId, digest)
+    tail.locateAfter = 0; tail.locateBackoffMs = INITIAL_LOCATE_BACKOFF_MS
+  }
   forget(threadId: string, messageId: string): void { this.tails.get(threadId)?.own.delete(messageId) }
   start(): void {
     if (this.timer || this.stopped) return
