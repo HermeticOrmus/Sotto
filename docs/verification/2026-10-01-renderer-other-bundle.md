@@ -79,10 +79,26 @@ The two existing retained feedback captures were refreshed from this run.
 - [Questionnaire progress](../../artifacts/renderer-save-feedback/questionnaire-readable-progress.png)
 - [Pairing code, 820x560 dark](../../artifacts/renderer-save-feedback/pairing-code-820-dark.png)
 
-The final rework run passed all four required local gates.
+The first complete rework run passed all four required local gates.
 `npm test -- --maxWorkers=2` completed with 507 passed and 39 skipped files:
 6,901 tests passed and 154 skipped in 21.2 minutes. Typecheck and lint passed
 again after the Electron assertion edits; notices verified 174 components.
 The built Electron run passed all seven tests in 5.6 minutes, including both
 Tools rail and Changes-scope journeys that failed on earlier revisions.
 The independent Standards and Spec reviews have no remaining findings.
+
+
+## Follow-up gate checks
+
+The second Windows attempt passed SSH but exposed a Hosts focus test that could
+find the dialog before its passive focus effect ran. A separate test commit waits
+for the same focus target before asserting or sending keyboard input. All 44
+Hosts tests pass, and both independent reviewers cleared the change.
+
+[Gates (Windows) passed on 892661e0](https://github.com/millZach/Sotto/actions/runs/36917982127/job/110556616879):
+6,930 tests passed and 151 skipped; typecheck, lint and notices passed.
+The follow-up full local run passed 6,895 tests but hit six unchanged 15-second
+timeouts across threadWorktrees, socketHostContract, gitStatus, worktreeCleanup
+and headlessWorktreeCleanup. The failed files' isolated reruns and the subsequent
+main-sync checks are reported in PR #666. Their deadlines and assertions were
+preserved.
