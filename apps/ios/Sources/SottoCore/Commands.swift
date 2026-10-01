@@ -95,6 +95,7 @@ public struct PendingOperation: Codable, Identifiable, Equatable, Sendable {
     }
     public func matches(hostID: String, clientID: String) -> Bool { self.hostID == hostID && self.clientID == clientID }
     public func reconciled(receipt: Receipt, deliveries: [Delivery]) -> Bool {
+        if kind == "answer" { return receipt.confirmsAnswer }
         // Completed transport receipt only confirms provider delivery when its draft status agrees.
         if let draftID, let delivery = deliveries.first(where: { $0.draftId == draftID && $0.threadId == threadID }) {
             return delivery.status == "accepted" || delivery.status == "failed"
