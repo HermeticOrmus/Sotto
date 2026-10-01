@@ -1,3 +1,4 @@
+import { isCompositionKey } from '../../agents/composerKeys'
 import React, { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { AlertTriangle, Check, Circle, CircleCheck, CircleX, Copy, Info, Smartphone } from 'lucide-react'
 import { PHONE_ACCESS_SERVE_PORT, type PairedPhone, type PhonesBridge, type PhonesCommand, type PhonesState } from '../../../../shared/phones'
@@ -6,6 +7,7 @@ import { Button } from '../../components/Button'
 import { ConfirmationDialog } from '../../components/ConfirmationDialog'
 import { Field } from '../../components/Field'
 import { Toggle } from '../../components/Toggle'
+import { writeClipboard } from '../../agents/richActions'
 import './hosts.css'
 import './phones.css'
 
@@ -84,7 +86,7 @@ function NameField({ name, defaultName, onSave }: { readonly name: string; reado
   return <Field label="Name on phones" description={`Phones list this computer’s threads under this name. Leave it empty to use ${defaultName}.`}>
     <input className="tt-input" value={draft} placeholder={defaultName} maxLength={63} spellCheck={false}
       onChange={event => setDraft(event.target.value)} onBlur={save}
-      onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); save() } else if (event.key === 'Escape' && draft !== name) { event.preventDefault(); event.stopPropagation(); setDraft(name) } }} />
+      onKeyDown={event => { if (isCompositionKey(event.nativeEvent)) { event.stopPropagation(); return } if (event.key === 'Enter') { event.preventDefault(); save() } else if (event.key === 'Escape' && draft !== name) { event.preventDefault(); event.stopPropagation(); setDraft(name) } }} />
   </Field>
 }
 
@@ -139,7 +141,7 @@ export function PhonesSettings({ phoneAccess, phoneAccessName, onUpdateSettings,
     catch (failure) { setError(failure instanceof Error ? failure.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/u, '') : 'Phone access could not be changed. Nothing was changed. Try again.'); return false }
   }
   const copyAddress = async (address: string): Promise<void> => {
-    try { await navigator.clipboard.writeText(address); setCopied(true); setTimeout(() => setCopied(false), 1500) }
+    try { await writeClipboard(address); setCopied(true); setTimeout(() => setCopied(false), 1500) }
     catch { setError('The address could not be copied. Select it and copy it instead.') }
   }
 

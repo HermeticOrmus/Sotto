@@ -1,3 +1,4 @@
+import { isCompositionKey } from '../../agents/composerKeys'
 import React, { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { Laptop, MoreHorizontal, Plus, Server } from 'lucide-react'
 import { type HostSetupChoice, type HostSetupState, type HostsBridge, type HostsCommand, type HostsState, type HostStatus } from '../../../../shared/hosts'
@@ -128,7 +129,7 @@ function RenameDialog({ host, onRename, onClose }: { readonly host: HostStatus; 
     <div className="hosts-dialog__fields"><div className="tt-field">
       <label className="tt-field__label" htmlFor={inputId}>Host name</label>
       <input id={inputId} className="tt-input tt-focusable" value={name} maxLength={80} aria-describedby={hintId} onChange={event => setName(event.target.value)}
-        onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); void save() } }} />
+        onKeyDown={event => { if (isCompositionKey(event.nativeEvent)) { event.stopPropagation(); return } if (event.key === 'Enter') { event.preventDefault(); void save() } }} />
       <p className="tt-field__description" id={hintId}>Shown on this row and beside the host's projects and threads. The SSH connection does not change.</p>
     </div></div>
     {error ? <div className="hosts-notice hosts-notice--error" role="alert"><p>{error}</p></div> : null}

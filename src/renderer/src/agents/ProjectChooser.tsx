@@ -5,6 +5,7 @@ import type { AgentConnection } from './AgentContext'
 import { hostIdOf, listedHostName } from './HostBadge'
 import { FolderBrowserDialog } from './FolderBrowserDialog'
 import { folderKey, folderName, projectAtFolder, projectOnHost } from './projectFolders'
+import { isCompositionKey } from './composerKeys'
 
 export { folderKey, folderName } from './projectFolders'
 
@@ -55,6 +56,7 @@ export function useProjectChooser(state: AgentState, onChoose: (choice: ProjectC
     search: <><Search size={16} aria-hidden="true" /><input ref={search} type="search" aria-label="Search projects" placeholder="Search projects..." value={query}
       onChange={event => { setQuery(event.target.value); setHighlight(0) }}
       onKeyDown={event => {
+        if (isCompositionKey(event.nativeEvent)) return
         const count = projects.length + 1
         if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && count > 0) { event.preventDefault(); setHighlight(current => (current + (event.key === 'ArrowDown' ? 1 : count - 1)) % count) }
         if (event.key === 'Enter') { event.preventDefault(); choose(highlight) }

@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -67,7 +67,7 @@ describe.each(factories)('%s host setup tools', (provider, factory) => {
     } else if (provider === 'claude') {
       const launch = records.find(record => record.method === 'launch' && (record.params?.frame as { args: string[] }).args.includes('--mcp-config'))
       const args = (launch!.params!.frame as { args: string[] }).args
-      const config = JSON.parse(args[args.indexOf('--mcp-config') + 1]!) as { mcpServers: Record<string, { url: string; headers: Record<string, string> }> }
+      const config = JSON.parse(await readFile(args[args.indexOf('--mcp-config') + 1]!, 'utf8')) as { mcpServers: Record<string, { url: string; headers: Record<string, string> }> }
       const entry = config.mcpServers[HOST_SETUP_MCP_SERVER]!
       // Sotto's own tools carry no native prompt; adding asks in the thread itself.
       const allowed = args.slice(args.indexOf('--allowedTools') + 1, args.indexOf('--print'))

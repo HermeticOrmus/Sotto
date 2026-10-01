@@ -4,7 +4,7 @@ import type { AgentActivity } from '../../shared/agentActivity'
 import type { AgentSkillCatalog, AgentSkillReference } from '../../shared/agentSkills'
 import type { AgentFileReference } from '../../shared/agentFiles'
 import type { AnswerGivenEvent } from '../../shared/threadEvents'
-import type { AgentWorkingCopyOptions, AgentWorkingCopySelection, AgentAttachmentHandle, AgentHostSnapshot, AgentMessage, AgentProject, AgentQuestionAnswers, AgentThreadOptions, ProviderId } from '../../shared/agents'
+import type { WorktreeReclaimPreview, AgentWorkingCopyOptions, AgentWorkingCopySelection, AgentAttachmentHandle, AgentHostSnapshot, AgentMessage, AgentProject, AgentQuestionAnswers, AgentThreadOptions, ProviderId } from '../../shared/agents'
 import type { GitPullResult, GitStackedAction } from '../../shared/gitActions'
 import type { GitRefsPage, GitRefsRequest } from '../../shared/gitRefs'
 import type { GitChangedFiles, GitChangedFilesRequest } from '../../shared/gitChangedFiles'
@@ -31,6 +31,8 @@ export type AgentHostCommand =
 export interface AgentHostResult {
   readonly accepted: boolean
   readonly uncertain?: boolean
+  /** Local answer delivery after its deadline; observes the original write and never sends another. */
+  readonly answerCompletion?: Promise<boolean>
   /**
    * For `configure-thread`: the snapshot the adapter emitted once the provider confirmed the change, carrying
    * the thread's effective settings. The coordinator accepts it in place of reading the thread again, and
@@ -61,6 +63,8 @@ export function confirmedSettingsSnapshot(result: AgentHostResult): [Omit<AgentH
  */
 export interface ThreadReadPurpose {
   readonly beforeSend?: boolean
+  /** An explicit Check again may reopen an uncertain Claude answer for a fresh user choice. */
+  readonly retryUncertainAnswers?: boolean
   /**
    * The reader keeps each thread's history from the host's `subscribeEvents` and reads none from what the read
    * hands back, as an activity subscriber that asks for it does. A host that publishes events then hands back
@@ -171,7 +175,8 @@ export interface AgentHost {
   updateThreadWorktree?(threadId: string, retry: boolean): Promise<AgentHostSnapshot>
   restoreThreadBranch?(threadId: string, withUncommittedChanges: boolean): Promise<AgentHostSnapshot>
   /** Remove the thread's own worktree folder and keep its branch (ADR-0041). */
-  reclaimThreadWorktree?(threadId: string, options?: { withUncommittedChanges?: boolean; automatic?: boolean }): Promise<AgentHostSnapshot>
+  previewThreadWorktreeReclaim?(threadId: string): Promise<WorktreeReclaimPreview>
+  reclaimThreadWorktree?(threadId: string, options?: { withUncommittedChanges?: boolean; automatic?: boolean; confirmedIgnored?: readonly string[]; confirmedItems?: readonly { path: string; fileCount: number }[]; confirmedRepositories?: WorktreeReclaimPreview['repositories'] }): Promise<AgentHostSnapshot>
   threadWorkingDirectory?(threadId: string): Promise<string>
   /** T3's stacked Git action on the thread's folder, reported on the thread record as it runs (ADR-0027). */
   runGitAction?(command: { threadId: string; actionId: string; action: GitStackedAction; commitMessage?: string | undefined; featureBranch?: boolean | undefined; filePaths?: readonly string[] | undefined; allowDefaultBranch?: boolean | undefined }): Promise<AgentHostSnapshot>
