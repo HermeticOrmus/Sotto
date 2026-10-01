@@ -93,7 +93,19 @@ Verification:
 - Rebuilt from the final source and ran `npx playwright test tests/e2e/thread-activity.spec.ts tests/e2e/phase-three-personal-requests.spec.ts`: five passed. The complete-app common request form retains a refused answer; the activity cases cover failed-turn feedback, keyboard expansion, light/dark themes, the minimum width and reduced motion. Native Claude ordering and takeover are established by adapter/coordinator regressions, not these scripted Codex captures.
 - Inspected the complete-app question/retained-choice captures and the minimum-width light activity transcript. The isolated activity fixture still lacks complete sidebar styling and establishes transcript readability only. Generated captures were restored, and no design baseline changed.
 - The throwaway state prototype is retained locally on `prototype/claude-third-review` at `b89cfaf3`, beside the adapter on that branch. Its guided cases cover early/late delivery, a newer error and deletion stopping work. Its rendered notice was inspected. The requested behavior is fixed by the review brief; no production layout changed.
-- Independent Standards and Spec reviews used gpt-6.1-sol at high reasoning. Standards prompted the takeover documentation and full provider-session wording; Spec prompted explicit ordering assertions in the newer-error tests. Final reviews found no remaining material findings. The initial read-only reviewer processes failed to access files because of Windows sandbox ACL setup; their successful replacements remained read-only by instruction.
+- Independent Standards and Spec reviews used gpt-6.1-sol at high reasoning. Standards prompted the takeover documentation and full provider session wording; Spec prompted explicit ordering assertions in the newer-error tests. Final reviews found no remaining material findings. The initial read-only reviewer processes failed to access files because of Windows sandbox ACL setup; their successful replacements remained read-only by instruction.
 - An earlier full run overlapped the notice wording edits and failed the deletion notice assertion with mismatched source/test versions. It was stopped and discarded. The final full run began after the source was fixed and stayed unchanged throughout that run.
 
 Live laptop-wake and Claude background-task ordering, and macOS file modes, remain unverified locally. Restarting context does not erase earlier native conversation history. The PR remains open for review and is not merged.
+
+
+### Later main sync
+
+Main advanced while the full gate was running. Merged `origin/main` through `081d9afa` in `982ad492`, cleanly preserving the Claude fixes. Main's retired account dependency exposed two obsolete membership mocks in the PR-only Claude safety fixtures; typecheck caught both, and `afa4bec5` removes them. The error-completion ordering and answer attribution remain intact.
+
+The combined revision passed 168 affected tests across ten files: Claude safety/settings, request-draft delivery, personal recovery, provider inherited pipes/final output, socket host, composer recovery, credential storage and the retired-account guard. The rebuild and seven Electron cases passed across the previous request/activity specs plus composer recovery and refused Codex approval. Inspected the complete-app minimum-size light composer recovery and refusal captures. The incoming captures remained unchanged; generated activity captures were restored.
+
+Separate Standards and Spec integration reviews found no material findings. Typecheck passed after the fixture alignment; the final gate counts and pushed-head Windows check are reported in the PR.
+
+
+On the synchronized source, `npm run typecheck`, `npm run lint`, and `npm run notices:verify` passed (174 components). `npm test -- --maxWorkers=2` passed 6,662 tests with 153 skipped (499 files passed, 39 skipped). The first Windows run on `af9d6276` failed only the two obsolete fixture properties, matching the reproduced local typecheck errors; the next push contains their fix. The fresh Windows result is linked from the PR.
