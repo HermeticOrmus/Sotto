@@ -31,3 +31,29 @@ it.each([
   await f.driver.completeTurn(threadId, 'Finished')
   await expect.poll(async () => (await f.host.snapshot()).threads.find(thread => thread.id === threadId)?.status).toBe('idle')
 })
+
+it('keeps unreadable Grok request notices on the asking thread', async () => {
+  const f = await grokFixture()
+  fixtures.push(f)
+  await f.host.connect()
+  await f.host.execute({ type: 'create-project', commandId: randomUUID(), projectId: f.projectId, title: 'Project', path: f.root })
+  const threadIds = [randomUUID(), randomUUID()]
+  for (const threadId of threadIds) {
+    await f.host.execute({ type: 'create-thread', commandId: randomUUID(), threadId, projectId: f.projectId, modelId: f.modelId, title: 'Test' })
+    await f.host.execute({ type: 'send', commandId: randomUUID(), messageId: randomUUID(), threadId, text: 'Synthetic prompt' })
+  }
+  const notice = unreadableRequest('Grok')
+  for (const [index, threadId] of threadIds.entries()) {
+    await f.action(threadId, { type: 'unreadable', method: 'x.ai/ask_user_question', params: { questions: [{ question: 'Which?', options: null }] } })
+    await expect.poll(async () => (await f.host.snapshot()).threads.find(thread => thread.id === threadId)?.requestNotice).toBe(notice)
+    const snapshot = await f.host.snapshot()
+    expect(snapshot.connected).toBe(true)
+    expect(snapshot.threads.find(thread => thread.id === threadId)).toMatchObject({ status: 'running', requests: [] })
+    if (index === 0) expect(snapshot.threads.find(thread => thread.id === threadIds[1])?.requestNotice).toBeUndefined()
+  }
+  await expect.poll(async () => (await f.driver.requests()).filter(record => 'error' in record).length).toBe(2)
+  for (const threadId of threadIds) {
+    await f.driver.completeTurn(threadId, 'Finished')
+    await expect.poll(async () => (await f.host.snapshot()).threads.find(thread => thread.id === threadId)?.status).toBe('idle')
+  }
+})
