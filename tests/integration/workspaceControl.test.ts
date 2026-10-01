@@ -23,7 +23,7 @@ async function fixture(root?: string) {
   const control = new AgentControl({ schedule: immediatePublishScheduler, directory: f.root, host: f.host, credentials, turns: recorder,
     openThreadFolder: async path => { opened.push(path) },
     reasoner: { intent: async () => ({ type: 'clarify', text: 'Choose a thread' }), decide: async () => ({ decision: 'human', text: 'Review' }) },
-    membership: { status: async () => ({ status: 'beta', label: 'Test', expiresAt: null }), action: async () => ({ status: 'beta', label: 'Test', expiresAt: null }) } })
+  })
   let closing: Promise<void> | undefined
   const close = () => closing ??= (async () => { control.dispose(); await control.privacyChanged(); await f.stop() })()
   cleanup.push(async () => { await close(); await f.remove() })

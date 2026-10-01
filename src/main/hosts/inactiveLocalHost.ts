@@ -13,7 +13,6 @@ export function emptyDesktopState(hostId?: string): AgentState {
     draftRequestId: null, pendingRequest: '', globalLaneBusy: false, notice: '', error: null,
     speech: { id: 0, text: '' }, voice: { status: 'off', error: null, action: 'none', revision: 0 },
     credentials: { reasoning: false, grokSpeech: false, secure: false }, reasoningAccounts: [],
-    membership: { status: 'free', label: 'Local host off', expiresAt: null },
   }
 }
 
@@ -28,7 +27,7 @@ export async function inactiveLocalHost(directory: string): Promise<Awaited<Retu
   const unsubscribe = () => idle
   const shell = () => structuredClone(state)
   const control = {
-    get: shell, shell, configuration: () => state.configuration, membershipStatus: () => state.membership.status, command: async () => unavailable(),
+    get: shell, shell, configuration: () => state.configuration, command: async () => unavailable(),
     threadDetail: () => null, attachmentPreview: unavailable, stageAttachment: async () => unavailable(), attachmentContent: async () => null, gitRefs: async () => unavailable(), gitChangedFiles: async () => unavailable(), gitPullRequest: async () => unavailable(),
     subscribe: unsubscribe, subscribeThreadDetail: unsubscribe, dispose: idle, closed: async () => undefined,
     privacyChanged: async () => undefined, hasPendingThreadWork: () => false, useSottoRequests: idle,
@@ -58,7 +57,6 @@ export async function inactiveLocalHost(directory: string): Promise<Awaited<Retu
     close: async () => undefined,
   } as unknown as Awaited<ReturnType<typeof createAgentRuntime>>
 }
-
 
 /** Refuse an explicit privacy change before saving settings if its local cleanup cannot run. */
 export function requireLocalHistoryCleanup(localHostRunning: boolean, historyEnabled: boolean, requestedHistoryEnabled: boolean | undefined): void {
