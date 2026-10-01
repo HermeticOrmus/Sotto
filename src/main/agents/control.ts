@@ -41,6 +41,11 @@ import { isSottoRequest, withSottoRequests, type SottoThreadRequests } from './s
 
 /** One shared empty array stands in for every shell thread's history; the clone that follows copies nothing. */
 const EMPTY_MESSAGES: AgentMessage[] = []
+
+/** Its error is published before observing completion, so the command catch must not publish it again. */
+class AnswerDeliveryUnconfirmed extends Error {
+  delivered = false
+}
 const EMPTY_ACTIVITIES: AgentActivity[] = []
 const RECORDED_COMMAND_TYPES: ReadonlySet<AgentCommand['type']> = new Set([
   'utterance', 'connect', 'refresh', 'send', 'steer', 'steer-followup', 'manual-send', 'answer', 'create-thread', 'create-project', 'select-project',
@@ -214,6 +219,10 @@ export class AgentControl {
   /** Requests Sotto owns, merged into their threads (ADR-0035); absent until main gives the coordinator some. */
   private sottoRequests: SottoThreadRequests | undefined
   private unsubscribeSottoRequests: (() => void) | undefined
+  private visibleCommandError: unknown
+  private setCommandError(error: unknown, message: string | null): void {
+    this.visibleCommandError = error; this.state.error = message
+  }
   private readonly activeCommands = new Set<Promise<AgentState>>()
   private maintenanceTimer: ReturnType<typeof setInterval> | null = null
   private privacyCleanupPending = false
@@ -1138,7 +1147,14 @@ export class AgentControl {
   async refreshRequestDraft(threadId: string): Promise<void> {
     const thread = this.thread(threadId)
     if (!isThreadProviderConnected(this.state.host, thread)) throw new Error('Reconnect the original provider before checking this answer.')
-    this.acceptSnapshot(await this.readThread(threadId))
+    this.acceptSnapshot(await this.readThread(threadId, undefined, { retryUncertainAnswers: true }))
+    const checked = this.thread(threadId)
+    if (requestDraftProvider(this.state.host, checked, this.state.configuration.provider) === 'claude') {
+      const retryable = new Set(checked.requests.filter(request => request.answerRetryReady).map(request => request.id))
+      // This user check releases only the old answer reservation. It dispatches nothing;
+      // Claude keeps its durable uncertain-answer evidence until the user chooses again.
+      this.outbox = this.outbox.filter(item => item.type !== 'answer' || item.threadId !== threadId || !item.requestId || !retryable.has(item.requestId))
+    }
     await this.persist()
     this.publish()
   }
@@ -1251,7 +1267,7 @@ export class AgentControl {
       }
       this.state.error = lostImage ? DRAFT_IMAGE_NOT_SAVED : null
       await this.persist().catch(() => { throw new Error('Could not save this thread draft. Keep your text and images and retry when storage is available.') })
-    } catch (error) { this.state.error = error instanceof z.ZodError ? 'Choose valid draft text and images before saving.' : error instanceof Error ? error.message : 'Could not save this thread draft.' }
+    } catch (error) { this.setCommandError(error, error instanceof z.ZodError ? 'Choose valid draft text and images before saving.' : error instanceof Error ? error.message : 'Could not save this thread draft.') }
     this.publish()
     // Saving text needs exact revision/durability evidence, not a copy of every loaded history.
     // The desktop router discards those histories anyway; copying them here blocks native input.
@@ -1356,7 +1372,7 @@ export class AgentControl {
           break
         }
       }
-    } catch (error) { this.state.error = error instanceof Error ? error.message : 'The Git command failed.' }
+    } catch (error) { this.setCommandError(error, error instanceof Error ? error.message : 'The Git command failed.') }
     this.publish()
     return this.shell()
   }
@@ -1370,7 +1386,7 @@ export class AgentControl {
       if (title !== thread.title) this.acceptSnapshot(await this.dependencies.host.renameThread(command.threadId, title))
       this.state.error = null
       await this.persist().catch(() => { throw new Error('Could not save the new name. Retry when storage is available.') })
-    } catch (error) { this.state.error = error instanceof Error ? error.message : 'Could not rename this thread.' }
+    } catch (error) { this.setCommandError(error, error instanceof Error ? error.message : 'Could not rename this thread.') }
     this.publish()
     return this.shell()
   }
@@ -1443,7 +1459,7 @@ export class AgentControl {
   command(command: AgentCommand, client: ClientIdentity = this.localClient): Promise<AgentState> {
     const reply = this.commandShell(command, client)
     let whole = this.sharedWholeStateReplies.get(reply)
-    if (!whole) { whole = reply.then(shell => ({ ...this.get(), error: shell.error })); this.sharedWholeStateReplies.set(reply, whole) }
+    if (!whole) { whole = reply.then(shell => ({ ...this.get(), error: shell.error, ...(shell.worktreeReclaimPreview ? { worktreeReclaimPreview: shell.worktreeReclaimPreview } : {}) })); this.sharedWholeStateReplies.set(reply, whole) }
     return whole
   }
   /**
@@ -1461,7 +1477,7 @@ export class AgentControl {
     // A draft save is the exception: it keeps the text and drops what is gone (saveThreadDraft), so typing is never lost.
     try { if (command.type !== 'save-thread-draft') this.attachments.verify('attachments' in command ? command.attachments : undefined) }
     catch (error) {
-      this.state.error = error instanceof Error ? error.message : this.attachments.missing
+      this.setCommandError(error, error instanceof Error ? error.message : this.attachments.missing)
       if ((command.type === 'manual-send' || command.type === 'steer' || command.type === 'queue-followup') && command.draftId) this.setDelivery(command.threadId, command.draftId, 'failed')
       this.publish()
       return Promise.resolve(this.shell())
@@ -1511,6 +1527,12 @@ export class AgentControl {
     // disconnect, never on the one global lane, which would lock every other surface while it ran.
     if (command.type === 'update-client' || command.type === 'queue-client-updates' || command.type === 'cancel-client-updates' || command.type === 'check-client-updates' || command.type === 'dismiss-client-updates') return this.providerCommand(command)
     if (command.type === 'refresh-thread-skills') return this.refreshThreadSkills(command.threadId, command.forceReload)
+    if (command.type === 'preview-reclaim-thread-worktree') {
+      const preview = this.dependencies.host.previewThreadWorktreeReclaim
+      if (!preview) return Promise.resolve({ ...this.shell(), error: 'Checking this worktree is unavailable. Nothing was removed. Update this host and try again.' })
+      return preview.call(this.dependencies.host, command.threadId).then(worktreeReclaimPreview => ({ ...this.shell(), error: null, worktreeReclaimPreview }),
+        () => ({ ...this.shell(), error: 'The folder could not be checked. Nothing was removed. Check the host connection and try again.' }))
+    }
     // Selection owns no action authority and must not wait for provider actions.
     if (command.type === 'select-thread') return this.navigate(command.threadId)
     if (command.type === 'observe-threads') {
@@ -1596,14 +1618,17 @@ export class AgentControl {
             : (command.type === 'manual-send' || command.type === 'steer') ? command.text : command.type === 'send' ? this.state.draft : command.type === 'answer' ? command.answer : '',
         }) : undefined
       let failure: string | undefined
+      let unconfirmedAnswer: AnswerDeliveryUnconfirmed | undefined
       try {
         const admissionError = admission ? await admission : undefined
         if (admissionError instanceof Error) throw admissionError
         await this.execute(command, turn, manualRetryId, selectionRevision, client)
       } catch (error) {
-        failure = error instanceof Error ? error.message : 'Sotto could not complete this action.'
-        this.state.error = failure
-        this.say(failure)
+        if (error instanceof AnswerDeliveryUnconfirmed) unconfirmedAnswer = error
+        failure = error instanceof AnswerDeliveryUnconfirmed && error.delivered ? undefined
+          : error instanceof Error ? error.message : 'Sotto could not complete this action.'
+        if (!(error instanceof AnswerDeliveryUnconfirmed)) this.setCommandError(error, failure!)
+        if (failure !== undefined) this.say(failure)
       }
       if ((command.type === 'manual-send' || command.type === 'steer') && command.draftId) {
         const delivery = this.state.deliveries?.find(item => item.threadId === command.threadId && item.draftId === command.draftId)
@@ -1617,6 +1642,7 @@ export class AgentControl {
       await this.persist().catch(error => {
         // The user sees fixed guidance; diagnostics keep only the storage failure category.
         if (turn) turn.failureCode = 'storage-failed'
+        unconfirmedAnswer = undefined
         failure = error instanceof Error ? error.message : 'Could not save agent state.'
         this.state.error = 'Could not save agent state. Pause management until storage is available.'
         this.state.assignments.forEach(a => { a.paused = true })
@@ -1627,7 +1653,9 @@ export class AgentControl {
       }
       this.publish()
       if (turn) turn.firstFeedbackAtMs ??= Date.now()
-      await this.finishTurn(turn, failure)
+      await this.finishTurn(turn, unconfirmedAnswer?.delivered ? undefined : failure)
+      // Completion can settle during persistence or diagnostics, after the catch observed uncertainty.
+      if (unconfirmedAnswer?.delivered) failure = undefined
       // The socket receipt needs this answer's outcome, not a shared error another lane can change.
       // Keep the published shell and desktop response as they are.
       return command.type === 'answer' && client.transport === 'socket'
@@ -1689,7 +1717,7 @@ export class AgentControl {
       }
       this.syncFollowups(); this.observe(); await this.persist()
     } catch (error) {
-      this.state.error = error instanceof Error ? error.message : 'Could not save the follow-up queue.'
+      this.setCommandError(error, error instanceof Error ? error.message : 'Could not save the follow-up queue.')
       if (command.type === 'queue-followup' && !this.followupStore.get().receipts.some(r => r.threadId === command.threadId && r.draftId === command.draftId)) this.setDelivery(command.threadId, command.draftId, 'failed')
     }
     this.publish(); this.pumpFollowups(); return this.shell()
@@ -1778,7 +1806,7 @@ export class AgentControl {
     // Stopping a turn waits for nothing, not even that thread's own lane, but the thread is working on it.
     const release = this.mark(this.busyThreads, command.threadId)
     try {
-      this.state.error = null
+      this.setCommandError(undefined, null)
       this.publish()
       this.validateInterrupt(command.threadId)
       if (assignment) assignment.paused = true
@@ -1786,7 +1814,7 @@ export class AgentControl {
       try { await this.followupStore.pause(command.threadId, 'The turn was interrupted. Review the thread and resume queued follow-ups when ready.') }
       catch { pauseFailure = 'Stop was sent, but the queue pause could not be saved. Your queued messages are still saved. Check them before sending another message.' }
       this.syncFollowups(); await this.execute(command, turn); await this.persist()
-      if (pauseFailure) this.state.error = pauseFailure
+      if (pauseFailure) this.setCommandError(undefined, pauseFailure)
     } catch (error) {
       failure = error instanceof Error ? error.message : 'Could not interrupt this thread.'
       if (error instanceof RefusedInterrupt && assignment && wasPaused !== undefined && assignment.paused !== wasPaused) {
@@ -1794,7 +1822,7 @@ export class AgentControl {
         try { await this.persist() }
         catch { failure = 'Stop was refused, and the previous management state could not be saved. Refresh before resuming management.' }
       }
-      this.state.error = failure
+      this.setCommandError(error, failure)
     }
     release()
     this.publish(); await this.finishTurn(turn, failure); return this.shell()
@@ -1869,7 +1897,7 @@ export class AgentControl {
     const turn = this.beginTurn({ source: 'command', commandType: command.type, text: '' })
     let failure: string | undefined
     try { this.state.error = null; await this.execute(command, turn); await this.persist() }
-    catch (error) { failure = error instanceof Error ? error.message : 'Provider action failed.'; this.state.error = failure }
+    catch (error) { failure = error instanceof Error ? error.message : 'Provider action failed.'; this.setCommandError(error, failure) }
     await this.finishTurn(turn, failure); this.publish()
     // Provider commands overlap, so each answers with its own outcome and not a refusal another one met meanwhile.
     const state = this.shell()
@@ -1897,7 +1925,7 @@ export class AgentControl {
       await this.persist()
     } catch (error) {
       failure = error instanceof Error ? error.message : 'Could not select this thread.'
-      this.state.error = failure
+      this.setCommandError(error, failure)
       this.publish()
     }
     await this.finishTurn(turn, failure)
@@ -2166,7 +2194,7 @@ export class AgentControl {
       }
       case 'reclaim-thread-worktree': {
         if (!this.dependencies.host.reclaimThreadWorktree) throw new Error('Removing this thread’s worktree is unavailable.')
-        this.acceptSnapshot(await this.dependencies.host.reclaimThreadWorktree(command.threadId, { withUncommittedChanges: command.withUncommittedChanges === true }))
+        this.acceptSnapshot(await this.dependencies.host.reclaimThreadWorktree(command.threadId, { withUncommittedChanges: command.withUncommittedChanges === true, ...(command.confirmedIgnored ? { confirmedIgnored: command.confirmedIgnored } : {}), ...(command.confirmedItems ? { confirmedItems: command.confirmedItems } : {}), ...(command.confirmedRepositories ? { confirmedRepositories: command.confirmedRepositories } : {}) }))
         this.state.notice = 'Worktree removed. The branch is kept.'
         return
       }
@@ -2572,7 +2600,23 @@ export class AgentControl {
       this.recordAnswerAttribution(command, client)
     }
     // An adapter that knows more about what an unconfirmed action cost says it; the intent is kept either way.
-    if (result.uncertain && this.outbox.some(o => o.id === command.commandId)) throw new Error(result.error ?? PROVIDER_RESULT_UNCONFIRMED)
+    const uncertaintyError = command.type === 'answer' && result.uncertain && result.answerCompletion
+      ? new AnswerDeliveryUnconfirmed(result.error ?? PROVIDER_RESULT_UNCONFIRMED)
+      : new Error(result.error ?? PROVIDER_RESULT_UNCONFIRMED)
+    if (uncertaintyError instanceof AnswerDeliveryUnconfirmed) this.setCommandError(uncertaintyError, uncertaintyError.message)
+    if (command.type === 'answer' && result.answerCompletion) {
+      void result.answerCompletion.then(async delivered => {
+        if (!delivered) return
+        if (uncertaintyError instanceof AnswerDeliveryUnconfirmed) uncertaintyError.delivered = true
+        if (answerIntent) this.recordAnsweredRequest(answerIntent)
+        if (this.visibleCommandError === uncertaintyError && this.state.error === uncertaintyError.message) {
+          this.setCommandError(undefined, null)
+        }
+        this.outbox = this.outbox.filter(item => item.id !== command.commandId)
+        await this.persist(); this.publish()
+      }).catch(() => { this.state.error = 'Answer delivery was confirmed, but could not be saved. Restore local storage access and refresh.'; this.publish() })
+    }
+    if (result.uncertain && this.outbox.some(o => o.id === command.commandId)) throw uncertaintyError
     if ((command.type === 'configure-thread' || prompt) && result.accepted) {
       // A settings change the provider confirmed comes back with the snapshot it produced, which is the
       // reconciliation; the thread is read again only when the adapter has none to give.
@@ -2598,10 +2642,11 @@ export class AgentControl {
       throw new Error(PROVIDER_REJECTED_ACTION)
     }
     this.acceptSnapshot(await this.readThread(threadId, provider))
-    // Another client or a cancellation can remove the request during this send. That reconciles
-    // the waiting request, but never upgrades this adapter's uncertain answer into a confirmation.
-    if (command.type === 'answer' && client.transport === 'socket' && result.uncertain) {
-      throw new Error(result.error ?? PROVIDER_RESULT_UNCONFIRMED)
+    // Request disappearance alone confirms nothing. A late write completion does confirm this
+    // answer, and must not be replaced with a fresh uncertainty error for a socket client.
+    if (command.type === 'answer' && client.transport === 'socket' && result.uncertain
+      && !(uncertaintyError instanceof AnswerDeliveryUnconfirmed && uncertaintyError.delivered)) {
+      throw uncertaintyError
     }
   }
   /**

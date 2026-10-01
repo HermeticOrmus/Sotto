@@ -1,4 +1,4 @@
-import { TRANSCRIPTION_SAMPLE_RATE } from '../../../shared/audio'
+import { MAX_TRANSCRIPTION_SAMPLES, TRANSCRIPTION_SAMPLE_RATE } from '../../../shared/audio'
 import { calculateRms, resampleMono } from './audioMath'
 import { microphoneConstraints, type MicrophoneConstraints } from './microphoneConstraints'
 export type { MicrophoneConstraints } from './microphoneConstraints'
@@ -173,7 +173,6 @@ function cloneResult(result: AudioRecordingResult): AudioRecordingResult {
 export class AudioRecorder {
   private readonly dependencies: AudioRecorderDependencies
   private session: RecordingSession | null = null
-  private lastResult: AudioRecordingResult | null = null
   private lastError: AudioRecorderError | null = null
 
   constructor(
@@ -206,7 +205,6 @@ export class AudioRecorder {
       terminated: false,
     }
     this.session = session
-    this.lastResult = null
     this.lastError = null
 
     try {
@@ -282,10 +280,6 @@ export class AudioRecorder {
     const session = this.session
     if (session === null) return
     await this.finalize(session, false)
-  }
-
-  getLastResult(): AudioRecordingResult | null {
-    return this.lastResult === null ? null : cloneResult(this.lastResult)
   }
 
   getLastError(): AudioRecorderError | null {
@@ -428,8 +422,13 @@ export class AudioRecorder {
             joined.set(chunk, offset)
             offset += chunk.length
           }
+          const samples = resampleMono(joined, sampleRate)
           result = {
-            samples: resampleMono(joined, sampleRate),
+            // The duration timer can run late in a hidden renderer. Keep its
+            // overrun from making the entire WAV exceed the IPC limit.
+            samples: samples.length > MAX_TRANSCRIPTION_SAMPLES
+              ? samples.slice(0, MAX_TRANSCRIPTION_SAMPLES)
+              : samples,
             sourceSampleRate: sampleRate,
             durationMs: (session.totalFrames / sampleRate) * 1_000,
           }
@@ -446,7 +445,6 @@ export class AudioRecorder {
         await this.cleanup(session)
         if (!session.starting && this.session === session) this.session = null
       }
-      if (result !== null) this.lastResult = result
       return result
     })()
     return session.finalization

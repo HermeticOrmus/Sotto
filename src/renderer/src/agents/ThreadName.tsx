@@ -1,4 +1,5 @@
 import React, { useState, type ReactNode } from 'react'
+import { isCompositionKey } from './composerKeys'
 
 /**
  * The inline editor for a thread's name, shared by the sidebar row and the pane header.
@@ -28,6 +29,7 @@ export function ThreadNameField({ title, label, className, onRename, onDone }: {
     autoFocus value={value} spellCheck={false}
     onChange={event => { setValue(event.target.value); setRefused(false) }}
     onKeyDown={event => {
+      if (isCompositionKey(event.nativeEvent)) return
       if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); confirm() }
       else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onDone() }
     }}

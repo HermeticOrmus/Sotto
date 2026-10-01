@@ -21,6 +21,8 @@ export interface TerminalViewLike {
 export interface TerminalViewHandlers {
   readonly onInput: (data: string) => void
   readonly onInterrupt: () => void
+  /** Copy feedback, shown by the surface that owns this terminal. */
+  readonly onNotice?: ((message: string | null) => void) | undefined
   /** An image was pasted: its PNG as a data URL. Left out where images have nowhere to go. */
   readonly onPasteImage?: ((dataUrl: string) => void) | undefined
 }
@@ -205,9 +207,14 @@ export class TerminalStore {
   attach(bridge: TerminalBridge | undefined, threadId: string, sessionId: string, container: HTMLElement, factory: TerminalViewFactory): TerminalViewLike | null {
     const record = this.ensureRecord(threadId, sessionId)
     if (!record.view) {
+      let copyNotice: string | null = null
       record.view = factory({
         onInput: data => this.write(bridge, threadId, sessionId, data),
         onInterrupt: () => this.interrupt(bridge, threadId, sessionId),
+        onNotice: notice => {
+          if (notice !== null || this.thread(threadId)?.notice === copyNotice) this.patch(threadId, { notice })
+          copyNotice = notice
+        },
       })
     }
     record.view.mount(container)

@@ -252,6 +252,15 @@ export class DesktopHostRouter {
     }
     if (connection.available?.() === false) throw new Error('This host is disconnected. Connect again before sending. No command was sent.')
     if (connection.kind === 'remote' && ['open-thread-folder', 'open-folder'].includes(command.type)) throw new Error('This folder is on the host machine. Open it there.')
+    if (command.type === 'preview-reclaim-thread-worktree') {
+      try {
+        const result = await connection.service.command(command, client)
+        if (result.error || !result.worktreeReclaimPreview) return { ...this.shell(), error: 'This host could not check the worktree. Nothing was removed. Update the host and try again.' }
+        return { ...this.shell(), error: null, worktreeReclaimPreview: result.worktreeReclaimPreview }
+      } catch {
+        return { ...this.shell(), error: 'This host could not check the worktree. Nothing was removed. Check its connection or update the host and try again.' }
+      }
+    }
     // Read as values: a host's shell can be its live state, which the command is about to change.
     const { activeThreadId, activeProjectId } = connection.service.shell()
     const selections = this.selections

@@ -33,7 +33,7 @@ test('permissions keep composer focus and failed answers remain on their own thr
     await answer.fill('Go left')
     await page.evaluate(async () => window.sottoE2E!.agentEvent!({ type: 'reject', threadId: 'workshop', text: 'The answer was refused.' }))
     await answer.press('Enter')
-    const failure = page.getByRole('alert').filter({ hasText: 'The answer was refused.' })
+    const failure = page.getByRole('alert').filter({ hasText: 'The answer was refused. It is back in the composer.' })
     await expect(failure).toContainText('It is back in the composer.')
     await page.getByRole('button', { name: 'Docs', exact: true }).click()
     await expect(failure).toHaveCount(0)

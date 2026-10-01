@@ -264,9 +264,12 @@ export class SocketHostService implements HostService {
       if (!frames.send({ v: 1, id, session: session.session, ...operation })) { clearTimeout(timer); this.pending.delete(id); reject(new HostConnectionError('The connection closed before this request could be confirmed.', 'disconnected', command ? id : undefined)) }
     })
   }
-  private publish(state: AgentState): void {
+  private validateState(state: AgentState): void {
     const hostId = this.session?.hostId
     if (hostId && (state.hostId !== hostId || state.host.hostId !== hostId || state.host.threads.some(thread => thread.hostId && thread.hostId !== hostId) || state.host.projects.some(project => project.hostId && project.hostId !== hostId))) throw new HostConnectionError('The host returned another host identity. Reconnect before continuing.', 'unauthenticated')
+  }
+  private publish(state: AgentState): void {
+    this.validateState(state)
     delete state.clientScoped; delete state.connections
     this.cached = state; for (const listener of this.listeners) listener(this.state())
     if (this.pushErrorThread === null) this.clearPushError()
@@ -303,7 +306,9 @@ export class SocketHostService implements HostService {
   async command(command: AgentCommand, _client?: ClientIdentity, commandId?: string): Promise<AgentState> {
     if (command.type === 'observe-threads') { await this.observe(command.threadIds); return this.state() }
     const generation = this.generation
-    const state = this.read(protocolAgentStateSchema, await this.call({ op: 'command', command }, commandId)); this.sameGeneration(generation); this.publish(state)
+    const state = this.read(protocolAgentStateSchema, await this.call({ op: 'command', command }, commandId)); this.sameGeneration(generation)
+    if (command.type === 'preview-reclaim-thread-worktree') { this.validateState(state); return state }
+    this.publish(state)
     const acknowledged = this.state()
     // The host already confirmed the command. Refresh failures must not invite sending it again.
     try {

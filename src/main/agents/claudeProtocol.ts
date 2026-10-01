@@ -5,6 +5,10 @@ import { withCliPath } from './cliLookup'
 
 export type ClaudeFrame = Record<string, unknown>
 class ClaudeUncertain extends Error {}
+/** The deadline elapsed, but stdin still owns the original bytes. */
+export class ClaudeWritePending extends ClaudeUncertain {
+  constructor(readonly completion: Promise<void>) { super('Claude delivery is uncertain.') }
+}
 /**
  * The CLI answered a control request with an error: it heard the request and did not do it. Unlike a lost or
  * unreadable answer, nothing about the request is unknown, so a caller may try another way.
@@ -19,6 +23,7 @@ const OUTPUT_DRAIN_GRACE_MS = 300
 export class ClaudeProtocol {
   private readonly child: ChildProcessWithoutNullStreams
   private readonly waiters = new Map<string, { resolve: (value: ClaudeFrame) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>()
+  private readonly writes = new Set<(error: Error) => void>()
   private ended = false
   private stopping = false
   readonly closed: Promise<void>
@@ -68,7 +73,7 @@ export class ClaudeProtocol {
       }
     })
     this.child.stderr.on('data', (chunk: Buffer) => { stderrBytes += chunk.length; if (stderrBytes > 1024 * 1024) this.abort() })
-    this.child.on('error', () => this.abort()); this.child.stdin.on('error', () => this.abort())
+    this.child.on('error', () => this.abort()); this.child.stdin.on('error', () => this.abort()); this.child.stdin.on('close', () => this.fail())
   }
   control(request: ClaudeFrame): Promise<ClaudeFrame> {
     const id = randomUUID()
@@ -81,12 +86,19 @@ export class ClaudeProtocol {
     })
   }
   write(frame: ClaudeFrame): Promise<void> {
-    if (this.ended || this.stopping) return Promise.reject(new ClaudeUncertain('Claude is disconnected.'))
+    if (this.ended || this.stopping || this.child.stdin.destroyed) return Promise.reject(new ClaudeUncertain('Claude is disconnected.'))
+    const completion = new Promise<void>((resolve, reject) => {
+      this.writes.add(reject)
+      const finish = (error?: Error | null): void => {
+        this.writes.delete(reject)
+        if (error) reject(new ClaudeUncertain('Claude delivery is uncertain.')); else resolve()
+      }
+      try { this.child.stdin.write(`${JSON.stringify(frame)}\n`, finish) }
+      catch { finish(new Error('Claude stdin write failed.')) }
+    })
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new ClaudeUncertain('Claude delivery is uncertain.')), this.timeout)
-      this.child.stdin.write(`${JSON.stringify(frame)}\n`, error => {
-        clearTimeout(timer); if (error) reject(new ClaudeUncertain('Claude delivery is uncertain.')); else resolve()
-      })
+      const timer = setTimeout(() => reject(new ClaudeWritePending(completion)), this.timeout)
+      void completion.then(() => { clearTimeout(timer); resolve() }, error => { clearTimeout(timer); reject(error) })
     })
   }
   stop(): void {
@@ -98,6 +110,8 @@ export class ClaudeProtocol {
   private abort(): void { this.fail(); this.child.kill() }
   private fail(): void {
     this.ended = true
+    for (const reject of this.writes) reject(new ClaudeUncertain('Claude is disconnected.'))
+    this.writes.clear()
     for (const waiter of this.waiters.values()) { clearTimeout(waiter.timer); waiter.reject(new ClaudeUncertain('Claude disconnected before acknowledging the request.')) }
     this.waiters.clear()
   }
