@@ -74,6 +74,26 @@ describe('completed native turn checkpoints', () => {
     expect(await gitAction).toBe('refused')
     expect(unwrap(await revert).status).toBe('reverted')
   })
+  it.each(['backup stat', 'storage listing', 'blob listing', 'blob stat'])('keeps sends working when %s cleanup fails', async failure => {
+    const f = await fixture(); await f.complete()
+    const backup = join(f.dependencies.directory, 'checkpoints.json.corrupt-fixture')
+    await writeFile(backup, 'backup')
+    const report = vi.fn(); f.dependencies.report = report
+    const actualStat = fsPromises.lstat, actualRead = fsPromises.readdir
+    const stat = vi.spyOn(fsPromises, 'lstat').mockImplementation((...args) => {
+      if (failure === 'backup stat' && args[0] === backup || failure === 'blob stat' && args[0] === join(f.dependencies.directory, 'blobs')) return Promise.reject(Object.assign(new Error('private path'), { code: 'EACCES' }))
+      return actualStat(...args)
+    })
+    const listing = vi.spyOn(fsPromises, 'readdir').mockImplementation((...args) => {
+      if (failure === 'storage listing' && args[0] === f.dependencies.directory || failure === 'blob listing' && args[0] === join(f.dependencies.directory, 'blobs')) return Promise.reject(Object.assign(new Error('private path'), { code: 'EACCES' }))
+      return actualRead(...args)
+    })
+    try {
+      await expect(f.service.beforeTurn('thread-a')).resolves.toBeUndefined()
+      expect(report).toHaveBeenCalledWith('checkpoint-cleanup-failed')
+      expect(await readFile(backup, 'utf8')).toBe('backup')
+    } finally { stat.mockRestore(); listing.mockRestore() }
+  })
   it.each(['EBUSY', 'EPERM'])('retries %s blob removal and keeps sends working after cleanup fails', async code => {
     const f = await fixture(); await f.complete()
     const orphan = join(f.dependencies.directory, 'blobs', 'f'.repeat(64))

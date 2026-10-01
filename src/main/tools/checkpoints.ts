@@ -107,7 +107,7 @@ export class CheckpointService extends ToolOperations {
   initialize(): Promise<void> { if (this.initialized) return Promise.resolve(); return this.serial(async () => { await this.load(); if (!this.initialized) { await this.save(); this.initialized = true } }) }
   private async refreshRecoveryNotice(): Promise<void> {
     if (!this.recoveryBackup) return
-    const exists = await lstat(this.recoveryBackup).catch(error => { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error })
+    const exists = await lstat(this.recoveryBackup).catch(error => { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; this.dependencies.report?.('checkpoint-cleanup-failed'); return true })
     if (!exists) { this.recoveryBackup = undefined; this.recoveryNotice = undefined }
   }
   private unresolved(record: Record): boolean { return record.status === 'reverting' || record.status === 'uncertain' }
@@ -127,14 +127,14 @@ export class CheckpointService extends ToolOperations {
     const cutoff = (this.dependencies.now?.() ?? Date.now()) - 30 * 24 * 60 * 60 * 1000
     for (const record of this.records.values()) if (!this.unresolved(record) && (this.dependencies.historyEnabled?.() === false || Date.parse(record.createdAt) < cutoff)) this.records.delete(record.id)
     const directory = join(this.dependencies.directory, 'blobs')
-    const blobInfo = await lstat(directory).catch(error => { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error })
+    const blobInfo = await lstat(directory).catch(error => { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') this.dependencies.report?.('checkpoint-cleanup-failed'); return null })
     const safeDirectory = blobInfo?.isDirectory() && !blobInfo.isSymbolicLink()
     if (blobInfo && !safeDirectory) this.dependencies.report?.('checkpoint-cleanup-unsafe-directory')
-    const names = safeDirectory ? (await readdir(directory)).filter(name => /^[a-f0-9]{64}$/.test(name)) : []
+    const names = safeDirectory ? (await readdir(directory).catch(error => { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') this.dependencies.report?.('checkpoint-cleanup-failed'); return [] })).filter(name => /^[a-f0-9]{64}$/.test(name)) : []
     const regular = new Set<string>()
     for (const name of names) {
       if (this.blobSizes.has(name)) { regular.add(name); continue }
-      const info = await lstat(join(directory, name)).catch(error => { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error })
+      const info = await lstat(join(directory, name)).catch(error => { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') this.dependencies.report?.('checkpoint-cleanup-failed'); return null })
       if (info?.isFile() && !info.isSymbolicLink()) { regular.add(name); if (!this.blobSizes.has(name)) this.blobSizes.set(name, info.size) }
     }
     const hashes = (record: Record): Set<string> => new Set([record.before, record.after].flatMap(snapshot => snapshot ? Object.values(snapshot.files).map(file => file.hash) : []))
@@ -147,12 +147,12 @@ export class CheckpointService extends ToolOperations {
       recordBytes.set(record.id, bytes)
       for (const hash of hashes(record)) { if (!counts.has(hash)) total += this.blobSizes.get(hash) ?? 0; counts.set(hash, (counts.get(hash) ?? 0) + 1) }
     }
-    const backupNames = (await readdir(this.dependencies.directory).catch(error => { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error })).filter(name => name.startsWith('checkpoints.json.corrupt-'))
+    const backupNames = (await readdir(this.dependencies.directory).catch(error => { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') this.dependencies.report?.('checkpoint-cleanup-failed'); return [] })).filter(name => name.startsWith('checkpoints.json.corrupt-'))
     const backups = new Map<string, { size: number; createdAt: number }>()
     const removedBackups = new Set<string>()
     for (const name of backupNames) {
-      const info = await lstat(join(this.dependencies.directory, name))
-      if (!info.isFile() || info.isSymbolicLink()) continue
+      const info = await lstat(join(this.dependencies.directory, name)).catch(error => { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') this.dependencies.report?.('checkpoint-cleanup-failed'); return null })
+      if (!info?.isFile() || info.isSymbolicLink()) continue
       if (this.dependencies.historyEnabled?.() === false || info.mtimeMs < cutoff) removedBackups.add(name)
       else { backups.set(name, { size: info.size, createdAt: info.mtimeMs }); total += info.size }
     }
@@ -177,7 +177,7 @@ export class CheckpointService extends ToolOperations {
     // Commit references before deleting any file backups.
     await this.store.write({ version: 1, records: [...this.records.values()] })
     for (const name of regular) if (!counts.has(name)) {
-      const info = await lstat(join(directory, name)).catch(error => { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error })
+      const info = await lstat(join(directory, name)).catch(error => { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') this.dependencies.report?.('checkpoint-cleanup-failed'); return null })
       if (info?.isFile() && !info.isSymbolicLink()) await this.removeBackup(join(directory, name))
       this.blobSizes.delete(name)
     }
