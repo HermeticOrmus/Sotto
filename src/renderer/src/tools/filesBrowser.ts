@@ -56,6 +56,7 @@ export class FilesBrowserStore {
   private readonly listeners = new Set<() => void>()
   private readonly scroll = new Map<string, { tree: number; preview: number }>()
   private readonly inflight = new Set<string>()
+  private readonly rootLoads = new Map<string, Promise<boolean>>()
 
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener)
@@ -177,6 +178,16 @@ export class FilesBrowserStore {
 
   // Lists the root without a token. Resolves true when the working folder was replaced.
   private async loadRoot(bridge: FilesBridge | undefined, threadId: string): Promise<boolean> {
+    const key = `${threadId}:${this.threads.get(threadId)?.generation}`
+    const pending = this.rootLoads.get(key)
+    if (pending) return pending
+    const request = this.readRoot(bridge, threadId)
+    this.rootLoads.set(key, request)
+    try { return await request }
+    finally { this.rootLoads.delete(key) }
+  }
+
+  private async readRoot(bridge: FilesBridge | undefined, threadId: string): Promise<boolean> {
     const start = this.threads.get(threadId)
     if (!start) return false
     if (!bridge) {
@@ -204,7 +215,11 @@ export class FilesBrowserStore {
     const start = this.threads.get(threadId)
     if (!start) return
     if (!bridge || !start.workspace) {
-      if (!start.workspace && bridge) await this.loadRoot(bridge, threadId)
+      if (!start.workspace && bridge) {
+        await this.loadRoot(bridge, threadId)
+        const current = this.threads.get(threadId)
+        if (current?.generation === start.generation && current.workspace && current.expanded.has(path)) await this.loadDirectory(bridge, threadId, path)
+      }
       return
     }
     const { generation, workspace } = start
@@ -217,8 +232,20 @@ export class FilesBrowserStore {
   }
 
   private async loadPreview(bridge: FilesBridge | undefined, threadId: string, path: string, quiet: boolean): Promise<void> {
-    const start = this.threads.get(threadId)
+    let start = this.threads.get(threadId)
     if (!start) return
+    if (bridge && !start.workspace) {
+      const generation = start.generation
+      await this.loadRoot(bridge, threadId)
+      start = this.threads.get(threadId)
+      if (!start || start.generation !== generation || start.selectedPath !== path) return
+      if (start.workspace) {
+        for (const folder of start.expanded) {
+          const listing = start.listings.get(folder)
+          if (!listing || listing.status === 'error') void this.loadDirectory(bridge, threadId, folder)
+        }
+      }
+    }
     if (!bridge || !start.workspace) {
       this.patch(threadId, start.generation, { preview: { status: 'error', path, error: bridge ? { code: 'workspace-unavailable', message: '' } : unavailableBridge } })
       return

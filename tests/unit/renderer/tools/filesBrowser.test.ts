@@ -13,6 +13,53 @@ function workshop(token = TOKEN_A): FakeFolders[string] {
 }
 
 describe('Files browsing model', () => {
+  it('opens a Changes file after a delayed first root listing and loads its folders', async () => {
+    const bridge = fakeFilesBridge({ t1: workshop() })
+    const list = bridge.list
+    let release!: () => void
+    bridge.list = vi.fn(async request => {
+      if (request.path === '') await new Promise<void>(resolve => { release = resolve })
+      return list(request)
+    })
+    const store = new FilesBrowserStore()
+    store.showFile(bridge, 't1', 'src/app.ts')
+    expect(bridge.preview).not.toHaveBeenCalled()
+    release()
+    await settle()
+    expect(store.thread('t1')?.preview).toMatchObject({ status: 'ready', path: 'src/app.ts' })
+    expect(store.thread('t1')?.listings.get('src')?.status).toBe('ready')
+  })
+
+  it('retries the root when preview Retry follows a failed initial listing', async () => {
+    const bridge = fakeFilesBridge({ t1: workshop() })
+    vi.mocked(bridge.list).mockResolvedValueOnce({ ok: false, error: { code: 'unavailable', message: 'Unavailable' } })
+    const store = new FilesBrowserStore()
+    store.showFile(bridge, 't1', 'src/app.ts')
+    await settle()
+    expect(store.thread('t1')?.preview?.status).toBe('error')
+    store.openFile(bridge, 't1', 'src/app.ts')
+    await settle()
+    expect(store.thread('t1')?.preview).toMatchObject({ status: 'ready', path: 'src/app.ts' })
+    expect(store.thread('t1')?.listings.get('src')?.status).toBe('ready')
+  })
+
+  it('does not reopen a preview closed while the root listing was pending', async () => {
+    const bridge = fakeFilesBridge({ t1: workshop() })
+    const list = bridge.list
+    let release!: () => void
+    bridge.list = vi.fn(async request => {
+      if (request.path === '') await new Promise<void>(resolve => { release = resolve })
+      return list(request)
+    })
+    const store = new FilesBrowserStore()
+    store.showFile(bridge, 't1', 'README.md')
+    store.closePreview('t1')
+    release()
+    await settle()
+    expect(bridge.preview).not.toHaveBeenCalled()
+    expect(store.thread('t1')?.preview).toBeNull()
+  })
+
   it('lists the root without a token and sends the returned workspace ID with every later request', async () => {
     const folders: FakeFolders = { t1: workshop() }
     const bridge = fakeFilesBridge(folders)
