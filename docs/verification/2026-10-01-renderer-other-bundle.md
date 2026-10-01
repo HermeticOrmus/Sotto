@@ -36,3 +36,12 @@ places feedback beside the control, following #596's requested placement. This
 was the reversible assumption used after asking for clarification; no alternative
 layout was selected by the user. The implementation uses the app's real controls
 and theme tokens. No domain term or architectural decision changed.
+
+## Review correction
+
+The PR review reproduced a busy preview when opening a file four or five folders
+deep: ancestor reads consumed the service's four request slots before the preview
+started. Files now queues its reads and path actions within that same limit,
+shared with main as a constant. A controlled bridge holds each read and rejects a
+fifth concurrent request. Both deep-path regressions failed before this correction
+and pass after it, with every expanded folder and the preview ready without Retry.

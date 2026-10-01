@@ -13,6 +13,38 @@ function workshop(token = TOKEN_A): FakeFolders[string] {
 }
 
 describe('Files browsing model', () => {
+  it.each([4, 5])('opens a Changes file %i folders deep without exceeding the service request limit', async depth => {
+    const folders = Array.from({ length: depth }, (_, index) => Array.from({ length: index + 1 }, (_, part) => `folder${part}`).join('/'))
+    const path = `${folders.at(-1)!}/app.ts`
+    const bridge = fakeFilesBridge({ t1: { root: 'D:/work', token: TOKEN_A, tree: {
+      ...Object.fromEntries(folders.map(folder => [folder, { kind: 'directory' as const }])),
+      [path]: { kind: 'file', content: text('ready') },
+    } } })
+    const pending: (() => void)[] = []
+    let active = 0
+    let rejected = 0
+    const limited = async <T,>(request: () => Promise<FilesResult<T>>): Promise<FilesResult<T>> => {
+      if (active >= 4) { rejected++; return { ok: false, error: { code: 'busy', message: 'Files is busy.' } } }
+      active++
+      try {
+        await new Promise<void>(resolve => { pending.push(resolve) })
+        return await request()
+      } finally { active-- }
+    }
+    const list = bridge.list, preview = bridge.preview
+    bridge.list = vi.fn(request => limited(() => list(request)))
+    bridge.preview = vi.fn(request => limited(() => preview(request)))
+    const store = new FilesBrowserStore()
+    store.showFile(bridge, 't1', path)
+    while (pending.length) {
+      for (const release of pending.splice(0)) release()
+      await settle()
+    }
+    expect(rejected).toBe(0)
+    expect(store.thread('t1')?.preview).toMatchObject({ status: 'ready', path })
+    for (const folder of folders) expect(store.thread('t1')?.listings.get(folder)?.status).toBe('ready')
+  })
+
   it('opens a Changes file after a delayed first root listing and loads its folders', async () => {
     const bridge = fakeFilesBridge({ t1: workshop() })
     const list = bridge.list

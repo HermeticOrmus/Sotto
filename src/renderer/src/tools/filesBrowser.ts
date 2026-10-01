@@ -1,4 +1,4 @@
-import type { FileListing, FilePath, FilePreview, FileWorkspace, FilesBridge, FilesError, FilesResult } from '../../../shared/files'
+import { FILES_MAX_CONCURRENT_REQUESTS, type FileListing, type FilePath, type FilePreview, type FileWorkspace, type FilesBridge, type FilesError, type FilesResult } from '../../../shared/files'
 
 export type FileEntry = FileListing['entries'][number]
 export type ListingState =
@@ -57,6 +57,8 @@ export class FilesBrowserStore {
   private readonly scroll = new Map<string, { tree: number; preview: number }>()
   private readonly inflight = new Set<string>()
   private readonly rootLoads = new Map<string, Promise<boolean>>()
+  private activeRequests = 0
+  private readonly waitingRequests: (() => void)[] = []
 
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener)
@@ -274,7 +276,17 @@ export class FilesBrowserStore {
   }
 
   private async call<T>(request: () => Promise<FilesResult<T>>): Promise<FilesResult<T>> {
-    try { return await request() } catch { return { ok: false, error: { code: 'unavailable', message: 'Files could not be reached.' } } }
+    if (this.activeRequests >= FILES_MAX_CONCURRENT_REQUESTS) {
+      await new Promise<void>(resolve => { this.waitingRequests.push(resolve) })
+    } else this.activeRequests++
+    try { return await request() }
+    catch { return { ok: false, error: { code: 'unavailable', message: 'Files could not be reached.' } } }
+    finally {
+      // Hand the completed request's slot to the oldest waiter before admitting another request.
+      const next = this.waitingRequests.shift()
+      if (next) next()
+      else this.activeRequests--
+    }
   }
 
   private patch(threadId: string, generation: number, patch: Partial<ThreadFiles>): void {
