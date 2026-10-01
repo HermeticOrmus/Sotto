@@ -101,7 +101,8 @@ afterEach(() => {
 it('keeps the terminal selection until copying succeeds and explains a failed copy', async () => {
   vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} }))
   let fail!: (error: Error) => void
-  vi.stubGlobal('sotto', { deliverOutput: vi.fn(() => new Promise((_resolve, reject) => { fail = reject })) })
+  const deliverOutput = vi.fn(() => new Promise((_resolve, reject) => { fail = reject }))
+  vi.stubGlobal('sotto', { deliverOutput })
   const onNotice = vi.fn()
   const view = createXtermView({ onInput() {}, onInterrupt() {}, onNotice }, { resolveColor: value => value })
   const terminal = xterm.instances[0]!
@@ -110,6 +111,10 @@ it('keeps the terminal selection until copying succeeds and explains a failed co
   fail(new Error('Permission denied'))
   await vi.waitFor(() => expect(onNotice).toHaveBeenCalledWith('Could not copy. Your selection is kept. Try Ctrl+C again.'))
   expect(terminal.clearSelection).not.toHaveBeenCalled()
+  deliverOutput.mockResolvedValue('copied')
+  terminal.key(new KeyboardEvent('keydown', { key: 'c', ctrlKey: true }))
+  await vi.waitFor(() => expect(terminal.clearSelection).toHaveBeenCalledOnce())
+  expect(onNotice).toHaveBeenLastCalledWith(null)
   view.dispose()
 })
 

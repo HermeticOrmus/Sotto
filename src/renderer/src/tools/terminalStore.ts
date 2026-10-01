@@ -22,7 +22,7 @@ export interface TerminalViewHandlers {
   readonly onInput: (data: string) => void
   readonly onInterrupt: () => void
   /** Copy feedback, shown by the surface that owns this terminal. */
-  readonly onNotice?: ((message: string) => void) | undefined
+  readonly onNotice?: ((message: string | null) => void) | undefined
   /** An image was pasted: its PNG as a data URL. Left out where images have nowhere to go. */
   readonly onPasteImage?: ((dataUrl: string) => void) | undefined
 }
