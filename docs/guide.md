@@ -341,7 +341,13 @@ Settings:
 
 Turning **Keep local history** off stops saving new dictation transcripts. Older dictation transcripts stay on disk until you delete them or clear history. **Delete** removes a retained transcript from this computer even while history is off; turning history back on does not restore it.
 
+**Clear history** also removes dictation history backups and temporary files left by an interrupted save. Sotto removes those temporary files when it starts, without changing saved history.
+
 Automatic paste is best effort. Windows blocks synthetic input into elevated applications, password fields, protected desktops, and some custom editors. macOS blocks it in secure input fields and until both the Automation and Accessibility grants exist. When paste is rejected, Sotto shows **Copied — paste manually** and leaves the complete text in the clipboard. If a Windows target app is running as administrator, either paste manually or run both apps at the same integrity level.
+
+Sotto finishes each automatic paste before copying or pasting the next transcript. Copying from History while a dictation is waiting to paste waits for that delivery to finish.
+
+If the Windows paste helper does not become ready, the fallback can paste up to about 10 seconds after dictation ends, into whichever window has focus then. Once a paste has been dispatched, if the helper stops or does not confirm in time, Sotto keeps the copied result and does not repeat the paste. Check the target before pasting manually: the text may already have arrived.
 
 ## Updates
 
@@ -388,6 +394,8 @@ Dictation audio is uploaded to OpenRouter and transcribed by Microsoft MAI-Trans
 Optional AI cleanup is off by default. When you enable it, the finished transcript (never audio) is sent to OpenRouter with the same key for punctuation and self-correction cleanup. If the network is slow or offline, Sotto delivers the raw transcript instead. Optional agent control also sends the prompts you submit to the connected harness and, when configured, sends assignment text and relevant thread context to your selected reasoning provider: `openrouter.ai` for an OpenRouter account, `api.openai.com` for an OpenAI one. Agent replies default to Grok Altair, which sends reply text to xAI using a separately saved xAI API key. Kokoro Heart is a lower-cost choice that sends reply text through OpenRouter using the existing OpenRouter key. Voice previews incur the same provider usage charges; neither option silently falls back to another provider. The optional natural voice is generated on this computer after a one-time voice download. Provider usage is billed separately from Sotto access. Credentials are encrypted using the operating system credential store and are not returned to the UI.
 
 Sotto has no analytics or crash upload. Dictation audio is never persisted. Transcript history is local, optional, bounded, searchable, and clearable. Two small diagnostic files in Sotto's data folder help explain a lost dictation: `polish-diagnostics.jsonl` records word counts around AI cleanup, and `transcription-diagnostics.jsonl` records why a transcription request failed (reason, HTTP status, attempts, clip length and time taken). They hold no words, audio or keys, each starts over past 256 KB with one older copy kept, and neither leaves this computer.
+
+Spellcheck stays enabled, but Sotto blocks dictionary downloads in its windows and browser. The OS spellchecker remains available on Windows and macOS. A language that needs a downloaded dictionary may have no spelling suggestions.
 
 ### Thread titles, branch names and Git
 
