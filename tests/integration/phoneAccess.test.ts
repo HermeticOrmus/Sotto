@@ -9,6 +9,7 @@ import { E2EAgentHost, e2eAgentReasoner } from '../../src/main/e2e/agentEffects'
 import { PolicyStore } from '../../src/main/memory/policies'
 import { MemoryStore } from '../../src/main/memory/store'
 import { PhoneAccess, type PhoneAccessTailscale } from '../../src/main/phones/phoneAccess'
+import { rawPeer } from '../fixtures/rawHostPeer'
 import { serveTarget } from '../../src/main/phones/tailscale'
 
 /**
@@ -113,4 +114,24 @@ it('closes every phone’s socket when phone access turns off', async () => {
   await expect.poll(() => access.get().phase).toBe('off')
   await expect.poll(() => access.get().phones[0]?.connected).toBe(false)
   await expect(fetch(await url() + '/v1/health')).rejects.toBeDefined()
+})
+
+it('pushes Can answer changes to each connected phone without reconnecting', async () => {
+  const phones = [await pairPhone('First phone'), await pairPhone('Second phone')]
+  const base = await url()
+  const peers = await Promise.all(phones.map(async ({ paired }) => {
+    const session = await (await fetch(base + '/v1/session', { method: 'POST', headers: { Authorization: 'Bearer ' + paired.token } })).json() as { session: string }
+    return rawPeer(Number(new URL(base).port), session.session)
+  }))
+  try {
+    for (const peer of peers) expect(await peer.call('hello', { op: 'hello' })).toMatchObject({ ok: true, result: { capabilities: { mayAnswer: false } } })
+    for (const peer of peers) peer.messages.length = 0
+    await access.command({ type: 'set-can-answer', clientId: phones[0]!.paired.clientId, allowed: true })
+    await expect.poll(() => peers[0]!.messages.find(message => message.event === 'shell')).toMatchObject({ state: { clientCapabilities: { mayAnswer: true } } })
+    await expect.poll(() => peers[1]!.messages.find(message => message.event === 'shell')).toMatchObject({ state: { clientCapabilities: { mayAnswer: false } } })
+    for (const peer of peers) peer.messages.length = 0
+    await access.command({ type: 'set-can-answer', clientId: phones[0]!.paired.clientId, allowed: false })
+    await expect.poll(() => peers[0]!.messages.find(message => message.event === 'shell')).toMatchObject({ state: { clientCapabilities: { mayAnswer: false } } })
+    expect(access.get().phones.every(phone => phone.connected)).toBe(true)
+  } finally { for (const peer of peers) peer.frames.close() }
 })
