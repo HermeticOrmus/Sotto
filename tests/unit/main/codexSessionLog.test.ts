@@ -25,6 +25,27 @@ afterEach(async () => {
   }
 })
 describe('Codex session log', () => {
+  it.each(['sent', 'sentDigest'] as const)('keeps a %s reset made during a missing-file search', async method => {
+    const root = await mkdtemp(join(tmpdir(), 'sotto-codex-log-')); roots.push(root)
+    const messages: AgentMessage[] = []
+    const watcher = new CodexSessionLogWatcher({ codexHome: root, onMessage: (_id, message) => messages.push(message) })
+    watchers.push(watcher); watcher.observe('thread')
+    vi.spyOn(Date, 'now').mockReturnValue(0)
+    let started!: () => void, release!: () => void
+    const locating = new Promise<void>(resolve => { started = resolve })
+    const held = new Promise<void>(resolve => { release = resolve })
+    vi.mocked(readdir).mockImplementationOnce(async () => { started(); await held; return [] })
+    const polling = watcher.poll()
+    await locating
+    watcher[method]('thread', 'own-client', method === 'sent' ? 'Own input' : promptDigest('Own input'))
+    release()
+    await polling
+    const directory = join(root, 'sessions'); await mkdir(directory)
+    await writeFile(join(directory, 'rollout-thread.jsonl'), rolloutLine(1, { type: 'user_message', id: 'new', message: 'Native input' }))
+    await watcher.poll()
+    expect(messages.map(message => message.id)).toEqual(['new'])
+  })
+
   it.each(['sent', 'sentDigest'] as const)('resets missing-rollout discovery after %s', async method => {
     const root = await mkdtemp(join(tmpdir(), 'sotto-codex-log-')); roots.push(root)
     const messages: AgentMessage[] = []
