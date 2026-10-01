@@ -114,9 +114,13 @@ export function mergeDevices(reading: TailscaleReading, suggestions: readonly Ss
   // A bare host name never counts, the alias least of all: two machines that kept a default name such as pop-os
   // share it, and only a lookup could say which one answers. Loopback never counts either: a VM such as Colima,
   // Lima or WSL is reached through a port forwarded to it, and is a machine of its own.
+  // A jump is the other exception for an address. `ProxyJump bastion` with `HostName 192.168.1.10` connects to
+  // that address from the bastion, which can be a different machine; the same is true of a `ProxyCommand` that
+  // forwards with `ssh` (`ssh -W %h:%p bastion`). The full tailnet name still names this computer, jump or not.
+  // A Git service is that destination, not the alias: an entry named github.com can go to an ordinary computer.
   const own = new Set([...(reading.self ?? []), ...thisComputer].map(lower).filter(name => !LOOPBACK.test(name)))
-  const unusable = (goesTo: string, names: readonly string[]): HostDevice['unavailable'] =>
-    own.has(goesTo) ? 'this-computer' : names.some(name => GIT_SERVICES.has(name)) ? 'git-service' : undefined
+  const unusable = (goesTo: string, jump = false): HostDevice['unavailable'] =>
+    own.has(goesTo) && !(jump && ADDRESS.test(goesTo)) ? 'this-computer' : GIT_SERVICES.has(goesTo) ? 'git-service' : undefined
   const configured: HostDevice[] = []
   const known: HostDevice[] = []
   for (const suggestion of suggestions) {
@@ -132,7 +136,7 @@ export function mergeDevices(reading: TailscaleReading, suggestions: readonly Ss
         continue
       }
       const names = [...new Set([suggestion.alias, suggestion.hostname ?? ''].filter(Boolean).map(lower))]
-      const unavailable = unusable(goesTo, names)
+      const unavailable = unusable(goesTo, suggestion.jump === true)
       configured.push({ target: suggestion.alias, name: suggestion.alias, sshConfiguration: true, names, ...(suggestion.detail ? { detail: suggestion.detail } : {}), ...(unavailable ? { unavailable } : {}) })
       continue
     }
@@ -143,7 +147,7 @@ export function mergeDevices(reading: TailscaleReading, suggestions: readonly Ss
       if (suggestion.port && !match.aliased) match.device.port = suggestion.port
       continue
     }
-    const unavailable = unusable(lower(suggestion.alias), [lower(suggestion.alias)])
+    const unavailable = unusable(lower(suggestion.alias))
     known.push({ target: suggestion.alias, name: suggestion.alias, knownHost: true, names: [lower(suggestion.alias)], ...(suggestion.port ? { port: suggestion.port } : {}), ...(suggestion.detail ? { detail: suggestion.detail } : {}), ...(unavailable ? { unavailable } : {}) })
   }
   const byName = (left: HostDevice, right: HostDevice): number => left.name.localeCompare(right.name, undefined, { sensitivity: 'base' })
