@@ -19,7 +19,7 @@ async function fixture(root?: string) {
   const credentials = new AgentCredentials(join(f.root, 'vault'), { isEncryptionAvailable: () => false, encryptString: value => Buffer.from(value), decryptString: value => value.toString() })
   await credentials.load()
   const opened: string[] = []
-  const recorder = new TurnRecorder({ directory: f.root, historyEnabled: () => true, resolveSession: id => f.registry.byThread(id) })
+  const recorder = new TurnRecorder({ directory: f.root, resolveSession: id => f.registry.byThread(id) })
   const control = new AgentControl({ schedule: immediatePublishScheduler, directory: f.root, host: f.host, credentials, turns: recorder,
     openThreadFolder: async path => { opened.push(path) },
     reasoner: { intent: async () => ({ type: 'clarify', text: 'Choose a thread' }), decide: async () => ({ decision: 'human', text: 'Review' }) },
@@ -42,7 +42,7 @@ describe('workspace controller integration', () => {
       const result = await f.control.command({ type: 'interrupt', threadId })
       expect(f.adapters.codex.commands.filter(command => command.type === 'interrupt')).toHaveLength(1)
       expect(result.assignments.find(item => item.threadId === threadId)?.paused).toBe(true)
-      expect((await f.recorder.recent(20)).find(turn => turn.commandType === 'interrupt')).toMatchObject({ outcome: 'completed', error: '' })
+      expect((await f.recorder.recent(20)).find(turn => turn.commandType === 'interrupt')).toMatchObject({ outcome: 'completed' })
       expect(result.error).toBe('Stop was sent, but the queue pause could not be saved. Your queued messages are still saved. Check them before sending another message.')
     } finally { pause.mockRestore() }
   })
