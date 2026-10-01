@@ -301,13 +301,24 @@ class ElectronBrowserWindowAdapter implements BrowserWindowLike {
   }
 
   on(
-    event: 'close' | 'closed' | 'moved' | 'maximize' | 'unmaximize',
+    event: 'close' | 'closed' | 'moved' | 'maximize' | 'unmaximize' | 'hide' | 'minimize',
     listener: (event: { preventDefault(): void }) => void,
   ): void {
     if (event === 'close') {
       const wrapped = (nativeEvent: { preventDefault(): void }): void => listener(nativeEvent)
       this.window.on('close', wrapped)
       this.windowListenerCleanups.set(listener, () => this.window.removeListener('close', wrapped))
+      return
+    }
+    if (event === 'hide' || event === 'minimize') {
+      const wrapped = (): void => listener({ preventDefault: () => undefined })
+      if (event === 'hide') {
+        this.window.on('hide', wrapped)
+        this.windowListenerCleanups.set(listener, () => this.window.removeListener('hide', wrapped))
+      } else {
+        this.window.on('minimize', wrapped)
+        this.windowListenerCleanups.set(listener, () => this.window.removeListener('minimize', wrapped))
+      }
       return
     }
     if (event === 'moved' || event === 'maximize' || event === 'unmaximize') {
@@ -331,7 +342,7 @@ class ElectronBrowserWindowAdapter implements BrowserWindowLike {
   }
 
   removeListener(
-    _event: 'close' | 'closed' | 'moved' | 'maximize' | 'unmaximize',
+    _event: 'close' | 'closed' | 'moved' | 'maximize' | 'unmaximize' | 'hide' | 'minimize',
     listener: (event: { preventDefault(): void }) => void,
   ): void {
     this.windowListenerCleanups.get(listener)?.()
