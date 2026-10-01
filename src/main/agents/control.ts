@@ -2611,10 +2611,11 @@ export class AgentControl {
       throw new Error(PROVIDER_REJECTED_ACTION)
     }
     this.acceptSnapshot(await this.readThread(threadId, provider))
-    // Another client or a cancellation can remove the request during this send. That reconciles
-    // the waiting request, but never upgrades this adapter's uncertain answer into a confirmation.
-    if (command.type === 'answer' && client.transport === 'socket' && result.uncertain) {
-      throw new Error(result.error ?? PROVIDER_RESULT_UNCONFIRMED)
+    // Request disappearance alone confirms nothing. A late write completion does confirm this
+    // answer, and must not be replaced with a fresh uncertainty error for a socket client.
+    if (command.type === 'answer' && client.transport === 'socket' && result.uncertain
+      && !(uncertaintyError instanceof AnswerDeliveryUnconfirmed && uncertaintyError.delivered)) {
+      throw uncertaintyError
     }
   }
   /**

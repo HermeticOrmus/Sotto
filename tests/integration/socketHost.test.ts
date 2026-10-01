@@ -178,6 +178,28 @@ describe('authenticated host socket', () => {
       expect(host.service.shell().host.threads.find(thread => thread.id === threadId)?.requests).toHaveLength(requestLeaves ? 0 : 1)
     } finally { spy.mockRestore() }
   })
+  it('confirms a socket answer whose delayed delivery finishes before the wrapped result arrives', async () => {
+    const { client, result } = await pair()
+    await client.command({ type: 'configure', patch: { provider: 'codex', enabledProviders: ['codex'] } })
+    await client.command({ type: 'connect', provider: 'codex' })
+    const threadId = client.shell().host.threads.find(thread => thread.title === 'Workshop')!.id
+    const descriptor = JSON.parse(await readFile(join(root, 'host-listener.json'), 'utf8')) as { adminToken: string }
+    expect((await fetch(url + '/v1/admin/allow-answers', { method: 'POST', headers: { Authorization: 'Bearer ' + descriptor.adminToken, 'Content-Type': 'application/json' }, body: JSON.stringify({ clientId: result.clientId }) })).status).toBe(200)
+    native.event({ type: 'permission', threadId: 'workshop', requestId: 'permission-receipt', text: 'Build?' })
+    await expect.poll(() => client.shell().host.threads.find(thread => thread.id === threadId)?.requests.length).toBe(1)
+    const execute = native.execute.bind(native)
+    const spy = vi.spyOn(native, 'execute').mockImplementation(async command => {
+      const outcome = await execute(command)
+      return command.type === 'answer' ? { accepted: false, uncertain: true, answerCompletion: Promise.resolve(true) } : outcome
+    })
+    try {
+      const commandId = randomUUID()
+      expect((await client.command({ type: 'answer', threadId, requestId: 'permission-receipt', answer: '', approved: true }, undefined, commandId)).error).toBeNull()
+      expect(await client.receipt(commandId)).toEqual({ status: 'completed', answerDelivered: true })
+      expect(host.service.shell().error).toBeNull()
+      expect(host.service.shell().host.threads.find(thread => thread.id === threadId)?.requests).toHaveLength(0)
+    } finally { spy.mockRestore() }
+  })
   it('confirms a successful answer receipt despite another command failing while it runs', async () => {
     const { client, result } = await pair()
     await client.command({ type: 'configure', patch: { provider: 'codex', enabledProviders: ['codex'] } })
