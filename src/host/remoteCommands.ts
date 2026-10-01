@@ -7,7 +7,7 @@ type Fields<T extends CommandType> = readonly Exclude<keyof Extract<AgentCommand
  * Every command a paired client may send over the socket, and every field it may carry. The list is
  * closed: a command type or field added to `agentCommandSchema` is refused remotely until it is added
  * here on purpose, because a paired device is not the user at this computer (ADR-0004). Anything
- * absent is host-local: credentials, membership, the voice commands and voice engine, reasoning checks,
+ * absent is host-local: credentials, the voice commands and voice engine, reasoning checks,
  * opening a folder on the host machine, and `update-client`, which holds the request open for as long as the installer
  * runs. A headless host that lists the `client-updates` feature takes `queue-client-updates` instead: it puts clients in
  * the host's own one-at-a-time update line and answers at once (#480). Updating a client answers no permission request

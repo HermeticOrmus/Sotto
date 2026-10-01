@@ -216,7 +216,7 @@ async function coordinator(host: VersionedHost, run: RunLike, published = '1.0.4
     clients: new ProviderClients({ fetchImpl: async () => answer(published), run, npmPath: async () => join(prefix, 'npm.cmd') }),
     locateClient: async (provider: ProviderId) => join(prefix, `${provider}.exe`),
     reasoner: { intent: async () => ({ type: 'clarify', text: '' }), decide: async () => ({ decision: 'human', text: '' }) },
-    membership: { status: async () => ({ status: 'beta', label: 'Fixture', expiresAt: null }), action: async () => ({ status: 'beta', label: 'Fixture', expiresAt: null }) },
+
     ...extra,
   })
   await control.start()

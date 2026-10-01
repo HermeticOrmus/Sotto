@@ -54,7 +54,7 @@ async function fixture() {
   const credentials = new AgentCredentials(root, { isEncryptionAvailable: () => false, encryptString: t => Buffer.from(t), decryptString: t => t.toString() }); await credentials.load()
   const create = () => {
     const c = new AgentControl({ schedule: immediatePublishScheduler, directory: root, host, credentials, reasoner: e2eAgentReasoner,
-      membership: { status: async () => ({ status: 'beta', label: 'Test', expiresAt: null }), action: async () => ({ status: 'beta', label: 'Test', expiresAt: null }) } })
+    })
     controls.push(c); return c
   }
   const control = create(); await control.start(); await stageInto(control, PIXEL_PNG); await control.command({ type: 'connect' })
@@ -458,7 +458,6 @@ it('requires explicit resume when an idle thread has no known turn outcome', asy
   expect(f.host.attempts.filter(command => command.type === 'send')).toHaveLength(1)
 })
 
-
 it('steers a selected edited queue item once, preserving the remaining queue and newer draft', async () => {
   const f = await fixture()
   f.host.state.capabilities.steer = true
@@ -503,7 +502,6 @@ it.each(['unsupported', 'question', 'refused', 'uncertain'] as const)('preserves
     expect(restored.get().followups?.[0]?.status).toBe('uncertain')
   }
 })
-
 
 it('reconciles a late steer confirmation behind an untouched queue head', async () => {
   const f = await fixture(); f.host.state.capabilities.steer = true
