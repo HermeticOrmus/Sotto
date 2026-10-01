@@ -250,7 +250,7 @@ export async function startSocketServer(options: SocketServerOptions) {
           const thread = service.shell().host.threads.find(thread => thread.id === input.threadId)
           if (!thread) throw new Refusal('invalid_request')
           peer.selectedThreadId = thread.id; peer.selectedProjectId = thread.projectId
-          detail(peer, thread.id)
+          if (!peer.observed.has(thread.id)) detail(peer, thread.id)
         } else if (input.type === 'select-project') {
           peer.selectedProjectId = input.projectId; peer.selectedThreadId = null
         } else if (input.type === 'observe-threads') {

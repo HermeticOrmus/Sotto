@@ -91,6 +91,7 @@ export class SocketHostService implements HostService {
     return task
   }
   private async open(): Promise<HostHello> {
+    const selectedThreadId = this.cached?.activeThreadId
     const generation = ++this.generation
     this.opening?.abort()
     const opening = new AbortController(); this.opening = opening
@@ -148,6 +149,11 @@ export class SocketHostService implements HostService {
         while (page.hasMore) page = await this.readEvents(this.latestSeq)
       }
       await this.observe(this.observed)
+      if (selectedThreadId && hello.shell.host.threads.some(thread => thread.id === selectedThreadId)) {
+        const selected = this.read(protocolAgentStateSchema, await this.call({ op: 'command', command: { type: 'select-thread', threadId: selectedThreadId } }))
+        this.sameGeneration(generation)
+        this.publish(selected)
+      }
       this.options.onConnectionChange?.(true)
       return hello
     } catch (error) { this.frames?.close(); throw error }
