@@ -160,3 +160,7 @@ While active, the iPhone retries a dropped connection with exponential waits sta
 ## September 30 amendment: device names in attribution
 
 Pairing records a plain, bounded device name: Unicode compatibility normalisation, control and formatting characters removed, and whitespace collapsed. Existing saved names receive the same normalisation when read for display or attribution. An answer records the permanent paired client ID beside that name, as it already does, so the chosen name is a label rather than an identity (#582).
+
+## October 1 amendment: older idle clients
+
+Client-owned pings require `client-liveness` in hello's `accepts`, an additive v1 feature. Only opted-in peers get the 75-second idle close, deferred while output is buffered. Older clients keep host pings every 25 seconds; a missed pong closes them only when no other traffic arrived and no output remains buffered. Their WebSocket implementations can answer host pings while the app is idle. This replaces the earlier listener-only-answer rule for clients without the opt-in.

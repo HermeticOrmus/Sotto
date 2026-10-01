@@ -50,7 +50,7 @@ export const protocolAgentStateSchema = z.preprocess(value => {
  * `queue-client-updates` command, which updates its clients one at a time (ADR-0042, #480). Only a headless host offers
  * it, and a client shows a host's client updates only when the host lists it.
  */
-export const HOST_FEATURES = ['message-aliases', 'detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders', 'provider-sign-in', 'client-updates'] as const
+export const HOST_FEATURES = ['client-liveness', 'message-aliases', 'detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders', 'provider-sign-in', 'client-updates'] as const
 export type HostFeature = typeof HOST_FEATURES[number]
 /**
  * A client update as a client that does not accept `client-updates` can read it: the mise channel, which such a client

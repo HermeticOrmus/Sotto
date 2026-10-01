@@ -12,6 +12,7 @@ export class SocketFrames {
   private heartbeat: ReturnType<typeof setInterval> | undefined
   private awaitingPong: Buffer | undefined
   private lastReceived = Date.now()
+  private clientLiveness = false
   get isClosed(): boolean { return this.ended }
   private readonly closedListeners = new Set<() => void>()
   constructor(private readonly stream: Duplex, private readonly client: boolean, private readonly message: (text: string) => void) {
@@ -20,11 +21,13 @@ export class SocketFrames {
     stream.on('close', () => this.closed())
     stream.on('end', () => this.close())
   }
+  /** Only peers opting in through hello take responsibility for their own pings. */
+  setClientLiveness(enabled: boolean): void { this.clientLiveness = enabled; this.awaitingPong = undefined }
   startHeartbeat(): void {
     if (this.heartbeat || this.ended) return
     this.heartbeat = setInterval(() => {
       if (this.stream.writableLength > 0) return
-      if (!this.client) {
+      if (!this.client && this.clientLiveness) {
         if (Date.now() - this.lastReceived >= 75_000) this.close()
         return
       }

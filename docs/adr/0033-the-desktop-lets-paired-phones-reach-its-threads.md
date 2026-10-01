@@ -47,3 +47,7 @@ This choice grants no permission to an agent and writes no policy record. Answer
 Only the phone initiates keep-alive pings on its connection, every 25 seconds. A pong, any received message, or growth in received bytes within ten seconds confirms liveness, including a large frame still arriving. The listener answers pings, counts all incoming bytes as progress and closes a silent peer after 75 seconds only when output is no longer buffered. This avoids cutting off slow thread downloads while still releasing abandoned connections.
 
 The active phone reconnects with exponential waits from about one second to a thirty-second cap, with a small random variation (0.8–1.2 before the cap). Hello does not reset the delay; the first successful liveness round does. Reconnect reads threads and reconciles receipts without sending an unconfirmed command again. Backgrounding cancels retries. Physical-device network changes remain a separate verification from simulator tests.
+
+## October 1 amendment: older idle clients
+
+Client-owned pings require `client-liveness` in hello's `accepts`, an additive v1 feature. Only opted-in peers get the 75-second idle close, deferred while output is buffered. Older clients keep host pings every 25 seconds; a missed pong closes them only when no other traffic arrived and no output remains buffered. Their WebSocket implementations can answer host pings while the app is idle. This replaces the earlier listener-only-answer rule for clients without the opt-in.

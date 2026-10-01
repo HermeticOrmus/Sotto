@@ -98,13 +98,42 @@ describe('bounded WebSocket framing', () => {
     expect(client.messages).toEqual(['{"ok":true}'])
     client.frames.close(); server.frames.close()
   })
-  it('lets only the client ping and closes a silent listener peer', () => {
+  it('closes a silent listener peer that accepts client liveness', () => {
+    vi.useFakeTimers()
+    const h = harness()
+    try {
+      h.frames.setClientLiveness(true)
+      h.frames.startHeartbeat()
+      vi.advanceTimersByTime(50_000)
+      expect(h.writes).toEqual([])
+      expect(h.stream.destroyed).toBe(false)
+      vi.advanceTimersByTime(25_000)
+      expect(h.stream.destroyed).toBe(true)
+    } finally { h.frames.close(); vi.useRealTimers() }
+  })
+  it('keeps an idle older client connected beyond 75 seconds when it answers host pings', () => {
     vi.useFakeTimers()
     const h = harness()
     try {
       h.frames.startHeartbeat()
-      vi.advanceTimersByTime(50_000)
-      expect(h.writes).toEqual([])
+      for (let round = 0; round < 5; round++) {
+        vi.advanceTimersByTime(25_000)
+        const ping = h.writes.at(-1)!
+        expect(ping[0]).toBe(137)
+        h.frames.feed(masked(ping.subarray(2), 10))
+      }
+      expect(h.stream.destroyed).toBe(false)
+      expect(h.messages).toEqual([])
+    } finally { h.frames.close(); vi.useRealTimers() }
+  })
+  it('closes an older peer only after a missed ping without other traffic', () => {
+    vi.useFakeTimers()
+    const h = harness()
+    try {
+      h.frames.startHeartbeat()
+      vi.advanceTimersByTime(25_000)
+      h.frames.feed(masked(Buffer.from('still here')))
+      vi.advanceTimersByTime(25_000)
       expect(h.stream.destroyed).toBe(false)
       vi.advanceTimersByTime(25_000)
       expect(h.stream.destroyed).toBe(true)
@@ -114,6 +143,7 @@ describe('bounded WebSocket framing', () => {
     vi.useFakeTimers()
     const h = harness()
     try {
+      h.frames.setClientLiveness(true)
       h.frames.startHeartbeat()
       vi.advanceTimersByTime(50_000)
       const large = masked(Buffer.alloc(4 * 1024 * 1024, 97))

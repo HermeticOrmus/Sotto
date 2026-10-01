@@ -289,6 +289,7 @@ export async function startSocketServer(options: SocketServerOptions) {
     if (request.session !== peer.session || !authenticated(peer)) throw new Refusal('unauthenticated')
     switch (request.op) {
       case 'hello':
+        peer.frames.setClientLiveness(request.accepts?.includes('client-liveness') ?? false)
         peer.messageAliases = request.accepts?.includes('message-aliases') ?? false
         peer.afterSeq = request.afterSeq ?? 0; peer.deltas = request.accepts?.includes('detail-delta') ?? false
         peer.clientUpdates = request.accepts?.includes('client-updates') ?? false
