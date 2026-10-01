@@ -99,17 +99,16 @@ export class PhoneAccess {
 
   constructor(private readonly options: PhoneAccessOptions) {
     this.pairing = new PairedClients(options.directory)
-    this.store = new AtomicJsonStore(join(options.directory, 'phone-access.json'), recordSchema.parse, () => ({ port: null, mapped: false }), Date.now, undefined, () => { this.recordUncertain = true })
+    this.store = new AtomicJsonStore(join(options.directory, 'phone-access.json'), recordSchema.parse, () => { this.recordUncertain = true; return { port: null, mapped: true } })
   }
 
   /** Reads the saved pairings and record, then brings phone access in line with the setting. */
   async start(): Promise<void> {
-    let unreadable = false
-    try { this.record = await this.store.read() } catch { this.recordUncertain = true; unreadable = true }
+    // Keep an invalid primary until an atomic replacement preserves pending cleanup.
+    try { if (await this.store.exists()) this.record = await this.store.peek() } catch { this.recordUncertain = true }
     if (this.record.mapped && this.record.port === null) this.recordUncertain = true
     if (this.recordUncertain) {
       this.record.mapped = true
-      if (!unreadable) await this.save(this.record)
       this.options.log?.('phone-access-record-unreadable')
     }
     if (this.record.mapped) {
@@ -337,6 +336,7 @@ export class PhoneAccess {
           const recovered = await this.store.peek()
           if (recovered.port !== null) { this.record = { ...recovered, mapped: true }; this.recordUncertain = false; await this.reservePort() }
         } catch { /* Still check Serve, even when the saved record remains unreadable. */ }
+        if (this.recordUncertain) await this.save(this.record)
       }
       const owner = servePortOwner(await this.options.tailscale.serveStatus(), PHONE_ACCESS_SERVE_PORT, this.ourPorts())
       if (owner === 'ours' && !await this.options.tailscale.unserve(PHONE_ACCESS_SERVE_PORT)) { this.options.log?.('phone-access-serve-remove-failed'); return false }

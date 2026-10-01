@@ -349,9 +349,46 @@ it('keeps cleanup pending after a setup failure while the setting remains on', a
   } finally { await access.close() }
 })
 
+it('preserves pending cleanup across restart when a recovery write is refused', async () => {
+  const path = join(root, 'phone-access.json')
+  await writeFile(path, 'not json')
+  const fake = fakeTailscale({ other: serveTarget(41000) })
+  const { access } = create({ tailscale: fake.tailscale }, { phoneAccess: false, phoneAccessName: '' })
+  const originalWrite = AtomicJsonStore.prototype.write
+  let refused = false
+  const write = vi.spyOn(AtomicJsonStore.prototype, 'write').mockImplementation(function (this: AtomicJsonStore<unknown>, value: unknown) {
+    if (!refused && typeof value === 'object' && value !== null && 'mapped' in value) {
+      refused = true
+      return Promise.reject(new Error('unavailable'))
+    }
+    return originalWrite.call(this, value)
+  })
+  let restarted: PhoneAccess | undefined
+  try {
+    await access.start()
+    expect(access.get()).toMatchObject({ phase: 'cleanup-failed', serve: { reason: 'cleanup-record' } })
+    expect(await readFile(path, 'utf8')).toBe('not json')
+    expect(refused).toBe(true)
+    // A fresh instance reads the durable state before the first instance retries.
+    restarted = create({ tailscale: fake.tailscale }, { phoneAccess: false, phoneAccessName: '' }).access
+    vi.mocked(fake.tailscale.serveStatus).mockClear()
+    await restarted.start()
+    expect(fake.tailscale.serveStatus).toHaveBeenCalledOnce()
+    expect(restarted.get()).toMatchObject({ enabled: false, phase: 'cleanup-failed', serve: { reason: 'cleanup-record' } })
+    expect(await record()).toEqual({ port: null, mapped: true })
+    const writes = write.mock.calls.length
+    await restarted.command({ type: 'retry' })
+    expect(write.mock.calls.length).toBe(writes + 1)
+    expect(fake.tailscale.unserve).not.toHaveBeenCalled()
+    vi.mocked(fake.tailscale.serveStatus).mockResolvedValue({})
+    await restarted.command({ type: 'retry' })
+    expect(restarted.get().phase).toBe('off')
+  } finally { write.mockRestore(); await access.close(); await restarted?.close() }
+})
+
 it.each(['corrupt', 'unreadable'])('checks cleanup rather than declaring an occupied mapping another app’s with a %s record', async kind => {
   await writeFile(join(root, 'phone-access.json'), 'not json')
-  const read = kind === 'unreadable' ? vi.spyOn(AtomicJsonStore.prototype, 'read').mockRejectedValueOnce(new Error('unreadable')) : undefined
+  const read = kind === 'unreadable' ? vi.spyOn(AtomicJsonStore.prototype, 'peek').mockRejectedValueOnce(new Error('unreadable')) : undefined
   const fake = fakeTailscale({ other: serveTarget(41000) }), server = fakeServer()
   const { access } = create({ tailscale: fake.tailscale, startServer: server.startServer })
   try {
@@ -360,8 +397,7 @@ it.each(['corrupt', 'unreadable'])('checks cleanup rather than declaring an occu
     expect(access.get()).toMatchObject({ phase: 'cleanup-failed', serve: { reason: 'cleanup-record' } })
     expect(server.started).toEqual([])
     expect(fake.tailscale.unserve).not.toHaveBeenCalled()
-    if (kind === 'corrupt') expect(await record()).toEqual({ port: null, mapped: true })
-    else expect(await readFile(join(root, 'phone-access.json'), 'utf8')).toBe('not json')
+    expect(await record()).toEqual({ port: null, mapped: true })
     await access.close()
     const restarted = create({ tailscale: fake.tailscale, startServer: server.startServer }).access
     await restarted.start()
