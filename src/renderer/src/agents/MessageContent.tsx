@@ -75,7 +75,7 @@ export function attachmentTypeLabel(mimeType: string | undefined): string | null
   return label || 'File'
 }
 
-// Conservatively count two bytes per retained string character, including validation keys.
+// Raster data URLs are ASCII (one byte per character); other retained strings use two.
 const PREVIEW_CACHE_BYTES = 8 * 1024 * 1024
 function evictPreviews<T extends { size: number }>(cache: Map<string, T>, limit: number): void {
   let bytes = 0
@@ -93,9 +93,12 @@ function trustedPreviewSource(dataUrl: string | undefined): string | null {
   if (typeof dataUrl !== 'string') return null
   let entry = validatedPreviews.get(dataUrl)
   if (entry === undefined) {
-    entry = { valid: agentAttachmentPreviewDataSchema.safeParse({ dataUrl }).success, size: dataUrl.length * 2 }
-    validatedPreviews.set(dataUrl, entry)
-    evictPreviews(validatedPreviews, VALIDATED_PREVIEW_CACHE)
+    const valid = agentAttachmentPreviewDataSchema.safeParse({ dataUrl }).success
+    entry = { valid, size: dataUrl.length * (valid ? 1 : 2) }
+    if (entry.size <= PREVIEW_CACHE_BYTES) {
+      validatedPreviews.set(dataUrl, entry)
+      evictPreviews(validatedPreviews, VALIDATED_PREVIEW_CACHE)
+    }
   }
   return entry.valid ? dataUrl : null
 }
@@ -124,7 +127,11 @@ function requestPreview(origin: AttachmentOrigin, attachmentId: string): Promise
     // An evicted request may finish after another request for the same image was cached.
     if (fetchedPreviews.get(key) !== entry) return
     if (source === null) fetchedPreviews.delete(key)
-    else { entry.size += source.length * 2; evictPreviews(fetchedPreviews, FETCHED_PREVIEW_CACHE) }
+    else {
+      entry.size += source.length
+      if (entry.size > PREVIEW_CACHE_BYTES) fetchedPreviews.delete(key)
+      else evictPreviews(fetchedPreviews, FETCHED_PREVIEW_CACHE)
+    }
   })
   return pending
 }

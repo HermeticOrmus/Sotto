@@ -278,7 +278,7 @@ describe('attachment previews', () => {
 
   it('evicts validated data URLs by retained bytes before reaching the entry limit', () => {
     const validate = vi.spyOn(agentAttachmentPreviewDataSchema, 'safeParse')
-    const sources = [1, 2, 3].map(index => largePreview(index))
+    const sources = [1, 2, 3].map(index => largePreview(index, 3 * 1024 * 1024))
     const show = (dataUrl: string) => render(<AttachmentPreviews attachments={[{ id: 'large-inline', name: 'large.png', preview: { dataUrl } }]} />)
     for (const source of sources) { show(source); expect(screen.getByRole('img')).toHaveAttribute('src', source); cleanup() }
     show(sources[0]!)
@@ -286,7 +286,7 @@ describe('attachment previews', () => {
   })
 
   it('evicts fetched preview bytes when requests resolve and refetches an evicted image', async () => {
-    const attachmentPreview = vi.fn(async ({ attachmentId }: { attachmentId: string }) => ({ dataUrl: largePreview(Number(attachmentId)) }))
+    const attachmentPreview = vi.fn(async ({ attachmentId }: { attachmentId: string }) => ({ dataUrl: largePreview(Number(attachmentId), 3 * 1024 * 1024) }))
     ;(window as { sotto?: unknown }).sotto = { agents: { attachmentPreview } }
     const origin = { threadId: 'byte-bound', messageId: 'message' }
     const show = (id: string) => render(<AttachmentPreviews origin={origin} attachments={[{ id, name: 'large.png', preview: { available: true } }]} />)
@@ -297,7 +297,7 @@ describe('attachment previews', () => {
   })
 
   it('draws an individually oversized preview without retaining it in either cache', async () => {
-    const dataUrl = largePreview(4, 5 * 1024 * 1024)
+    const dataUrl = largePreview(4, 9 * 1024 * 1024)
     const validate = vi.spyOn(agentAttachmentPreviewDataSchema, 'safeParse')
     const attachmentPreview = vi.fn(async () => ({ dataUrl }))
     ;(window as { sotto?: unknown }).sotto = { agents: { attachmentPreview } }
@@ -306,6 +306,21 @@ describe('attachment previews', () => {
     show(); await screen.findByRole('img')
     expect(attachmentPreview).toHaveBeenCalledTimes(2)
     expect(validate.mock.calls.filter(([value]) => (value as { dataUrl: string }).dataUrl === dataUrl).length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('retains an ordinary large ASCII preview across an oversized request', async () => {
+    const normal = largePreview(5, 5 * 1024 * 1024)
+    const oversized = largePreview(6, 9 * 1024 * 1024)
+    const validate = vi.spyOn(agentAttachmentPreviewDataSchema, 'safeParse')
+    const attachmentPreview = vi.fn(async ({ attachmentId }: { attachmentId: string }) => ({ dataUrl: attachmentId === 'normal' ? normal : oversized }))
+    ;(window as { sotto?: unknown }).sotto = { agents: { attachmentPreview } }
+    const show = (id: string) => render(<AttachmentPreviews origin={{ threadId: 'oversized-admission', messageId: 'message' }} attachments={[{ id, name: `${id}.png`, preview: { available: true } }]} />)
+    for (const id of ['normal', 'oversized', 'normal']) { show(id); await screen.findByRole('img'); cleanup() }
+    expect(attachmentPreview.mock.calls.filter(([request]) => request.attachmentId === 'normal')).toHaveLength(1)
+    // Inline reuse reaches validation even when the fetch cache supplied the previous render.
+    render(<AttachmentPreviews attachments={[{ id: 'inline-normal', name: 'normal.png', preview: { dataUrl: normal } }]} />)
+    expect(screen.getByRole('img')).toHaveAttribute('src', normal)
+    expect(validate.mock.calls.filter(([value]) => (value as { dataUrl: string }).dataUrl === normal)).toHaveLength(1)
   })
 
   it('shows a validated submitted image with readable name, type and size', () => {
