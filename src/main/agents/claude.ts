@@ -55,6 +55,16 @@ type Alias = z.infer<typeof aliasSchema>
 // Native CLI permission modes. Aliases without a stored mode keep the original
 // approval-required behaviour.
 const nativePermissionModes = { 'approval-required': 'default', 'auto-accept-edits': 'acceptEdits', auto: 'auto', 'full-access': 'bypassPermissions' } as const satisfies Record<AgentRuntimeMode, string>
+/** The names the permission chip shows, so a mismatch notice says what the thread asked for. */
+const permissionModeLabels: Record<string, string> = { default: 'Ask for approval', acceptEdits: 'Allow edits', auto: 'Auto', bypassPermissions: 'Full access' }
+/**
+ * The CLI's init frame named a different mode from the one this thread launched with, or the one a later
+ * control request from Sotto moved it to. The turn stops before a tool runs (ADR-0045).
+ */
+function permissionModeNotice(expected: string, actual: string): string {
+  const name = (mode: string): string => permissionModeLabels[mode] ?? mode
+  return `Claude Code started in ${name(actual)} although this thread asked for ${name(expected)}. Something between Sotto and Claude Code changed it, such as a wrapper script or managed settings. Nothing ran.`
+}
 /**
  * The tool the CLI offers only where someone can answer it. Its absence from a session's tool list is
  * how Sotto reads "this CLI has no approval surface", because the CLI reports no other sign of it.
@@ -149,7 +159,7 @@ export interface ClaudeStreamJsonHostOptions {
   logEvent?: (event: ClaudeAdapterEvent) => void
 }
 /** `client` is the client generation the CLI was launched from: see `clientUpdated`. */
-type Runtime = { protocol: ClaudeProtocol; requests: Map<string, ClaudePending>; answered: Set<string>; answerWrites: Map<string, 'pending' | 'failed'>; contextMemoryIds: Set<string>; clientRevision: number }
+type Runtime = { protocol: ClaudeProtocol; requests: Map<string, ClaudePending>; answered: Set<string>; answerWrites: Map<string, 'pending' | 'failed'>; contextMemoryIds: Set<string>; clientRevision: number; launchPermissionMode: string; expectedPermissionMode: string; checkedLaunchMode?: true; permissionModeNotice?: string }
 
 /** One native coding CLI per thread. Credentials and transcript persistence remain native. */
 export class ClaudeStreamJsonHost implements AgentHost {
@@ -657,6 +667,9 @@ export class ClaudeStreamJsonHost implements AgentHost {
           this.staleMemoryContexts.delete(id); this.revokedContexts.delete(id); this.nativeTakeovers.delete(id)
         }
         const runtime = await this.start(id)
+        // The session's init frame already disagreed. Writing the prompt would let a tool start
+        // before the next init could be stopped.
+        if (runtime.permissionModeNotice) { thread.status = 'error'; this.report(runtime.permissionModeNotice); throw new Error(runtime.permissionModeNotice) }
         verifyFileMentions(command.text, command.files)
         // The provider's own form of each staged image, read from the store at the protocol boundary (ADR-0031).
         const images = await Promise.all((command.attachments ?? []).map(async image => ({ type: 'image', source: { type: 'base64', media_type: image.mimeType,
@@ -799,8 +812,15 @@ export class ClaudeStreamJsonHost implements AgentHost {
   private async applySteps(runtime: Runtime, from: ClaudeSettings, to: ClaudeSettings, steps: readonly ClaudeSettingsStep[]): Promise<{ outcome: 'applied' | 'rejected' | 'uncertain'; reached: ClaudeSettings }> {
     let reached = from
     for (const step of steps) {
+      // Move the expected mode before the CLI answers, so an init frame that reports the new mode
+      // during the request is the mode Sotto asked for. A refusal puts the previous mode back.
+      const previousMode = runtime.expectedPermissionMode
+      if (step.field === 'runtimeMode') runtime.expectedPermissionMode = nativePermissionModes[to.runtimeMode]
       try { await runtime.protocol.control(step.request) }
-      catch (error) { return { outcome: error instanceof ClaudeRejected ? 'rejected' : 'uncertain', reached } }
+      catch (error) {
+        if (step.field === 'runtimeMode') runtime.expectedPermissionMode = previousMode
+        return { outcome: error instanceof ClaudeRejected ? 'rejected' : 'uncertain', reached }
+      }
       reached = { ...reached, [step.field]: to[step.field] }
     }
     return { outcome: 'applied', reached }
@@ -953,7 +973,8 @@ export class ClaudeStreamJsonHost implements AgentHost {
       ...(alias.kind === 'personal' ? ['--append-system-prompt', this.personalContexts.get(id) ?? personalContext()] : []),
       resume ? '--resume' : '--session-id', alias.sessionId, '--model', alias.modelId, ...(alias.reasoningEffort ? ['--effort', alias.reasoningEffort] : [])]
     let runtime: Runtime
-    try { runtime = { requests: new Map(), answered: new Set(), answerWrites: new Map(), contextMemoryIds: new Set(this.personalMemories.get(id)?.map(memory => memory.id)), clientRevision: this.clientRevision, protocol: new ClaudeProtocol(this.executable, args, alias.cwd, { ...this.client.environment(), ...(setup ? { MCP_TOOL_TIMEOUT: '600000' } : browser ? { MCP_TOOL_TIMEOUT: '360000' } : {}) }, this.options.requestTimeoutMs ?? 15000,
+    const launchedMode = nativePermissionModes[alias.runtimeMode ?? 'approval-required']
+    try { runtime = { requests: new Map(), answered: new Set(), answerWrites: new Map(), contextMemoryIds: new Set(this.personalMemories.get(id)?.map(memory => memory.id)), clientRevision: this.clientRevision, launchPermissionMode: launchedMode, expectedPermissionMode: launchedMode, protocol: new ClaudeProtocol(this.executable, args, alias.cwd, { ...this.client.environment(), ...(setup ? { MCP_TOOL_TIMEOUT: '600000' } : browser ? { MCP_TOOL_TIMEOUT: '360000' } : {}) }, this.options.requestTimeoutMs ?? 15000,
       frame => { if (this.runtimes.get(id) === runtime) this.frame(id, frame) }, () => {
         if (this.runtimes.get(id) !== runtime) return
         // Each thread has its own CLI, so one ending is this thread's failure, not the provider's: the others
@@ -1024,10 +1045,17 @@ export class ClaudeStreamJsonHost implements AgentHost {
       // A CLI still running a replaced client names the old version; the provider's is the one on disk.
       if (typeof frame.claude_code_version === 'string' && runtime.clientRevision === this.clientRevision) this.state.version = frame.claude_code_version
       this.checkApprovalSurface(frame)
+      this.checkPermissionMode(id, runtime, frame)
       this.queries.add(id)
     }
     if (frame.type === 'control_request') {
       if (typeof frame.request_id === 'string' && runtime.answered.has(frame.request_id)) return
+      // A mode mismatch already stopped this turn. A tool ask that still arrives is denied and not shown,
+      // so it cannot run while the notice says nothing did.
+      if (runtime.permissionModeNotice && object(frame.request)?.subtype === 'can_use_tool' && typeof frame.request_id === 'string') {
+        void this.reply(runtime, frame.request_id, claudeDenial()).catch(() => undefined)
+        return
+      }
       // A thread holding this many unanswered requests is a flood, and denying it is the defence. That is
       // a different thing from a request this adapter could not read, so it is not reported as one.
       const flooded = runtime.requests.size >= 256
@@ -1106,12 +1134,15 @@ export class ClaudeStreamJsonHost implements AgentHost {
       // came from instead, so such a result never ends a prompt of Sotto's still waiting to go out.
       const origin = typeof frame.user_message_uuid === 'string' ? frame.user_message_uuid : this.selfTurns.get(id) ?? (object(frame.origin) ? undefined : alias.origins.at(-1)?.uuid)
       this.selfTurns.delete(id); this.queries.delete(id)
+      // A mismatched permission mode stops the turn. The result that follows is the interrupt landing,
+      // not a turn Claude completed and not a stop the user asked for.
+      const modeNotice = runtime.permissionModeNotice
       // A turn the user stopped ends in an error result, which is no failure of Claude Code's.
-      const stopped = this.interrupting.has(id) || thread.lastTurn?.status === 'interrupted' && (!origin || thread.lastTurn.id === origin)
+      const stopped = !modeNotice && (this.interrupting.has(id) || thread.lastTurn?.status === 'interrupted' && (!origin || thread.lastTurn.id === origin))
       this.interrupting.delete(id)
-      const failure = frame.is_error === true && !stopped ? claudeTurnFailure(frame, this.assistantErrors.get(id)) : null
+      const failure = modeNotice ?? (frame.is_error === true && !stopped ? claudeTurnFailure(frame, this.assistantErrors.get(id)) : null)
       if (origin) {
-        const status = stopped ? 'interrupted' : frame.is_error === true ? 'failed' : 'completed'
+        const status = modeNotice ? 'failed' : stopped ? 'interrupted' : frame.is_error === true ? 'failed' : 'completed'
         this.completedOrigins.add(origin)
         thread.lastTurn = { id: origin, status }
         this.markTurn(id, status, alias.origins.find(value => value.uuid === origin)?.messageId, failure ?? undefined)
@@ -1305,6 +1336,49 @@ export class ClaudeStreamJsonHost implements AgentHost {
     }
     return { ...this.state, threads: [...this.threads.values()]
       .filter((thread): thread is AgentThread => 'projectId' in thread).map(thread => this.messageLog.activityThread(thread, historyFromEvents)) }
+  }
+  /**
+   * The mode the CLI says it is in has to be the mode this thread launched with, or the mode a control
+   * request from Sotto has since moved it to. Anything else, a wrapper on PATH or managed settings,
+   * would let tools run under a mode the composer does not show (ADR-0045).
+   */
+  private checkPermissionMode(id: string, runtime: Runtime, frame: ClaudeFrame): void {
+    const reported = frame.permissionMode
+    if (typeof reported !== 'string' || !reported) return
+    // The first init is the process as it was launched, and it can arrive after a control request has
+    // already moved the expected mode. Later inits are the mode Sotto asked for, including that change.
+    const baseline = runtime.checkedLaunchMode ? runtime.expectedPermissionMode : runtime.launchPermissionMode
+    runtime.checkedLaunchMode = true
+    if (reported === baseline || reported === runtime.expectedPermissionMode) {
+      const stale = runtime.permissionModeNotice ?? (this.turnFailures.get(id)?.startsWith('Claude Code started in ') ? this.turnFailures.get(id) : undefined)
+      delete runtime.permissionModeNotice
+      if (stale && this.turnFailures.get(id) === stale) this.clearTurnFailure(id)
+      return
+    }
+    const notice = permissionModeNotice(runtime.expectedPermissionMode, reported)
+    runtime.permissionModeNotice = notice
+    this.stopMismatchedPermission(id, runtime, notice)
+  }
+  /** Interrupt a running turn and say so. A tool ask that arrives anyway is denied in `frame`. */
+  private stopMismatchedPermission(id: string, runtime: Runtime, notice: string): void {
+    const thread = this.threads.get(id)
+    if (!thread) return
+    const turn = thread.lastTurn
+    const running = thread.status === 'running' || turn?.status === 'running'
+    if (running) {
+      this.interrupting.add(id)
+      void this.denyPending(id, runtime).catch(() => undefined)
+      void runtime.protocol.control({ subtype: 'interrupt' }).catch(() => { this.interrupting.delete(id) })
+      if (turn?.status === 'running') {
+        thread.lastTurn = { id: turn.id, status: 'failed' }
+        this.completedOrigins.add(turn.id)
+        this.markTurn(id, 'failed', this.aliases[id]?.origins.find(origin => origin.uuid === turn.id)?.messageId, notice)
+      }
+      thread.status = 'error'
+      this.clearMonitoring(id)
+    }
+    this.turnFailures.set(id, notice)
+    this.report(notice)
   }
   /**
    * Read a starting session's tool list for the approval surface Sotto asked for. The CLI does not report
