@@ -29,6 +29,8 @@ A thread in a project opens at once, named "New thread" and ready for your first
 
 A new thread starts on **New threads start with** in **Settings → Agents**: a model, a reasoning effort and a permission mode, the same chips the composer itself shows. Change any of them for one thread from its own composer once it is open; the setting only chooses what a thread starts on. A model or provider that does not offer the chosen effort or permission starts on the nearest one it does — the closest safer permission mode, and the effort at the same position among the levels offered — and Settings says so under the row when that applies to the model chosen there. A provider with its own permission profiles, such as Devin, always starts on its first profile. Personal chats and the coordinator keep their own reasoning account, model and effort, under their own heading in the same page.
 
+If a new thread cannot be created, the next new thread you open in that project gets its prompt and staged screenshots back. This includes a prompt you pressed Send on while creation was pending, along with anything typed afterward. Leaving Threads for Settings keeps this recovery in the window, and reusing an empty thread combines it with any draft already there. Nothing is sent again automatically. Prompt text stays until you close the window; screenshots not owned by a saved draft are kept for an hour, so reopen the thread before then to keep them.
+
 ### Personal chats
 
 Personal chats are project-free conversations with the provider chosen for personal chats and the coordinator in Settings → Agents. A started chat stays with its original provider when you change that default.

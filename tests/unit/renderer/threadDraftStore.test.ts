@@ -34,6 +34,19 @@ beforeEach(() => { vi.useFakeTimers() })
 afterEach(() => { vi.useRealTimers() })
 
 describe('ThreadDraftStore revisions and saves', () => {
+  it('recovers an unconfirmed creation into itself without duplicating content or redirecting its reads', () => {
+    const store = new ThreadDraftStore(heldCommand().command, 250, uuids())
+    const image = { id: 'shot', name: 'Screenshot.png', mimeType: 'image/png' as const, sizeBytes: 8, digest: 'e'.repeat(64) }
+    store.edit('thread', { text: 'Keep this prompt.', attachments: [image] })
+    const endRead = store.beginScreenshotRead('thread')
+    store.carryRefusedCreation('thread', 'project')
+    store.restoreRefusedCreation('thread', 'project')
+    expect(store.draft('thread')).toMatchObject({ text: 'Keep this prompt.', attachments: [image] })
+    expect(store.screenshotReads('thread').pending).toBe(1)
+    endRead()
+    expect(store.screenshotReads('thread').pending).toBe(0)
+  })
+
   it('saves a text edit beside an 8 MiB screenshot with the handle alone, no image bytes (ADR-0031)', () => {
     const held = heldCommand()
     const store = new ThreadDraftStore(held.command, 250, uuids())

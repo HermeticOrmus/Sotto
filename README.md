@@ -20,6 +20,8 @@ Sotto runs the Claude Code, Codex, Grok Build and Devin clients you already have
 
 Saved Codex conversations keep both sides after a restart. Opening a thread also repairs repeated prompts saved by earlier versions.
 
+If creating a thread fails, its prompt returns in the next new thread opened in that project, while this window stays open. Staged screenshots come with it while available; unused screenshots are kept for an hour.
+
 ## What it does
 
 - **One sidebar for every agent.** Each provider keeps its own sign-in and models. Sotto keeps the threads. Stop still reaches running work when its last prompt is unconfirmed.

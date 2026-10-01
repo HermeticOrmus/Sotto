@@ -127,6 +127,12 @@ interface Entry {
 }
 
 const EMPTY: ComposerDraft = { draftId: '', text: '', attachments: [], skills: [], files: [], requestId: null }
+const combineDrafts = (content: readonly Pick<ComposerDraft, 'text' | 'attachments' | 'skills' | 'files'>[]): ComposerDraft => ({ ...EMPTY,
+  text: content.map(item => item.text).filter(text => text.trim()).join('\n\n'),
+  attachments: [...new Map(content.flatMap(item => item.attachments).map(item => [item.id, item])).values()],
+  skills: [...new Map(content.flatMap(item => item.skills).map(item => [JSON.stringify([item.name, item.path]), item])).values()],
+  files: [...new Map(content.flatMap(item => item.files).map(item => [item.path, item])).values()],
+})
 const SAVE_ERROR = 'Could not confirm this draft was saved. Keep your text and images and try Save again.'
 const key = (threadId: string, draftId: string): string => `${threadId}\n${draftId}`
 const isEmpty = (draft: ComposerDraft): boolean => draft.text === '' && draft.attachments.length === 0
@@ -208,6 +214,9 @@ export class ThreadDraftStore {
   private readonly reads = new Map<string, ScreenshotReads>()
   private readonly answers = new Map<string, ComposerAnswerState>()
   private submissionList: readonly Submission[] = []
+  private readonly refusedDrafts = new Map<string, ComposerDraft>()
+  private readonly projectRecoveries = new Map<string, readonly string[]>()
+  private readonly recoveryTargets = new Map<string, string>()
   /** Every write waits for the creation of a thread this window minted, so a fresh thread's draft is never refused. */
   private readonly command: Command
   constructor(command: Command, private readonly debounceMs = 250, private readonly uuid: () => string = () => crypto.randomUUID()) {
@@ -238,12 +247,47 @@ export class ThreadDraftStore {
 
   draft(threadId: string): ComposerDraft { return this.entries.get(threadId)?.draft ?? EMPTY }
 
+  /** Nothing reached a refused creation: carry submitted revisions and newer typing back as one draft. */
+  carryRefusedCreation(threadId: string, projectId: string): void {
+    const draft = this.draft(threadId)
+    const sent = this.submissionList.filter(item => item.threadId === threadId && item.restoredAs !== draft.draftId)
+    this.refusedDrafts.set(threadId, { ...combineDrafts([...sent.map(item => ({ ...item, files: item.files ?? [] })), draft]), draftId: draft.draftId })
+    this.projectRecoveries.set(projectId, [...new Set([...(this.projectRecoveries.get(projectId) ?? []), threadId])])
+  }
+
+  /** Move recovery and any screenshot reads to the next thread, even after leaving the Threads page. */
+  restoreRefusedCreation(threadId: string, projectId: string): void {
+    const sources = this.projectRecoveries.get(projectId)
+    if (!sources) return
+    const targetDraft = this.draft(threadId)
+    const alreadyCarried = this.refusedDrafts.get(threadId)?.draftId === targetDraft.draftId
+    const content = combineDrafts([...sources.map(id => this.refusedDrafts.get(id)!), ...(alreadyCarried ? [] : [targetDraft])])
+    // An unconfirmed creation can later appear in main and be reused as its own recovery target.
+    this.recoveryTargets.delete(threadId)
+    this.projectRecoveries.delete(projectId)
+    this.restoreDraft(threadId, content)
+    for (const sourceId of sources) {
+      this.refusedDrafts.delete(sourceId)
+      if (sourceId === threadId) continue
+      const reads = this.screenshotReads(sourceId)
+      const targetReads = this.screenshotReads(threadId)
+      this.reads.delete(sourceId)
+      this.recoveryTargets.set(sourceId, threadId)
+      this.setScreenshotReads(threadId, { pending: reads.pending + targetReads.pending, problem: [targetReads.problem, reads.problem].filter(Boolean).join(' ') || null })
+    }
+  }
+
+  private recoveredThreadId(threadId: string): string {
+    while (this.recoveryTargets.has(threadId)) threadId = this.recoveryTargets.get(threadId)!
+    return threadId
+  }
+
   setAnswerState(threadId: string, answer: ComposerAnswerState): void {
     this.answers.set(threadId, answer)
     this.emit(new Set([threadId]))
   }
 
-  screenshotReads(threadId: string): ScreenshotReads { return this.reads.get(threadId) ?? NO_SCREENSHOT_READS }
+  screenshotReads(threadId: string): ScreenshotReads { return this.reads.get(this.recoveredThreadId(threadId)) ?? NO_SCREENSHOT_READS }
 
   /**
    * Screenshots start being read for the thread's draft. The returned function says they have been handed on,
@@ -267,8 +311,11 @@ export class ThreadDraftStore {
    * that now answers a question, or a thread whose model does not read screenshots, takes none.
    */
   addLateScreenshots(threadId: string, images: readonly AgentAttachmentHandle[], { imagesSupported, failure = null }: { readonly imagesSupported: boolean; readonly failure?: string | null }): void {
-    const before = this.draft(threadId).attachments
-    const refusal = this.draft(threadId).requestId !== null ? 'answering' : !imagesSupported ? 'unsupported' : null
+    threadId = this.recoveredThreadId(threadId)
+    const recovering = this.refusedDrafts.get(threadId)
+    const draft = recovering ?? this.draft(threadId)
+    const before = draft.attachments
+    const refusal = draft.requestId !== null ? 'answering' : !imagesSupported ? 'unsupported' : null
     let attachments = before
     let leftOut = 0
     for (const image of images) {
@@ -276,7 +323,10 @@ export class ThreadDraftStore {
       if (next?.success) attachments = next.data
       else leftOut += 1
     }
-    if (attachments !== before) this.revise(threadId, { attachments })
+    if (attachments !== before) {
+      if (recovering) this.refusedDrafts.set(threadId, { ...recovering, attachments })
+      else this.revise(threadId, { attachments })
+    }
     const problems = [...(leftOut > 0 ? [lateScreenshotsLeftOut(leftOut, refusal ?? 'full')] : []), ...(failure ? [failure] : [])]
     if (problems.length > 0) this.reads.set(threadId, { ...this.screenshotReads(threadId), problem: problems.join(' ') })
     this.emit(new Set([threadId]))
@@ -289,6 +339,7 @@ export class ThreadDraftStore {
   }
 
   private setScreenshotReads(threadId: string, reads: ScreenshotReads): void {
+    threadId = this.recoveredThreadId(threadId)
     if (reads.pending === 0 && reads.problem === null) this.reads.delete(threadId)
     else this.reads.set(threadId, reads)
     this.emit(new Set())

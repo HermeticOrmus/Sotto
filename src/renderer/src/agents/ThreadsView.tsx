@@ -95,9 +95,6 @@ export function ThreadsView({ onOpenAgents, now: fixedNow, updateControl, tools,
   const stateRef = useRef<AgentState | null>(null)
   const lastFocused = useRef<string | null>(null)
   const store = agents.threadDrafts
-  // Text typed into a draft thread's composer before its creation is refused: kept for the next new thread
-  // opened in the same project, since the refused thread's own pane and composer are gone from here.
-  const carriedDraftText = useRef(new Map<string, string>())
   // A thread created in this window is shown from its local record until main's state carries it, and every
   // command about it waits for that creation instead of being refused for naming a thread main does not know.
   const drafts = useDraftThreads()
@@ -159,15 +156,13 @@ export function ThreadsView({ onOpenAgents, now: fixedNow, updateControl, tools,
   const handleCreationStart = useCallback((start: ThreadCreationStart): void => {
     draftThreads.open(start.thread, start.created)
     setPending({ threadId: start.thread.id })
-    const carried = carriedDraftText.current.get(start.thread.projectId)
-    if (carried !== undefined) { carriedDraftText.current.delete(start.thread.projectId); store.edit(start.thread.id, { text: carried }) }
+    store.restoreRefusedCreation(start.thread.id, start.thread.projectId)
     focusNewComposer()
     void start.created.then(creationError => {
       if (creationError === null) return
       setNewThreadError(creationError)
-      // The refused thread's own pane is gone; its typed text moves to the project's next new thread instead.
-      const text = store.draft(start.thread.id).text
-      if (text.trim()) carriedDraftText.current.set(start.thread.projectId, text)
+      // The pane is gone and gated sends never left the window; retain all its content, not just unsent text.
+      store.carryRefusedCreation(start.thread.id, start.thread.projectId)
     })
   }, [store])
   // The pen and the empty page's button already know their project: the thread opens at once, on the defaults
@@ -176,12 +171,12 @@ export function ThreadsView({ onOpenAgents, now: fixedNow, updateControl, tools,
     if (state === null) return
     setNewThreadError(null)
     const unused = unusedNewThread(state, project)
-    if (unused) { openThread(unused.id); focusNewComposer(); return }
+    if (unused) { store.restoreRefusedCreation(unused.id, project.id); openThread(unused.id); focusNewComposer(); return }
     void beginNewThread(state, command, project).then(start => {
       if ('error' in start) { setNewThreadError(start.error); return }
       handleCreationStart(start)
     })
-  }, [state, command, handleCreationStart, openThread])
+  }, [state, command, handleCreationStart, openThread, store])
   const startNewThread = useCallback((projectId?: string): void => {
     setNewThreadError(null)
     const project = projectId !== undefined ? state?.host.projects.find(item => item.id === projectId) : undefined

@@ -568,6 +568,80 @@ describe('a thread created without a round trip', () => {
     expect(command.mock.calls.filter(([request]) => (request as AgentCommand).type === 'create-thread')).toHaveLength(1)
   })
 
+  it.each(['unsent', 'sent', 'sent with newer typing', 'sent after navigation', 'sent into reused thread'])('recovers the %s prompt and staged images after creation is refused', async mode => {
+    const state = stateFixture()
+    let settle: (value: AgentState) => void = () => undefined
+    const refusing = new Promise<AgentState>(resolve => { settle = resolve })
+    let creations = 0
+    const command = vi.fn(async (...args: unknown[]) => {
+      const request = args[0] as AgentCommand
+      return request.type === 'create-thread' && ++creations === 1 ? refusing : state
+    })
+    const view = renderThreads(state, command)
+    createThread()
+    await screen.findByRole('heading', { name: 'New thread' })
+    const firstId = createRequest(command)!.threadId!
+    const newThread = draftThreads.get().find(thread => thread.id === firstId)!
+    const store = connectionStores.get(command)!
+    const image = handleOf(new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]), 'recover-image', 'recover.png')
+    act(() => store.edit(firstId, { text: 'Keep this prompt.', attachments: [image] }))
+    if (mode !== 'unsent') fireEvent.click(screen.getByRole('button', { name: 'Send prompt' }))
+    if (mode === 'sent with newer typing') {
+      act(() => store.edit(firstId, { text: 'And this next thought.', attachments: [{ ...image, id: 'newer-image', name: 'newer.png' }] }))
+    }
+    await act(async () => { settle({ ...state, error: 'That model is unavailable.' }) })
+    await screen.findByRole('alert')
+    expect(screen.queryByRole('heading', { name: 'New thread' })).not.toBeInTheDocument()
+    if (mode === 'sent after navigation') { view.unmount(); renderThreads(state, command) }
+    if (mode === 'sent into reused thread') {
+      const reusedState: AgentState = { ...state, activeThreadId: 'reusable', host: { ...state.host, threads: [...state.host.threads, { ...newThread, id: 'reusable', titleSource: 'default' }] } }
+      act(() => store.edit('reusable', { text: 'Already here.' }))
+      vi.mocked(useAgents).mockReturnValue(connection(reusedState, command))
+      view.rerender(<ThreadsView onOpenAgents={vi.fn()} now={NOW} />)
+    }
+    createThread()
+    await screen.findByRole('heading', { name: 'New thread' })
+    const requests = command.mock.calls.map(([request]) => request as AgentCommand).filter(request => request.type === 'create-thread')
+    const nextId = mode === 'sent into reused thread' ? 'reusable' : (requests[1] as Extract<AgentCommand, { type: 'create-thread' }>).threadId!
+    expect(requests).toHaveLength(mode === 'sent into reused thread' ? 1 : 2)
+    expect(store.draft(nextId).text).toBe(mode === 'sent with newer typing' ? 'Keep this prompt.\n\nAnd this next thought.' : mode === 'sent into reused thread' ? 'Keep this prompt.\n\nAlready here.' : 'Keep this prompt.')
+    expect(store.draft(nextId).attachments.map(attachment => attachment.name)).toEqual(mode === 'sent with newer typing' ? ['recover.png', 'newer.png'] : ['recover.png'])
+    expect(command).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'manual-send' }))
+  })
+
+  it.each([false, true])('keeps a screenshot whose staging finishes after refusal (after reopening: %s)', async reopenFirst => {
+    const state = stateFixture()
+    state.host.models.forEach(model => { model.supportsImages = true })
+    let refuse: (state: AgentState) => void = () => undefined
+    const creating = new Promise<AgentState>(resolve => { refuse = resolve })
+    let creations = 0
+    const command = vi.fn(async (...args: unknown[]) => (args[0] as AgentCommand).type === 'create-thread' && ++creations === 1 ? creating : state)
+    let finishStaging: (handle: ReturnType<typeof handleOf>) => void = () => undefined
+    const stageAttachment = vi.fn(() => new Promise<ReturnType<typeof handleOf>>(resolve => { finishStaging = resolve }))
+    vi.stubGlobal('sotto', { agents: { stageAttachment } })
+    onTestFinished(() => { vi.unstubAllGlobals() })
+    renderThreads(state, command)
+    createThread()
+    await screen.findByRole('heading', { name: 'New thread' })
+    fireEvent.change(screen.getByRole('textbox', { name: 'Prompt' }), { target: { value: 'Keep the pending screenshot.' } })
+    const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])
+    fireEvent.change(screen.getByLabelText('Screenshot files'), { target: { files: [new File([bytes], 'late.png', { type: 'image/png' })] } })
+    await waitFor(() => expect(stageAttachment).toHaveBeenCalledOnce())
+    await act(async () => { refuse({ ...state, error: 'That model is unavailable.' }) })
+    await screen.findByRole('alert')
+    if (reopenFirst) {
+      createThread()
+      await screen.findByRole('heading', { name: 'New thread' })
+      expect(screen.getByRole('button', { name: 'Send prompt' })).toBeDisabled()
+    }
+    await act(async () => { finishStaging(handleOf(bytes, 'late', 'late.png')) })
+    if (!reopenFirst) { createThread(); await screen.findByRole('heading', { name: 'New thread' }) }
+    await waitFor(() => expect(screen.getByRole('img', { name: 'late.png' })).toBeVisible())
+    expect(screen.getByRole('textbox', { name: 'Prompt' })).toHaveValue('Keep the pending screenshot.')
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send prompt' })).toBeEnabled())
+    expect(command).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'manual-send' }))
+  })
+
   it('carries text typed before a refusal to the next new thread opened in the same project', async () => {
     const state = stateFixture()
     let settle: (value: AgentState) => void = () => undefined
