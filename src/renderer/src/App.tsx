@@ -109,6 +109,7 @@ export function App({ createMicrophoneTest = () => new BrowserMicrophoneTest() }
   const microphoneReleasesRef = useRef(new WeakMap<MicrophoneTestController, Promise<void>>())
   const systemDark = useSystemPrefersDark()
   const appearanceEdits = useAppearancePreviewVersion()
+  const [settingsNotice, setSettingsNotice] = useState<string | null>(null)
   const [themeNotice, setThemeNotice] = useState<ToastMessage | null>(null)
   const latestSettingsRef = useRef(app.settings)
   latestSettingsRef.current = app.settings
@@ -252,7 +253,16 @@ export function App({ createMicrophoneTest = () => new BrowserMicrophoneTest() }
       ) {
         setMicrophoneLevel(level)
       }
-    }, latestSettingsRef.current?.microphoneId ?? undefined).catch(() => 'error' as const)
+    }, latestSettingsRef.current?.microphoneId ?? undefined, () => {
+      if (
+        !microphoneMountedRef.current ||
+        microphoneGenerationRef.current !== generation ||
+        microphoneRef.current !== controller
+      ) return
+      microphoneRef.current = null
+      setMicrophoneLevel(0)
+      commitMicrophoneState('missing')
+    }).catch(() => 'error' as const)
     if (
       !microphoneMountedRef.current ||
       microphoneGenerationRef.current !== generation ||
@@ -367,6 +377,7 @@ export function App({ createMicrophoneTest = () => new BrowserMicrophoneTest() }
         break
       case 'settings':
         view = <SettingsView
+          onNotice={setSettingsNotice}
           settings={app.settings}
           openRouterKeyMigrationFailed={app.recoveryNotices.some(notice => notice.code === 'OPENROUTER_KEY_MIGRATION_FAILED')}
           platform={app.platform}
@@ -454,6 +465,10 @@ export function App({ createMicrophoneTest = () => new BrowserMicrophoneTest() }
             message: recoveryMessages[notice.code],
           })),
           ...(themeNotice === null ? [] : [themeNotice]),
+          ...(settingsNotice === null ? [] : [{
+            id: 'settings-save', tone: 'error' as const,
+            message: <>{settingsNotice} <button type="button" className="tt-toast__link tt-focusable" aria-label="Dismiss dictionary save notice" onClick={() => setSettingsNotice(null)}>Dismiss</button></>,
+          }]),
           ...updateToasts,
         ]} />
       </>

@@ -75,6 +75,18 @@ function createHarness() {
   }
 }
 
+it('merges queued cleanup rule edits with the latest persisted settings', async () => {
+  const harness = createHarness()
+  await Promise.all([
+    harness.coordinator.updateSettings({ worktreeCleanup: { onSettle: true } }),
+    harness.coordinator.updateSettings({ worktreeCleanup: { merged: true } }),
+    harness.coordinator.updateSettings({ worktreeCleanup: { afterDays: 14 } }),
+  ])
+  expect(harness.persisted.worktreeCleanup).toEqual({
+    onSettle: true, merged: true, afterDays: 14, unchanged: false,
+  })
+})
+
 describe('NativeSettingsCoordinator', () => {
   it.each(['hotkey', 'launchAtStartup'] as const)(
     'rejects generic mutation of native-managed %s',
