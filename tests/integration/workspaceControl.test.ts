@@ -19,7 +19,7 @@ async function fixture(root?: string) {
   const credentials = new AgentCredentials(join(f.root, 'vault'), { isEncryptionAvailable: () => false, encryptString: value => Buffer.from(value), decryptString: value => value.toString() })
   await credentials.load()
   const opened: string[] = []
-  const recorder = new TurnRecorder({ directory: f.root, historyEnabled: () => true, resolveSession: id => f.registry.byThread(id) })
+  const recorder = new TurnRecorder({ directory: f.root, resolveSession: id => f.registry.byThread(id) })
   const control = new AgentControl({ schedule: immediatePublishScheduler, directory: f.root, host: f.host, credentials, turns: recorder,
     openThreadFolder: async path => { opened.push(path) },
     reasoner: { intent: async () => ({ type: 'clarify', text: 'Choose a thread' }), decide: async () => ({ decision: 'human', text: 'Review' }) },

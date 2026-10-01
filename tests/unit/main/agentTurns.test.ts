@@ -50,9 +50,7 @@ async function fixture() {
     return Response.json({ choices: [{ message: { content: JSON.stringify(result) } }] })
   })
   const recorder = new TurnRecorder({
-    directory: root,
-    historyEnabled: () => historyEnabled,
-    resolveSession: id => ({ provider: 'codex', sessionId: `session-${id}` }),
+    directory: root, resolveSession: id => ({ provider: 'codex', sessionId: `session-${id}` }),
   })
   const binding: { control: AgentControl } = {} as { control: AgentControl }
   const reasoner = new ConfiguredAgentReasoner(() => binding.control.get().configuration, credentials)
@@ -261,9 +259,10 @@ describe('coordinator turn records', () => {
 
   it.each([true, false])('scrubs existing records and omits new content with history %s', async enabled => {
     const f = await fixture()
+    historyEnabled = enabled
     const record = (await f.recorder.recent(1))[0]!
     await writeFile(f.recorder.path(), `${JSON.stringify({ ...record, text: 'Private prompt and answer', error: 'Private error' })}\n{broken private text\n`)
-    const upgraded = new TurnRecorder({ directory: f.root, historyEnabled: () => enabled, resolveSession: () => undefined })
+    const upgraded = new TurnRecorder({ directory: f.root, resolveSession: () => undefined })
     await upgraded.initialize()
     expect(await readFile(upgraded.path(), 'utf8')).not.toContain('Private')
     expect(await readFile(upgraded.path(), 'utf8')).not.toContain('broken')
@@ -278,8 +277,7 @@ describe('coordinator turn records', () => {
   it('keeps overlapping finishes in order while compacting', async () => {
     const root = await mkdtemp(join(tmpdir(), 'sotto-turns-'))
     roots.push(root)
-    const recorder = new TurnRecorder({ directory: root, historyEnabled: () => true,
-      resolveSession: () => undefined, maxBytes: 4000 })
+    const recorder = new TurnRecorder({ directory: root, resolveSession: () => undefined, maxBytes: 4000 })
     await Promise.all(Array.from({ length: 40 }, (_, index) => recorder.finish(recorder.begin({
       source: 'command', commandType: 'send', text: '', threadId: `thread-${index}`,
     }), 'completed')))
@@ -294,9 +292,7 @@ describe('coordinator turn records', () => {
     const root = await mkdtemp(join(tmpdir(), 'sotto-turns-'))
     roots.push(root)
     const recorder = new TurnRecorder({
-      directory: root,
-      historyEnabled: () => true,
-      resolveSession: () => undefined,
+      directory: root, resolveSession: () => undefined,
       maxBytes: 200_000,
       maxLines: 1000,
     })

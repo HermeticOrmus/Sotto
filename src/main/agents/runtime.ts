@@ -120,8 +120,7 @@ export async function createAgentRuntime(options: AgentRuntimeOptions) {
     followPullRequestTemplates: async () => (await options.writingSettings()).followPullRequestTemplates }))
   // The branch's pull request as a Tools surface (ADR-0027): read and acted on through the same gh.
   if (gitStatus) agentHost.setGitPullRequests(new GitPullRequests(gitRun ? { run: gitRun } : {}))
-  const turns = new TurnRecorder({ directory, historyEnabled: options.historyEnabled,
-    resolveSession: id => { const binding = threadRegistry?.byThread(id); return binding ? { provider: binding.provider, sessionId: binding.sessionId } : undefined },
+  const turns = new TurnRecorder({ directory, resolveSession: id => { const binding = threadRegistry?.byThread(id); return binding ? { provider: binding.provider, sessionId: binding.sessionId } : undefined },
   })
   const membership = new AgentMembershipClient({ configuration: () => agentControl.configuration(),
     credentials, directory, openExternal: options.openExternal,

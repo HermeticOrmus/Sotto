@@ -48,8 +48,7 @@ async function fixture(partialAuthority?: Pick<Authority, 'authorizes'> & Partia
   roots.push(root)
   const credentials = new AgentCredentials(join(root, 'vault'), encryption)
   await credentials.load()
-  const recorder = new TurnRecorder({ directory: root, historyEnabled: () => true,
-    resolveSession: id => ({ provider: 'codex', sessionId: `session-${id}` }) })
+  const recorder = new TurnRecorder({ directory: root, resolveSession: id => ({ provider: 'codex', sessionId: `session-${id}` }) })
   const reasoner = { ...e2eAgentReasoner, decide: vi.fn(e2eAgentReasoner.decide) }
   const host = new RecordingHost()
   const control = new AgentControl({ schedule: immediatePublishScheduler, directory: root, host, credentials, reasoner,

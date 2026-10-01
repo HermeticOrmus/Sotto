@@ -83,7 +83,6 @@ export class TurnRecorder {
 
   constructor(options: {
     directory: string
-    historyEnabled: () => boolean
     resolveSession: (threadId: string) => { provider: string; sessionId: string } | undefined
     maxBytes?: number
     maxLines?: number
