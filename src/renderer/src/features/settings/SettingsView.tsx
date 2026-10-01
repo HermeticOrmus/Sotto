@@ -61,6 +61,7 @@ export interface SettingsViewProps {
   readonly mediaDevices?: MediaDevicesAdapter | undefined
   /** Injected in tests; production runs the same browser test onboarding uses. */
   readonly createMicrophoneTest?: () => MicrophoneTestController
+  readonly onNotice?: (message: string | null) => void
   readonly onUpdateSettings: (patch: SettingsPatch) => Promise<boolean>
   readonly onReplaceHotkey: (accelerator: string) => Promise<HotkeyChangeResult>
   readonly onSetStartup: (enabled: boolean) => Promise<StartupState | null>
@@ -71,6 +72,9 @@ export interface SettingsViewProps {
   readonly onDownloadUpdate: () => Promise<boolean>
   readonly onInstallUpdate: () => Promise<boolean>
 }
+
+// VoiceWave reports a normalized 0..1 level. Ignore tiny background activity.
+const MICROPHONE_TEST_HEARD_THRESHOLD = 0.02
 
 const SETTINGS_SECTIONS = [
   { id: 'settings-capture', label: 'Dictation', icon: Mic },
@@ -136,6 +140,7 @@ export function SettingsView({
   mediaDevices = typeof navigator === 'undefined' ? undefined : navigator.mediaDevices,
   createMicrophoneTest = () => new BrowserMicrophoneTest(),
   onUpdateSettings,
+  onNotice,
   onReplaceHotkey,
   onSetStartup,
   onResetSettings,
@@ -146,8 +151,9 @@ export function SettingsView({
   onInstallUpdate,
 }: SettingsViewProps): ReactNode {
   const [microphones, setMicrophones] = useState<readonly MediaDeviceInfo[]>([])
-  const [microphoneState, setMicrophoneState] = useState<MicrophoneTestState>('idle')
+  const [microphoneState, setMicrophoneState] = useState<MicrophoneTestState | 'closed'>('idle')
   const [microphoneLevel, setMicrophoneLevel] = useState(0)
+  const microphonePeakRef = useRef(0)
   const microphoneTestRef = useRef<MicrophoneTestController | null>(null)
   const microphoneTestGeneration = useRef(0)
   const [deviceState, setDeviceState] = useState<'loading' | 'ready' | 'error'>('loading')
@@ -157,6 +163,7 @@ export function SettingsView({
   const hotkeyDraft = useRevisionDraft(canonicalAccelerator(settings.hotkey, platform), formatAccelerator(settings.hotkey, platform, 'editing'))
   const pasteDelayDraft = useRevisionDraft(settings.pasteDelayMs, String(settings.pasteDelayMs), () => setPasteDelayError(undefined))
   const successDurationDraft = useRevisionDraft(settings.successDisplayMs, String(settings.successDisplayMs), () => setSuccessDurationError(undefined))
+  const [dictionaryPasteCut, setDictionaryPasteCut] = useState(false)
   const llmDictionaryDraft = useRevisionDraft(settings.llmDictionary, settings.llmDictionary)
   const [updateBusy, setUpdateBusy] = useState(false)
   const [clearFailure, setClearFailure] = useState<string | null>(null)
@@ -215,6 +222,7 @@ export function SettingsView({
   // A result belongs to one input. A changed selection also invalidates pending permission.
   useEffect(() => {
     setMicrophoneState('idle')
+    microphonePeakRef.current = 0
     setMicrophoneLevel(0)
     return () => {
       ++microphoneTestGeneration.current
@@ -223,6 +231,25 @@ export function SettingsView({
       if (controller !== null) void Promise.resolve(controller.stop()).catch(() => undefined)
     }
   }, [settings.microphoneId])
+
+  const stopMicrophoneTest = useCallback((): void => {
+    ++microphoneTestGeneration.current
+    const controller = microphoneTestRef.current
+    microphoneTestRef.current = null
+    if (controller !== null) void Promise.resolve(controller.stop()).catch(() => undefined)
+    setMicrophoneLevel(0)
+    setMicrophoneState(state => state === 'ready' ? 'closed' : state === 'requesting' ? 'idle' : state)
+  }, [])
+
+  useEffect(() => {
+    const onVisibilityChange = (): void => { if (document.hidden) stopMicrophoneTest() }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    const unsubscribe = window.sotto?.onWindowHidden?.(stopMicrophoneTest)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+      unsubscribe?.()
+    }
+  }, [stopMicrophoneTest])
 
   /**
    * The same level test onboarding runs. A microphone that reports ready is
@@ -235,9 +262,10 @@ export function SettingsView({
     const previous = microphoneTestRef.current
     microphoneTestRef.current = null
     setMicrophoneLevel(0)
+    microphonePeakRef.current = 0
     setMicrophoneState('requesting')
     if (previous !== null) await Promise.resolve(previous.stop()).catch(() => undefined)
-    if (generation !== microphoneTestGeneration.current) return
+    if (generation !== microphoneTestGeneration.current || document.hidden) return
     let controller: MicrophoneTestController
     try { controller = createMicrophoneTest() } catch {
       setMicrophoneState('error')
@@ -245,8 +273,16 @@ export function SettingsView({
     }
     microphoneTestRef.current = controller
     const outcome = await controller.start((level) => {
-      if (microphoneTestRef.current === controller) setMicrophoneLevel(level)
-    }, selectedDeviceId).catch(() => 'error' as const)
+      if (microphoneTestRef.current !== controller) return
+      const safeLevel = Number.isFinite(level) ? Math.min(1, Math.max(0, level)) : 0
+      microphonePeakRef.current = Math.max(microphonePeakRef.current, safeLevel)
+      setMicrophoneLevel(safeLevel)
+    }, selectedDeviceId, () => {
+      if (microphoneTestRef.current !== controller) return
+      microphoneTestRef.current = null
+      setMicrophoneLevel(0)
+      setMicrophoneState('missing')
+    }).catch(() => 'error' as const)
     if (microphoneTestRef.current !== controller) return
     setMicrophoneState(outcome)
     if (outcome !== 'ready') {
@@ -258,13 +294,36 @@ export function SettingsView({
     if (settingsRef.current.microphoneSkipped) await onUpdateSettings({ microphoneSkipped: false }).catch(() => false)
   }
 
-  const saveDictionary = async (): Promise<void> => {
+  const dictionarySaveSequenceRef = useRef(0)
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => { mountedRef.current = false }
+  }, [])
+
+  const saveDictionary = async (announce = true): Promise<void> => {
     const value = llmDictionaryDraft.read()
+    if (value.length > 4000) {
+      if (announce) setNotice({ text: 'The dictionary could not be saved. Keep it within 4,000 characters.', error: true })
+      return
+    }
     const submission = llmDictionaryDraft.begin(value, true)
     if (submission === null) return
-    const saved = await save({ llmDictionary: value }, 'Dictionary saved.')
+    const sequence = ++dictionarySaveSequenceRef.current
+    const saved = announce
+      ? await save({ llmDictionary: value }, 'Dictionary saved.')
+      : await onUpdateSettings({ llmDictionary: value }).catch(() => false)
     llmDictionaryDraft.settle(submission, saved, false)
+    if (sequence !== dictionarySaveSequenceRef.current) return
+    if (saved) onNotice?.(null)
+    else if (!mountedRef.current) {
+      onNotice?.('Your dictionary edits were not saved. Open Settings, choose Cleanup and enter them again.')
+    }
   }
+
+  const saveDictionaryRef = useRef(saveDictionary)
+  saveDictionaryRef.current = saveDictionary
+  useEffect(() => () => { void saveDictionaryRef.current(false) }, [])
 
   const savePasteDelay = async (): Promise<void> => {
     const value = parseBoundedInteger(pasteDelayDraft.read(), 50, 1_000)
@@ -273,7 +332,8 @@ export function SettingsView({
       return
     }
     setPasteDelayError(undefined)
-    const submission = pasteDelayDraft.begin(value)!
+    const submission = pasteDelayDraft.begin(value, true)
+    if (submission === null) return
     const saved = await save({ pasteDelayMs: value }, 'Paste delay saved.')
     pasteDelayDraft.settle(submission, saved, true)
   }
@@ -285,7 +345,8 @@ export function SettingsView({
       return
     }
     setSuccessDurationError(undefined)
-    const submission = successDurationDraft.begin(value)!
+    const submission = successDurationDraft.begin(value, true)
+    if (submission === null) return
     const saved = await save({ successDisplayMs: value }, 'Success duration saved.')
     successDurationDraft.settle(submission, saved, true)
   }
@@ -328,7 +389,8 @@ export function SettingsView({
       setNotice({ text: 'Enter a valid shortcut. Your previous shortcut is still active.', error: true })
       return
     }
-    const submission = hotkeyDraft.begin(candidate)!
+    const submission = hotkeyDraft.begin(candidate, true)
+    if (submission === null) return
     const result = await onReplaceHotkey(candidate).catch(() => ({ ok: false as const, reason: 'unavailable' as const }))
     const latest = hotkeyDraft.isLatest(submission)
     hotkeyDraft.settle(submission, result.ok, true)
@@ -340,6 +402,7 @@ export function SettingsView({
   }
 
   const selectSection = (id: SettingsSectionId): void => {
+    if (id !== 'settings-capture') stopMicrophoneTest()
     setActiveSection(id)
   }
 
@@ -408,19 +471,20 @@ export function SettingsView({
                       {/* The wave the widget and the Dictate room show; it listens for as long as the test's stream runs. */}
                       <VoiceWave stage={microphoneState === 'requesting' || microphoneState === 'ready' ? 'listening' : 'idle'} value={microphoneLevel} label="Microphone level" size="deck" />
                       <p role="status">
-                        {microphoneState === 'ready' ? 'Microphone ready.' : null}
+                        {microphoneState === 'ready' ? 'Listening. Say something.' : null}
+                        {microphoneState === 'closed' ? microphonePeakRef.current > MICROPHONE_TEST_HEARD_THRESHOLD ? 'Sotto heard you. The microphone is closed.' : 'Sotto did not hear anything. Check that the microphone is not muted.' : null}
                         {microphoneState === 'requesting' ? 'Waiting for microphone permission...' : null}
                         {microphoneState === 'idle' ? (settings.microphoneSkipped ? 'No microphone is set up. Run this test to set one up.' : 'Run a quick input-level test.') : null}
                         {microphoneState === 'denied' ? copy.settingsMicrophoneUnavailable : null}
-                        {microphoneState === 'missing' ? 'No microphone was found.' : null}
+                        {microphoneState === 'missing' ? !microphoneKnown && microphones.length > 0 ? 'The chosen microphone is not connected. Plug it in or choose another.' : 'No microphone was found.' : null}
                         {microphoneState === 'error' ? 'The microphone test could not start.' : null}
                       </p>
                       <Button
-                        variant={microphoneState === 'ready' ? 'secondary' : 'primary'}
+                        variant={microphoneState === 'closed' ? 'secondary' : 'primary'}
                         disabled={microphoneState === 'requesting'}
-                        onClick={() => void runMicrophoneTest()}
+                        onClick={() => microphoneState === 'ready' ? stopMicrophoneTest() : void runMicrophoneTest()}
                       >
-                        {microphoneState === 'ready' ? 'Retest microphone' : 'Test microphone'}
+                        {microphoneState === 'ready' ? 'Stop test' : microphoneState === 'closed' ? 'Test again' : 'Test microphone'}
                       </Button>
                     </div>
                   </Field>
@@ -459,12 +523,18 @@ export function SettingsView({
                   <Toggle label="AI formatting" checked={settings.llmFormatting} onCheckedChange={(checked) => void save({ llmFormatting: checked })} description="Send transcript text to OpenRouter for cleanup. Falls back to the raw transcript if the network is slow or offline." />
                   <Field label="Formatting quality" description="Low is near-instant; higher tiers format better but add up to a couple seconds."><Select disabled={!settings.llmFormatting} value={settings.llmQuality} onChange={(event) => void save({ llmQuality: event.currentTarget.value as LlmQuality })}><option value="low">Low — fastest (Mercury 2)</option><option value="medium">Medium (Nova 2 Lite)</option><option value="value">Value — cheap, near-High (GLM-5.3 Flash)</option><option value="high">High — best formatting (Claude Haiku 4.5)</option></Select></Field>
                   <div className="settings-input-action">
-                    <Field label="Personal dictionary" description="One word or name per line. Sent as spelling hints with your audio and used during cleanup.">
-                      <textarea className="tt-input" rows={5} value={llmDictionaryDraft.value} onBlur={() => void saveDictionary()} onChange={(event) => {
+                    <Field label="Personal dictionary" description={`One word or name per line. Sent as spelling hints with your audio and used during cleanup.${llmDictionaryDraft.value.length >= 4000 ? ' 4,000 characters maximum.' : ''}`}>
+                      <textarea className="tt-input" rows={5} maxLength={4000} value={llmDictionaryDraft.value} onPaste={(event) => {
+                        const input = event.currentTarget
+                        const pasted = event.clipboardData.getData('text').replace(/\r\n?/gu, '\n')
+                        setDictionaryPasteCut(input.value.length - (input.selectionEnd - input.selectionStart) + pasted.length > input.maxLength)
+                      }} onBlur={() => void saveDictionary()} onChange={(event) => {
                         const value = event.currentTarget.value
+                        if (value.length < event.currentTarget.maxLength) setDictionaryPasteCut(false)
                         llmDictionaryDraft.edit(value)
                       }} />
                     </Field>
+                    <p className="settings-disclosure" role="status">{dictionaryPasteCut ? 'The pasted text was cut to fit the 4,000-character limit.' : ''}</p>
 
                   </div>
                   <Toggle label="Generated thread titles" checked={settings.threadTitles} onCheckedChange={(checked) => void save({ threadTitles: checked })} description="Ask a thread's own model to name the thread from its first exchange, and a new worktree branch from its first prompt, only while local history is kept. Names you choose are never replaced." />
@@ -505,10 +575,10 @@ export function SettingsView({
                   <Toggle label="Let agents use the browser without asking" checked={settings.browserWithoutAsking} onCheckedChange={checked => void save({ browserWithoutAsking: checked })} description="Agents can open pages, click and type in Sotto's browser without asking first, including on sites you are signed in to there. Stop it for one thread in Tools > Browser." />
                   <Field label="Replies in threads" description="Stream a reply word by word as the agent writes it, or show it once it is finished. Commands and tool calls always appear as they run."><SegmentedControl label="Replies in threads" value={settings.responseStreaming} onChange={value => void save({ responseStreaming: value as AppSettings['responseStreaming'] })} options={[{ value: 'live', label: 'As written' }, { value: 'complete', label: 'When finished' }]} /></Field>
                   <Field label="New threads work in" description="Project defaults can override this. Existing threads keep their working folder."><Select value={settings.threadWorkingCopyDefault} onChange={event => void save({ threadWorkingCopyDefault: event.currentTarget.value as AppSettings['threadWorkingCopyDefault'] })}><option value="shared">Project folder</option><option value="independent">New worktree</option></Select></Field>
-                  <Field label="Remove idle worktrees after" description="A thread's own worktree folder goes when the thread has been idle this long. The branch stays and sending puts the folder back. Only a folder with no uncommitted changes and nothing but installed dependencies in its ignored files is removed."><Select value={String(settings.worktreeCleanup.afterDays ?? 'never')} onChange={event => { const value = event.currentTarget.value; void save({ worktreeCleanup: { ...settings.worktreeCleanup, afterDays: value === 'never' ? null : Number(value) as WorktreeCleanupDays } }) }}><option value="never">Never</option>{WORKTREE_CLEANUP_DAYS.map(days => <option key={days} value={String(days)}>{days} days</option>)}</Select></Field>
-                  <Toggle label="Remove a worktree when its thread is settled" checked={settings.worktreeCleanup.onSettle} onCheckedChange={checked => void save({ worktreeCleanup: { ...settings.worktreeCleanup, onSettle: checked } })} description="Settle removes a clean worktree folder without asking. A folder with uncommitted changes still asks." />
-                  <Toggle label="Remove a worktree once its commits are in the default branch" checked={settings.worktreeCleanup.unchanged} onCheckedChange={checked => void save({ worktreeCleanup: { ...settings.worktreeCleanup, unchanged: checked } })} description="Checked against the local copy of the repository's default branch, once an hour." />
-                  <Toggle label="Remove a worktree when its pull request is merged" checked={settings.worktreeCleanup.merged} onCheckedChange={checked => void save({ worktreeCleanup: { ...settings.worktreeCleanup, merged: checked } })} description="Once an hour, asks GitHub through gh, on your own sign-in, whether the worktree's branch has a merged pull request." />
+                  <Field label="Remove idle worktrees after" description="A thread's own worktree folder goes when the thread has been idle this long. The branch stays and sending puts the folder back. Only a folder with no uncommitted changes and nothing but installed dependencies in its ignored files is removed."><Select value={String(settings.worktreeCleanup.afterDays ?? 'never')} onChange={event => { const value = event.currentTarget.value; void save({ worktreeCleanup: { afterDays: value === 'never' ? null : Number(value) as WorktreeCleanupDays } }) }}><option value="never">Never</option>{WORKTREE_CLEANUP_DAYS.map(days => <option key={days} value={String(days)}>{days} days</option>)}</Select></Field>
+                  <Toggle label="Remove a worktree when its thread is settled" checked={settings.worktreeCleanup.onSettle} onCheckedChange={checked => void save({ worktreeCleanup: { onSettle: checked } })} description="Settle removes a clean worktree folder without asking. A folder with uncommitted changes still asks." />
+                  <Toggle label="Remove a worktree once its commits are in the default branch" checked={settings.worktreeCleanup.unchanged} onCheckedChange={checked => void save({ worktreeCleanup: { unchanged: checked } })} description="Checked against the local copy of the repository's default branch, once an hour." />
+                  <Toggle label="Remove a worktree when its pull request is merged" checked={settings.worktreeCleanup.merged} onCheckedChange={checked => void save({ worktreeCleanup: { merged: checked } })} description="Once an hour, asks GitHub through gh, on your own sign-in, whether the worktree's branch has a merged pull request." />
                   <ProjectThreadDefaults settings={settings} onSave={save} />
                   <Toggle label="Show floating widget when idle" checked={settings.showWidgetWhenIdle} onCheckedChange={(checked) => void save({ showWidgetWhenIdle: checked })} description="Keep the small dictation sliver on screen between sessions. Click it to dictate." />
                   <Toggle label={copy.settingsLaunchAtStartupLabel} checked={settings.launchAtStartup} onCheckedChange={async (checked) => {

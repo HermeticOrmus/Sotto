@@ -137,7 +137,7 @@ import type { WidgetSnapshot } from '../shared/dictation'
 import { widgetPresentationFor } from '../shared/themeBranding'
 import { resolvePlatform } from '../shared/platform'
 import { defaultSettings, type AppSettings } from '../shared/settings'
-import { enableWasmThreadSupport } from './security'
+import { blockSpellcheckDictionaryDownloads, enableWasmThreadSupport } from './security'
 import {
   beginRuntimeVerification,
   registerLocalAssetProtocols,
@@ -231,6 +231,7 @@ type NativeDiagnostic =
   | 'settings-update-failed'
   | 'secure-key-migration-unavailable'
   | 'memory-store-open-failed'
+  | 'history-temp-cleanup-failed'
   | 'checkpoint-unavailable'
   | 'worktree-cleanup-reclaimed'
   | 'worktree-cleanup-skipped'
@@ -301,13 +302,24 @@ class ElectronBrowserWindowAdapter implements BrowserWindowLike {
   }
 
   on(
-    event: 'close' | 'closed' | 'moved' | 'maximize' | 'unmaximize',
+    event: 'close' | 'closed' | 'moved' | 'maximize' | 'unmaximize' | 'hide' | 'minimize',
     listener: (event: { preventDefault(): void }) => void,
   ): void {
     if (event === 'close') {
       const wrapped = (nativeEvent: { preventDefault(): void }): void => listener(nativeEvent)
       this.window.on('close', wrapped)
       this.windowListenerCleanups.set(listener, () => this.window.removeListener('close', wrapped))
+      return
+    }
+    if (event === 'hide' || event === 'minimize') {
+      const wrapped = (): void => listener({ preventDefault: () => undefined })
+      if (event === 'hide') {
+        this.window.on('hide', wrapped)
+        this.windowListenerCleanups.set(listener, () => this.window.removeListener('hide', wrapped))
+      } else {
+        this.window.on('minimize', wrapped)
+        this.windowListenerCleanups.set(listener, () => this.window.removeListener('minimize', wrapped))
+      }
       return
     }
     if (event === 'moved' || event === 'maximize' || event === 'unmaximize') {
@@ -331,7 +343,7 @@ class ElectronBrowserWindowAdapter implements BrowserWindowLike {
   }
 
   removeListener(
-    _event: 'close' | 'closed' | 'moved' | 'maximize' | 'unmaximize',
+    _event: 'close' | 'closed' | 'moved' | 'maximize' | 'unmaximize' | 'hide' | 'minimize',
     listener: (event: { preventDefault(): void }) => void,
   ): void {
     this.windowListenerCleanups.get(listener)?.()
@@ -482,6 +494,7 @@ function createBrowserWindow(options: WindowConstructorOptions): BrowserWindowLi
 }
 
 async function createRuntime(): Promise<NativeRuntimeController> {
+  blockSpellcheckDictionaryDownloads(session.defaultSession)
   const userDataPath = app.getPath('userData')
   const memoryStore = openRuntimeMemory(join(userDataPath, 'memory.sqlite'), logOperational)
   const memoryProfile = memoryStore === undefined ? undefined : new MemoryProfile(memoryStore)
@@ -506,7 +519,9 @@ async function createRuntime(): Promise<NativeRuntimeController> {
     recoveryNotices,
     Date.now,
     platformDefaults,
+    logOperational,
   )
+  await history.initialize()
   const credentials = new AgentCredentials(userDataPath, safeStorage, notice => recoveryNotices.publish(notice))
   await credentials.load()
   const grokSpeech = new GrokSpeechService({ credentials, ...(e2eConfiguration === null ? {} : { fetchFn: e2eGrokSpeechFetch }) })
@@ -872,6 +887,10 @@ async function createRuntime(): Promise<NativeRuntimeController> {
     buildPasteInvocation: pasteCommands.oneShot,
   })
 
+  const copyOutput = async (text: string): Promise<void> => {
+    await output.deliver(text, { autoPaste: false, pasteDelayMs: 0 })
+  }
+
   // Local, text-free diagnostics: one JSON line per event, rotated past 256 KB,
   // never sent anywhere. They carry counts and reasons, never words, audio or keys.
   const diagnosticsAppender = (fileName: string) => {
@@ -1096,11 +1115,11 @@ async function createRuntime(): Promise<NativeRuntimeController> {
         }),
     registerIpc: () => {
       const cleanupPersonalChats = registerPersonalChatIpc(ipcMain, personalChats, () => windows.getTrustedRenderers())
-      const cleanupChatPrompts = registerChatPromptIpc(ipcMain, chatPrompts, () => windows.getTrustedRenderers(), text => clipboard.writeText(text))
+      const cleanupChatPrompts = registerChatPromptIpc(ipcMain, chatPrompts, () => windows.getTrustedRenderers(), copyOutput)
       const cleanupRequestDrafts = registerRequestDraftIpc(ipcMain, requestDrafts, () => windows.getTrustedRenderers())
       const files = new FilesService({
         resolveBinding: threadId => agentControl.filesBinding(threadId),
-        copyPath: path => clipboard.writeText(path),
+        copyPath: copyOutput,
         reveal: path => shell.showItemInFolder(path),
       })
       const cleanupFiles = registerFilesIpc(ipcMain, files, () => windows.getTrustedRenderers())
@@ -1110,7 +1129,7 @@ async function createRuntime(): Promise<NativeRuntimeController> {
       agentHost.setMutationGuard(checkpointIntegration.canMutate)
       const gitChanges = new GitChangesService({ files, checkpoints: checkpointIntegration.checkpoints, canMutate: checkpointIntegration.canMutate,
         acted: threadId => { void agentHost.gitActionFinished(threadId).catch(() => undefined) },
-        copyPath: path => clipboard.writeText(path), reveal: path => shell.showItemInFolder(path), emit: event => { windows.sendToMain(GIT_CHANGES_EVENT, event) } })
+        copyPath: copyOutput, reveal: path => shell.showItemInFolder(path), emit: event => { windows.sendToMain(GIT_CHANGES_EVENT, event) } })
       const cleanupTerminals = registerTerminalWorkspaceIpc(ipcMain, new TerminalWorkspaceService({
         projects: () => agentControl.projects(), git: runWorktreeGit,
         worktrees: new ThreadWorktrees(userDataPath, runWorktreeGit, TERMINAL_WORKTREE_HOME),
