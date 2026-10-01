@@ -20,7 +20,7 @@ import { observedSubagentStatus, EMPTY_SUBAGENT_SUMMARY, type SubagentChange, ty
 import { validateThreadOptions } from './threadOptions'
 import { resolveModel } from '../../shared/modelCatalog'
 import { resolveThreadWorkingDirectory } from '../../shared/threadWorkingDirectory'
-import { existingWorkingDirectory, ThreadWorktrees } from './threadWorktrees'
+import { existingWorkingDirectory, runWorktreeGit, ThreadWorktrees } from './threadWorktrees'
 import { gitStatusFingerprint, type GitStatus } from '../../shared/gitStatus'
 import type { GitStatusSource } from './gitStatus'
 import { GitActionRefusal, type GitActionEvent, type GitActions } from './gitActions'
@@ -693,7 +693,7 @@ export class WorkspaceHost implements AgentHost {
       return { ...facts, ignored: [...facts.ignored], items: [...facts.items], repositories: [...facts.repositories], untracked: [...facts.untracked] }
     })
   }
-  async reclaimThreadWorktree(threadId: string, options: { withUncommittedChanges?: boolean; automatic?: boolean; confirmedIgnored?: readonly string[]; confirmedItems?: readonly { path: string; fileCount: number }[]; confirmedRepositories?: WorktreeReclaimPreview['repositories'] } = {}): Promise<AgentHostSnapshot> {
+  async reclaimThreadWorktree(threadId: string, options: { withUncommittedChanges?: boolean; automatic?: boolean; confirmedIgnored?: readonly string[]; confirmedItems?: readonly { path: string; fileCount: number }[]; confirmedRepositories?: WorktreeReclaimPreview['repositories']; expectedMergedTip?: string } = {}): Promise<AgentHostSnapshot> {
     return this.onLane(threadId, async () => {
       await this.initialize()
       const thread = this.thread(threadId)
@@ -703,12 +703,17 @@ export class WorkspaceHost implements AgentHost {
       if (thread.status === 'running' || thread.requests.length || this.preparations.has(threadId)) throw new Error('This thread is still working. Wait for it to finish and answer its requests before removing its folder.')
       if (!await this.ownsCheckoutAlone(threadId)) throw new Error('Another thread works in this folder too, so it stays.')
       if (this.worktreeInUse(threadId)) throw new Error('A terminal is open in this folder. Close it before removing the folder.')
-      const reclaimed = await this.worktrees.reclaim(worktree, options)
-      this.thread(threadId).worktree = reclaimed
-      this.dirty = true
-      try { await this.flush() } catch { this.saveError = BRANCH_SAVE_ERROR }
-      this.publish()
-      return this.workspaceSnapshot()
+      return this.withCheckoutMutation(threadId, async () => {
+        if (options.expectedMergedTip && (await runWorktreeGit(worktree.path!, ['rev-parse', '--verify', 'HEAD^{commit}'])).trim() !== options.expectedMergedTip) {
+          throw new Error('This branch changed after its merged pull request was checked. Its folder stays.')
+        }
+        const reclaimed = await this.worktrees.reclaim(worktree, options)
+        this.thread(threadId).worktree = reclaimed
+        this.dirty = true
+        try { await this.flush() } catch { this.saveError = BRANCH_SAVE_ERROR }
+        this.publish()
+        return this.workspaceSnapshot()
+      })
     })
   }
   async workingCopyOptions(projectId: string): Promise<AgentWorkingCopyOptions> {
@@ -1754,7 +1759,16 @@ export class WorkspaceHost implements AgentHost {
     if (this.eventSourced) return { ...purpose, historyFromEvents: true } as T
     return purpose?.historyFromEvents ? { ...purpose, historyFromEvents: false } : purpose
   }
-  async setWorkspaceSettled(kind: 'project' | 'thread', id: string, settled: boolean): Promise<AgentHostSnapshot> {
+  async setWorkspaceSettled(kind: 'project' | 'thread', id: string, settled: boolean, options?: { expectedMergedTip: string; expectedMergedBranch: string }): Promise<AgentHostSnapshot> {
+    if (kind === 'thread' && settled && options) return this.onGitLane(id, async () => {
+      const worktree = this.thread(id).worktree
+      const branch = worktree?.mode === 'independent' ? worktree.sentBranch ?? worktree.branch : worktree?.sentBranch
+      if (!worktree?.repositoryRoot || branch !== options.expectedMergedBranch
+        || (await runWorktreeGit(worktree.repositoryRoot, ['rev-parse', '--verify', '--end-of-options', `refs/heads/${branch}^{commit}`])).trim() !== options.expectedMergedTip) {
+        throw new Error('This branch changed after its merged pull request was checked. Its thread stays unsettled.')
+      }
+      return this.setWorkspaceSettled(kind, id, settled)
+    })
     await this.initialize()
     const projectId = kind === 'project' ? id : this.state.snapshot.threads.find(thread => thread.id === id)?.projectId
     if (!projectId) throw new Error('That thread is unavailable.')

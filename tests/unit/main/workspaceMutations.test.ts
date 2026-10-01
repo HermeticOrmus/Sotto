@@ -1,10 +1,13 @@
 // @vitest-environment node
-import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { expect, it, vi } from 'vitest'
 import { workspaceFixture } from '../../fixtures/workspaceFixture'
 import { runWorktreeGit as git } from '../../../src/main/agents/threadWorktrees'
-import type { GitActions } from '../../../src/main/agents/gitActions'
+import { GitActions } from '../../../src/main/agents/gitActions'
+import { WorktreeCleanup } from '../../../src/main/agents/worktreeCleanup'
+import { DEFAULT_WORKTREE_CLEANUP } from '../../../src/shared/settings'
+import { GitStatusReader } from '../../../src/main/agents/gitStatus'
 import { CheckoutMutations } from '../../../src/main/agents/checkoutMutations'
 
 async function fixture() {
@@ -134,3 +137,39 @@ it('restores a deleted owned worktree for a project subdirectory and holds its r
     expect((await git(copy.path, ['branch', '--show-current'])).trim()).toBe(copy.branch)
   } finally { pause.release(); await sending; await f.stop(); await f.remove() }
 })
+
+
+it.each(['reclaim', 'settle'] as const)('rechecks a merged commit inside the lane before %s after a queued commit action', async kind => {
+  const f = await fixture(), pause = barrier(), queued = barrier()
+  let action: Promise<unknown> | undefined, sweep: Promise<void> | undefined
+  try {
+    const model = f.host.workspaceSnapshot().models.find(item => item.providerId === 'codex')!
+    await f.host.execute({ type: 'create-thread', commandId: 'c', threadId: 'c', projectId: f.project.id, modelId: model.id, title: 'c', workingCopy: 'independent' })
+    await f.host.execute(send('c'))
+    for (const thread of f.adapters.codex.state.threads) thread.status = 'idle'
+    f.adapters.codex.emit()
+    await vi.waitFor(() => expect(f.host.workspaceSnapshot().threads.find(thread => thread.id === 'c')?.status).toBe('idle'))
+    const copy = f.host.workspaceSnapshot().threads.find(thread => thread.id === 'c')!.worktree!
+    const tip = (await git(copy.path!, ['rev-parse', 'HEAD'])).trim()
+    await git(f.project.path, ['config', 'user.name', 'Fixture'])
+    await git(f.project.path, ['config', 'user.email', 'fixture@example.invalid'])
+    await git(f.project.path, ['config', 'commit.gpgSign', 'false'])
+    await writeFile(join(copy.path!, 'file.txt'), 'new unmerged work')
+    f.host.setGitActions(new GitActions({ status: new GitStatusReader({ fetchIntervalMs: () => 0 }),
+      writeCommitMessage: async () => { pause.enter(); await pause.held; return 'Keep new unmerged work' }, writePullRequestText: async () => null }))
+    action = f.host.runGitAction({ threadId: 'c', actionId: 'commit', action: 'commit' })
+    await pause.entered
+    const host = { workspaceSnapshot: () => f.host.workspaceSnapshot(), subscribe: f.host.subscribe.bind(f.host),
+      reclaimThreadWorktree: (...args: Parameters<typeof f.host.reclaimThreadWorktree>) => { queued.enter(); return f.host.reclaimThreadWorktree(...args) },
+      setWorkspaceSettled: (...args: Parameters<typeof f.host.setWorkspaceSettled>) => { queued.enter(); return f.host.setWorkspaceSettled(...args) } }
+    sweep = new WorktreeCleanup({ host, rules: () => ({ ...DEFAULT_WORKTREE_CLEANUP, merged: kind === 'reclaim' }),
+      autoSettleMerged: () => kind === 'settle', pullRequestMerged: async () => true }).sweep()
+    await queued.entered
+    pause.release(); await action; await sweep
+    expect(f.host.workspaceSnapshot().threads.find(thread => thread.id === 'c')?.gitAction?.status).toBe('done')
+    expect((await git(f.project.path, ['rev-parse', `refs/heads/${copy.branch}`])).trim()).not.toBe(tip)
+    expect(f.host.workspaceSnapshot().threads.find(thread => thread.id === 'c')?.worktree?.reclaimedAt).toBeUndefined()
+    expect(f.host.workspaceSnapshot().threads.find(thread => thread.id === 'c')?.workspaceSettledAt ?? null).toBeNull()
+    expect((await stat(copy.path!)).isDirectory()).toBe(true)
+  } finally { pause.release(); await action; await sweep; await f.stop(); await f.remove() }
+}, 60_000)

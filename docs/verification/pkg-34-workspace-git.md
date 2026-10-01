@@ -22,4 +22,4 @@ Inspected the minimum-size Git action capture and checkpoint captures at minimum
 
 ## Review
 
-Separate Standards and Spec reviewers found and prompted fixes for early reservation, missing-worktree identity, shared checkpoint exclusions and current-tip cache invalidation. Both final reviews found no remaining issues. Live providers were not used; fixtures and real Git repositories supplied the concurrency scenarios.
+Separate Standards and Spec reviewers found and prompted fixes for early reservation, missing-worktree identity, shared checkpoint exclusions and current-tip cache invalidation. The PR review then reproduced a stale merged-tip decision queued behind a commit action. A real GitActions regression holds commit drafting, queues reclaim or auto-settle, advances the branch and verifies that the folder and unsettled thread remain. The validated tip now crosses that queue boundary and is checked under the checkout guard. Live providers were not used; fixtures and real Git repositories supplied the concurrency scenarios.
