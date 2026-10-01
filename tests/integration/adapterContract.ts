@@ -130,7 +130,7 @@ export function describeAdapterContract(name: string, factory: (session?: Adapte
       expect((await thread()).messages).toContainEqual(expect.objectContaining({ id: 'own-message', role: 'user', commandId: expect.any(String) }))
       await f.driver.completeTurn(sessionId, 'Completed reply')
       await expect.poll(async () => (await thread()).status).toBe('idle')
-      expect(snapshots.some(s => s.threads.some(t => t.messages.some(m => m.text === 'Completed reply')))).toBe(true)
+      await expect.poll(() => snapshots.some(s => s.threads.some(t => t.messages.some(m => m.text === 'Completed reply')))).toBe(true)
       unsubscribe()
       if (!f.host.subscribeEvents) return
       // The prompt and the reply each reached the record once, through the adapter's own append path.
