@@ -320,6 +320,7 @@ describe('Sotto application onboarding integration', () => {
       listRecoveryNotices: vi.fn(async () => [
         { code: 'SETTINGS_RECOVERED' as const },
         { code: 'HISTORY_RECOVERED' as const },
+        { code: 'CREDENTIALS_RECOVERED' as const },
       ]),
       onRecoveryNotice: vi.fn((listener) => {
         recoveryListener = listener
@@ -332,9 +333,10 @@ describe('Sotto application onboarding integration', () => {
 
     await waitFor(() => expect(screen.getAllByRole('status').filter((node) =>
       node.classList.contains('tt-toast'),
-    )).toHaveLength(2))
+    )).toHaveLength(3))
     expect(screen.getByText(/restored default settings/i)).toBeVisible()
     expect(screen.getByText(/started with an empty history/i)).toBeVisible()
+    expect(screen.getByText(/Add your keys again in Settings/)).toBeVisible()
     expect(document.body).not.toHaveTextContent('C:\\private\\settings.json')
     expect(document.body).not.toHaveTextContent('private transcript content')
     expect(screen.getByRole('heading', { level: 1, name: /ready when you are/i })).toBeVisible()
@@ -625,7 +627,7 @@ describe('Sotto application onboarding integration', () => {
 
     const toast = await screen.findByRole('alert')
     expect(toast).toHaveTextContent('Could not download update net::ERR_INTERNET_DISCONNECTED')
-    expect(screen.getByRole('button', { name: 'Download failed for 3.5.0. Click to retry.' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Update check failed. Update 3.5.0 is still offered. Click to download.' })).toBeInTheDocument()
 
     act(() => publish?.({ currentVersion: '3.4.0', phase: { phase: 'downloaded', version: '3.5.0', problem: 'No update filepath provided, can’t quit and install' }, checkedAt: 1 }))
     expect(screen.getByRole('button', { name: 'Install failed for 3.5.0. Click to retry.' })).toBeInTheDocument()
