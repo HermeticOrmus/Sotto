@@ -103,7 +103,11 @@ export class FilesService {
         for await (const entry of directory) {
           if (scanned++ === FILES_MAX_ENTRIES) { truncated = true; break }
           const path = request.path ? `${request.path}/${entry.name}` : entry.name
-          if (!fileRelativePathSchema.safeParse(path).success) continue
+          if (!fileRelativePathSchema.safeParse(path).success) {
+            if (path.length <= 4096) entries.push({ name: entry.name, path, kind: 'unavailable' })
+            else truncated = true
+            continue
+          }
           let kind: FileListing['entries'][number]['kind'] = 'unavailable'
           try {
             const child = await this.target(workspace, path)
