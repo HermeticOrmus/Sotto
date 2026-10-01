@@ -103,3 +103,8 @@ Turn checkpoints follow Keep local history. Turning it off or forgetting a threa
 ## Amendment: checkpoint file recovery (September 30, 2026)
 
 The checkpoint file records which storage format it uses. If it is damaged, Sotto keeps readable records and backs up the original beside `checkpoints.json` as `checkpoints.json.corrupt-<id>`. The Checkpoints drawer names the backup file without its folder and says Sotto kept the readable checkpoints. Readable interrupted reverts still require recovery before more work; unreadable records cannot be restored. Backups share the storage limit, expire after 30 days and are erased when Keep local history is turned off or a thread they mention is forgotten.
+
+
+## Correction, October 1, 2026: reserve the checkout (#502)
+
+Git actions, branch restore and checkpoint rollback or recovery share one checkout guard with sends, on desktop and headless hosts. It reserves the checkout before asynchronous checks or side calls and releases it after completion or refusal. Identity follows the canonical checkout root, including subdirectories and path aliases; linked worktrees stay separate. Active or pending thread work prevents mutations, and a mutation prevents sibling sends. Checkpoint snapshots also hold a read reservation.

@@ -6,7 +6,6 @@ import { FilesService } from '../../../src/main/files/service'
 import { resolveFilesBinding } from '../../../src/main/files/binding'
 import type { GitActions } from '../../../src/main/agents/gitActions'
 import type { AgentControl } from '../../../src/main/agents/control'
-import type { GitChangesService } from '../../../src/main/tools/gitChanges'
 
 it('excludes an unallocated worktree from shared-folder checkpoint guards while retaining active shared-thread protection', async () => {
   const f = await workspaceFixture()
@@ -24,11 +23,15 @@ it('excludes an unallocated worktree from shared-folder checkpoint guards while 
     let historyEnabled = true
     integration = connectCheckpoints({ historyEnabled: () => historyEnabled, files, directory: f.root, host: f.host, registry: f.registry,
       control: { subscribe, hasPendingThreadWork: pending } as unknown as AgentControl,
-      git: () => ({ isMutating: async () => false }) as unknown as GitChangesService, report: vi.fn() })
+      report: vi.fn() })
     await expect(Promise.resolve(hooks.mock.calls[0]![0].isBlocked('pending'))).resolves.toBe(false)
     await expect(integration.canMutate('pending')).resolves.toBe(false)
     await expect(integration.canMutate('ready')).resolves.toBe(true)
     expect(pending).not.toHaveBeenCalledWith('pending')
+    const releaseMutation = await f.host.acquireCheckoutMutation('ready')
+    await expect(Promise.resolve(hooks.mock.calls[0]![0].isBlocked('ready'))).resolves.toBe(true)
+    releaseMutation()
+    await expect(Promise.resolve(hooks.mock.calls[0]![0].isBlocked('ready'))).resolves.toBe(false)
     // A revert holds the checkpoint queue while validating files. Git commands
     // hold the real host lane while consulting the integration guard.
     const internals = integration.checkpoints as unknown as { locks: Set<string>; serial<T>(work: () => Promise<T>): Promise<T> }

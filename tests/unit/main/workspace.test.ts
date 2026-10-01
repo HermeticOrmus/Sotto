@@ -643,7 +643,7 @@ describe('durable project/thread organization', () => {
     let behind = 1
     const status = (): GitStatus => ({ isRepository: true, branch: 'main', upstream: 'origin/main', hasRemote: true, defaultBranch: 'main', isDefaultBranch: true, dirty: false, changedFiles: 0, insertions: 0, deletions: 0, ahead: 0, behind, aheadOfDefault: null, pullRequest: null, fetchedAt: null, readAt: '2026-09-23T00:00:00.000Z' })
     const source = { read: vi.fn(async () => status()), invalidate: vi.fn() }
-    // The real GitActions, whose one-action-per-folder rule is what keeps a press from racing the pull; only Git is scripted.
+    // The real GitActions run under the host's checkout guard; only Git is scripted.
     const pulling = deferred(), started = deferred()
     let head = 'aaa'
     const run = vi.fn(async (_cwd: string, _command: 'git' | 'gh', args: readonly string[]) => {
@@ -664,8 +664,7 @@ describe('durable project/thread organization', () => {
     await started.promise
     // Mid-pull, the other thread in the same folder presses Commit & push: refused, not run beside the pull, and told
     // what holds the folder, since the automatic pull shows nothing on screen.
-    await f.host.runGitAction({ threadId: 'second', actionId: 'press', action: 'commit_push' })
-    expect(f.host.workspaceSnapshot().threads.find(thread => thread.id === 'second')?.gitAction).toMatchObject({ status: 'failed', error: 'Sotto is pulling this folder. Try again in a moment.' })
+    await expect(f.host.runGitAction({ threadId: 'second', actionId: 'press', action: 'commit_push' })).rejects.toThrow('Wait for active or pending thread work')
     expect(run.mock.calls.filter(call => call[2][0] === 'commit')).toHaveLength(0)
     pulling.release()
     await refresh
@@ -878,6 +877,8 @@ describe('durable project/thread organization', () => {
     const switched = vi.spyOn(ThreadWorktrees.prototype, 'switchBranch').mockImplementation(async (metadata, branch) => { checkedOut = branch; return { ...metadata, status: 'ready', branch, dirty } })
     await f.host.execute({ type: 'create-thread', commandId: 'create-local', threadId: 'local', projectId: project.id, title: 'New task', modelId: model.id })
     await f.host.execute(send())
+    f.adapters.codex.state.threads.at(-1)!.status = 'idle'; f.adapters.codex.emit()
+    await vi.waitFor(() => expect(f.host.workspaceSnapshot().threads.find(thread => thread.id === 'local')?.status).toBe('idle'))
     checkedOut = 'feat/agent-chose'
     await expect(f.host.restoreThreadBranch('local', false)).rejects.toThrow('uncommitted changes')
     expect(switched).not.toHaveBeenCalled()

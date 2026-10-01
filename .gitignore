@@ -119,3 +119,6 @@ artifacts/iphone-new-threads/
 
 # Composer recovery captures; retain only the images cited by the verification note.
 artifacts/crossing/pkg-43-*.png
+
+# Shared-checkout Git verification; retain only captures cited by the note.
+artifacts/pkg-34-workspace-git/
