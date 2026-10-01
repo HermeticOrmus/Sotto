@@ -15,4 +15,6 @@ Inspected captures at 1600×1000, 1280×800 and 820×560 in dark and light appea
 - [Dark at the minimum size](../../artifacts/crossing/pkg-43-dark-820.png).
 - [Light at the minimum size](../../artifacts/crossing/pkg-43-light-820.png).
 
+After merging current main, all 127 tests in the eight affected renderer files passed, along with typecheck, lint, notices and the build. The same six Electron tests passed again. The retained minimum-size captures were unchanged.
+
 The throwaway focus/error walkthrough is captured locally on `prototype/bh-43-composer-recovery` at `eff650147053340bb27a699fefd6c967954a693c`, in `docs/prototypes/thread-composer-recovery-prototype.html`. Its assumption was to keep the editor focused and read-only rather than move focus when a request arrives; issue #569 permits either fix. Its HTML does not ship with the fix branch.
