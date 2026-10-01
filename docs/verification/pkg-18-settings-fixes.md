@@ -53,3 +53,20 @@ Main was integrated at `268fa07d`; both artifact-exclusion lists were retained w
 After Gates (Windows) passed on `6751c6e3`, main was fetched and merged through `d343d76a`. That brought in wake preparation and CI path filters without changing Settings code. Typecheck, lint and notices passed again; all 428 affected tests passed across seven files, including wake preparation, and the rebuilt three-spec Electron run passed all four tests (37.9 seconds).
 
 Windows passed again on `7b8e2278` (6,489 tests, 150 skipped). The subsequent fetch brought main through `1f9a5597`, including coordinator recovery and key migration feedback in App and Settings. Those files merged without conflicts. Both independent reviewers rechecked their combined behavior and found no integration issues. Typecheck, lint and notices passed; all 700 affected tests passed across 15 files (81.90 seconds), and the rebuilt four-spec Electron run passed all six tests (49.5 seconds).
+
+## PR #630 second review
+
+Merged main through `df0a0468` in a new merge commit, retaining both sides' capture exclusions in `.gitignore`. Each polish fix is a new commit. A cut-paste message now clears after editing below the limit, and its empty status element stays mounted before and after the message. Settings checks whether the selected ID is absent from the current input list before calling it disconnected; an empty list keeps the existing no-microphone message.
+
+`App.tsx` owns the onboarding microphone controller, while `Onboarding.tsx` displays its state. App now passes the ended callback there. Ending the active input resets the meter and readiness; retry works and callbacks from earlier tests cannot override the latest test. The browser controller already owns resource cleanup. The onboarding Electron fixture now offers a test-only browser-backed scenario, so this journey uses a real AudioContext and synthetic MediaStream instead of the always-ready setup stub.
+
+All four new regression checks failed before the fixes. The affected unit run passed 173 checks with one test assertion incorrectly expecting a live meter after shutdown; VoiceWave hides its meter when idle. The corrected onboarding regression passed separately. Final typecheck, lint and notices verification passed. The rebuilt selected-microphone, settings-index and onboarding-microphone-step specs passed all five tests (43.9 seconds), including native dictionary paste and deletion, listed and absent selected inputs, ended-track cleanup, and keyboard retry. These remain synthetic-device checks. Physical hardware, hands-on screen-reader announcements and macOS remain unverified.
+
+Inspected captures under `artifacts/pkg-18-e2e/second-review/`:
+
+- `dictionary-paste-cut.png`: native paste feedback beside the limited dictionary.
+- `cleanup-820-light.png`: the empty status preserves the existing Cleanup layout at the minimum size.
+- `onboarding-ended-820-light.png`: missing-input feedback and retry at the minimum size.
+- `onboarding-ended-1600-dark.png`: missing-input recovery with Continue disabled in the dark room.
+
+Both themes and all three required window sizes were exercised with reduced motion on. No design baselines were regenerated. The throwaway state prototype was inspected and captured on the local `prototype/pkg-18-second-review` branch; it preserves the existing controls and is absent from this PR. Independent gpt-6.1-sol reviewers at high reasoning reported no Standards or Spec findings on the full PR and latest corrections. The first read-only CLI attempts could not launch because of a Windows deny-read ACL error; separate read-only agents completed both reviews using the same model and effort.

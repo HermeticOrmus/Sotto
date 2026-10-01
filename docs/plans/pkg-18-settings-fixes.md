@@ -11,3 +11,5 @@ Acceptance checks:
 - S-123: unchanged shortcut and numeric fields do not write or announce a save; changed and failed drafts retain their existing acknowledgement behavior.
 
 Before delivery: run the four repository gates, build and exercise the affected Electron journeys, inspect the captures, review the diff against standards and these acceptance checks, then open the PR and wait for CI on its latest revision. Merge origin/main after the first green result and check any subsequent push. The PR stays open for its reviewer.
+
+Second-review acceptance checks: retain both `.gitignore` additions when merging main; keep the dictionary paste status mounted and clear its text below 4,000 characters; call a chosen microphone disconnected only when its ID is absent from the current list; and move onboarding to missing when its test input ends, allowing retry and ignoring older callbacks. Preserve the existing UI and owner-selected variant B. The state prototype is captured on the local `prototype/pkg-18-second-review` branch, outside this PR.
