@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { appendFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
 import type { AgentVoiceTiming } from '../../shared/agents'
@@ -76,6 +76,7 @@ function hasErrorCode(error: unknown, code: string): boolean {
 
 /** Append-only coordinator turn log. Writes never throw into the command path. */
 export class TurnRecorder {
+  private lane: Promise<void> = Promise.resolve()
   private readonly directory: string
   private readonly historyEnabled: () => boolean
   private readonly resolveSession: (threadId: string) => { provider: string; sessionId: string } | undefined
@@ -170,24 +171,43 @@ export class TurnRecorder {
         text: retain ? turn.text : '',
         error: retain ? error ?? '' : '',
       }
-      await mkdir(this.directory, { recursive: true })
-      const filePath = this.path()
-      await appendFile(filePath, `${JSON.stringify(record)}\n`, 'utf8')
-      if ((await stat(filePath)).size > this.maxBytes) {
-        const lines = (await readFile(filePath, 'utf8')).split(/\r?\n/u).filter(line => line.length > 0)
-        // Keep the newest lines, then drop the oldest until the file sits at half the cap,
-        // so the next append does not trigger another full rewrite.
-        const newest = lines.slice(-this.maxLines)
-        let bytes = newest.reduce((total, line) => total + Buffer.byteLength(line, 'utf8') + 1, 0)
-        while (newest.length > 1 && bytes > this.maxBytes / 2) bytes -= Buffer.byteLength(newest.shift()!, 'utf8') + 1
-        await writeFile(filePath, newest.length > 0 ? `${newest.join('\n')}\n` : '', 'utf8')
-      }
+      await this.enqueue(async () => {
+        await mkdir(this.directory, { recursive: true })
+        const filePath = this.path()
+        await appendFile(filePath, `${JSON.stringify(record)}\n`, 'utf8')
+        if ((await stat(filePath)).size > this.maxBytes) {
+          const lines = (await readFile(filePath, 'utf8')).split(/\r?\n/u).filter(line => line.length > 0)
+          // Keep the newest lines, then drop the oldest until the file sits at half the cap,
+          // so the next append does not trigger another full rewrite.
+          const newest = lines.slice(-this.maxLines)
+          let bytes = newest.reduce((total, line) => total + Buffer.byteLength(line, 'utf8') + 1, 0)
+          while (newest.length > 1 && bytes > this.maxBytes / 2) bytes -= Buffer.byteLength(newest.shift()!, 'utf8') + 1
+          await this.replace(newest.length > 0 ? `${newest.join('\n')}\n` : '')
+        }
+      })
     } catch {
       // Recording must never throw into the command path.
     }
   }
 
+  private enqueue(operation: () => Promise<void>): Promise<void> {
+    const pending = this.lane.then(operation)
+    this.lane = pending.catch(() => {})
+    return pending
+  }
+
+  private async replace(contents: string): Promise<void> {
+    const temporary = `${this.path()}.${randomUUID()}.tmp`
+    try {
+      await writeFile(temporary, contents, 'utf8')
+      await rename(temporary, this.path())
+    } finally {
+      await rm(temporary, { force: true })
+    }
+  }
+
   async recent(limit: number): Promise<TurnRecord[]> {
+    await this.lane
     let contents: string
     try {
       contents = await readFile(this.path(), 'utf8')

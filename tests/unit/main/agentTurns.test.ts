@@ -266,6 +266,21 @@ describe('coordinator turn records', () => {
     expect(Date.parse(recent[0]!.startedAt)).toBeGreaterThanOrEqual(Date.parse(recent[1]!.startedAt))
   })
 
+  it('keeps overlapping finishes in order while compacting', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sotto-turns-'))
+    roots.push(root)
+    const recorder = new TurnRecorder({ directory: root, historyEnabled: () => true,
+      resolveSession: () => undefined, maxBytes: 4000 })
+    await Promise.all(Array.from({ length: 40 }, (_, index) => recorder.finish(recorder.begin({
+      source: 'command', commandType: 'send', text: '', threadId: `thread-${index}`,
+    }), 'completed')))
+    const records = await recorder.recent(100)
+    expect(records[0]?.threadId).toBe('thread-39')
+    expect(records.map(record => Number(record.threadId!.split('-')[1]))).toEqual(
+      Array.from({ length: records.length }, (_, index) => 39 - index))
+    expect(records.length).toBeGreaterThan(1)
+  })
+
   it('rewrites the log to its newest records once it exceeds the cap', async () => {
     const root = await mkdtemp(join(tmpdir(), 'sotto-turns-'))
     roots.push(root)
