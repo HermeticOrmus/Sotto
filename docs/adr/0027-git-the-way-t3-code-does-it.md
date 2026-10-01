@@ -95,3 +95,11 @@ The project header reserves space for its actions instead of overlaying them on 
 ## Amendment: preserve staging during commits (September 30, 2026)
 
 The commit action keeps staged hunks in selected files and stages selected files with no staged changes in full. It temporarily excludes staging for files left out, then restores that staging after success. Any failure before the commit completes restores the original index without changing working files. A selected rename includes both paths, and paths are resolved from the checkout root even when the thread works in a subfolder. This departs from resetting and re-adding whole files: the user's staging is work to preserve (#500, #501, #503).
+
+## Amendment: checkpoint retention (September 30, 2026)
+
+Turn checkpoints follow Keep local history. Turning it off or forgetting a thread deletes its saved checkpoints at once, along with file backups that no other checkpoint needs. Turning history off, forgetting a thread and the age and size limits keep unfinished revert records and their file backups until recovery finishes. Completed checkpoints expire after 30 days; checkpoint storage is capped at 500 MB, removing the oldest checkpoints and recovery backups first. Turning history back on starts fresh checkpoints.
+
+## Amendment: checkpoint file recovery (September 30, 2026)
+
+The checkpoint file records which storage format it uses. If it is damaged, Sotto keeps readable records and backs up the original beside `checkpoints.json` as `checkpoints.json.corrupt-<id>`. The Checkpoints drawer names the backup file without its folder and says Sotto kept the readable checkpoints. Readable interrupted reverts still require recovery before more work; unreadable records cannot be restored. Backups share the storage limit, expire after 30 days and are erased when Keep local history is turned off or a thread they mention is forgotten.
