@@ -179,6 +179,21 @@ describe('authority at dispatch', () => {
       expect(recordAnswer).not.toHaveBeenCalled()
     }
   })
+  it.each([false, true])('retains an ordinary selected draft binding when answer permission is %s', async allowed => {
+    const client: ClientIdentity = { clientId: 'fixture-client', user: 'Fixture client', transport: 'socket', selectedThreadId: 'workshop' }
+    const f = await fixture({ authorizes: () => ({ allowed: false, reason: 'no-policy' }),
+      mayGrant: identity => ({ allowed: identity.transport === 'ipc' || allowed, reason: 'fixture' }) })
+    await f.control.commandShell({ type: 'compose', text: 'Ordinary prompt' }, client)
+    f.host.event({ type: 'question', threadId: 'workshop', requestId: 'choice', text: 'Which color?' })
+    await vi.waitFor(() => expect(f.control.get().queue.some(item => item.requestId === 'choice')).toBe(true))
+    const edited = await f.control.commandShell({ type: 'compose', text: 'Edited prompt' }, client)
+    expect(edited.error).toBeNull()
+    expect(edited.threadDrafts?.find(draft => draft.threadId === 'workshop')).toMatchObject({ text: 'Edited prompt', requestId: null })
+    const sent = await f.control.commandShell({ type: 'send' }, client)
+    expect(sent.error).toContain('Answer the pending question')
+    expect(f.host.executed.filter(command => command.type === 'answer')).toEqual([])
+  })
+
   it('keeps the compose client check consistent with send', async () => {
     const client: ClientIdentity = { clientId: 'fixture-client', user: 'Fixture client', transport: 'socket', selectedThreadId: 'workshop' }
     const f = await fixture({ authorizes: () => ({ allowed: false, reason: 'no-policy' }),

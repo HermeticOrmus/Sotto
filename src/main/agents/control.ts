@@ -1950,7 +1950,7 @@ export class AgentControl {
       const thread = this.thread(client.selectedThreadId ?? null)
       const saved = this.state.threadDrafts?.find(draft => draft.threadId === thread.id)
       if (command.type === 'compose') {
-        const requestId = saved?.requestId ?? this.state.queue.find(item => item.threadId === thread.id && item.kind === 'question')?.requestId ?? null
+        const requestId = saved ? saved.requestId : this.state.queue.find(item => item.threadId === thread.id && item.kind === 'question')?.requestId ?? null
         if (requestId) this.guardClientGrant(client)
         await this.saveThreadDraft({ type: 'save-thread-draft', threadId: thread.id, draftId: randomUUID(), text: command.text,
           attachments: command.attachments ?? saved?.attachments ?? [], skills: saved?.skills, files: saved?.files, requestId })
