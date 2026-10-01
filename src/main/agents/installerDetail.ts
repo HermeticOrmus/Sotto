@@ -30,8 +30,12 @@ function redactPaths(line: string): string {
     } else {
       // Spaces belong to account folders too. Only clear diagnostic delimiters
       // end an unquoted path; skip the drive colon when finding that boundary.
-      const boundary = path.windows ? /:(?=[ \d])|["<>|?*)]/u : /: |\s*[()]|:\d+:\d+(?=\s|[)]|$)/u
-      const diagnostic = boundary.exec(span.slice(path.prefixLength))
+      const boundary = path.windows ? /:(?=[ \d])|["<>|?*)]/gu : /: |\s*[()]|:\d+:\d+\b/gu
+      // Unix folder names may contain the same punctuation. A suffix with
+      // more path segments is still private, even across an identified prefix.
+      const continues = next && line[next.start] === '/' && !/\s/u.test(line[next.start - 1]!)
+      const diagnostic = Array.from(span.slice(path.prefixLength).matchAll(boundary))
+        .find(match => path.windows || !continues && !/[\\/]/u.test(span.slice(path.prefixLength + match.index)))
       const separator = next ? /\s+(?:->|to)\s*$/u.exec(span) : null
       const suffixStart = Math.min(diagnostic ? path.prefixLength + diagnostic.index : span.length, separator?.index ?? span.length)
       suffix = span.slice(suffixStart)

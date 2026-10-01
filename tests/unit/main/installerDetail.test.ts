@@ -16,11 +16,13 @@ it.each([
   ['file:///home/jsmith/x.js:1:2', 'file://…:1:2'],
   ['Cannot write "file:///Users/John Smith/codex"; permission denied', 'Cannot write "…"; permission denied'],
   ['Cannot write file:///C:/Users/John Smith/codex.exe: Permission denied', 'Cannot write file://…: Permission denied'],
+  ['Cannot write /home/Smith: John/client: Permission denied', 'Cannot write …: Permission denied'],
+  ['Cannot write /home/John (Work)/client: Permission denied', 'Cannot write ……: Permission denied'],
 ])('preserves diagnostics while redacting unquoted paths: %s', (line, expected) => {
   for (const format of [installerDetail, installerOutput]) {
     const shown = format(line)
     expect(shown).toBe(expected)
-    expect(shown).not.toMatch(/John Smith|jsmith/u)
+    expect(shown).not.toMatch(/John|Smith|jsmith|Work/u)
   }
 })
 
