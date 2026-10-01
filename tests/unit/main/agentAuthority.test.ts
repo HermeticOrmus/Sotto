@@ -55,10 +55,6 @@ async function fixture(partialAuthority?: Pick<Authority, 'authorizes'> & Partia
   const control = new AgentControl({ schedule: immediatePublishScheduler, directory: root, host, credentials, reasoner,
     ...(recordTurns ? { turns: recorder } : {}),
     ...(authority === undefined ? {} : { authority }),
-    membership: {
-      status: async () => ({ status: 'beta', label: 'Fixture beta', expiresAt: null }),
-      action: async () => ({ status: 'beta', label: 'Fixture beta', expiresAt: null }),
-    },
   })
   controls.push(control)
   await control.start()
