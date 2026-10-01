@@ -6,7 +6,7 @@ import { isDeepStrictEqual } from 'node:util'
 import { cloneHostSnapshot } from './cloneHostSnapshot'
 import { cloneActivitySnapshot, immutableActivities, isImmutableActivities, subscribeActivitySnapshots } from './activitySnapshots'
 import { readdir, unlink } from 'node:fs/promises'
-import { isAbsolute, join, relative, sep } from 'node:path'
+import { dirname, isAbsolute, join, relative, sep } from 'node:path'
 import { z } from 'zod'
 import { agentHostSnapshotSchema, EMPTY_AGENT_HOST, isThreadProviderConnected, RESTORE_BRANCH_NEEDS_CONFIRMATION, summarizeThread, type WorktreeReclaimPreview, type AgentWorkingCopyOptions, type AgentWorkingCopySelection, type AgentHostSnapshot, type AgentMessage, type AgentThread, type AgentThreadSummary, type AgentWorktree, type ProviderId } from '../../shared/agents'
 import type { AgentSkillReference } from '../../shared/agentSkills'
@@ -708,9 +708,22 @@ export class WorkspaceHost implements AgentHost {
         try {
           if (await this.worktrees.checkoutIdentity(path) === identity) return false
         } catch (error) {
-          // A missing folder cannot share this checkout. Other failures still leave ownership unproven.
+          // Resolve missing subfolders through their nearest available parent. Other failures leave ownership unproven.
           const cause = error instanceof Error ? error.cause : undefined
           if (!cause || typeof cause !== 'object' || !('code' in cause) || cause.code !== 'ENOENT') return false
+          let parent = dirname(path)
+          while (true) {
+            try {
+              if (await this.worktrees.checkoutIdentity(parent) === identity) return false
+              break
+            } catch (parentError) {
+              const parentCause = parentError instanceof Error ? parentError.cause : undefined
+              if (!parentCause || typeof parentCause !== 'object' || !('code' in parentCause) || parentCause.code !== 'ENOENT') return false
+              const next = dirname(parent)
+              if (next === parent) break
+              parent = next
+            }
+          }
         }
       }
       return true

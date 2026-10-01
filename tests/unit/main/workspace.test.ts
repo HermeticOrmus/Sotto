@@ -922,7 +922,7 @@ describe('durable project/thread organization', () => {
     expect(worktree()).toMatchObject({ status: 'ready', error: undefined })
   })
 
-  it.each(['missing', 'reclaimed', 'unreadable', 'shared-after-missing'] as const)('checks checkout ownership with a %s thread folder', async kind => {
+  it.each(['missing', 'reclaimed', 'unreadable', 'shared-after-missing', 'missing-shared-subfolder'] as const)('checks checkout ownership with a %s thread folder', async kind => {
     const f = await fixture()
     const repository = f.adapters.codex.state.projects[0]!.path
     await git(repository, ['init'])
@@ -935,7 +935,7 @@ describe('durable project/thread organization', () => {
     const owner = f.host.workspaceSnapshot().threads.find(thread => thread.id === 'local')!
     const provider = f.adapters.codex.state.threads
     provider.at(-1)!.status = 'idle'
-    const missing = join(repository, 'missing-folder')
+    const missing = join(kind === 'missing-shared-subfolder' ? owner.workingDirectory! : repository, 'missing-folder')
     provider[0]!.workingDirectory = missing
     if (kind === 'reclaimed') provider[0]!.worktree = { mode: 'independent', status: 'ready', path: missing, reclaimedAt: '2026-09-22T00:00:00.000Z' }
     if (kind === 'shared-after-missing') {
@@ -954,7 +954,7 @@ describe('durable project/thread organization', () => {
     f.adapters.codex.emit()
     await f.host.snapshot()
     await f.host.renameTemporaryBranch('local', 'sotto/available-name')
-    const blocked = kind === 'unreadable' || kind === 'shared-after-missing'
+    const blocked = kind === 'unreadable' || kind === 'shared-after-missing' || kind === 'missing-shared-subfolder'
     expect((await git(owner.workingDirectory!, ['branch', '--show-current'])).trim()).toBe(blocked ? owner.worktree!.branch : 'sotto/available-name')
     if (kind === 'reclaimed') expect(identity).not.toHaveBeenCalledWith(missing)
     if (blocked) await expect(f.host.reclaimThreadWorktree('local')).rejects.toThrow('Another thread works in this folder')
