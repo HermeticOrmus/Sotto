@@ -250,6 +250,7 @@ describe('the spotlight and colour readers do not wake each other', () => {
   })
 
   it('reads the palette again when the theme really changes, not when a probe puts a colour back', async () => {
+    vi.useFakeTimers()
     render(<DiagramReader />)
     const root = document.documentElement
     const reads = vi.spyOn(window, 'getComputedStyle')
@@ -257,12 +258,15 @@ describe('the spotlight and colour readers do not wake each other', () => {
       root.style.setProperty('--tt-text', '#01fea7', 'important')
       root.style.removeProperty('--tt-text')
     })
+    await advance(200)
     expect(reads).not.toHaveBeenCalled()
 
     await act(async () => { root.style.setProperty('--tt-text', '#123456') })
+    await advance(150)
     expect(screen.getByRole('status', { name: 'Diagram text' })).toHaveTextContent('#123456')
     reads.mockClear()
     await act(async () => { root.dataset.theme = 'light' })
+    await advance(150)
     expect(reads).toHaveBeenCalled()
     reads.mockRestore()
     delete root.dataset.theme
