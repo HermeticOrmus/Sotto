@@ -56,6 +56,18 @@ afterEach(async () => {
 })
 
 describe('HistoryRepository', () => {
+  it.each(['initialize', 'clear'] as const)('preserves malformed temporary filenames during %s', async action => {
+    const { filePath, repository } = await createRepository()
+    const lookalikes = [
+      `${filePath}.tmp-123-${'a'.repeat(36)}`,
+      `${filePath}.tmp-123-${'-'.repeat(36)}`,
+      `${filePath}.tmp-123-1234567-12345-1234-1234-123456789abc`,
+    ]
+    await Promise.all(lookalikes.map(path => writeFile(path, 'unrelated note', 'utf8')))
+    await repository[action]()
+    for (const path of lookalikes) expect(await readFile(path, 'utf8')).toBe('unrelated note')
+  })
+
   it.each(['EPERM', 'EBUSY', 'EACCES'])('continues startup and loads history after cleanup %s', async code => {
     const { filePath } = await createRepository()
     const saved = createEntry('saved', 1)

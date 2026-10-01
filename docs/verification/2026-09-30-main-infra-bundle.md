@@ -13,6 +13,8 @@ The unit regressions failed before their corresponding fixes. The spellcheck net
 
 The second review combined the real warm helper adapter with OutputService and a waiting history copy. Helper exit, `fail` and response timeout after dispatch each reproduced an immediate clipboard overwrite before the fix. Each regression now holds the clipboard and widget unchanged through 149 ms, releases the copy after 150 ms and confirms no fallback paste runs. The history cleanup regressions also failed when logging still used `console.warn`; they pass with the injected operational event, including an unreadable directory through the startup storage factory. The guide states that a fallback before helper readiness can paste up to about ten seconds after dictation into whichever window has focus then.
 
+The independent spec review found that the old filename filter accepted 36 hexadecimal characters or hyphens in any arrangement. Startup and Clear history regressions reproduced deletion of those malformed lookalikes. Cleanup now requires the UUID's `8-4-4-4-12` structure and preserves the unrelated files while still removing temporary files written by the store.
+
 Electron 43.1.0's [dictionary URL patch](https://github.com/electron/electron/blob/v43.1.0/patches/chromium/feat_add_support_for_overriding_the_base_spellchecker_download_url.patch) appends the dictionary filename to a process-wide base URL. `data:,` has no host and cannot return a valid Hunspell dictionary. Electron's [spellchecker documentation](https://www.electronjs.org/docs/latest/tutorial/spellchecker/) describes OS spellchecking on macOS. OS spelling suggestions were not manually tested on macOS; a language needing a downloaded dictionary may offer none.
 
 ## Running app

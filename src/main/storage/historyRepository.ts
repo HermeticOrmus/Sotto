@@ -183,7 +183,7 @@ export class HistoryRepository {
 
     await Promise.all(
       siblingNames
-        .filter((name) => (name.startsWith(temporaryPrefix) && /^\d+-[0-9a-f-]{36}$/.test(name.slice(temporaryPrefix.length)))
+        .filter((name) => (name.startsWith(temporaryPrefix) && /^\d+-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(name.slice(temporaryPrefix.length)))
           || (includeRecovery && name.startsWith(recoveryPrefix)))
         .map(async (name) => {
           try {
