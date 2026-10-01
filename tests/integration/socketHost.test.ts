@@ -846,6 +846,23 @@ describe('request budgets', () => {
     expect(checked).toHaveBeenCalledTimes(11)
     await expect(client.connect()).resolves.toBeDefined()
   })
+  it('evicts the oldest pairing budget and expires entries after a minute', async () => {
+    const redeem = (address: string) => fetch(url + '/v1/pair', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': address },
+      body: JSON.stringify({ v: 1, code: 'WRONG', name: 'Phone' }),
+    })
+    for (let index = 0; index < 10; index++) expect((await redeem('100.64.0.1')).status).toBe(401)
+    expect((await redeem('100.64.0.1')).status).toBe(429)
+    for (let index = 2; index <= 1025; index++) {
+      expect((await redeem('100.64.' + Math.floor(index / 256) + '.' + index % 256)).status).toBe(401)
+    }
+    expect((await redeem('100.64.0.1')).status).toBe(401)
+    for (let index = 0; index < 9; index++) await redeem('100.64.0.1')
+    expect((await redeem('100.64.0.1')).status).toBe(429)
+    const now = Date.now()
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now + 60_001)
+    try { expect((await redeem('100.64.0.1')).status).toBe(401) } finally { clock.mockRestore() }
+  })
   it('uses the local pairing budget for a forwarded address that is not one IP', async () => {
     const redeem = (address: string) => fetch(url + '/v1/pair', {
       method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': address },

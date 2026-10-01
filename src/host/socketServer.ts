@@ -131,6 +131,7 @@ export async function startSocketServer(options: SocketServerOptions) {
     const now = Date.now()
     for (const [key, entry] of httpBudgets) if (now - entry.window >= HTTP_WINDOW_MS) httpBudgets.delete(key)
     const entry = httpBudgets.get(bucket) ?? { window: now, count: 0 }
+    if (!httpBudgets.has(bucket) && httpBudgets.size >= 1024) httpBudgets.delete(httpBudgets.keys().next().value!)
     httpBudgets.set(bucket, entry)
     if (entry.count >= limit) throw new Refusal('busy')
     entry.count++
