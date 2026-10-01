@@ -207,6 +207,9 @@ describe('authority at dispatch', () => {
     const result = await composing
     expect(result.error).toBe(UNPAIRED_CLIENT_ERROR)
     expect(result.draft).not.toBe('Blue')
+    expect(result.composing).toBe(false)
+    expect(result.draftRequestId).toBeNull()
+    expect(result.threadDrafts?.some(draft => draft.requestId === 'choice')).not.toBe(true)
     expect(f.host.executed.filter(command => command.type === 'answer')).toEqual([])
   })
 

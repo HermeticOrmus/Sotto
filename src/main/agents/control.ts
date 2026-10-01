@@ -2023,8 +2023,9 @@ export class AgentControl {
       case 'dismiss-client-updates': this.state.clientUpdatesDismissedAt = new Date().toISOString(); return
       case 'utterance': await this.utterance(command.text.trim(), turn, selectionRevision); return
       case 'compose': {
+        const requestId = this.state.composing ? this.state.draftRequestId : this.draftRequestId(this.state.activeThreadId)
+        if (requestId) this.guardClientGrant(client)
         if (!this.state.composing) this.startDraft()
-        if (this.state.draftRequestId) this.guardClientGrant(client)
         const previous = this.state.threadDrafts?.find(item => item.threadId === this.state.draftThreadId && item.requestId === this.state.draftRequestId)
         if (command.attachments !== undefined) this.state.draftAttachments = agentAttachmentHandlesSchema.parse(command.attachments)
         this.state.draft = command.text
@@ -2694,17 +2695,22 @@ export class AgentControl {
     this.say(`Sent to ${thread.title}.`)
     this.presentQueue(true, selectionRevision)
   }
+  private draftRequestId(threadId: string | null): string | null {
+    const thread = this.thread(threadId)
+    const saved = !this.hasDraft() ? this.state.threadDrafts?.find(item => item.threadId === thread.id) : undefined
+    return saved ? saved.requestId : this.state.queue.find(item => item.threadId === thread.id && item.kind === 'question' && item.requestId)?.requestId ?? null
+  }
   private startDraft(threadId = this.state.activeThreadId): void {
     const thread = this.thread(threadId)
     this.coordinatorConversation = false
     this.manualDraftId = null
-    const question = this.state.queue.find(item => item.threadId === thread.id && item.kind === 'question' && item.requestId)
+    const requestId = this.draftRequestId(threadId)
     const saved = !this.hasDraft() ? this.state.threadDrafts?.find(item => item.threadId === thread.id) : undefined
     if (saved) {
       this.state.draft = saved.text; this.state.draftAttachments = structuredClone(saved.attachments); this.manualDraftId = saved.draftId
     }
     this.state.draftThreadId = thread.id
-    this.state.draftRequestId = saved ? saved.requestId : question?.requestId ?? null
+    this.state.draftRequestId = requestId
     this.state.composing = true
   }
   private clearDraft(): void {
