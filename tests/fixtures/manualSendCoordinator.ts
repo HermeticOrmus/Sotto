@@ -16,5 +16,5 @@ export async function manualSendCoordinator(directory: string, host: AgentHost,
   await credentials.load()
   return new AgentControl({ schedule: immediatePublishScheduler, directory, host, credentials,
     reasoner: { intent: async () => ({ type: 'clarify', text: 'Choose a thread' }), decide },
-     })
+  })
 }

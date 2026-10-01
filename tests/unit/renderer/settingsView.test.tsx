@@ -1077,7 +1077,6 @@ function withProjects(hostId?: string): AgentState {
     draftRequestId: null, pendingRequest: '', globalLaneBusy: false, notice: '', error: null, speech: { id: 0, text: '' },
     voice: { status: 'off', error: null, action: 'none', revision: 0 },
     credentials: { reasoning: false, grokSpeech: false, secure: true }, reasoningAccounts: [],
-
   }
   const clientState = hostId ? clientAgentState({ ...state, hostId }) : state
   vi.mocked(useOptionalAgents).mockReturnValue(agentContextFixture(clientState, vi.fn(async () => clientState)))

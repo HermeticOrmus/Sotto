@@ -73,7 +73,7 @@ async function fixture() {
   await credentials.load()
   const control = new AgentControl({ schedule: immediatePublishScheduler, directory: root, host, credentials, reasoner: e2eAgentReasoner,
     openThreadFolder: async path => { openedFolders.push(path) },
-     })
+  })
   controls.push(control)
   await control.start(); await control.command({ type: 'connect' })
   const published: AgentState[] = []

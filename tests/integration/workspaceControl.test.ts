@@ -23,7 +23,7 @@ async function fixture(root?: string) {
   const control = new AgentControl({ schedule: immediatePublishScheduler, directory: f.root, host: f.host, credentials, turns: recorder,
     openThreadFolder: async path => { opened.push(path) },
     reasoner: { intent: async () => ({ type: 'clarify', text: 'Choose a thread' }), decide: async () => ({ decision: 'human', text: 'Review' }) },
-     })
+  })
   let closing: Promise<void> | undefined
   const close = () => closing ??= (async () => { control.dispose(); await control.privacyChanged(); await f.stop() })()
   cleanup.push(async () => { await close(); await f.remove() })
@@ -101,7 +101,7 @@ describe('workspace controller integration', () => {
       if (value && typeof value === 'object' && 'outbox' in value && Array.isArray(value.outbox)
         && value.outbox.some(item => item.type === 'interrupt')) return Promise.reject(new Error('Synthetic Stop intent failure'))
       return write.call(this, value)
-    })
+  })
     try {
       const result = await f.control.command({ type: 'interrupt', threadId })
       expect(result.error).toBe('Synthetic Stop intent failure')
@@ -134,7 +134,7 @@ describe('workspace controller integration', () => {
     const execute = vi.spyOn(first.adapters.codex, 'execute').mockImplementation(async command => {
       if (command.type !== 'send') return original(command)
       return { accepted: false, uncertain: true }
-    })
+  })
     const prompt = { type: 'manual-send' as const, threadId, draftId: randomUUID(), text: 'Keep this exact synthetic prompt' }
     const saved = async () => JSON.parse(await readFile(join(first.root, 'agents.json'), 'utf8'))
     try {
@@ -179,7 +179,7 @@ describe('workspace controller integration', () => {
       f.adapters.codex.emit()
       if (delivery === 'pending') await held
       return { accepted: false, uncertain: true }
-    })
+  })
     const prompt = { type: 'manual-send' as const, threadId, draftId: randomUUID(), text: 'Start synthetic work' }
     const sending = f.control.command(prompt)
     let stopping: Promise<AgentState> | undefined

@@ -51,7 +51,7 @@ async function fixture() {
   let history = true
   const create = () => {
     const control = new AgentControl({ schedule: immediatePublishScheduler, directory: root, host, credentials, reasoner: e2eAgentReasoner, historyEnabled: () => history,
-       })
+    })
     controls.add(control); return control
   }
   let control = create()
@@ -124,7 +124,7 @@ describe('persistent per-thread drafts', () => {
       vi.spyOn(AtomicJsonStore.prototype, 'write').mockImplementation(function(this: AtomicJsonStore<unknown>, value) {
         if ('threadDrafts' in (value as object)) return Promise.reject(new Error('Startup rewrite failed'))
         return original.call(this, value)
-      })
+    })
     })).rejects.toThrow('Startup rewrite failed')
     expect(f.control.get().threadDraftPersistence).toEqual([{ threadId: 'workshop', draftId: draft.draftId, status: 'saved' }])
     expect(f.control.get().threadDrafts).toContainEqual(expect.objectContaining({ text: draft.text, attachments: [image] }))

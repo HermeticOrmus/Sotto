@@ -53,7 +53,7 @@ async function coordinator(f: Awaited<ReturnType<typeof fixture>>, decide: Agent
   await credentials.load()
   const control = new AgentControl({ schedule: immediatePublishScheduler, directory: f.root, host: f.host, credentials,
     reasoner: { intent: async () => ({ type: 'clarify', text: 'Choose a thread' }), decide },
-     })
+  })
   control.subscribe(state => f.configuration(state.configuration))
   await control.start(); f.configuration(control.get().configuration)
   cleanup.push(async () => { control.dispose() })
@@ -66,7 +66,7 @@ describe('independent thread providers', () => {
     const host = new ConfiguredProviderHost({
       hosts: { codex, claude: new FakeProviderHost(), grok: new FakeProviderHost(), devin: new FakeProviderHost() },
       provider: () => 'codex', enabledProviders: () => ['codex'],
-    })
+  })
     const events: ThreadHostEvent[] = []
     const off = host.subscribeEvents?.(event => events.push(event))
     await host.connect('codex')
@@ -226,7 +226,7 @@ describe('independent thread providers', () => {
     const spy = vi.spyOn(f.adapters.claude, 'execute').mockImplementation(async command => {
       if (command.type === 'create-project') { registration = command; return { accepted: false, uncertain: true } }
       return execute(command)
-    })
+  })
     const create = { type: 'create-thread' as const, commandId: 'first', threadId: 'not-yet-submitted', title: 'New task', projectId: project.id, modelId: model.id }
     await expect(f.host.execute(create)).rejects.toThrow('has not confirmed this project registration')
     expect(spy).toHaveBeenCalledTimes(1)
@@ -422,7 +422,7 @@ describe('independent thread providers', () => {
     const refuse = (adapter: FakeProviderHost, fields: Partial<AgentHostSnapshot>) => vi.spyOn(adapter, 'connect').mockImplementationOnce(async () => {
       Object.assign(adapter.state, { connected: false, ...fields })
       return adapter.snapshot()
-    })
+  })
     refuse(f.adapters.claude, { error: 'Sign in to Claude Code with your Claude subscription.', problem: 'signed-out', version: '2.1.281' })
     refuse(f.adapters.grok, { error: 'Use Grok CLI 1.0.5 or newer.', problem: 'too-old', version: '0.9.12', requiredVersion: '1.0.5' })
     const snapshot = await f.host.connect()

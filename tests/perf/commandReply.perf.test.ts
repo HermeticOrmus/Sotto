@@ -86,7 +86,7 @@ describe.skipIf(!PERF_BENCH)('command reply cost', () => {
     const credentials = new AgentCredentials(root, { isEncryptionAvailable: () => false, encryptString: text => Buffer.from(text), decryptString: bytes => bytes.toString() })
     await credentials.load()
     control = new AgentControl({ schedule: neverPublish, directory: root, host: new LongHistoryHost(), credentials, reasoner: e2eAgentReasoner,
-       })
+    })
     await control.start(); await control.command({ type: 'connect' })
     const live = control
     expect(live.get().host.threads.reduce((count, thread) => count + thread.messages.length, 0)).toBe(THREADS * MESSAGES_PER_THREAD)

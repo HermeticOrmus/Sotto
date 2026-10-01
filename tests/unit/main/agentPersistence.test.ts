@@ -25,7 +25,7 @@ async function fixture() {
   await credentials.load()
   const host = new E2EAgentHost()
   const control = new AgentControl({ schedule: immediatePublishScheduler, directory: root, host, credentials, reasoner: e2eAgentReasoner,
-     })
+  })
   controls.push(control)
   await control.start()
   if (!control.get().host.connected) await control.command({ type: 'connect' })
@@ -85,7 +85,7 @@ describe('coordinator persistence', () => {
     expect(writes.count()).toBe(beforeConfigure + 1)
     await vi.waitFor(async () => {
       expect((JSON.parse(await readFile(file, 'utf8')) as { configuration: { orbColor: string } }).configuration.orbColor).toBe('amber')
-    })
+  })
     await f.control.command({ type: 'configure', patch: { orbColor: 'amber' } })
     await settle(writes)
     expect(writes.count()).toBe(beforeConfigure + 1)
@@ -103,7 +103,7 @@ describe('coordinator persistence', () => {
         return Promise.reject(new Error('disk'))
       }
       return real.call(this, value as never)
-    })
+  })
     const failed = await f.control.command({ type: 'configure', patch: { orbColor: 'violet' } })
     expect(failed.error).toBe('Could not save agent state. Pause management until storage is available.')
     const beforeRetry = writes.count()
@@ -113,7 +113,7 @@ describe('coordinator persistence', () => {
     const file = join(f.root, 'agents.json')
     await vi.waitFor(async () => {
       expect((JSON.parse(await readFile(file, 'utf8')) as { configuration: { orbColor: string } }).configuration.orbColor).toBe('violet')
-    })
+  })
   })
   it('keeps the newest save when it returns to the last completed state', async () => {
     const f = await fixture()
@@ -135,7 +135,7 @@ describe('coordinator persistence', () => {
         return held.then(() => realImmediate.call(this, value))
       }
       return realImmediate.call(this, value)
-    })
+  })
     const older = f.control.command({ type: 'configure', patch: { speak: !initial } })
     await writing
     let newerFinished = false

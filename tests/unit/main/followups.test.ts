@@ -54,7 +54,7 @@ async function fixture() {
   const credentials = new AgentCredentials(root, { isEncryptionAvailable: () => false, encryptString: t => Buffer.from(t), decryptString: t => t.toString() }); await credentials.load()
   const create = () => {
     const c = new AgentControl({ schedule: immediatePublishScheduler, directory: root, host, credentials, reasoner: e2eAgentReasoner,
-       })
+    })
     controls.push(c); return c
   }
   const control = create(); await control.start(); await stageInto(control, PIXEL_PNG); await control.command({ type: 'connect' })

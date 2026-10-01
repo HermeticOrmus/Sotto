@@ -46,7 +46,7 @@ async function fixture(schedule: PublishScheduler = immediatePublishScheduler) {
   const credentials = new AgentCredentials(root, { isEncryptionAvailable: () => false, encryptString: text => Buffer.from(text), decryptString: bytes => bytes.toString() })
   await credentials.load()
   const control = new AgentControl({ schedule, directory: root, host, credentials, reasoner: e2eAgentReasoner,
-     })
+  })
   controls.add(control)
   await control.start(); await control.command({ type: 'connect' })
   host.event({ type: 'manual', threadId: 'workshop', text: 'Pick the palette' })
@@ -71,7 +71,7 @@ describe('the published shell', () => {
       const historyCopies = clone.mock.calls.filter(([value]) => {
         const state = value as Partial<AgentState> | null
         return state?.host?.threads.some(thread => thread.messages.length > 0 || (thread.activities?.length ?? 0) > 0)
-      })
+    })
       expect(historyCopies).toHaveLength(0)
       expect(reply.error).toBeNull()
       expect(reply.host.threads.every(thread => thread.messages.length === 0 && !thread.activities?.length)).toBe(true)
@@ -391,7 +391,7 @@ describe('detail deltas while a thread streams', () => {
       const applied = held === null ? null : applyAgentThreadDetailDelta(held, update)
       if (applied === null) misses += 1
       else held = applied
-    })
+  })
     await f.control.command({ type: 'observe-threads', threadIds: ['workshop'] })
     clock.tick()
     let text = ''

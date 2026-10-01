@@ -21,7 +21,7 @@ async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'sotto-reload-drafts-'))
   const credentials = new AgentCredentials(root, { isEncryptionAvailable: () => false, encryptString: value => Buffer.from(value), decryptString: value => value.toString() })
   const control = new AgentControl({ schedule: immediatePublishScheduler, directory: root, host: new E2EAgentHost(), credentials, reasoner: e2eAgentReasoner,
-     })
+  })
   await credentials.load(); await control.start(); await stageInto(control, PIXEL_PNG); await control.command({ type: 'connect' })
   const bridge: AgentBridge = agentBridgeFor(control)
   return { control, bridge, disk: async () => JSON.parse(await readFile(join(root, 'agents.json'), 'utf8')),
@@ -48,7 +48,7 @@ describe('fresh renderer draft durability with a live main controller', () => {
         if (recovery !== 'original success') throw new Error('Injected disk failure')
       }
       return original.call(this, value)
-    })
+  })
     try {
       const first = renderHook(() => useAgentConnection(f.bridge))
       await waitFor(() => expect(first.result.current.state).not.toBeNull())
@@ -101,7 +101,7 @@ describe('fresh renderer draft durability with a live main controller', () => {
       if (text === 'Older revision') { ++started; await oldGate }
       if (text === 'Newer revision') { ++started; await newGate; throw new Error('New write failed') }
       return original.call(this, value)
-    })
+  })
     try {
       const first = renderHook(() => useAgentConnection(f.bridge))
       await waitFor(() => expect(first.result.current.state).not.toBeNull())

@@ -63,7 +63,7 @@ async function fixture() {
   await credentials.load()
   const create = () => {
     const control = new AgentControl({ schedule: immediatePublishScheduler, directory: root, host, credentials, reasoner: e2eAgentReasoner, historyEnabled: () => history,
-       })
+    })
     controls.push(control); return control
   }
   let control = create(); await control.start(); await control.command({ type: 'connect' })

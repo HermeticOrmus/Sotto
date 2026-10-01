@@ -15,7 +15,7 @@ it.each(['before-read', 'during-read'] as const)('keeps a native-confirmed send 
   await credentials.load()
   const control = new AgentControl({ schedule: immediatePublishScheduler, directory: f.root, host: f.host, credentials,
     reasoner: { intent: async () => ({ type: 'clarify', text: 'Choose a thread' }), decide: async () => ({ decision: 'human', text: 'Review' }) },
-     })
+  })
   try {
     await f.host.connect()
     await f.host.execute({ type: 'create-project', commandId: randomUUID(), projectId: f.projectId, title: 'Project', path: f.root })
@@ -43,7 +43,7 @@ it.each(['before-read', 'during-read'] as const)('keeps a native-confirmed send 
         if (!holdEcho) await stream()
       }
       return result
-    })
+  })
     vi.spyOn(seam, 'rpc').mockImplementation(async (method, params, apply, rejected) => {
       if (method === 'thread/read' && accepted) {
         // Delay each reconciliation read until a real native delta arrives.
@@ -52,7 +52,7 @@ it.each(['before-read', 'during-read'] as const)('keeps a native-confirmed send 
         await stream()
       }
       return rpc(method, params, apply, rejected)
-    })
+  })
     const result = await control.command({ type: 'manual-send', threadId: id, text: 'Confirmed native prompt', draftId })
     expect(result.deliveredDrafts).toContainEqual({ threadId: id, draftId })
     expect(result.deliveries).toContainEqual(expect.objectContaining({ threadId: id, draftId, status: 'accepted' }))

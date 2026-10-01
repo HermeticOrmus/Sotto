@@ -31,7 +31,7 @@ async function fixture() {
   const create = () => {
     const control = new AgentControl({ schedule: immediatePublishScheduler, directory: root, host, credentials, historyEnabled: () => historyEnabled,
       reasoner: { intent: vi.fn(), decide: vi.fn() } as never,
-       })
+    })
     controls.push(control); return control
   }
   const seed = create(); await seed.start(); seed.dispose()

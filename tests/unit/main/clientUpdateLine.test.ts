@@ -238,7 +238,7 @@ describe('the client update line', () => {
     await credentials.load()
     const control = new AgentControl({ schedule: immediatePublishScheduler, directory, host, credentials, clients, locateClient: async () => undefined,
       reasoner: { intent: async () => ({ type: 'clarify', text: '' }), decide: async () => ({ decision: 'human', text: '' }) },
-       })
+    })
     await control.start()
     try {
       await control.command({ type: 'connect' })

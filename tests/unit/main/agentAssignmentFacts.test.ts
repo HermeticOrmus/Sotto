@@ -34,7 +34,7 @@ async function fixture(saved?: object) {
   }
   const control = new AgentControl({ schedule: immediatePublishScheduler, directory: root, host, credentials, reasoner,
     turns: new TurnRecorder({ directory: root, historyEnabled: () => true, resolveSession: () => undefined }),
-     })
+  })
   controls.push(control)
   await control.start()
   return {
@@ -223,7 +223,7 @@ describe('assignment facts', () => {
       configuration: defaultAgentConfiguration(), assignments: [assignment], queue: [],
       activeThreadId: 'workshop', activeProjectId: 'project', draft: '', draftThreadId: null,
       composing: false, outbox: [], contextSavedAt: Date.now(),
-    })
+  })
     const expected = { ...assignment, startedAt: '', origin: 'unknown', stopReason: 'none', stoppedAt: '' }
     expect(f.control.get().assignments).toEqual([expected])
     await f.control.command({ type: 'cancel-draft' })
@@ -260,6 +260,6 @@ describe('Threads design host fixtures', () => {
       models: [{ id: 'claude:test', provider: 'Claude', name: 'Claude Test', ready: true }],
       projects: [{ id: 'project', title: 'Sotto test', path: 'C:/sotto-test' }],
       threads: ['workshop', 'docs'].map(id => ({ id, title: id === 'workshop' ? 'Workshop' : 'Docs', projectId: 'project', modelId: 'claude:test', status: 'idle', messages: [], requests: [] })),
-    })
+  })
   })
 })

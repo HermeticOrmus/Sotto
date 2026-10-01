@@ -37,7 +37,7 @@ async function fixture() {
   const credentials = new AgentCredentials(root, { isEncryptionAvailable: () => false, encryptString: value => Buffer.from(value), decryptString: value => value.toString() })
   await credentials.load()
   const control = new AgentControl({ schedule: immediatePublishScheduler, directory: root, host: new E2EAgentHost(), credentials, reasoner: e2eAgentReasoner,
-     })
+  })
   let broadcastBytes = 0
   control.subscribe(state => { broadcastBytes = Math.max(broadcastBytes, serialize(state).length) })
   await control.start(); await control.command({ type: 'connect' })

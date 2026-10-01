@@ -45,7 +45,6 @@ function stateFixture(): AgentState {
     speech: { id: 0, text: '' }, voice: { status: 'off', error: null, action: 'none', revision: 0 },
     credentials: { reasoning: false, grokSpeech: false, secure: true },
     reasoningAccounts: [],
-
   }
 }
 

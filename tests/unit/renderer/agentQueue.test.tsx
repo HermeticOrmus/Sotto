@@ -42,7 +42,7 @@ async function fixture() {
   let control: AgentControl
   const start = async (): Promise<void> => {
     control = new AgentControl({ schedule: immediatePublishScheduler, directory, host, credentials, reasoner: e2eAgentReasoner,
-       })
+    })
     controls.push(control)
     await control.start()
     if (!control.get().host.connected) await control.command({ type: 'connect' })

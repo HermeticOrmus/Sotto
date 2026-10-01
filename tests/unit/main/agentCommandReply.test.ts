@@ -42,7 +42,7 @@ async function fixture() {
   const credentials = new AgentCredentials(root, { isEncryptionAvailable: () => false, encryptString: text => Buffer.from(text), decryptString: bytes => bytes.toString() })
   await credentials.load()
   const control = new AgentControl({ schedule: immediatePublishScheduler, directory: root, host, credentials, reasoner: e2eAgentReasoner,
-     })
+  })
   disposables.push(() => control.dispose())
   await control.start(); await control.command({ type: 'connect' })
   host.event({ type: 'manual', threadId: 'workshop', text: 'Pick the palette' })

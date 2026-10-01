@@ -44,14 +44,14 @@ describe.skipIf(!PERF_BENCH)('thread command lanes in the window', () => {
       const host = new E2EAgentHost()
       const credentials = new AgentCredentials(root, { isEncryptionAvailable: () => false, encryptString: value => Buffer.from(value), decryptString: value => value.toString() })
       const control = new AgentControl({ schedule: immediatePublishScheduler, directory: root, host, credentials, reasoner: e2eAgentReasoner,
-         })
+      })
       try {
         await credentials.load(); await control.start(); await control.command({ type: 'connect' })
         const execute = host.execute.bind(host)
         vi.spyOn(host, 'execute').mockImplementation(async (command: AgentHostCommand) => {
           if (command.type === 'answer' && ackMs > 0) await new Promise(done => { setTimeout(done, ackMs) })
           return execute(command)
-        })
+      })
         let reachedAt = 0
         const inner = agentBridgeFor(control)
         const bridge: AgentBridge = { ...inner, command: request => {
@@ -70,11 +70,11 @@ describe.skipIf(!PERF_BENCH)('thread command lanes in the window', () => {
           act(() => {
             answer = result.current.command({ type: 'answer', threadId: 'docs', requestId, answer: 'Yes' })
             settings = result.current.command({ type: 'configure-thread', threadId: 'workshop', runtimeMode: run % 2 === 0 ? 'full-access' : 'approval-required' })
-          })
+        })
           let answerAt = 0, settingsAt = 0
           await act(async () => {
             await Promise.all([answer!.then(() => { answerAt = performance.now() }), settings!.then(() => { settingsAt = performance.now() })])
-          })
+        })
           reached.push(reachedAt - started); replied.push(settingsAt - started); answered.push(answerAt - started)
         }
         unmount()
