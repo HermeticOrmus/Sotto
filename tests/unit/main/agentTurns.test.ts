@@ -315,6 +315,21 @@ describe('coordinator turn records', () => {
     await expect(upgraded.initialize()).rejects.toThrow('Close other apps using turns.jsonl, then restart Sotto.')
   })
 
+  it('uses only fixed failure codes and migrates old failed records', async () => {
+    const f = await fixture()
+    for (const source of ['command', 'utterance', 'supervision'] as const) {
+      await f.recorder.finish(f.recorder.begin({ source, commandType: 'send', text: 'Private prompt' }), 'failed')
+      const record = (await f.recorder.recent(1))[0]!
+      expect(record.failureCode).toBe(`${source}-failed`)
+      expect(turnRecordSchema.safeParse({ ...record, failureCode: 'Private error' }).success).toBe(false)
+      const { failureCode: _code, ...legacy } = record
+      await writeFile(f.recorder.path(), `${JSON.stringify(legacy)}\n`)
+      const upgraded = new TurnRecorder({ directory: f.root, resolveSession: () => undefined })
+      await upgraded.initialize()
+      expect((await upgraded.recent(1))[0]?.failureCode).toBe('unknown')
+    }
+  })
+
   it('keeps overlapping finishes in order while compacting', async () => {
     const root = await mkdtemp(join(tmpdir(), 'sotto-turns-'))
     roots.push(root)

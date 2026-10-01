@@ -82,7 +82,7 @@ Your data leaves your computer only when a feature you use needs it, and only to
 
 Dictation history stays on your computer, and you can turn it off. Older dictation transcripts can still be deleted while history is off. If completed dictation cannot reach the clipboard, Dictate keeps selectable text with **Copy text** until you dismiss it or close Sotto. With history off, that recovery stays in memory. Screenshots you attach to a thread are kept as files on the computer that runs the thread, only while an unsent draft, a queued message or a recent message's preview needs them and for an hour after; with history off, new ones stay in memory and are not written to disk. Keys are kept in your operating system's credential store. If Sotto cannot read its saved keys, it preserves the encrypted file and shows a notice. Add your keys again in Settings.
 
-Diagnostic turn records keep event names, IDs, outcomes and timings only. They never keep prompt, answer or error text. On upgrade, Sotto removes text from existing turn records before starting the coordinator.
+Diagnostic turn records keep event names, IDs, outcomes, fixed failure codes and timings only. They never keep prompt, answer or error text. On upgrade, Sotto removes text from existing turn records before starting the coordinator. If that rewrite cannot finish, Sotto deletes the diagnostic file; if deletion also fails, it asks you to close apps using the file and restart.
 
 If thread messages cannot be saved, Sotto keeps them in memory and retries while it is open. The warning stays until they are saved. Restore storage access before quitting; unsaved messages cannot survive a restart.
 

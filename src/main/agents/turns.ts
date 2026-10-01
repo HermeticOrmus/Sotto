@@ -30,6 +30,7 @@ export const turnRecordSchema = z.object({
   retrievedMemoryIds: z.array(z.string()),
   contextTokenEstimate: z.number().int().nonnegative(),
   outcome: z.enum(['completed', 'clarified', 'failed']),
+  failureCode: z.enum(['command-failed', 'utterance-failed', 'supervision-failed', 'unknown']).nullable().default(null),
 })
 export type TurnRecord = z.infer<typeof turnRecordSchema>
 
@@ -164,6 +165,7 @@ export class TurnRecorder {
         retrievedMemoryIds: turn.retrievedMemoryIds,
         contextTokenEstimate: turn.contextTokenEstimate,
         outcome,
+        failureCode: outcome === 'failed' ? `${turn.source}-failed` : null,
       }
       await this.enqueue(async () => {
         await this.scrub()
@@ -203,7 +205,10 @@ export class TurnRecorder {
       if (!line) continue
       try {
         const record = turnRecordSchema.safeParse(JSON.parse(line))
-        if (record.success) lines.push(JSON.stringify(record.data))
+        if (record.success) {
+          if (record.data.outcome === 'failed' && record.data.failureCode === null) record.data.failureCode = 'unknown'
+          lines.push(JSON.stringify(record.data))
+        }
       } catch { /* Discard corrupt legacy lines rather than retaining unknown content. */ }
     }
     const cleaned = lines.length ? `${lines.join('\n')}\n` : ''
