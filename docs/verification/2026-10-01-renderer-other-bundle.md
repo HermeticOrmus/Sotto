@@ -16,8 +16,8 @@ at 1600x1000, 1280x800 and 820x560, in light and dark with reduced motion on.
 The local-host view checks horizontal overflow. The retained screenshots were
 inspected: the errors wrap beside their controls without clipping.
 
-- [Local host, 820x560 dark](../../artifacts/pkg-37/local-host-820-dark.png)
-- [Phone access, 820x560 light](../../artifacts/pkg-37/phone-access-820-light.png)
+- [Local host, 820x560 dark](../../artifacts/renderer-save-feedback/local-host-820-dark.png)
+- [Phone access, 820x560 light](../../artifacts/renderer-save-feedback/phone-access-820-light.png)
 
 The existing hosts, memory and dictation recovery journeys passed. The first
 phones journey stopped on its hard-coded September pairing expectation on
