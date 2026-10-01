@@ -34,10 +34,7 @@ async function fixture(saved?: object) {
   }
   const control = new AgentControl({ schedule: immediatePublishScheduler, directory: root, host, credentials, reasoner,
     turns: new TurnRecorder({ directory: root, resolveSession: () => undefined }),
-    membership: {
-      status: async () => ({ status: 'beta', label: 'Fixture beta', expiresAt: null }),
-      action: async () => ({ status: 'beta', label: 'Fixture beta', expiresAt: null }),
-    } })
+  })
   controls.push(control)
   await control.start()
   return {

@@ -50,7 +50,7 @@ async function fixture() {
       complete, status: async () => ({ provider: 'claude', installed: true, ready: true, label: 'Fixture', detail: '', models: [] }),
     } })
     control = new AgentControl({ schedule: immediatePublishScheduler, directory: root, host, credentials, reasoner, preferences: profile, authority: new PolicyStore(store), turns,
-      membership: { status: async () => ({ status: 'beta', label: 'Fixture', expiresAt: null }), action: async () => ({ status: 'beta', label: 'Fixture', expiresAt: null }) } })
+    })
     controls.push(control)
     await control.start()
     if (!control.get().host.connected) await control.command({ type: 'connect' })
