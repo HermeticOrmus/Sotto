@@ -207,10 +207,14 @@ export class TerminalStore {
   attach(bridge: TerminalBridge | undefined, threadId: string, sessionId: string, container: HTMLElement, factory: TerminalViewFactory): TerminalViewLike | null {
     const record = this.ensureRecord(threadId, sessionId)
     if (!record.view) {
+      let copyNotice: string | null = null
       record.view = factory({
         onInput: data => this.write(bridge, threadId, sessionId, data),
         onInterrupt: () => this.interrupt(bridge, threadId, sessionId),
-        onNotice: notice => this.patch(threadId, { notice }),
+        onNotice: notice => {
+          if (notice !== null || this.thread(threadId)?.notice === copyNotice) this.patch(threadId, { notice })
+          copyNotice = notice
+        },
       })
     }
     record.view.mount(container)
