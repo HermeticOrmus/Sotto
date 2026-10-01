@@ -1,5 +1,4 @@
 import XCTest
-import Combine
 import SottoCore
 
 final class AppModelTests: XCTestCase {
@@ -251,6 +250,27 @@ final class AppModelTests: XCTestCase {
         XCTAssertTrue(model.pending.isEmpty)
         XCTAssertEqual(model.feedback, "That request is no longer waiting.")
     }
+    @MainActor func testConnectingAgainWaitsForTheAttemptInFlightAndItsReceiptCheck() async throws {
+        let (_, ref) = try fixture()
+        let marker = PendingOperation(hostID: ref.hostID, clientID: "phone", threadID: ref.threadID, requestID: "request", kind: "answer")
+        _ = try changeShell(requests: [["id": "request", "kind": "permission", "text": "Read files?", "options": []]])
+        HostConnection.receipt = .object(["status": .string("completed"), "answerDelivered": .bool(true)])
+        let model = try modelWithMarker(marker)
+        let joined = expectation(description: "The second connect returns once the first has checked its receipts")
+        // Activation's own reconnect is the attempt in flight; this asks again before it finishes.
+        HostConnection.afterGreeting = { _ in
+            HostConnection.afterGreeting = nil
+            Task {
+                await model.connect(ref.hostID)
+                XCTAssertTrue(model.pending.isEmpty)
+                XCTAssertEqual(model.feedback, "Answer sent.")
+                joined.fulfill()
+            }
+        }
+        model.phase(.active)
+        await fulfillment(of: [joined], timeout: 10)
+        XCTAssertEqual(HostConnection.instances.last?.operations.filter { $0 == "receipt" }.count, 1, "The second request starts no connect of its own")
+    }
     @MainActor func testCompletedReceiptWithErrorDoesNotConfirmAnAnswer() async throws {
         let (_, ref) = try fixture()
         let marker = PendingOperation(hostID: ref.hostID, clientID: "phone", threadID: ref.threadID, requestID: "request", kind: "answer")
@@ -282,13 +302,7 @@ final class AppModelTests: XCTestCase {
         model.phase(.active); await model.reconnectAll()
         model.feedback = "Removed Studio Mac."
         XCTAssertEqual(model.pending, [marker])
-        // Activation can own the reconnect still finishing its receipt check. Observe the
-        // settlement rather than treating another reconnect's early return as completion.
-        let settled = expectation(description: "The disappeared answer marker settles")
-        let observation = model.$pending.filter { $0.isEmpty }.prefix(1).sink { _ in settled.fulfill() }
-        defer { observation.cancel() }
         try XCTUnwrap(HostConnection.instances.last).push(.shell(try changeShell()))
-        await fulfillment(of: [settled], timeout: 10)
         XCTAssertTrue(model.pending.isEmpty)
         XCTAssertEqual(model.feedback, "Removed Studio Mac.")
         XCTAssertFalse(HostConnection.instances.flatMap(\.operations).contains("command"))
