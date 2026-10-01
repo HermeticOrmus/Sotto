@@ -15,6 +15,7 @@ import { useAttentionReview, type AttentionReview } from './attentionReview'
 import { createStateSharing } from './stateSharing'
 import { ThreadDraftStore } from './threadDraftStore'
 import { approximateDetailBytes } from './detailCacheSize'
+import { requestAnswerStore } from './requests/requestAnswers'
 
 export interface AgentConnection {
   readonly state: AgentState | null
@@ -31,7 +32,7 @@ const SHELL_CACHE_INTERVAL_MS = 2_000
 export function useAgentConnection(bridge: AgentBridge | undefined): AgentConnection {
   // A connection owns its command lane and draft durability knowledge. Neither page
   // navigation nor outstanding writes create a new store; a different bridge does.
-  const session = useMemo(() => ({ current: false, observed: 0, tail: Promise.resolve() as Promise<unknown>, share: createStateSharing() }), [bridge])
+  const session = useMemo(() => ({ current: false, observed: 0, tail: Promise.resolve() as Promise<unknown>, share: createStateSharing(), requestOwners: new Set<string>() }), [bridge])
   /**
    * Main publishes every thread's state but only the history of the threads this window says it is
    * looking at, so the window holds those histories and splices them back into each arriving shell.
@@ -86,6 +87,12 @@ export function useAgentConnection(bridge: AgentBridge | undefined): AgentConnec
   // the initial connect (nothing is on screen yet to stay interruptible for) and a command's own reply
   // (the user is watching that one land) both ask for it.
   const receiveState = useCallback((next: AgentState, options: { urgent?: boolean } = {}): void => {
+    if (next.stale !== true) {
+      const owners = new Set(next.host.threads.map(thread => thread.id))
+      for (const owner of session.requestOwners) if (!owners.has(owner)) requestAnswerStore.prune(owner, [])
+      for (const thread of next.host.threads) requestAnswerStore.prune(thread.id, thread.requests.map(request => request.id))
+      session.requestOwners = owners
+    }
     arrived.current = performance.now()
     detail.shell = next
     // The thread on screen needs its history whether or not this window asked for it: a restart opens
