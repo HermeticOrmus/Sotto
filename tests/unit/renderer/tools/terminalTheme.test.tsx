@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-const xterm = vi.hoisted(() => ({ selection: 'terminal selection', instances: [] as { options: Record<string, unknown>; themes: unknown[]; key: (event: KeyboardEvent) => boolean; clearSelection: ReturnType<typeof vi.fn>; selectionChange: () => void }[] }))
+const xterm = vi.hoisted(() => ({ selection: 'terminal selection', range: { start: { x: 0, y: 0 }, end: { x: 18, y: 0 } }, instances: [] as { options: Record<string, unknown>; themes: unknown[]; key: (event: KeyboardEvent) => boolean; clearSelection: ReturnType<typeof vi.fn>; selectionChange: () => void }[] }))
 const gpu = vi.hoisted(() => ({ fail: false, instances: [] as { dispose: ReturnType<typeof vi.fn>; lose(): void }[] }))
 vi.mock('@xterm/addon-webgl', () => ({ WebglAddon: class {
   readonly dispose = vi.fn()
@@ -27,6 +27,7 @@ vi.mock('@xterm/xterm', () => ({
     onSelectionChange(listener: () => void): { dispose(): void } { this.selectionChange = listener; return { dispose() {} } }
     hasSelection(): boolean { return xterm.selection.length > 0 }
     getSelection(): string { return xterm.selection }
+    getSelectionPosition() { return xterm.selection ? { start: { ...xterm.range.start }, end: { ...xterm.range.end } } : undefined }
     readonly clearSelection = vi.fn(() => { xterm.selection = ''; this.selectionChange() })
     open(): void {}
     dispose(): void {}
@@ -98,6 +99,7 @@ afterEach(() => {
   gpu.instances.length = 0
   gpu.fail = false
   xterm.selection = 'terminal selection'
+  xterm.range = { start: { x: 0, y: 0 }, end: { x: 18, y: 0 } }
 })
 
 it('keeps the terminal selection until copying succeeds and explains a failed copy', async () => {
@@ -145,6 +147,32 @@ it.each([
   expect(terminal.clearSelection).not.toHaveBeenCalled()
   terminal.key(new KeyboardEvent('keydown', { key: 'c', ctrlKey: true }))
   expect(deliverOutput).toHaveBeenLastCalledWith({ text: selection, autoPaste: false, pasteDelayMs: 50 })
+  expect(onInterrupt).not.toHaveBeenCalled()
+  await vi.waitFor(() => expect(terminal.clearSelection).toHaveBeenCalledOnce())
+  view.dispose()
+})
+
+it('keeps a range expanded after copying during an active drag', async () => {
+  vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} }))
+  const pending = Promise.withResolvers<string>()
+  const deliverOutput = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValue('copied')
+  vi.stubGlobal('sotto', { deliverOutput })
+  const onNotice = vi.fn(), onInterrupt = vi.fn()
+  const view = createXtermView({ onInput() {}, onInterrupt, onNotice }, { resolveColor: value => value })
+  view.setInputEnabled(true)
+  const host = document.createElement('div')
+  view.mount(host)
+  const terminal = xterm.instances[0]!
+  host.firstElementChild!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+  terminal.key(new KeyboardEvent('keydown', { key: 'c', ctrlKey: true }))
+  xterm.selection = 'terminal selection expanded'
+  xterm.range.end = { x: 26, y: 0 }
+  // xterm updates the live endpoint during dragging, then emits selectionChange on mouseup.
+  pending.resolve('copied')
+  await vi.waitFor(() => expect(onNotice).toHaveBeenCalledWith(null))
+  expect(terminal.clearSelection).not.toHaveBeenCalled()
+  terminal.key(new KeyboardEvent('keydown', { key: 'c', ctrlKey: true }))
+  expect(deliverOutput).toHaveBeenLastCalledWith({ text: 'terminal selection expanded', autoPaste: false, pasteDelayMs: 50 })
   expect(onInterrupt).not.toHaveBeenCalled()
   await vi.waitFor(() => expect(terminal.clearSelection).toHaveBeenCalledOnce())
   view.dispose()

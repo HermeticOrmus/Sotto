@@ -178,9 +178,13 @@ export const createXtermView = (handlers: TerminalViewHandlers, { resolveColor =
         const selection = terminal.getSelection()
         if (!selection.trim()) { handlers.onNotice?.('Nothing to copy. Select some text first.'); return false }
         const copiedRevision = selectionRevision
+        const copiedRange = terminal.getSelectionPosition()
         void writeClipboard(selection).then(() => {
           if (disposed) return
-          if (selectionRevision === copiedRevision) terminal.clearSelection()
+          const range = terminal.getSelectionPosition()
+          if (selectionRevision === copiedRevision && range && copiedRange &&
+            range.start.x === copiedRange.start.x && range.start.y === copiedRange.start.y &&
+            range.end.x === copiedRange.end.x && range.end.y === copiedRange.end.y) terminal.clearSelection()
           handlers.onNotice?.(null)
         }, () => { if (!disposed) handlers.onNotice?.('Could not copy. Your selection is kept. Try Ctrl+C again.') })
         return false
