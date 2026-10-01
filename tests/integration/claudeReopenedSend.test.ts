@@ -76,7 +76,7 @@ it('sends from the composer to a thread whose session ended while another thread
   await credentials.load()
   const registry = new ThreadRegistry(f.root)
   const control = new AgentControl({ schedule: immediatePublishScheduler, directory: f.root, host: new SottoThreadHost('claude', f.adapter, registry), credentials, reasoner: e2eAgentReasoner,
-    membership: { status: async () => ({ status: 'beta', label: 'Test', expiresAt: null }), action: async () => ({ status: 'beta', label: 'Test', expiresAt: null }) } })
+  })
   cleanups.push(async () => { control.dispose(); await control.privacyChanged(); await f.adapter.closed(); await registry.flush() })
   await control.start(); await control.command({ type: 'connect' })
   const threadId = registry.all().find(binding => binding.sessionId === 'first')!.threadId
