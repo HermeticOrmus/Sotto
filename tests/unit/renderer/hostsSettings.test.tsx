@@ -10,6 +10,18 @@ import type { HostDevice, TailscaleConnectOutcome, TailscaleSummary } from '../.
 import { hostVersionMismatch } from '../../../src/shared/hostProtocol'
 
 afterEach(cleanup)
+
+it('shows a failed local host save beside the switch and clears it on retry', async () => {
+  const change = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true)
+  const user = userEvent.setup()
+  const { container } = render(<HostsSettings localHostEnabled onLocalHostChange={change} bridge={fixture().bridge} />)
+  const toggle = screen.getByRole('switch', { name: 'Run the local host' })
+  await user.click(toggle)
+  expect(await within(container.querySelector('.hosts-local')!).findByRole('alert')).toHaveTextContent('The local host setting could not be saved. Nothing was changed. Try again.')
+  expect(toggle).toHaveAttribute('aria-checked', 'true')
+  await user.click(toggle)
+  await waitFor(() => expect(within(container.querySelector('.hosts-local')!).queryByRole('alert')).toBeNull())
+})
 const LOCAL = '11111111-1111-4111-8111-111111111111'
 const REMOTE = '22222222-2222-4222-8222-222222222222'
 const DAY = 24 * 60 * 60_000
@@ -698,13 +710,14 @@ it.each(['passphrase', 'password', 'host-key'] as const)('opens a saved host %s 
   render(<HostQuestionDialog bridge={bridge} />)
   const dialog = await screen.findByRole('dialog')
   const target = kind === 'host-key' ? within(dialog).getByRole('region', { name: 'SSH host key' }) : within(dialog).getByLabelText(kind === 'password' ? 'SSH password' : 'Key passphrase')
-  expect(document.activeElement).toBe(target)
+  await waitFor(() => expect(document.activeElement).toBe(target))
 })
 
 it('requires deliberate keyboard navigation before trusting a saved host key', async () => {
   const { bridge, command } = fixture([host({ phase: 'connecting', prompt: { id: 'trust-prompt', kind: 'host-key', text: 'Synthetic host key' } })]), user = userEvent.setup()
   render(<HostQuestionDialog bridge={bridge} />)
   const dialog = await screen.findByRole('dialog')
+  await waitFor(() => expect(document.activeElement).toBe(within(dialog).getByRole('region', { name: 'SSH host key' })))
   await user.keyboard('{Enter}')
   expect(command).not.toHaveBeenCalled()
   await user.tab()
@@ -718,7 +731,7 @@ it.each(['passphrase', 'password'] as const)('submits a saved host %s on Enter a
   render(<HostQuestionDialog bridge={bridge} />)
   const dialog = await screen.findByRole('dialog')
   const field = within(dialog).getByLabelText(kind === 'password' ? 'SSH password' : 'Key passphrase')
-  expect(document.activeElement).toBe(field)
+  await waitFor(() => expect(document.activeElement).toBe(field))
   await user.tab()
   expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: 'Continue' }))
   await user.tab()
