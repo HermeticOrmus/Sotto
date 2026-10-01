@@ -60,7 +60,15 @@ export interface ThreadComposerSnapshot {
   /** `saved` requires main's durability evidence for this exact revision. */
   readonly save: 'saved' | 'saving' | 'unsaved'
   readonly saveError: string | null
+  /** Answer delivery belongs to the thread even when its composer is closed. Kept only in this window. */
+  readonly answer: ComposerAnswerState
 }
+
+export interface ComposerAnswerState {
+  readonly sending: boolean
+  readonly error: string | null
+}
+const NO_ANSWER: ComposerAnswerState = { sending: false, error: null }
 
 /**
  * How a revision left the composer. `send` and `steer` are provider deliveries shown in the transcript;
@@ -198,6 +206,7 @@ export class ThreadDraftStore {
   private readonly pendingSaves = new Map<string, Set<Promise<void>>>()
   private readonly handoffs = new Map<string, Promise<AgentState | null>>()
   private readonly reads = new Map<string, ScreenshotReads>()
+  private readonly answers = new Map<string, ComposerAnswerState>()
   private submissionList: readonly Submission[] = []
   /** Every write waits for the creation of a thread this window minted, so a fresh thread's draft is never refused. */
   private readonly command: Command
@@ -221,12 +230,18 @@ export class ThreadDraftStore {
       draft,
       save: entry === undefined || entry.saved ? 'saved' : entry.error !== null ? 'unsaved' : 'saving',
       saveError: entry?.error ?? null,
+      answer: this.answers.get(threadId) ?? NO_ANSWER,
     }
     this.snapshots.set(threadId, value)
     return value
   }
 
   draft(threadId: string): ComposerDraft { return this.entries.get(threadId)?.draft ?? EMPTY }
+
+  setAnswerState(threadId: string, answer: ComposerAnswerState): void {
+    this.answers.set(threadId, answer)
+    this.emit(new Set([threadId]))
+  }
 
   screenshotReads(threadId: string): ScreenshotReads { return this.reads.get(threadId) ?? NO_SCREENSHOT_READS }
 
@@ -347,6 +362,7 @@ export class ThreadDraftStore {
 
   /** A new revision of the thread's composer. */
   edit(threadId: string, patch: { readonly text?: string; readonly attachments?: readonly AgentAttachmentHandle[]; readonly skills?: readonly AgentSkillReference[]; readonly files?: readonly AgentFileReference[]; readonly requestId?: string | null }): void {
+    if (this.answers.get(threadId)?.error) this.answers.delete(threadId)
     this.revise(threadId, patch)
     this.clearScreenshotProblem(threadId)
     this.emit(new Set([threadId]))
