@@ -39,6 +39,7 @@ import { appearancePreview, applyAppearance, systemPrefersDark, useAppearancePre
 const recoveryMessages = {
   OPENROUTER_KEY_MIGRATION_FAILED: 'The OpenRouter key could not be stored securely. Enter it again in Settings → Transcription.',
   SETTINGS_RECOVERED: 'Sotto restored default settings after a local settings file could not be read. The original file was preserved.',
+  CREDENTIALS_RECOVERED: 'Sotto could not read its saved keys. The encrypted file was preserved. Add your keys again in Settings.',
   HISTORY_RECOVERED: 'Sotto started with an empty history after its local history file could not be read. The original file was preserved.',
   ACCESSIBILITY_PERMISSION_REQUIRED: 'Sotto copied the transcript instead of pasting it. Automatic paste needs Sotto allowed in System Settings > Privacy & Security > Accessibility, and allowed to control System Events under System Settings > Privacy & Security > Automation.',
 } as const
