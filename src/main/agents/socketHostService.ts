@@ -24,6 +24,7 @@ export class HostConnectionError extends Error {
 export interface SocketHostServiceOptions {
   url: string; token: string; expectedHostId?: string
   onConnectionChange?: (connected: boolean) => void
+  getSelectedThreadId?: () => string | null
   /** A push the host could not send, such as a thread too large for one frame. The message is plain copy. */
   onPushError?: (message: string) => void
   /** What the last push error was about has since arrived: the thread it named, or the shell when it named none. */
@@ -149,8 +150,9 @@ export class SocketHostService implements HostService {
         while (page.hasMore) page = await this.readEvents(this.latestSeq)
       }
       await this.observe(this.observed)
-      if (selectedThreadId && hello.shell.host.threads.some(thread => thread.id === selectedThreadId)) {
-        const selected = this.read(protocolAgentStateSchema, await this.call({ op: 'command', command: { type: 'select-thread', threadId: selectedThreadId } }))
+      const pickedThreadId = this.options.getSelectedThreadId ? this.options.getSelectedThreadId() : selectedThreadId
+      if (pickedThreadId && hello.shell.host.threads.some(thread => thread.id === pickedThreadId)) {
+        const selected = this.read(protocolAgentStateSchema, await this.call({ op: 'command', command: { type: 'select-thread', threadId: pickedThreadId } }))
         this.sameGeneration(generation)
         this.publish(selected)
       }

@@ -775,6 +775,9 @@ describe('updating a host from the Threads page (ADR-0040)', () => {
     expect(row(thread)!.clientReconnecting).toBeUndefined()
     // The same thread, still selected, on a fresh connection, with no retry left behind.
     expect(router.shell().activeThreadId).toBe(thread)
+    const composed = await router.command({ type: 'compose', text: 'Draft after restart' }, desktopWindowClient('desktop-test'))
+    expect(composed.error).toBeNull()
+    expect(composed.threadDrafts).toContainEqual(expect.objectContaining({ threadId: thread, text: 'Draft after restart' }))
     expect(launchers).toHaveLength(2)
     expect(scheduled).toEqual([])
     expect(manager.updateCandidates()[0]!.version).toBe(packageVersion)
