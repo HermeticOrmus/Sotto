@@ -239,8 +239,8 @@ describe('completed native turn checkpoints', () => {
     expect(restarted.isBlocked('thread-a')).toBe(true)
     const backup = (await readdir(f.dependencies.directory)).find(name => name.startsWith('checkpoints.json.corrupt-'))!
     expect(await readFile(join(f.dependencies.directory, backup), 'utf8')).toBe(damaged)
-    expect(report).toHaveBeenCalledWith('Sotto set aside a checkpoint file it could not read and kept the rest.')
-    expect(unwrap(await restarted.checkpoints(f.target)).reason).toBe('Sotto set aside a checkpoint file it could not read and kept the rest.')
+    expect(report).toHaveBeenCalledWith(`Sotto set aside a checkpoint file it could not read as ${backup} and kept the rest.`)
+    expect(unwrap(await restarted.checkpoints(f.target)).reason).toBe(`Sotto set aside a checkpoint file it could not read as ${backup} and kept the rest.`)
     expect(JSON.parse(await readFile(path, 'utf8'))).toMatchObject({ version: 1, records: saved.records })
     expect(f.rollback).toHaveBeenCalledTimes(1)
     f.dependencies.historyEnabled = () => false

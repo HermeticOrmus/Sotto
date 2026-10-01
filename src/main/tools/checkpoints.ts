@@ -3,7 +3,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { execFile } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { copyFile, lstat, mkdir, readFile, readdir, realpath, rename, unlink, writeFile } from 'node:fs/promises'
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { z } from 'zod'
 import { checkpointInspectionSchema, checkpointRequestSchema, checkpointRevertSchema, type Checkpoint } from '../../shared/checkpoints'
 import { fileRelativePathSchema, type FileWorkspace } from '../../shared/files'
@@ -92,7 +92,7 @@ export class CheckpointService extends ToolOperations {
         try { await this.store.write({ version: 1, records }) }
         catch { throw new Error(`Checkpoint storage at ${source} could not be repaired. The original file is backed up at ${backup}. Restore access to local storage and try again.`) }
         this.recoveryBackup = backup
-        this.recoveryNotice = 'Sotto set aside a checkpoint file it could not read and kept the rest.'
+        this.recoveryNotice = `Sotto set aside a checkpoint file it could not read as ${basename(backup)} and kept the rest.`
         try { this.dependencies.report?.(this.recoveryNotice) } catch { /* Reporting cannot prevent recovery. */ }
       }
       for (const record of records) {

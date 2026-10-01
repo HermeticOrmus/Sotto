@@ -101,7 +101,7 @@ describe('Changes as T3’s diff', () => {
 
   it('names the preserved damaged file in the existing Checkpoints drawer', async () => {
     const git = fakeGit()
-    const reason = 'Sotto set aside a checkpoint file it could not read and kept the rest.'
+    const reason = 'Sotto set aside a checkpoint file it could not read as checkpoints.json.corrupt-fixture and kept the rest.'
     vi.mocked(git.bridge.checkpoints!).mockResolvedValue({ ok: true, value: { supported: true, checkpoints: [], reason } })
     setup(git)
     await within(panel()).findByText('export const ready = true')
