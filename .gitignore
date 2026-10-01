@@ -96,6 +96,7 @@ artifacts/screenshot-resize-run/
 artifacts/workflow-agent-rows-run/
 
 artifacts/review-*/
+artifacts/renderer-other-bundle-run/
 
 # Workspace menu layout verification
 artifacts/workspace-picker/
