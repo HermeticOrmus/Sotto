@@ -7,6 +7,7 @@ export const FILES_REVEAL = 'sotto:files:reveal'
 export const FILES_MAX_ENTRIES = 1_000
 export const FILES_MAX_TEXT_BYTES = 512 * 1024
 export const FILES_MAX_IMAGE_BYTES = 8 * 1024 * 1024
+export const FILES_MAX_CONCURRENT_REQUESTS = 4
 
 // Canonical slash-separated relative paths only. Reject Windows device names,
 // alternate streams, drive-relative paths and normalization aliases on every OS.

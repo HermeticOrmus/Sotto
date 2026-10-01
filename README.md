@@ -49,6 +49,8 @@ In Settings, **Test microphone** checks the same input selected for dictation. *
 
 The personal dictionary holds up to 4,000 characters. It saves when you leave the field or Settings. A paste cut to fit the limit is announced, and a failed save after leaving Settings says where to enter the unsaved edits again.
 
+A failed save under Phones or for **Run the local host** shows beside the control and keeps the previous setting.
+
 Escape dismisses a saved host's SSH question. While SSH is still waiting, **Answer** on its row in Settings → Hosts reopens it.
 
 Terminal mode keeps closed terminals on its Closed shelf until you quit. Reopen starts the same command with fresh output; Stop keeps the output readable.
