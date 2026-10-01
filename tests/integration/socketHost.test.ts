@@ -773,8 +773,9 @@ describe('request budgets', () => {
   })
   it('gives pairing a small bucket of its own that sessions do not share', async () => {
     const { client } = await pair()
-    for (let index = 1; index < 10; index++) await expect(SocketHostService.pair(url, 'WRONG' + index, 'Guess')).rejects.toMatchObject({ code: 'unauthenticated', message: expect.stringContaining('pairing code could not be used') })
-    await expect(SocketHostService.pair(url, host.pairing.issuePairingCode().code, 'Late')).rejects.toMatchObject({ code: 'busy', message: HOST_BUSY })
+    for (let index = 0; index < 10; index++) await expect(SocketHostService.pair(url, 'WRONG' + index, 'Guess')).rejects.toMatchObject({ code: 'unauthenticated', message: expect.stringContaining('pairing code could not be used') })
+    await expect(SocketHostService.pair(url, 'WRONG-LAST', 'Late')).rejects.toMatchObject({ code: 'busy', message: HOST_BUSY })
+    await expect(SocketHostService.pair(url, host.pairing.issuePairingCode().code, 'Ready')).resolves.toBeDefined()
     await expect(client.connect()).resolves.toBeDefined()
   })
   it('paces a client paging through a long log instead of closing it at the per-second cutoff', async () => {

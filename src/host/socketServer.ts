@@ -89,7 +89,7 @@ const EVENT_PAGES_PER_SECOND = 100
 /**
  * HTTP requests a minute, per endpoint class, so no caller can spend another's budget. Health is not
  * counted: refusing it costs as much as answering it, and the launch script polls it while a host starts.
- * Pairing has a small bucket of its own. The administrative path, and sessions and revocations per paired
+ * Failed pairing redemptions have a small bucket of their own; a valid code remains usable. The administrative path, and sessions and revocations per paired
  * client, are counted only after their token is checked, so a loop on a bad token spends nobody's budget.
  */
 const HTTP_BUDGETS = { pair: 10, admin: 120, client: 120 } as const
@@ -395,10 +395,9 @@ export async function startSocketServer(options: SocketServerOptions) {
           respond(response, 200, { v: 1, hostId, ok: true }); return
         }
         if (request.url === '/v1/pair') {
-          spend('pair', HTTP_BUDGETS.pair)
           const input = z.object({ v: z.literal(1), code: z.string().min(1).max(32), name: z.string().min(1).max(256) }).strict().parse(await body(request))
           let paired: Awaited<ReturnType<PairedClients['redeem']>>
-          try { paired = await pairing.redeem(input.code, input.name) } catch { throw new Refusal('unauthenticated') }
+          try { paired = await pairing.redeem(input.code, input.name) } catch { spend('pair', HTTP_BUDGETS.pair); throw new Refusal('unauthenticated') }
           respond(response, 200, { v: 1, hostId, ...paired }); options.onPaired?.(paired.clientId); return
         }
         if (request.url === '/v1/revoke') {
