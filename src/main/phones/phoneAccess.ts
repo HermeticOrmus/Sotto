@@ -83,6 +83,7 @@ export class PhoneAccess {
   private reservation: { close(): Promise<void> } | undefined
   private pairingReady = false
   private listener: Listener | undefined
+  private listenerStopped = false
   private phase: PhonesState['phase'] = 'off'
   private tailscaleCheck: TailscaleCheck = WAITING
   private serveCheck: ServeCheck = WAITING
@@ -122,6 +123,10 @@ export class PhoneAccess {
 
   /** Called when any setting changed: turns phone access on or off to match, and republishes the name. */
   settingsChanged(): void {
+    if (!this.wanted()) {
+      this.cancelCode()
+      if (this.listener) { this.listener.stopServing(); this.listenerStopped = true }
+    }
     this.enqueue(() => this.reconcile())
     this.publish()
   }
@@ -134,14 +139,15 @@ export class PhoneAccess {
   get(): PhonesState {
     const settings = this.options.settings()
     const defaultName = this.defaultName()
-    const connected = new Set(this.listener?.connectedClients() ?? [])
+    const connected = new Set(!this.listenerStopped && this.wanted() ? this.listener?.connectedClients() ?? [] : [])
     const phones = this.pairingReady ? this.pairing.list().map(client => ({
       clientId: client.clientId, name: client.name, pairedAt: client.pairedAt, connected: connected.has(client.clientId),
       canAnswer: this.options.policy?.mayGrant({ clientId: client.clientId, user: '', transport: 'socket' }).allowed ?? false,
     })) : []
     return {
-      enabled: settings.phoneAccess, localHostRunning: this.options.service !== undefined, phase: this.phase,
-      tailscale: this.tailscaleCheck, serve: this.serveCheck, address: this.address,
+      enabled: settings.phoneAccess, localHostRunning: this.options.service !== undefined,
+      phase: this.listenerStopped && this.phase === 'on' && this.wanted() ? 'starting' : this.phase,
+      tailscale: this.tailscaleCheck, serve: this.serveCheck, address: this.listenerStopped ? null : this.address,
       computerName: this.computerName(), defaultName,
       code: this.code, phones, answersAvailable: this.options.policy !== undefined,
     }
@@ -154,7 +160,7 @@ export class PhoneAccess {
         await this.queue
         break
       case 'show-code': {
-        if (this.phase !== 'on' || !this.pairingReady) throw new Error('Turn on Let phones connect first, then show a pairing code.')
+        if (this.phase !== 'on' || !this.wanted() || this.listenerStopped || !this.pairingReady) throw new Error('Turn on Let phones connect first, then show a pairing code.')
         this.cancelCode()
         const code = this.pairing.issuePairingCode()
         this.code = code
@@ -226,7 +232,7 @@ export class PhoneAccess {
   }
 
   private async reconcile(): Promise<void> {
-    if (this.phase === 'cleanup-failed') {
+    if (this.phase === 'cleanup-failed' || this.listenerStopped) {
       await this.turnOff()
       if (this.phase === 'cleanup-failed') return
     }
@@ -235,6 +241,10 @@ export class PhoneAccess {
   }
 
   private async turnOn(): Promise<void> {
+    if (this.listenerStopped || !this.wanted()) {
+      await this.turnOff()
+      if (this.phase === 'cleanup-failed' || !this.wanted()) return
+    }
     this.clearRetry()
     this.reset('starting')
     this.publish()
@@ -252,25 +262,30 @@ export class PhoneAccess {
     let owner: ReturnType<typeof servePortOwner>
     try { owner = servePortOwner(await this.options.tailscale.serveStatus(), PHONE_ACCESS_SERVE_PORT, this.ourPorts()) }
     catch { this.options.log?.('phone-access-serve-status-failed'); await this.failServe('failed'); return }
+    if (owner === 'ours') this.record.mapped = true
     if (owner === 'taken') { await this.failServe('port-taken'); return }
+    if (this.listenerStopped || !this.wanted()) { await this.turnOff(); return }
     if (!this.listener) {
       // Paired phones that cannot be read are never replaced: the listener stays shut until they can be.
       if (!await this.loadPairing()) { await this.failServe('listener'); return }
       try { this.listener = await this.listen() }
       catch { this.options.log?.('phone-access-listener-failed'); await this.failServe('listener'); return }
     }
+    if (this.listenerStopped || !this.wanted()) { await this.turnOff(); return }
     const port = this.listener.descriptor.port
     if (!await this.save({ port, mapped: true })) { await this.failServe('record'); return }
+    if (this.listenerStopped || !this.wanted()) { await this.turnOff(); return }
     let result: ServeResult
     try { result = await this.options.tailscale.serve(PHONE_ACCESS_SERVE_PORT, port) } catch { result = { ok: false, reason: 'failed' } }
     if (!result.ok) {
       this.options.log?.(result.reason === 'not-enabled' ? 'phone-access-serve-not-enabled' : 'phone-access-serve-failed')
       this.enableUrl = result.reason === 'not-enabled' ? result.enableUrl : undefined
-      // Nothing new was set up, so a setting that was already Sotto's is the only one that may still be there.
-      await this.save({ port, mapped: owner === 'ours' })
+      // A consent request made no new setting. Other failures keep cleanup pending until Serve is checked.
+      if (result.reason === 'not-enabled') await this.save({ port, mapped: owner === 'ours' })
       await this.failServe(result.reason)
       return
     }
+    if (this.listenerStopped || !this.wanted()) { await this.turnOff(); return }
     this.serveCheck = { status: 'ok' }
     this.address = `https://${status.dnsName}:${PHONE_ACCESS_SERVE_PORT}`
     this.phase = 'on'
@@ -279,6 +294,7 @@ export class PhoneAccess {
   }
 
   private reset(phase: PhonesState['phase']): void {
+    if (phase === 'off') this.listenerStopped = false
     this.phase = phase; this.tailscaleCheck = WAITING; this.serveCheck = WAITING; this.address = null; this.enableUrl = undefined
   }
 

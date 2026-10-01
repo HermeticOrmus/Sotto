@@ -144,7 +144,7 @@ export function PhonesSettings({ phoneAccess, phoneAccessName, onUpdateSettings,
   }
 
   const localHostRunning = state?.localHostRunning ?? true
-  const on = state?.phase === 'on'
+  const on = state?.phase === 'on' && state.enabled
   const starting = state?.phase === 'starting'
   const failure = state ? phonesFailure(state) : null
   const tailscaleStep: Step = state?.tailscale.status === 'ok' ? 'ok' : state?.tailscale.status === 'failed' ? 'failed' : 'waiting'

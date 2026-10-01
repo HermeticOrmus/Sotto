@@ -172,3 +172,9 @@ it('explains cleanup when the saved record could not be read', async () => {
   show({ ...OFF, phase: 'cleanup-failed', serve: { status: 'failed', reason: 'cleanup-record' } })
   expect(await screen.findByText(/couldn’t read its saved cleanup record/)).toBeVisible()
 })
+
+
+it('keeps pairing unavailable as soon as the setting turns off', async () => {
+  show({ ...READY, enabled: false })
+  expect(await screen.findByRole('button', { name: 'Show a pairing code' })).toBeDisabled()
+})
