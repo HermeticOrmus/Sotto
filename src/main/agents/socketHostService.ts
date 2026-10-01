@@ -306,9 +306,21 @@ export class SocketHostService implements HostService {
     if (command.type === 'observe-threads') { await this.observe(command.threadIds); return this.state() }
     const generation = this.generation
     const state = this.read(agentStateSchema, await this.call({ op: 'command', command }, commandId)); this.sameGeneration(generation); this.publish(state)
-    if ('threadId' in command && command.threadId) await this.readThreadDetail(command.threadId)
-    if (this.catchesUp) { let page = await this.readEvents(this.latestSeq); while (page.hasMore) page = await this.readEvents(this.latestSeq) }
-    return this.state()
+    const acknowledged = this.state()
+    // The host already confirmed the command. Refresh failures must not invite sending it again.
+    try {
+      if ('threadId' in command && command.threadId) await this.readThreadDetail(command.threadId)
+      if (this.catchesUp) { let page = await this.readEvents(this.latestSeq); while (page.hasMore) page = await this.readEvents(this.latestSeq) }
+    } catch (error) {
+      if (generation === this.generation) {
+        const threadId = 'threadId' in command ? command.threadId : undefined
+        if (!threadId || !this.reportedTooLarge(threadId, error)) {
+          this.pushErrorThread = threadId ?? null
+          this.options.onPushError?.('The host confirmed the command, but its latest details could not be read. Nothing was lost. Refresh or reconnect to see them.')
+        }
+      }
+    }
+    return generation === this.generation ? this.state() : acknowledged
   }
   async receipt(commandId: string): Promise<HostReceipt> { return this.read(hostReceiptSchema, await this.call({ op: 'receipt', commandId })) }
   attachmentPreview(request: AgentAttachmentPreviewRequest): Promise<AgentAttachmentPreviewResult> {

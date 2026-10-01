@@ -239,6 +239,37 @@ import XCTest
         capture("computers")
     }
 
+    func testRecoveryAndNeutralDeliveryFeedbackInBothAppearances() {
+        let scenarios = [
+            ("request-gone", "That request is no longer waiting."),
+            ("markers-unreadable", "Saved unconfirmed actions could not be read. Check your threads before sending again. Nothing was resent."),
+            ("computer-unreadable", "Recovered the saved computer list. Pair computer 22222222-2222-4222-8222-222222222222 again. Its saved connection details could not be read.")
+        ]
+        for (scenario, words) in scenarios {
+            app.terminate()
+            app.launchArguments = ["--ui-fixture", "--reset-ui-preferences", "--ui-feedback-" + scenario]
+            app.launch()
+            let message = app.staticTexts.matching(NSPredicate(format: "label == %@", words)).firstMatch
+            XCTAssertTrue(message.waitForExistence(timeout: 15))
+            reveal(message)
+            XCTAssertFalse(app.staticTexts["Answer sent."].exists)
+            capture("feedback-" + scenario + "-dark")
+            app.tabBars.buttons["Settings"].tap()
+            XCTAssertTrue(app.buttons["setting-light"].waitForExistence(timeout: 5))
+            app.buttons["setting-light"].tap()
+            let larger = app.switches["setting-larger-text"]
+            reveal(larger)
+            larger.tap()
+            app.tabBars.buttons["Threads"].tap()
+            reveal(message, swipingDown: true)
+            capture("feedback-" + scenario + "-light-larger-text")
+            let dismiss = app.buttons["Dismiss message"]
+            reveal(dismiss, swipingDown: true)
+            dismiss.tap()
+            XCTAssertFalse(message.exists)
+        }
+    }
+
     func testAppearanceAndLargerTextPersist() {
         app.tabBars.buttons["Settings"].tap()
         let light = app.buttons["setting-light"]

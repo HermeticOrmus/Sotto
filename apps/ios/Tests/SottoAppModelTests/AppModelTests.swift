@@ -1,21 +1,401 @@
 import XCTest
+import Combine
 import SottoCore
 
 final class AppModelTests: XCTestCase {
     @MainActor private func fixture() throws -> (AppModel, ThreadRef) {
-        HostConnection.instances = []; HostConnection.failDetail = false; HostConnection.holdDetail = false; KeychainStore.items = [:]
+        HostConnection.instances = []; HostConnection.failDetail = false; HostConnection.holdDetail = false; TestKeychain.items = [:]
         HostConnection.afterGreeting = nil
+        TestKeychain.locked = false; TestKeychain.unreadableAccount = nil
+        HostConnection.mayAnswer = false; HostConnection.receipt = .object(["status": .string("unknown")])
+        HostConnection.loseAcknowledgement = false
         HostConnection.shells = [:]; HostConnection.commandHandler = nil; HostConnection.folderHandler = nil
-        HostConnection.receipts = [:]; HostConnection.mayAnswer = false; HostConnection.features = ["host-folders"]
+        HostConnection.receipts = [:]; HostConnection.features = ["host-folders"]
         let host = "00000000-0000-4000-8000-000000000001"
         let pairing = try JSONDecoder().decode(Pairing.self, from: Data(#"{"v":1,"hostId":"\#(host)","clientId":"phone","token":"fixture"}"#.utf8))
         let saved = SavedComputer(address: "https://laptop.example.ts.net:8443", pairing: pairing, reportedName: "Laptop")
-        let store = KeychainStore()
+        let store = TestKeychain.store
         try store.write([host], account: ComputerStore.indexAccount)
         try store.write(saved, account: ComputerStore.account(host))
         HostConnection.shell = try JSONDecoder().decode(JSONValue.self, from: Data(#"{"hostId":"\#(host)","host":{"hostId":"\#(host)","name":"Laptop","threads":[{"id":"t","projectId":"p","title":"Thread","status":"idle","requests":[]}],"projects":[],"capabilities":{"submit":true,"interrupt":true,"questions":true,"permissions":true}}}"#.utf8))
         HostConnection.detail = try JSONDecoder().decode(JSONValue.self, from: Data(#"{"threadId":"t","revision":1,"messages":[{"id":"m","role":"assistant","text":"Ready"}]}"#.utf8))
-        return (AppModel(), ThreadRef(hostID: host, threadID: "t"))
+        return (AppModel(keychain: TestKeychain.store), ThreadRef(hostID: host, threadID: "t"))
+    }
+    @MainActor func testLockedLaunchLoadsComputersAndMarkersWhenActiveAfterUnlock() async throws {
+        let (_, ref) = try fixture()
+        let marker = PendingOperation(hostID: ref.hostID, clientID: "phone", threadID: ref.threadID, draftID: "draft", kind: "reply")
+        try TestKeychain.store.write([marker], account: ComputerStore.pendingAccount)
+        TestKeychain.locked = true
+        let model = AppModel(keychain: TestKeychain.store)
+        XCTAssertFalse(model.storageReady)
+        XCTAssertTrue(model.computers.isEmpty)
+        model.phase(.active)
+        XCTAssertFalse(model.storageReady)
+        TestKeychain.locked = false
+        let reconnected = expectation(description: "Recovered computers connect when storage becomes readable")
+        HostConnection.afterGreeting = { _ in reconnected.fulfill() }
+        model.phase(.active)
+        XCTAssertTrue(model.storageReady)
+        XCTAssertEqual(model.computers.map(\.hostID), [ref.hostID])
+        XCTAssertEqual(model.pending, [marker])
+        XCTAssertNil(model.feedback)
+        XCTAssertNil(model.pairFeedback)
+        await fulfillment(of: [reconnected], timeout: 10)
+        XCTAssertTrue(model.online(ref.hostID))
+    }
+    @MainActor func testRealKeychainDecodingDistinguishesMissingDamagedAndInaccessibleItems() throws {
+        _ = try fixture()
+        XCTAssertNil(try TestKeychain.store.read([String].self, account: "missing"))
+        TestKeychain.items["damaged"] = Data("incompatible item".utf8)
+        XCTAssertThrowsError(try TestKeychain.store.read([String].self, account: "damaged")) { error in
+            XCTAssertEqual((error as? KeychainStore.UndecodableItem)?.account, "damaged")
+        }
+        TestKeychain.locked = true
+        XCTAssertThrowsError(try TestKeychain.store.read([String].self, account: "damaged")) { error in
+            XCTAssertEqual(error as? ClientError, KeychainStore.failure)
+        }
+        TestKeychain.locked = false
+    }
+    @MainActor func testDamagedIndexRecoversComputersAndMarkersWithoutReplacingOriginal() throws {
+        let (_, ref) = try fixture()
+        let bytes = Data("incompatible index".utf8)
+        let marker = PendingOperation(hostID: ref.hostID, clientID: "phone", threadID: ref.threadID, draftID: "draft", kind: "reply")
+        try TestKeychain.store.write([marker], account: ComputerStore.pendingAccount)
+        TestKeychain.items[ComputerStore.indexAccount] = bytes
+        let model = AppModel(keychain: TestKeychain.store)
+        XCTAssertTrue(model.storageReady)
+        XCTAssertEqual(model.computers.map(\.hostID), [ref.hostID])
+        XCTAssertEqual(model.pending, [marker])
+        XCTAssertEqual(TestKeychain.items[ComputerStore.indexAccount], bytes)
+        XCTAssertEqual(try TestKeychain.store.read([String].self, account: ComputerStore.recoveredIndexAccount), [ref.hostID])
+        XCTAssertEqual(model.feedback, "Recovered the saved computer list.")
+        XCTAssertEqual(AppModel(keychain: TestKeychain.store).computers, model.computers)
+    }
+    @MainActor func testRecoveryPreservesADamagedRecoveredIndexToo() throws {
+        let (_, ref) = try fixture()
+        let bytes = Data("incompatible index".utf8)
+        TestKeychain.items[ComputerStore.indexAccount] = bytes
+        TestKeychain.items[ComputerStore.recoveredIndexAccount] = bytes
+        let model = AppModel(keychain: TestKeychain.store)
+        XCTAssertTrue(model.storageReady)
+        XCTAssertEqual(model.computers.map(\.hostID), [ref.hostID])
+        XCTAssertEqual(TestKeychain.items[ComputerStore.indexAccount], bytes)
+        XCTAssertEqual(TestKeychain.items[ComputerStore.recoveredIndexAccount], bytes)
+    }
+    @MainActor func testDamagedIndexNamesUnrecoverableComputerAndKeepsItsItem() throws {
+        let (_, ref) = try fixture()
+        let damagedID = "00000000-0000-4000-8000-000000000002"
+        let bytes = Data("incompatible computer".utf8)
+        TestKeychain.items[ComputerStore.indexAccount] = Data("incompatible index".utf8)
+        TestKeychain.items[ComputerStore.account(damagedID)] = bytes
+        let model = AppModel(keychain: TestKeychain.store)
+        XCTAssertTrue(model.storageReady)
+        XCTAssertEqual(model.computers.map(\.hostID), [ref.hostID])
+        XCTAssertTrue(model.feedback?.contains("Pair computer \(damagedID) again.") == true)
+        XCTAssertEqual(TestKeychain.items[ComputerStore.account(damagedID)], bytes)
+    }
+    @MainActor func testDamagedMarkersAndLegacyPairingExplainWhatCouldNotBeRead() throws {
+        for (account, expected) in [(ComputerStore.pendingAccount, "Saved unconfirmed actions could not be read."),
+                                    (ComputerStore.legacyAccount, "The computer saved by an earlier version needs pairing again.")] {
+            let (_, ref) = try fixture()
+            let bytes = Data("incompatible item".utf8)
+            TestKeychain.items[account] = bytes
+            let model = AppModel(keychain: TestKeychain.store)
+            XCTAssertTrue(model.storageReady)
+            XCTAssertEqual(model.computers.map(\.hostID), [ref.hostID])
+            XCTAssertTrue(model.feedback?.contains(expected) == true)
+            XCTAssertEqual(model.feedback, model.pairFeedback)
+            XCTAssertEqual(TestKeychain.items[account], bytes)
+        }
+    }
+    @MainActor func testDamagedComputerInReadableIndexExplainsPairingAgain() throws {
+        let (_, ref) = try fixture()
+        TestKeychain.items[ComputerStore.account(ref.hostID)] = Data("incompatible computer".utf8)
+        let model = AppModel(keychain: TestKeychain.store)
+        XCTAssertTrue(model.storageReady)
+        XCTAssertTrue(model.computers.isEmpty)
+        XCTAssertTrue(model.feedback?.contains("Pair computer \(ref.hostID) again.") == true)
+    }
+    @MainActor func testRecoveryRefusesInaccessibleItemsWithoutWritingAnIndex() throws {
+        let (_, ref) = try fixture()
+        let bytes = Data("incompatible index".utf8)
+        TestKeychain.items[ComputerStore.indexAccount] = bytes
+        TestKeychain.unreadableAccount = ComputerStore.account(ref.hostID)
+        let model = AppModel(keychain: TestKeychain.store)
+        XCTAssertFalse(model.storageReady)
+        XCTAssertTrue(model.computers.isEmpty)
+        XCTAssertEqual(TestKeychain.items[ComputerStore.indexAccount], bytes)
+        XCTAssertNil(TestKeychain.items[ComputerStore.recoveredIndexAccount])
+        XCTAssertEqual(model.feedback, "Secure connection details could not be read. Unlock this iPhone and return to Sotto.")
+        TestKeychain.unreadableAccount = nil
+    }
+    @MainActor private func changeShell(status: String = "idle", requests: [[String: Any]] = [], error: String? = nil, deliveries: [[String: Any]] = []) throws -> Shell {
+        var shell = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(HostConnection.shell)) as? [String: Any])
+        var host = try XCTUnwrap(shell["host"] as? [String: Any])
+        var threads = try XCTUnwrap(host["threads"] as? [[String: Any]])
+        threads[0]["status"] = status; threads[0]["requests"] = requests
+        host["threads"] = threads; shell["host"] = host; shell["error"] = error
+        shell["deliveries"] = deliveries
+        HostConnection.shell = try JSONDecoder().decode(JSONValue.self, from: JSONSerialization.data(withJSONObject: shell))
+        return try HostConnection.shell.decode(Shell.self)
+    }
+    @MainActor private func modelWithMarker(_ marker: PendingOperation) throws -> AppModel {
+        try TestKeychain.store.write([marker], account: ComputerStore.pendingAccount)
+        return AppModel(keychain: TestKeychain.store)
+    }
+    @MainActor func testOwnCompletedReceiptConfirmsAnAnswerEvenWhileItsRequestStillAppears() async throws {
+        let (_, ref) = try fixture()
+        let marker = PendingOperation(hostID: ref.hostID, clientID: "phone", threadID: ref.threadID, requestID: "request", kind: "answer")
+        _ = try changeShell(requests: [["id": "request", "kind": "permission", "text": "Read files?", "options": []]])
+        HostConnection.receipt = .object(["status": .string("completed"), "answerDelivered": .bool(true)])
+        let model = try modelWithMarker(marker)
+        model.phase(.active); await model.reconnectAll()
+        XCTAssertTrue(model.pending.isEmpty)
+        XCTAssertEqual(model.feedback, "Answer sent.")
+    }
+    @MainActor func testUnknownReceiptAndDisappearedRequestSettleNeutrallyDespiteUnrelatedShellError() async throws {
+        let (_, ref) = try fixture()
+        let marker = PendingOperation(hostID: ref.hostID, clientID: "phone", threadID: ref.threadID, requestID: "old", kind: "answer")
+        _ = try changeShell(requests: [["id": "next", "kind": "permission", "text": "Read files?", "options": []]], error: "Another thread failed")
+        HostConnection.mayAnswer = true
+        let model = try modelWithMarker(marker)
+        model.phase(.active); await model.reconnectAll()
+        XCTAssertTrue(model.pending.isEmpty)
+        XCTAssertEqual(model.feedback, "That request is no longer waiting.")
+        XCTAssertTrue(model.canAnswer(try XCTUnwrap(model.thread(ref)?.requests.first), in: ref))
+    }
+    @MainActor func testUncertainOrMissingRequestThreadDoesNotConfirmAnAnswer() async throws {
+        let (_, ref) = try fixture()
+        let marker = PendingOperation(hostID: ref.hostID, clientID: "phone", threadID: ref.threadID, requestID: "request", kind: "answer")
+        _ = try changeShell(requests: [["id": "request", "kind": "permission", "text": "Read files?", "options": [], "delivery": "uncertain"]])
+        HostConnection.receipt = .object(["status": .string("unknown")])
+        let model = try modelWithMarker(marker)
+        model.phase(.active); await model.reconnectAll()
+        XCTAssertEqual(model.pending, [marker])
+        let missing = PendingOperation(hostID: ref.hostID, clientID: "phone", threadID: "missing", requestID: "request", kind: "answer")
+        let missingModel = try modelWithMarker(missing)
+        missingModel.phase(.active); await missingModel.reconnectAll()
+        XCTAssertEqual(missingModel.pending, [missing])
+    }
+    @MainActor func testOwnCompletedReceiptConfirmsAnswerAfterPushBeforeCommandReply() async throws {
+        let (model, ref) = try fixture()
+        HostConnection.mayAnswer = true
+        _ = try changeShell(requests: [["id": "request", "kind": "permission", "text": "Read files?", "options": []]])
+        model.phase(.active); await model.reconnectAll()
+        let request = try XCTUnwrap(model.thread(ref)?.requests.first)
+        let connection = try XCTUnwrap(HostConnection.instances.last)
+        HostConnection.receipt = .object(["status": .string("completed"), "answerDelivered": .bool(true)])
+        connection.afterReply = { op in
+            if op == "command" { connection.push(.shell(try! self.changeShell())) }
+        }
+        await model.answer(request, in: ref, choice: "allow")
+        XCTAssertTrue(model.pending.isEmpty)
+        XCTAssertEqual(model.feedback, "Answer sent.")
+        XCTAssertEqual(connection.operations.filter { $0 == "command" }.count, 1)
+        XCTAssertEqual(connection.operations.filter { $0 == "receipt" }.count, 1)
+    }
+    @MainActor func testReconnectReceiptCheckSurvivesANewerDisappearancePush() async throws {
+        let (_, ref) = try fixture()
+        let marker = PendingOperation(hostID: ref.hostID, clientID: "phone", threadID: ref.threadID, requestID: "request", kind: "answer")
+        _ = try changeShell(requests: [["id": "request", "kind": "permission", "text": "Read files?", "options": []]])
+        HostConnection.receipt = .object(["status": .string("completed"), "answerDelivered": .bool(true)])
+        HostConnection.afterGreeting = { connection in
+            connection.afterReply = { op in
+                if op == "shell" { connection.push(.shell(try! self.changeShell())) }
+            }
+        }
+        let model = try modelWithMarker(marker)
+        model.phase(.active); await model.reconnectAll()
+        XCTAssertTrue(model.pending.isEmpty)
+        XCTAssertEqual(model.feedback, "Answer sent.")
+        let connection = try XCTUnwrap(HostConnection.instances.last)
+        XCTAssertEqual(connection.operations.filter { $0 == "receipt" }.count, 1)
+        XCTAssertEqual(connection.operations.filter { $0 == "command" }.count, 0)
+    }
+    @MainActor func testReconnectReceiptCheckSurvivesADisappearancePushBeforeHelloReturns() async throws {
+        let (_, ref) = try fixture()
+        let marker = PendingOperation(hostID: ref.hostID, clientID: "phone", threadID: ref.threadID, requestID: "request", kind: "answer")
+        _ = try changeShell(requests: [["id": "request", "kind": "permission", "text": "Read files?", "options": []]])
+        HostConnection.receipt = .object(["status": .string("completed"), "answerDelivered": .bool(true)])
+        HostConnection.afterGreeting = { connection in connection.push(.shell(try! self.changeShell())) }
+        let model = try modelWithMarker(marker)
+        model.phase(.active); await model.reconnectAll()
+        XCTAssertTrue(model.pending.isEmpty)
+        XCTAssertEqual(model.feedback, "Answer sent.")
+        let connection = try XCTUnwrap(HostConnection.instances.last)
+        XCTAssertEqual(connection.operations.filter { $0 == "receipt" }.count, 1)
+        XCTAssertEqual(connection.operations.filter { $0 == "command" }.count, 0)
+    }
+    @MainActor func testOlderHostCompletedReceiptDoesNotConfirmAnAnswer() async throws {
+        let (_, ref) = try fixture()
+        let marker = PendingOperation(hostID: ref.hostID, clientID: "phone", threadID: ref.threadID, requestID: "request", kind: "answer")
+        _ = try changeShell(requests: [["id": "request", "kind": "permission", "text": "Read files?", "options": []]])
+        HostConnection.receipt = .object(["status": .string("completed")])
+        let model = try modelWithMarker(marker)
+        model.phase(.active); await model.reconnectAll()
+        XCTAssertEqual(model.pending, [marker])
+        XCTAssertNotEqual(model.feedback, "Answer sent.")
+        try XCTUnwrap(HostConnection.instances.last).push(.shell(try changeShell()))
+        XCTAssertTrue(model.pending.isEmpty)
+        XCTAssertEqual(model.feedback, "That request is no longer waiting.")
+    }
+    @MainActor func testRefusedAnswerReceiptFollowedByDesktopResolutionSettlesNeutrally() async throws {
+        let (_, ref) = try fixture()
+        let marker = PendingOperation(hostID: ref.hostID, clientID: "phone", threadID: ref.threadID, requestID: "request", kind: "answer")
+        _ = try changeShell(requests: [["id": "request", "kind": "permission", "text": "Read files?", "options": []]])
+        HostConnection.receipt = .object(["status": .string("completed"), "answerDelivered": .bool(false), "error": .object(["code": .string("unavailable"), "message": .string("Answer refused")])])
+        let model = try modelWithMarker(marker)
+        model.phase(.active); await model.reconnectAll()
+        XCTAssertEqual(model.pending, [marker])
+        try XCTUnwrap(HostConnection.instances.last).push(.shell(try changeShell()))
+        XCTAssertTrue(model.pending.isEmpty)
+        XCTAssertEqual(model.feedback, "That request is no longer waiting.")
+    }
+    @MainActor func testCompletedReceiptWithErrorDoesNotConfirmAnAnswer() async throws {
+        let (_, ref) = try fixture()
+        let marker = PendingOperation(hostID: ref.hostID, clientID: "phone", threadID: ref.threadID, requestID: "request", kind: "answer")
+        _ = try changeShell(requests: [["id": "request", "kind": "permission", "text": "Read files?", "options": []]])
+        HostConnection.receipt = .object(["status": .string("completed"), "error": .object(["code": .string("unavailable"), "message": .string("Answer refused")])])
+        let model = try modelWithMarker(marker)
+        model.phase(.active); await model.reconnectAll()
+        XCTAssertEqual(model.pending, [marker])
+        XCTAssertNotEqual(model.feedback, "Answer sent.")
+    }
+    @MainActor func testLiveReplySettlementPreservesUnrelatedFeedback() async throws {
+        let (model, ref) = try fixture()
+        model.phase(.active); await model.reconnectAll()
+        let connection = try XCTUnwrap(HostConnection.instances.last)
+        HostConnection.loseAcknowledgement = true
+        model.drafts[ref.id] = "Continue"
+        await model.send(ref)
+        let marker = try XCTUnwrap(model.pending.first)
+        model.feedback = "Studio Mac could not be reached."
+        connection.push(.shell(try changeShell(deliveries: [["threadId": ref.threadID, "draftId": try XCTUnwrap(marker.draftID), "status": "accepted"]])))
+        XCTAssertTrue(model.pending.isEmpty)
+        XCTAssertEqual(model.feedback, "Studio Mac could not be reached.")
+    }
+    @MainActor func testLiveAnswerSettlementPreservesUnrelatedFeedback() async throws {
+        let (_, ref) = try fixture()
+        let marker = PendingOperation(hostID: ref.hostID, clientID: "phone", threadID: ref.threadID, requestID: "request", kind: "answer")
+        _ = try changeShell(requests: [["id": "request", "kind": "permission", "text": "Read files?", "options": []]])
+        let model = try modelWithMarker(marker)
+        model.phase(.active); await model.reconnectAll()
+        model.feedback = "Removed Studio Mac."
+        XCTAssertEqual(model.pending, [marker])
+        // Activation can own the reconnect still finishing its receipt check. Observe the
+        // settlement rather than treating another reconnect's early return as completion.
+        let settled = expectation(description: "The disappeared answer marker settles")
+        let observation = model.$pending.filter { $0.isEmpty }.prefix(1).sink { _ in settled.fulfill() }
+        defer { observation.cancel() }
+        try XCTUnwrap(HostConnection.instances.last).push(.shell(try changeShell()))
+        await fulfillment(of: [settled], timeout: 10)
+        XCTAssertTrue(model.pending.isEmpty)
+        XCTAssertEqual(model.feedback, "Removed Studio Mac.")
+        XCTAssertFalse(HostConnection.instances.flatMap(\.operations).contains("command"))
+    }
+    @MainActor func testStopRemainsAvailableAfterAReplyAcknowledgementIsLost() async throws {
+        let (model, ref) = try fixture()
+        model.phase(.active); await model.reconnectAll()
+        let connection = try XCTUnwrap(HostConnection.instances.last)
+        HostConnection.loseAcknowledgement = true
+        model.drafts[ref.id] = "Continue"
+        await model.send(ref)
+        XCTAssertEqual(model.pending(for: ref).map(\.kind), ["reply"])
+        connection.push(.shell(try changeShell(status: "running")))
+        XCTAssertTrue(model.canInterrupt(ref))
+        await model.interrupt(ref)
+        XCTAssertEqual(model.pending(for: ref).map(\.kind), ["reply", "interrupt"])
+        XCTAssertFalse(model.canInterrupt(ref), "An unconfirmed stop must not create duplicate stops")
+    }
+    @MainActor func testLiveShellSettlesALostReplyWithoutCheckingAgainOrResending() async throws {
+        let (model, ref) = try fixture()
+        model.phase(.active); await model.reconnectAll()
+        let connection = try XCTUnwrap(HostConnection.instances.last)
+        HostConnection.loseAcknowledgement = true
+        model.drafts[ref.id] = "Continue"
+        await model.send(ref)
+        let marker = try XCTUnwrap(model.pending.first)
+        let accepted = try changeShell(deliveries: [["threadId": ref.threadID, "draftId": try XCTUnwrap(marker.draftID), "status": "accepted"]])
+        connection.onPush?(.shell(accepted), 1)
+        XCTAssertEqual(model.pending, [marker], "An older shell cannot confirm delivery")
+        connection.push(.shell(accepted))
+        XCTAssertTrue(model.pending.isEmpty)
+        XCTAssertTrue(model.canSend(ref))
+        XCTAssertNil(model.feedback, "Only this marker's delivery message is cleared")
+        XCTAssertEqual(connection.operations.filter { $0 == "command" }.count, 1)
+        XCTAssertEqual(connection.operations.filter { $0 == "receipt" }.count, 0)
+        XCTAssertEqual(try TestKeychain.store.read([PendingOperation].self, account: ComputerStore.pendingAccount), [])
+    }
+    @MainActor func testLiveShellSettlesAnAnswerAndRestoresAFailedReply() async throws {
+        let (_, ref) = try fixture()
+        let answer = PendingOperation(hostID: ref.hostID, clientID: "phone", threadID: ref.threadID, requestID: "request", kind: "answer")
+        _ = try changeShell(requests: [["id": "request", "kind": "permission", "text": "Read files?", "options": []]])
+        let model = try modelWithMarker(answer)
+        model.phase(.active); await model.reconnectAll()
+        let connection = try XCTUnwrap(HostConnection.instances.last)
+        connection.push(.shell(try changeShell()))
+        XCTAssertTrue(model.pending.isEmpty)
+        XCTAssertEqual(model.feedback, "That request is no longer waiting.")
+        HostConnection.loseAcknowledgement = true
+        model.drafts[ref.id] = "Keep this reply"
+        await model.send(ref)
+        let reply = try XCTUnwrap(model.pending.first)
+        connection.push(.shell(try changeShell(deliveries: [["threadId": ref.threadID, "draftId": try XCTUnwrap(reply.draftID), "status": "failed"]])))
+        XCTAssertTrue(model.pending.isEmpty)
+        XCTAssertEqual(model.failedReplies[ref.id], "Keep this reply")
+        model.restoreReply(ref)
+        XCTAssertEqual(model.drafts[ref.id], "Keep this reply")
+        XCTAssertTrue(model.online(ref.hostID))
+    }
+    @MainActor func testMarkerStorageFailureDuringPushDoesNotDisconnectComputer() async throws {
+        let (_, ref) = try fixture()
+        let marker = PendingOperation(hostID: ref.hostID, clientID: "phone", threadID: ref.threadID, draftID: "draft", kind: "reply")
+        let model = try modelWithMarker(marker)
+        model.phase(.active); await model.reconnectAll()
+        let connection = try XCTUnwrap(HostConnection.instances.last)
+        TestKeychain.locked = true
+        connection.push(.shell(try changeShell(deliveries: [["threadId": ref.threadID, "draftId": "draft", "status": "accepted"]])))
+        TestKeychain.locked = false
+        XCTAssertEqual(model.pending, [marker])
+        XCTAssertTrue(model.online(ref.hostID))
+        XCTAssertEqual(connection.disconnects, 0)
+    }
+    @MainActor private func shellWithAnswerAuthority(_ allowed: Bool) throws -> Shell {
+        var shell = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(HostConnection.shell)) as? [String: Any])
+        shell["clientCapabilities"] = ["mayAnswer": allowed]
+        return try JSONDecoder().decode(Shell.self, from: JSONSerialization.data(withJSONObject: shell))
+    }
+    @MainActor func testLiveShellRefreshesAnswerAuthorityAndIgnoresStaleUpdates() async throws {
+        let (model, ref) = try fixture()
+        model.phase(.active); await model.reconnectAll()
+        let connection = try XCTUnwrap(HostConnection.instances.last)
+        XCTAssertFalse(model.mayAnswer(ref.hostID))
+        connection.push(.shell(try shellWithAnswerAuthority(true)))
+        XCTAssertTrue(model.mayAnswer(ref.hostID))
+        connection.onPush?(.shell(try shellWithAnswerAuthority(false)), 1)
+        XCTAssertTrue(model.mayAnswer(ref.hostID), "An old shell must not revoke newer authority")
+        connection.push(.shell(try shellWithAnswerAuthority(false)))
+        XCTAssertFalse(model.mayAnswer(ref.hostID))
+        connection.push(.shell(try shellWithAnswerAuthority(true)))
+        connection.push(.shell(try HostConnection.shell.decode(Shell.self)))
+        XCTAssertTrue(model.mayAnswer(ref.hostID), "Older hosts omit the optional field; keep their hello authority")
+    }
+    @MainActor func testHelloDoesNotReplaceNewerPushedAnswerAuthority() async throws {
+        let (model, ref) = try fixture()
+        HostConnection.afterGreeting = { connection in
+            connection.push(.shell(try! self.shellWithAnswerAuthority(true)))
+        }
+        model.phase(.active); await model.reconnectAll()
+        XCTAssertTrue(model.mayAnswer(ref.hostID))
+    }
+    @MainActor func testOlderHostHelloSuppliesAuthorityAfterANewerShellPush() async throws {
+        let (model, ref) = try fixture()
+        HostConnection.mayAnswer = true
+        HostConnection.afterGreeting = { connection in
+            connection.push(.shell(try! HostConnection.shell.decode(Shell.self)))
+        }
+        model.phase(.active); await model.reconnectAll()
+        XCTAssertTrue(model.mayAnswer(ref.hostID))
     }
     @MainActor func testAThreadReadFailureDoesNotDisconnectItsOnlineComputer() async throws {
         let (model, ref) = try fixture()

@@ -1,5 +1,6 @@
 import { join } from 'node:path'
 import { z } from 'zod'
+import type { RecoveryNotice } from '../../shared/recoveryNotice'
 import { AtomicJsonStore } from '../storage/atomicJsonStore'
 
 export interface CredentialEncryption {
@@ -13,8 +14,9 @@ export class AgentCredentials {
   private readonly store: AtomicJsonStore<Record<string, string>>
   private values: Record<string, string> = {}
   private mutation: Promise<void> = Promise.resolve()
-  constructor(directory: string, private readonly encryption: CredentialEncryption) {
-    this.store = new AtomicJsonStore(join(directory, 'credentials.json'), z.record(z.string(), z.string()).parse, () => ({}))
+  constructor(directory: string, private readonly encryption: CredentialEncryption, onRecovery?: (notice: RecoveryNotice) => void) {
+    this.store = new AtomicJsonStore(join(directory, 'credentials.json'), z.record(z.string(), z.string()).parse, () => ({}),
+      undefined, undefined, () => onRecovery?.({ code: 'CREDENTIALS_RECOVERED' }))
   }
   async load(): Promise<void> { await this.mutation; this.values = await this.store.read() }
   available(): boolean { return this.encryption.isEncryptionAvailable() }
