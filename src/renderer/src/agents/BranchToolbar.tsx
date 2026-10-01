@@ -394,7 +394,7 @@ function BranchPicker({ threadId, triggerRef, open, onOpenChange, label, busy, d
             setLoadedQuery(null); setLoading(true); setQuery(event.target.value)
           }}
           onKeyDown={event => {
-            if (isCompositionKey(event.nativeEvent)) return
+            if (isCompositionKey(event.nativeEvent)) { event.stopPropagation(); return }
             if (event.key === 'ArrowDown') { event.preventDefault(); list.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus() }
             if (event.key === 'Enter') {
               event.preventDefault()

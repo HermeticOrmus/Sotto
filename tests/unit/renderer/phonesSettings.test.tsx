@@ -1,5 +1,5 @@
 import React from 'react'
-import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, expect, it, vi } from 'vitest'
 import { PhonesSettings } from '../../../src/renderer/src/features/settings/PhonesSettings'
@@ -164,4 +164,14 @@ it('saves the name phones show on Enter, and Escape puts the saved one back', as
   await user.clear(field)
   await user.type(field, 'Den{Enter}')
   expect(update).toHaveBeenCalledWith({ phoneAccessName: 'Den' })
+})
+
+it.each([{ isComposing: true }, { keyCode: 229 }])('keeps the computer name while composing Enter (%j)', async composition => {
+  const { update } = show(READY)
+  const field = await screen.findByRole('textbox', { name: 'Name on phones' })
+  fireEvent.change(field, { target: { value: 'Forge' } })
+  fireEvent.keyDown(field, { key: 'Enter', ...composition })
+  expect(update).not.toHaveBeenCalled()
+  fireEvent.keyDown(field, { key: 'Enter' })
+  expect(update).toHaveBeenCalledWith({ phoneAccessName: 'Forge' })
 })

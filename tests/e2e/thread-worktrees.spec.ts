@@ -192,6 +192,9 @@ test('shared checkout is the default; independent worktrees are lazy, editable a
     for (const composition of [{ isComposing: true }, { keyCode: 229 }]) {
       await search.evaluate((element, detail) => element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, ...detail })), composition)
       await expect(search).toBeVisible()
+      await search.evaluate((element, detail) => element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, ...detail })), composition)
+      await expect(refs).toBeVisible()
+      await expect(search).toHaveValue('rel')
       expect(git(repo, 'branch', '--show-current')).toBe('main')
     }
     await page.keyboard.press('Enter')

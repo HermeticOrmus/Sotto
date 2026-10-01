@@ -1,3 +1,4 @@
+import { isCompositionKey } from '../../agents/composerKeys'
 import React, { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { AlertTriangle, Check, Circle, CircleCheck, CircleX, Copy, Info, Smartphone } from 'lucide-react'
 import { PHONE_ACCESS_SERVE_PORT, type PairedPhone, type PhonesBridge, type PhonesCommand, type PhonesState } from '../../../../shared/phones'
@@ -79,7 +80,7 @@ function NameField({ name, defaultName, onSave }: { readonly name: string; reado
   return <Field label="Name on phones" description={`Phones list this computer’s threads under this name. Leave it empty to use ${defaultName}.`}>
     <input className="tt-input" value={draft} placeholder={defaultName} maxLength={63} spellCheck={false}
       onChange={event => setDraft(event.target.value)} onBlur={save}
-      onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); save() } else if (event.key === 'Escape' && draft !== name) { event.preventDefault(); event.stopPropagation(); setDraft(name) } }} />
+      onKeyDown={event => { if (isCompositionKey(event.nativeEvent)) { event.stopPropagation(); return } if (event.key === 'Enter') { event.preventDefault(); save() } else if (event.key === 'Escape' && draft !== name) { event.preventDefault(); event.stopPropagation(); setDraft(name) } }} />
   </Field>
 }
 

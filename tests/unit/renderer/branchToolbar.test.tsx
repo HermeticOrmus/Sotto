@@ -449,6 +449,18 @@ describe('BranchToolbar', () => {
   })
 })
 
+it.each([{ isComposing: true }, { keyCode: 229 }])('keeps the branch picker open when Escape cancels composition (%j)', async composition => {
+  mount(thread())
+  await openPicker()
+  const field = screen.getByRole('textbox', { name: 'Search refs' })
+  fireEvent.change(field, { target: { value: 'draft' } })
+  fireEvent.keyDown(field, { key: 'Escape', ...composition })
+  expect(screen.getByRole('listbox', { name: 'Refs' })).toBeInTheDocument()
+  expect(field).toHaveValue('draft')
+  fireEvent.keyDown(field, { key: 'Escape' })
+  expect(screen.queryByRole('listbox', { name: 'Refs' })).toBeNull()
+})
+
 it('explains how to recover when copying the branch fails', async () => {
   mount(thread())
   vi.stubGlobal('sotto', { ...window.sotto, deliverOutput: vi.fn(async () => 'failed') })
