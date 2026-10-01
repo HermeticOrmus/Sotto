@@ -1918,6 +1918,26 @@ export class AgentControl {
   private async execute(command: AgentCommand, turn?: ActiveTurn, manualRetryId?: string, selectionRevision = this.selectionRevision,
     client: ClientIdentity = this.localClient): Promise<void> {
     if (this.disposed) throw new Error('Sotto is stopping. Your draft is saved.')
+    if (client.transport === 'socket' && ['compose', 'send', 'cancel-draft', 'pause-draft', 'cancel-request'].includes(command.type)) {
+      const thread = this.thread(client.selectedThreadId ?? null)
+      const saved = this.state.threadDrafts?.find(draft => draft.threadId === thread.id)
+      if (command.type === 'compose') {
+        const requestId = saved?.requestId ?? this.state.queue.find(item => item.threadId === thread.id && item.kind === 'question')?.requestId ?? null
+        if (requestId) this.guardClientGrant(client)
+        await this.saveThreadDraft({ type: 'save-thread-draft', threadId: thread.id, draftId: randomUUID(), text: command.text,
+          attachments: command.attachments ?? saved?.attachments ?? [], skills: saved?.skills, files: saved?.files, requestId })
+      } else if (command.type === 'send') {
+        await this.sendDraft(turn, undefined, selectionRevision, client, thread.id)
+      } else if (command.type === 'cancel-draft') {
+        if (this.state.draftThreadId === thread.id) this.clearDraft()
+        else this.state.threadDrafts = (this.state.threadDrafts ?? []).filter(draft => draft.threadId !== thread.id)
+      } else if (command.type === 'pause-draft' && this.state.draftThreadId === thread.id) {
+        this.syncLegacyDraft()
+        this.manualDraftId = null; this.state.draft = ''; this.state.draftAttachments = []
+        this.state.draftThreadId = null; this.state.draftRequestId = null; this.state.composing = false
+      } else if (command.type === 'cancel-request' && this.state.activeThreadId === thread.id) this.state.pendingRequest = ''
+      return
+    }
     // Explicit targets survive host observations and queue-driven selection changes.
     if (turn && 'threadId' in command) {
       turn.threadId = command.threadId
@@ -2648,35 +2668,42 @@ export class AgentControl {
     this.say(`Sent to ${thread.title}.`)
     this.observe()
   }
-  private async sendDraft(turn?: ActiveTurn, retryId?: string, selectionRevision = this.selectionRevision, client = this.localClient): Promise<void> {
-    const pendingId = retryId ?? this.outbox.find(item => item.threadId === this.state.draftThreadId)?.id
+  private async sendDraft(turn?: ActiveTurn, retryId?: string, selectionRevision = this.selectionRevision, client = this.localClient, selectedThreadId?: string): Promise<void> {
+    const scoped = selectedThreadId !== undefined
+    const draftThreadId = selectedThreadId ?? this.state.draftThreadId
+    if (!scoped || this.state.draftThreadId === draftThreadId) this.syncLegacyDraft()
+    const pickedDraft = this.state.threadDrafts?.find(draft => draft.threadId === draftThreadId)
+    const draftText = scoped ? pickedDraft?.text ?? '' : this.state.draft
+    const draftAttachments = scoped ? pickedDraft?.attachments ?? [] : this.state.draftAttachments
+    const draftRequestId = scoped ? pickedDraft?.requestId : this.state.draftRequestId
+    const pickedDraftId = scoped ? pickedDraft?.draftId : this.manualDraftId ?? undefined
+    const pendingId = retryId ?? this.outbox.find(item => item.threadId === draftThreadId)?.id
     if (pendingId) {
       this.canAct()
-      this.observe(); this.acceptSnapshot(await this.readThread(this.state.draftThreadId ?? undefined))
+      this.observe(); this.acceptSnapshot(await this.readThread(draftThreadId ?? undefined))
       if (this.outbox.some(item => item.id === pendingId)) throw new Error('An earlier action has an unknown result. Reconnect and inspect the provider before retrying; Sotto will not send it twice.')
       this.say('Reconciled the earlier action. No new prompt was sent.')
       return
     }
     if (turn) {
-      turn.threadId = this.state.draftThreadId
-      turn.projectId = this.state.host.threads.find(thread => thread.id === this.state.draftThreadId)?.projectId ?? null
+      turn.threadId = draftThreadId
+      turn.projectId = this.state.host.threads.find(thread => thread.id === draftThreadId)?.projectId ?? null
     }
     this.canAct()
     this.observe()
-    this.acceptSnapshot(await this.readThread(this.state.draftThreadId ?? undefined, undefined, { beforeSend: true }))
-    const thread = this.thread(this.state.draftThreadId)
-    if (!this.hasDraft()) throw new Error('There is no prompt to send.')
-    const attachments = validatePromptAttachments(this.state.host, thread.modelId, this.state.draftAttachments)
+    this.acceptSnapshot(await this.readThread(draftThreadId ?? undefined, undefined, { beforeSend: true }))
+    const thread = this.thread(draftThreadId)
+    if (!draftText.trim() && !draftAttachments?.length) throw new Error('There is no prompt to send.')
+    const attachments = validatePromptAttachments(this.state.host, thread.modelId, draftAttachments)
     const assignment = this.assignment(thread.id)
-    const text = this.state.draft.trim()
-    this.syncLegacyDraft()
-    const draftId = this.manualDraftId ?? undefined
+    const text = draftText.trim()
+    const draftId = pickedDraftId
     const savedDraft = this.state.threadDrafts?.find(item => item.threadId === thread.id && item.draftId === draftId)
     const skills = savedDraft?.skills
     const files = savedDraft?.files
-    if (this.state.draftRequestId) {
+    if (draftRequestId) {
       if (attachments.length) throw new Error('Images cannot answer a pending question. Remove the images and answer it explicitly.')
-      const requestId = this.state.draftRequestId
+      const requestId = draftRequestId
       if (!thread.requests.some(request => request.id === requestId && request.kind === 'question')) throw new Error('This question is no longer pending. Your answer is saved; review it before starting a new prompt.')
       await this.execute({ type: 'answer', threadId: thread.id, requestId, answer: text }, turn, undefined, selectionRevision, client)
       return
@@ -2690,10 +2717,11 @@ export class AgentControl {
     assignment.stopReason = 'none'; assignment.stoppedAt = ''
     assignment.contextUpdatedAt = Date.now()
     await this.dispatch({ type: 'send', commandId: randomUUID(), threadId: thread.id, messageId, text, ...(skills ? { skills } : {}), ...(files ? { files } : {}), ...(attachments.length ? { attachments } : {}), expectedLastUserMessageId: lastUserMessageIdOf(thread) }, turn, undefined, draftId)
-    if (this.manualDraftId === draftId) this.clearDraft()
+    if (this.manualDraftId === draftId && this.state.draftThreadId === thread.id) this.clearDraft()
+    else this.state.threadDrafts = (this.state.threadDrafts ?? []).filter(draft => draft.threadId !== thread.id || draft.draftId !== draftId)
     this.state.queue = this.state.queue.filter(q => q.threadId !== thread.id || q.kind === 'permission' || q.kind === 'question')
     this.say(`Sent to ${thread.title}.`)
-    this.presentQueue(true, selectionRevision)
+    if (!scoped) this.presentQueue(true, selectionRevision)
   }
   private draftRequestId(threadId: string | null): string | null {
     const thread = this.thread(threadId)

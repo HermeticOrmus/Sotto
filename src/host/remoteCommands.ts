@@ -15,6 +15,7 @@ type Fields<T extends CommandType> = readonly Exclude<keyof Extract<AgentCommand
  */
 export const REMOTE_COMMANDS: { readonly [T in CommandType]?: Fields<T> } = {
   configure: ['patch'],
+  compose: ['text', 'attachments'], send: [], 'cancel-draft': [], 'pause-draft': [], 'cancel-request': [],
   connect: ['provider'], disconnect: ['provider'], refresh: ['provider'],
   'refresh-thread-skills': ['threadId', 'forceReload'],
   'check-client-updates': [], 'dismiss-client-updates': [],

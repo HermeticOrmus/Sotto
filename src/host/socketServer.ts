@@ -222,11 +222,12 @@ export async function startSocketServer(options: SocketServerOptions) {
     }
     const input = request.command
     const state = service.shell()
-    const savedDraft = !state.composing && !state.draft.trim() && !state.draftAttachments?.length
-      ? state.threadDrafts?.find(draft => draft.threadId === state.activeThreadId) : undefined
-    const draftRequestId = state.composing || input.type === 'send' ? state.draftRequestId
+    const targetThreadId = peer.selectedThreadId
+    const savedDraft = state.draftThreadId !== targetThreadId || !state.composing && !state.draft.trim() && !state.draftAttachments?.length
+      ? state.threadDrafts?.find(draft => draft.threadId === targetThreadId) : undefined
+    const draftRequestId = state.composing && state.draftThreadId === targetThreadId ? state.draftRequestId
       : savedDraft ? savedDraft.requestId
-        : state.queue.find(item => item.threadId === state.activeThreadId && item.kind === 'question' && item.requestId)?.requestId
+        : state.queue.find(item => item.threadId === targetThreadId && item.kind === 'question' && item.requestId)?.requestId
     const refusal = remoteCommandRefusal(input, { mayAnswer: options.mayAnswer?.(peer.client) ?? false, askingProviderModes: askingProviderModes(input),
       draftRequestId: input.type === 'send' || input.type === 'compose' ? draftRequestId : undefined,
       clientUpdates: options.clientUpdates === true })
@@ -250,7 +251,7 @@ export async function startSocketServer(options: SocketServerOptions) {
         } else if (input.type === 'observe-threads') {
           peer.observed = new Set(input.threadIds); await observe()
         } else {
-          const result = await service.command(input, peer.client)
+          const result = await service.command(input, { ...peer.client, selectedThreadId: peer.selectedThreadId })
           if (input.type === 'answer') {
             receipt.answerDelivered = result.error == null
             if (!receipt.answerDelivered) receipt.error = { code: 'unavailable', message: errors.unavailable }

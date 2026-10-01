@@ -209,18 +209,41 @@ describe('authenticated host socket', () => {
       expect(await client.receipt(commandId)).toEqual({ status: 'completed', answerDelivered: true })
     } finally { release(); await answer; spy.mockRestore() }
   })
-  it.each(['compose', 'send', 'cancel-draft', 'pause-draft', 'cancel-request'] as const)('refuses an implicit remote target for %s without changing the host draft', async type => {
+  it('composes and sends to the peer selection while preserving another thread draft', async () => {
+    const { client } = await pair()
+    await client.command({ type: 'connect', provider: 'codex' })
+    const threads = client.shell().host.threads
+    const localId = threads[0]!.id
+    const created = await client.command({ type: 'create-project', provider: 'codex', title: 'Remote project', path: root, useExisting: true })
+    const projectId = created.host.projects.find(project => project.path === root)!.id
+    const opened = await client.command({ type: 'create-thread', projectId, title: 'Remote thread', modelId: created.host.models[0]!.id, managed: true })
+    const remoteId = opened.host.threads.find(thread => thread.title === 'Remote thread')!.id
+    await host.service.command({ type: 'pause-draft' }, desktopWindowClient())
+    await host.service.command({ type: 'select-thread', threadId: localId }, desktopWindowClient())
+    await host.service.command({ type: 'compose', text: 'Host draft' }, desktopWindowClient())
+    await client.command({ type: 'select-thread', threadId: remoteId })
+    const before = host.service.shell()
+    expect((await client.command({ type: 'compose', text: 'Remote draft' })).error).toBeNull()
+    expect(host.service.shell().threadDrafts).toEqual(expect.arrayContaining([expect.objectContaining({ threadId: remoteId, text: 'Remote draft' })]))
+    expect((await client.command({ type: 'send' })).error).toBeNull()
+    expect(host.service.threadDetail(remoteId)!.messages).toEqual(expect.arrayContaining([expect.objectContaining({ role: 'user', text: 'Remote draft' })]))
+    expect(host.service.shell().activeThreadId).toBe(before.activeThreadId)
+    expect(host.service.shell().draft).toBe(before.draft)
+    expect(host.service.shell().threadDrafts).toEqual(expect.arrayContaining(before.threadDrafts ?? []))
+  })
+  it.each(['cancel-draft', 'pause-draft', 'cancel-request'] as const)('targets the peer selection for %s and preserves another thread draft', async type => {
     const { client } = await pair()
     await client.command({ type: 'connect', provider: 'codex' })
     const threads = client.shell().host.threads
     await host.service.command({ type: 'select-thread', threadId: threads[0]!.id }, desktopWindowClient())
     await host.service.command({ type: 'compose', text: 'Host draft' }, desktopWindowClient())
     await client.command({ type: 'select-thread', threadId: threads[1]!.id })
+    await client.command({ type: 'compose', text: 'Remote draft' })
     const before = host.service.shell()
-    await expect(client.command(type === 'compose' ? { type, text: 'Remote draft' } : { type })).rejects.toMatchObject({ code: 'forbidden' })
+    expect((await client.command({ type })).error).toBeNull()
     expect(host.service.shell().activeThreadId).toBe(before.activeThreadId)
     expect(host.service.shell().draft).toBe(before.draft)
-    expect(host.service.shell().threadDrafts).toEqual(before.threadDrafts)
+    expect(host.service.shell().threadDrafts?.find(draft => draft.threadId === threads[1]!.id)?.text).toBe(type === 'cancel-draft' ? undefined : 'Remote draft')
   })
   it('refuses a second listener before it can open or overwrite the running host stores', async () => {
     await expect(startHeadlessHost({ dataDirectory: root, port: 0 })).rejects.toThrow(`Another host (process ${process.pid}) is using this data folder`)
