@@ -129,7 +129,7 @@ describe('bounded WebSocket framing', () => {
   })
   it('keeps a large outgoing frame alive past the deadline until output drains', () => {
     vi.useFakeTimers()
-    const stream = new Duplex({ read() {}, write(_chunk, _encoding, _callback) {} })
+    const stream = new Duplex({ read() {}, write() {} })
     const frames = new SocketFrames(stream, false, () => {})
     try {
       frames.startHeartbeat()
