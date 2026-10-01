@@ -34,7 +34,7 @@ function fakeServer(options: { refusePort?: number } = {}) {
     const port = input.port || next++
     const entry = { port, closed: false, name: input.name!, admin: input.admin, ...(input.onPaired ? { onPaired: input.onPaired } : {}) }
     started.push(entry)
-    return { descriptor: { port }, connectedClients: () => [], dropRevoked: vi.fn(), close: async () => { entry.closed = true } }
+    return { descriptor: { port }, connectedClients: () => [], dropRevoked: vi.fn(), refreshCapabilities: vi.fn(), close: async () => { entry.closed = true } }
   })
   return { startServer: startServer as unknown as NonNullable<PhoneAccessOptions['startServer']>, started }
 }

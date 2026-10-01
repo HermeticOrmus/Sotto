@@ -202,17 +202,10 @@ import { registerMemoryIpc } from './memory/ipc'
 import { MEMORY_CHANGED } from '../shared/memory'
 import { probeMemoryStore } from './memory/probe'
 
-const memoryProbeMode = process.env.SOTTO_MEMORY_PROBE === '1'
+export { probeMemoryStore }
+
 const e2eConfiguration = resolveE2EConfiguration(app.isPackaged, process.env)
-if (memoryProbeMode) {
-  const directory = process.env.SOTTO_MEMORY_PROBE_USER_DATA
-  if (!directory || !isAbsolute(directory)) {
-    console.error('[Sotto] memory-store-probe-profile-invalid')
-    app.exit(1)
-    throw new Error('Memory probe requires an absolute isolated user-data directory')
-  }
-  app.setPath('userData', directory)
-} else if (e2eConfiguration === null) {
+if (e2eConfiguration === null) {
   delete process.env.SOTTO_E2E
   delete process.env.SOTTO_E2E_SCENARIO
   delete process.env.SOTTO_E2E_USER_DATA
@@ -501,6 +494,7 @@ async function createRuntime(): Promise<NativeRuntimeController> {
   const runtimeVerification = e2eConfiguration === null
     ? beginRuntimeVerification(join(resourceRoot, 'runtime'))
     : null
+  await naturalSpeechModels.initialize()
   // Packaged builds get the brand icon stamped onto the executable by
   // electron-builder; an unpackaged run has to name the repository icon itself.
   const unpackagedIconPath = app.isPackaged
@@ -513,7 +507,7 @@ async function createRuntime(): Promise<NativeRuntimeController> {
     Date.now,
     platformDefaults,
   )
-  const credentials = new AgentCredentials(userDataPath, safeStorage)
+  const credentials = new AgentCredentials(userDataPath, safeStorage, notice => recoveryNotices.publish(notice))
   await credentials.load()
   const grokSpeech = new GrokSpeechService({ credentials, ...(e2eConfiguration === null ? {} : { fetchFn: e2eGrokSpeechFetch }) })
   const kokoroSpeech = new KokoroSpeechService({ credentials, ...(e2eConfiguration === null ? {} : { fetchFn: e2eKokoroSpeechFetch }) })
@@ -1332,26 +1326,7 @@ app.setAppUserModelId(APP_ID)
 // Electron's unhandled default does exactly that.
 app.on('window-all-closed', () => undefined)
 
-if (memoryProbeMode) {
-  // Wait for the verifier to attach stdout/exit listeners before running. This
-  // handshake avoids racing Playwright's main-process debugger attachment.
-  const timeout = setTimeout(() => app.exit(1), 60_000)
-  void app.whenReady().then(() => {
-    app.once('before-quit', (event) => {
-      event.preventDefault()
-      clearTimeout(timeout)
-      try {
-        const evidence = probeMemoryStore(join(app.getPath('userData'), 'memory.sqlite'))
-        process.stdout.write(`${JSON.stringify(evidence)}\n`, () => app.exit(0))
-      } catch (error) {
-        console.error('[Sotto] memory-store-probe-failed', error)
-        app.exit(1)
-      }
-    })
-  })
-} else {
-  void bootstrapSotto({ app, initialize: createRuntime, log: logOperational }).catch(() => {
-    logOperational('bootstrap-terminal-failed')
-    app.quit()
-  })
-}
+void bootstrapSotto({ app, initialize: createRuntime, log: logOperational }).catch(() => {
+  logOperational('bootstrap-terminal-failed')
+  app.quit()
+})

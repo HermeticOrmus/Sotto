@@ -6,11 +6,13 @@ final class NewThreadModelTests: XCTestCase {
     private let forge = "00000000-0000-4000-8000-000000000002"
     private func json(_ value: String) throws -> JSONValue { try JSONDecoder().decode(JSONValue.self, from: Data(value.utf8)) }
     @MainActor private func fixture(twoComputers: Bool = false, projects: Bool = true) async throws -> AppModel {
-        KeychainStore.items = [:]; HostConnection.instances = []; HostConnection.afterGreeting = nil
+        TestKeychain.items = [:]; HostConnection.instances = []; HostConnection.afterGreeting = nil
         HostConnection.failDetail = false; HostConnection.holdDetail = false; HostConnection.mayAnswer = false
+        TestKeychain.locked = false; TestKeychain.unreadableAccount = nil
+        HostConnection.receipt = .object(["status": .string("unknown")]); HostConnection.loseAcknowledgement = false
         HostConnection.features = ["host-folders"]; HostConnection.receipts = [:]
         HostConnection.shells = [:]; HostConnection.commandHandler = nil; HostConnection.folderHandler = nil
-        let store = KeychainStore(), hosts = twoComputers ? [laptop, forge] : [laptop]
+        let store = TestKeychain.store, hosts = twoComputers ? [laptop, forge] : [laptop]
         try store.write(hosts, account: ComputerStore.indexAccount)
         for host in hosts {
             let pairing = try json(#"{"v":1,"hostId":"\#(host)","clientId":"phone","token":"fixture"}"#).decode(Pairing.self)
@@ -40,7 +42,7 @@ final class NewThreadModelTests: XCTestCase {
             HostConnection.receipts[id] = .object(["status": .string("completed")])
             return result
         }
-        let model = AppModel(); model.phase(.active); await model.reconnectAll()
+        let model = AppModel(keychain: TestKeychain.store); model.phase(.active); await model.reconnectAll()
         return model
     }
     @MainActor private func create(_ model: AppModel, host: String? = nil, folder: FolderListing? = nil, permission: String = "approval-required") async -> ThreadRef? {
@@ -164,7 +166,7 @@ final class NewThreadModelTests: XCTestCase {
         }
         _ = await create(model)
         let marker = try XCTUnwrap(model.pendingCreations.first)
-        let restarted = AppModel(); restarted.phase(.active); await restarted.reconnectAll()
+        let restarted = AppModel(keychain: TestKeychain.store); restarted.phase(.active); await restarted.reconnectAll()
         XCTAssertTrue(restarted.pendingCreations.isEmpty)
         XCTAssertNotNil(restarted.thread(ThreadRef(hostID: laptop, threadID: marker.threadID)))
         XCTAssertEqual(HostConnection.instances.flatMap(\.commands).count, 1)
