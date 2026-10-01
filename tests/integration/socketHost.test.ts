@@ -37,6 +37,24 @@ async function pair(name = 'Socket test', onPushError?: (message: string) => voi
   await client.connect(); return { client, result }
 }
 describe('authenticated host socket', () => {
+  it('returns a worktree preview only in its command response, never in cached or paired-client shells', async () => {
+    const { client } = await pair()
+    const other = await pair('Other preview client')
+    const preview = { path: '/synthetic/worktree', branch: 'sotto/test', dirty: false, ignored: ['.env'], items: [{ path: '.env', bytes: 10, fileCount: 1 }], repositories: [], untracked: [] }
+    const command = vi.spyOn(host.service, 'command').mockResolvedValueOnce({ ...host.service.shell(), error: null, worktreeReclaimPreview: preview })
+    const pushes: unknown[] = []
+    const unsubscribe = client.subscribe(state => pushes.push(state.worktreeReclaimPreview))
+    try {
+      const result = await client.command({ type: 'preview-reclaim-thread-worktree', threadId: randomUUID() })
+      expect(result.worktreeReclaimPreview).toEqual(preview)
+      expect(client.shell().worktreeReclaimPreview).toBeUndefined()
+      expect(other.client.shell().worktreeReclaimPreview).toBeUndefined()
+      expect(host.service.shell().worktreeReclaimPreview).toBeUndefined()
+      expect(pushes).not.toContainEqual(preview)
+      command.mockResolvedValueOnce({ ...host.service.shell(), error: 'Checking this worktree is unavailable. Nothing was removed.' })
+      expect((await client.command({ type: 'preview-reclaim-thread-worktree', threadId: randomUUID() })).error).toContain('Nothing was removed')
+    } finally { unsubscribe(); command.mockRestore() }
+  })
   it('exposes only loopback health before pairing and rejects unsigned operations', async () => {
     expect(await (await fetch(url + '/v1/health')).json()).toMatchObject({ v: 1, hostId: host.service.shell().hostId, port: host.descriptor!.port })
     expect((await fetch(url + '/v1/session', { method: 'POST' })).status).toBe(401)

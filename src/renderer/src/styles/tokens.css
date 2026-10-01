@@ -202,6 +202,7 @@
   --tt-attention: var(--tt-warning);
   --tt-error: color-mix(in oklab, color-mix(in oklab, var(--theme-error-foreground) var(--theme-contrast-base), var(--theme-canvas)), var(--theme-contrast-target) var(--theme-contrast-boost));
   --tt-error-text: var(--tt-error);
+  --tt-danger: var(--tt-error);
   --tt-error-contrast: var(--theme-canvas);
   --tt-error-surface: var(--theme-error-surface);
   --tt-error-border: color-mix(in oklab, var(--theme-error) 38%, var(--theme-error-surface));
