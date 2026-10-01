@@ -49,7 +49,7 @@ Codex model, effort and permission changes use its native settings update and wa
 
 The **Agents** room coordinates threads by voice. It collects prompts until you say **“send it,”** supervises only the threads you assign, queues questions one at a time, and yields a thread to manual control when you send directly in the native client. Replies can be spoken: Grok Altair sends reply text to xAI on a separately saved xAI key, Kokoro Heart sends it through OpenRouter on your existing key, and the natural voice runs on this computer after a one-time download. The voice coordinator and memory are switched off for the beta, so the Agents room, the reply voices and the Memory page stay hidden until they are turned back on.
 
-Native clients retain their own subscription sign-in and model catalogs. Wake control requires separately supplied compatible local model/runtime files; their distribution, real microphone acceptance, and macOS live checks remain release gates. Production sign-in, checkout, and billing webhooks are not deployed. Until a membership service is configured, every build, installed or unpackaged, labels access **Private beta** and allows agent actions; that is not a paid entitlement.
+Native clients retain their own subscription sign-in and model catalogs. Wake control requires separately supplied compatible local model/runtime files; their distribution, real microphone acceptance, and macOS live checks remain release gates. Sotto has no account or subscription. Agent actions use your connected provider accounts.
 
 ### Questions and permissions
 
@@ -77,6 +77,10 @@ Ask for it by name ("use Computer Use to…") or with Codex's `$computer-use` sk
 In Terminal mode, **Close** releases the terminal's output and keeps its row on **Closed** until Sotto quits. **Reopen** starts the same command with fresh output. **Stop**, a command finishing, or hiding its pane keeps the output readable. Up to 64 terminals can be open at once; Closed rows do not count toward that limit.
 
 ### Sending, steering and screenshots
+
+If a permission arrives while you type, the composer keeps focus and your draft. It becomes read-only until you allow or deny the request above. Tab still reaches the other controls.
+
+If a question answer fails, its text comes back to the composer unless you have written a newer draft. The error stays with that thread when you switch away and return, until you edit or retry the answer or close the window.
 
 While a thread is running, **Steer now** beside a queued message sends that message into the current turn when the provider supports steering. The rest of the queue and any newer composer draft stay in place. An unconfirmed message cannot be steered again; use **Check again** to reconcile its delivery.
 

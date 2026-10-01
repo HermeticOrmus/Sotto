@@ -134,7 +134,7 @@ describe('Claude recovery and safety', () => {
     let registry = new ThreadRegistry(f.root)
     let wrapped = new SottoThreadHost('claude', f.adapter, registry)
     const create = () => new AgentControl({ schedule: immediatePublishScheduler, directory: f.root, host: wrapped, credentials, reasoner: e2eAgentReasoner,
-      membership: { status: async () => ({ status: 'beta', label: 'Test', expiresAt: null }), action: async () => ({ status: 'beta', label: 'Test', expiresAt: null }) } })
+    })
     let control = create()
     try {
       await control.start(); await stageInto(control, PIXEL_PNG); await control.command({ type: 'connect' })
