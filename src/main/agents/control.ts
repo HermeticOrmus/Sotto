@@ -1621,7 +1621,8 @@ export class AgentControl {
       else this.state.globalLaneBusy = false
       this.updateCredentials()
       await this.persist().catch(error => {
-        // The user sees the fixed guidance; the raw storage error goes to the turn record only.
+        // The user sees fixed guidance; diagnostics keep only the storage failure category.
+        if (turn) turn.failureCode = 'storage-failed'
         failure = error instanceof Error ? error.message : 'Could not save agent state.'
         this.state.error = 'Could not save agent state. Pause management until storage is available.'
         this.state.assignments.forEach(a => { a.paused = true })
@@ -2524,7 +2525,13 @@ export class AgentControl {
       // The images become the adapter's to read here, at the provider boundary, and not before (ADR-0031).
       const hostCommand = (prompt?.attachments?.length
         ? { ...prompt, attachments: prompt.attachments.map(image => this.promptImage(image)) } : command) as AgentHostCommand
-      try { this.canAct(undefined, draftKept); result = await this.dependencies.host.execute(hostCommand) }
+      try {
+        this.canAct(undefined, draftKept)
+        result = await this.dependencies.host.execute(hostCommand).catch(error => {
+          if (turn) turn.failureCode = 'provider-failed'
+          throw error
+        })
+      }
       finally { providerLatencyMs = Math.max(0, Date.now() - providerStartedAt) }
     } catch (error) {
       this.outbox = this.outbox.filter(o => o.id !== command.commandId)
@@ -2576,7 +2583,10 @@ export class AgentControl {
     }
     this.outbox = this.outbox.filter(o => o.id !== command.commandId)
     await this.persist()
-    if (!result.accepted && !result.uncertain) throw new Error(PROVIDER_REJECTED_ACTION)
+    if (!result.accepted && !result.uncertain) {
+      if (turn) turn.failureCode = 'provider-failed'
+      throw new Error(PROVIDER_REJECTED_ACTION)
+    }
     this.acceptSnapshot(await this.readThread(threadId, provider))
     // Another client or a cancellation can remove the request during this send. That reconciles
     // the waiting request, but never upgrades this adapter's uncertain answer into a confirmation.
@@ -2806,6 +2816,9 @@ export class AgentControl {
     try {
       intent = await this.dependencies.reasoner.intent(request, this.state.host, this.state.activeProjectId, defaultNewThreadModelId(this.state.configuration, this.state.host.models, this.state.reasoningAccounts), this.state.activeThreadId, preferences)
       if (turn) turn.intentResolvedAtMs = Date.now()
+    } catch (error) {
+      if (turn) turn.failureCode = 'reasoning-failed'
+      throw error
     } finally {
       if (turn) turn.intentMs += Date.now() - intentStarted
     }
@@ -3018,7 +3031,10 @@ export class AgentControl {
       const retrievalStarted = Date.now()
       const preferences = this.readPreferences(assignment.instruction, thread.projectId, thread.id, turn)
       const intentStarted = Date.now()
-      const decision = await this.dependencies.reasoner.decide(assignment.instruction, structuredClone(thread), preferences)
+      const decision = await this.dependencies.reasoner.decide(assignment.instruction, structuredClone(thread), preferences).catch(error => {
+        if (turn) turn.failureCode = 'reasoning-failed'
+        throw error
+      })
         .finally(() => { if (turn) turn.intentMs = Date.now() - intentStarted })
       const current = this.state.assignments.find(a => a.threadId === thread.id)
       const latest = this.state.host.threads.find(t => t.id === thread.id)
@@ -3082,6 +3098,7 @@ export class AgentControl {
         if (assignment.stopReason === 'none') {
           assignment.stopReason = 'error'; assignment.stoppedAt = new Date().toISOString()
         }
+        if (turn) turn.failureCode = 'storage-failed'
         failure = error instanceof Error ? error.message : 'Could not save agent state.'
         this.enqueue(thread, 'blocked', failure)
       })

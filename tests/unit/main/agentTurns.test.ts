@@ -280,7 +280,7 @@ describe('coordinator turn records', () => {
     expect(raw).not.toContain('Private')
     expect(raw).not.toContain('"text"')
     expect(raw).not.toContain('"error"')
-    expect((await upgraded.recent(1))[0]?.outcome).toBe('failed')
+    expect((await upgraded.recent(1))[0]).toMatchObject({ outcome: 'failed', failureCode: 'action-failed' })
   })
 
   it.each(['EPERM', 'EBUSY'])('retries a temporarily locked initial read (%s)', async code => {
@@ -341,10 +341,12 @@ describe('coordinator turn records', () => {
 
   it('uses only fixed failure codes and migrates old failed records', async () => {
     const f = await fixture()
-    for (const source of ['command', 'utterance', 'supervision'] as const) {
-      await f.recorder.finish(f.recorder.begin({ source, commandType: 'send', text: 'Private prompt' }), 'failed')
+    for (const failureCode of ['action-failed', 'reasoning-failed', 'provider-failed', 'storage-failed'] as const) {
+      const turn = f.recorder.begin({ source: 'command', commandType: 'send', text: 'Private prompt' })!
+      turn.failureCode = failureCode
+      await f.recorder.finish(turn, 'failed')
       const record = (await f.recorder.recent(1))[0]!
-      expect(record.failureCode).toBe(`${source}-failed`)
+      expect(record.failureCode).toBe(failureCode)
       expect(turnRecordSchema.safeParse({ ...record, failureCode: 'Private error' }).success).toBe(false)
       const legacy: Partial<typeof record> = { ...record }
       delete legacy.failureCode
@@ -453,7 +455,7 @@ describe('coordinator turn records', () => {
     })
     await f.control.command({ type: 'utterance', text: 'Choose the right project' })
     const record = await lastRawRecord(f.root)
-    expect(record).toMatchObject({ outcome: 'failed' })
+    expect(record).toMatchObject({ outcome: 'failed', failureCode: 'reasoning-failed' })
     expect(record.timings.intentMs).toBeGreaterThan(0)
   })
 
@@ -465,7 +467,7 @@ describe('coordinator turn records', () => {
     expect(write).toHaveBeenCalled()
     expect(state.error).toBe('Could not save agent state. Pause management until storage is available.')
     expect(state.assignments.every(assignment => assignment.paused)).toBe(true)
-    expect(await lastRawRecord(f.root)).toMatchObject({ outcome: 'failed' })
+    expect(await lastRawRecord(f.root)).toMatchObject({ outcome: 'failed', failureCode: 'storage-failed' })
   })
 
   it('keeps commands usable when a supplied recorder begin throws', async () => {
@@ -510,6 +512,7 @@ describe('coordinator turn records', () => {
       expect(record).toMatchObject({
         source: 'supervision', commandType: 'send', threadId: 'workshop', providerSessionId: 'session-workshop',
         outcome: reject ? 'failed' : 'completed',
+        failureCode: reject ? 'provider-failed' : null,
         contextTokenEstimate: Math.ceil(f.service.decision.text.length / 4),
       })
     })

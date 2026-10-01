@@ -30,7 +30,7 @@ export const turnRecordSchema = z.object({
   retrievedMemoryIds: z.array(z.string()),
   contextTokenEstimate: z.number().int().nonnegative(),
   outcome: z.enum(['completed', 'clarified', 'failed']),
-  failureCode: z.enum(['command-failed', 'utterance-failed', 'supervision-failed', 'unknown']).nullable().default(null),
+  failureCode: z.enum(['action-failed', 'reasoning-failed', 'provider-failed', 'storage-failed', 'unknown']).nullable().default(null),
 })
 export type TurnRecord = z.infer<typeof turnRecordSchema>
 
@@ -54,6 +54,7 @@ export interface ActiveTurn {
   projectId: string | null | undefined
   text: string
   clarified: boolean
+  failureCode?: NonNullable<TurnRecord['failureCode']>
 }
 
 /** A local estimate: one token per four characters across all turn context. */
@@ -165,7 +166,7 @@ export class TurnRecorder {
         retrievedMemoryIds: turn.retrievedMemoryIds,
         contextTokenEstimate: turn.contextTokenEstimate,
         outcome,
-        failureCode: outcome === 'failed' ? `${turn.source}-failed` : null,
+        failureCode: outcome === 'failed' ? turn.failureCode ?? 'action-failed' : null,
       }
       await this.enqueue(async () => {
         await this.scrub()
