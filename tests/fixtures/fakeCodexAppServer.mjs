@@ -359,7 +359,7 @@ function control(action) {
     if (reply) {
       heldReplies.delete(action.method)
       // Persist the action marker before the parent sees the reply and can retire this app-server.
-      queueMicrotask(() => emit(reply))
+      globalThis.queueMicrotask(() => emit(reply))
     }
     return
   }
