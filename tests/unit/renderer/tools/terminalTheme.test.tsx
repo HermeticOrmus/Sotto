@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-const xterm = vi.hoisted(() => ({ selection: 'terminal selection', instances: [] as { options: Record<string, unknown>; themes: unknown[]; key: (event: KeyboardEvent) => boolean; clearSelection: ReturnType<typeof vi.fn> }[] }))
+const xterm = vi.hoisted(() => ({ selection: 'terminal selection', instances: [] as { options: Record<string, unknown>; themes: unknown[]; key: (event: KeyboardEvent) => boolean; clearSelection: ReturnType<typeof vi.fn>; selectionChange: () => void }[] }))
 const gpu = vi.hoisted(() => ({ fail: false, instances: [] as { dispose: ReturnType<typeof vi.fn>; lose(): void }[] }))
 vi.mock('@xterm/addon-webgl', () => ({ WebglAddon: class {
   readonly dispose = vi.fn()
@@ -23,9 +23,11 @@ vi.mock('@xterm/xterm', () => ({
     onData(): void {}
     key: (event: KeyboardEvent) => boolean = () => true
     attachCustomKeyEventHandler(handler: (event: KeyboardEvent) => boolean): void { this.key = handler }
-    hasSelection(): boolean { return true }
+    selectionChange: () => void = () => {}
+    onSelectionChange(listener: () => void): { dispose(): void } { this.selectionChange = listener; return { dispose() {} } }
+    hasSelection(): boolean { return xterm.selection.length > 0 }
     getSelection(): string { return xterm.selection }
-    readonly clearSelection = vi.fn()
+    readonly clearSelection = vi.fn(() => { xterm.selection = ''; this.selectionChange() })
     open(): void {}
     dispose(): void {}
   },
@@ -116,6 +118,45 @@ it('keeps the terminal selection until copying succeeds and explains a failed co
   await vi.waitFor(() => expect(terminal.clearSelection).toHaveBeenCalledOnce())
   expect(onNotice).toHaveBeenLastCalledWith(null)
   view.dispose()
+})
+
+it.each(['new selection', 'terminal selection'])('keeps a newer selection (%s) when an earlier copy completes', async selection => {
+  vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} }))
+  const pending = Promise.withResolvers<string>()
+  const deliverOutput = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValue('copied')
+  vi.stubGlobal('sotto', { deliverOutput })
+  const onNotice = vi.fn(), onInterrupt = vi.fn()
+  const view = createXtermView({ onInput() {}, onInterrupt, onNotice }, { resolveColor: value => value })
+  view.setInputEnabled(true)
+  const terminal = xterm.instances[0]!
+  terminal.key(new KeyboardEvent('keydown', { key: 'c', ctrlKey: true }))
+  xterm.selection = selection
+  terminal.selectionChange()
+  pending.resolve('copied')
+  await vi.waitFor(() => expect(onNotice).toHaveBeenCalledWith(null))
+  expect(terminal.clearSelection).not.toHaveBeenCalled()
+  terminal.key(new KeyboardEvent('keydown', { key: 'c', ctrlKey: true }))
+  expect(deliverOutput).toHaveBeenLastCalledWith({ text: selection, autoPaste: false, pasteDelayMs: 50 })
+  expect(onInterrupt).not.toHaveBeenCalled()
+  await vi.waitFor(() => expect(terminal.clearSelection).toHaveBeenCalledOnce())
+  view.dispose()
+})
+
+it.each(['success', 'failure'])('ignores a pending copy %s after the terminal is disposed', async outcome => {
+  vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} }))
+  const pending = Promise.withResolvers<string>()
+  vi.stubGlobal('sotto', { deliverOutput: vi.fn(() => pending.promise) })
+  const onNotice = vi.fn()
+  const view = createXtermView({ onInput() {}, onInterrupt() {}, onNotice }, { resolveColor: value => value })
+  const terminal = xterm.instances[0]!
+  terminal.key(new KeyboardEvent('keydown', { key: 'c', ctrlKey: true }))
+  view.dispose()
+  if (outcome === 'success') pending.resolve('copied')
+  else pending.reject(new Error('Copy failed'))
+  await pending.promise.catch(() => {})
+  await Promise.resolve()
+  expect(terminal.clearSelection).not.toHaveBeenCalled()
+  expect(onNotice).not.toHaveBeenCalled()
 })
 
 it('does not copy whitespace-only terminal selections or interrupt the command', () => {

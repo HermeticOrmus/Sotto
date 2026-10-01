@@ -130,6 +130,9 @@ export const createXtermView = (handlers: TerminalViewHandlers, { resolveColor =
   element.className = 'terminal-view__screen'
   let opened = false
   let inputEnabled = false
+  let disposed = false
+  let selectionRevision = 0
+  const selectionChanges = terminal.onSelectionChange(() => { selectionRevision++ })
   let renderer: WebglAddon | undefined
   const releaseRenderer = (): void => {
     const current = renderer
@@ -170,10 +173,12 @@ export const createXtermView = (handlers: TerminalViewHandlers, { resolveColor =
       if (terminal.hasSelection()) {
         const selection = terminal.getSelection()
         if (!selection.trim()) { handlers.onNotice?.('Nothing to copy. Select some text first.'); return false }
+        const copiedRevision = selectionRevision
         void writeClipboard(selection).then(() => {
-          terminal.clearSelection()
+          if (disposed) return
+          if (selectionRevision === copiedRevision) terminal.clearSelection()
           handlers.onNotice?.(null)
-        }, () => handlers.onNotice?.('Could not copy. Your selection is kept. Try Ctrl+C again.'))
+        }, () => { if (!disposed) handlers.onNotice?.('Could not copy. Your selection is kept. Try Ctrl+C again.') })
         return false
       }
       if (inputEnabled) handlers.onInterrupt()
@@ -229,7 +234,7 @@ export const createXtermView = (handlers: TerminalViewHandlers, { resolveColor =
       return { cols: terminal.cols, rows: terminal.rows }
     },
     focus() { terminal.focus() },
-    dispose() { retheme.disconnect(); systemMotion.removeEventListener('change', followMotion); releaseRenderer(); terminal.dispose(); element.remove() },
+    dispose() { disposed = true; selectionChanges.dispose(); retheme.disconnect(); systemMotion.removeEventListener('change', followMotion); releaseRenderer(); terminal.dispose(); element.remove() },
   }
   return view
 }
