@@ -100,7 +100,7 @@ export class CheckpointService extends ToolOperations {
       }
     }).catch(error => { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') { this.loaded = undefined; if (error instanceof Error && error.message.startsWith('Checkpoint storage at ')) throw error; throw new Error(`Checkpoint storage at ${join(this.dependencies.directory, 'checkpoints.json')} could not be read. No checkpoints were discarded. Restore access to the file and try again.`, { cause: error }) } })
   }
-  initialize(): Promise<void> { return this.serial(async () => { await this.load(); if (!this.initialized) { await this.save(); this.initialized = true } }) }
+  initialize(): Promise<void> { if (this.initialized) return Promise.resolve(); return this.serial(async () => { await this.load(); if (!this.initialized) { await this.save(); this.initialized = true } }) }
   private async save(): Promise<void> {
     const cutoff = (this.dependencies.now?.() ?? Date.now()) - 30 * 24 * 60 * 60 * 1000
     for (const record of this.records.values()) if (this.dependencies.historyEnabled?.() === false || Date.parse(record.createdAt) < cutoff) this.records.delete(record.id)

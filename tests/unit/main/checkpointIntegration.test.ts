@@ -27,6 +27,23 @@ it('excludes an unallocated worktree from shared-folder checkpoint guards while 
     await expect(integration.canMutate('pending')).resolves.toBe(false)
     await expect(integration.canMutate('ready')).resolves.toBe(true)
     expect(pending).not.toHaveBeenCalledWith('pending')
+    // A revert holds the checkpoint queue while validating files. Git commands
+    // hold the real host lane while consulting the integration guard.
+    const internals = integration.checkpoints as unknown as { locks: Set<string>; serial<T>(work: () => Promise<T>): Promise<T> }
+    let release!: () => void, entered!: () => void
+    const paused = new Promise<void>(resolve => { release = resolve })
+    const checking = new Promise<void>(resolve => { entered = resolve })
+    const revert = internals.serial(async () => {
+      internals.locks.add('ready'); entered(); await paused
+      await f.host.refreshThread('ready')
+      internals.locks.delete('ready')
+    })
+    await checking
+    const git = f.host.execute({ type: 'git-pull', threadId: 'ready' })
+    const refused = expect(git).rejects.toThrow('interrupted checkpoint revert')
+    release()
+    await refused
+    await revert
     const forgotten = vi.spyOn(integration.checkpoints, 'forgetThread').mockResolvedValue()
     subscribe.mock.calls[0]![0]({ host: { ...f.host.workspaceSnapshot(), threads: [] } } as unknown as Parameters<Parameters<AgentControl['subscribe']>[0]>[0])
     expect(forgotten).toHaveBeenCalledWith('ready')
