@@ -530,6 +530,17 @@ describe('thread detail over the socket', () => {
     return { stream, server, client, updates, pushErrors, connected: () => connected, session: () => host.pairing.signSession(paired.clientId) }
   }
 
+  it('receives each observed detail once on reconnect', async () => {
+    const { stream, server, client } = await streamingHost()
+    try {
+      const reads = stream.reads
+      await client.close()
+      await client.connect()
+      expect(stream.reads).toBe(reads + 1)
+      expect(client.threadDetail('streaming')?.revision).toBe(1)
+    } finally { await client.close(); await server.close() }
+  })
+
   it('pushes what changed as a delta the client applies and passes on, and the whole thread to a client that never asked for deltas', async () => {
     const { stream, server, client, updates, session } = await streamingHost()
     try {

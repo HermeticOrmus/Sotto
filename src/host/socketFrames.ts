@@ -18,6 +18,14 @@ export class SocketFrames {
   }
   feed(data: Buffer): void { if (data.length) this.receive(data) }
   onClose(listener: () => void): () => void { this.closedListeners.add(listener); return () => this.closedListeners.delete(listener) }
+  /** Waits for buffered output to drain before the next detail in a batch is materialised. */
+  drained(): Promise<void> {
+    if (this.ended || !this.stream.writableNeedDrain) return Promise.resolve()
+    return new Promise(resolve => {
+      const done = (): void => { this.stream.removeListener('drain', done); this.closedListeners.delete(done); resolve() }
+      this.stream.once('drain', done); this.closedListeners.add(done)
+    })
+  }
   send(value: unknown): boolean { return this.sendText(JSON.stringify(value)) }
   sendText(text: string): boolean { return this.write(1, Buffer.from(text)) }
   close(): void { if (!this.ended) { this.stream.destroy(); this.closed() } }

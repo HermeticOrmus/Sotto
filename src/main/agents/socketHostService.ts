@@ -147,9 +147,6 @@ export class SocketHostService implements HostService {
         while (page.hasMore) page = await this.readEvents(this.latestSeq)
       }
       await this.observe(this.observed)
-      // A thread too large to send is reported and left out, the way a push of it is, so it cannot fail
-      // the connection and have the reconnect that follows read it whole again, and again.
-      for (const id of this.observed) await this.readThreadDetail(id).catch((error: unknown) => { if (!this.reportedTooLarge(id, error)) throw error })
       this.options.onConnectionChange?.(true)
       return hello
     } catch (error) { this.frames?.close(); throw error }

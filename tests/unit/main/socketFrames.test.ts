@@ -98,6 +98,21 @@ describe('bounded WebSocket framing', () => {
     expect(client.messages).toEqual(['{"ok":true}'])
     client.frames.close(); server.frames.close()
   })
+  it('waits for drain before continuing a detail batch and releases a wait on close', async () => {
+    const h = harness()
+    Object.defineProperty(h.stream, 'writableNeedDrain', { value: true, configurable: true })
+    const drained = vi.fn()
+    const waiting = h.frames.drained().then(drained)
+    await Promise.resolve()
+    expect(drained).not.toHaveBeenCalled()
+    h.stream.emit('drain')
+    await waiting
+    expect(drained).toHaveBeenCalledOnce()
+    const closing = h.frames.drained()
+    h.frames.close()
+    await closing
+    expect(h.stream.listenerCount('drain')).toBe(0)
+  })
   it('closes a slow consumer before accumulating unbounded writes', () => {
     const h = harness()
     Object.defineProperty(h.stream, 'writableLength', { value: HOST_MAX_FRAME_BYTES * 2 })
