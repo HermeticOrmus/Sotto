@@ -3,6 +3,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
 import '@xterm/xterm/css/xterm.css'
 import type { TerminalViewHandlers, TerminalViewLike } from './terminalStore'
+import { writeClipboard } from '../agents/richActions'
 
 /** ANSI colours per appearance, tuned to stay readable on the panel field in each mode. */
 const ANSI_DARK = {
@@ -129,6 +130,13 @@ export const createXtermView = (handlers: TerminalViewHandlers, { resolveColor =
   element.className = 'terminal-view__screen'
   let opened = false
   let inputEnabled = false
+  let disposed = false
+  let selectionRevision = 0
+  const selectionChanges = terminal.onSelectionChange(() => { selectionRevision++ })
+  // xterm reports a dragged selection on release. Protect it from queued copies from the first press.
+  const startSelection = (): void => { selectionRevision++ }
+  element.addEventListener('pointerdown', startSelection, true)
+  element.addEventListener('mousedown', startSelection, true)
   let renderer: WebglAddon | undefined
   const releaseRenderer = (): void => {
     const current = renderer
@@ -167,8 +175,18 @@ export const createXtermView = (handlers: TerminalViewHandlers, { resolveColor =
     }
     if (ctrl && !event.shiftKey && (event.key === 'c' || event.key === 'C')) {
       if (terminal.hasSelection()) {
-        void navigator.clipboard?.writeText(terminal.getSelection()).catch(() => undefined)
-        terminal.clearSelection()
+        const selection = terminal.getSelection()
+        if (!selection.trim()) { handlers.onNotice?.('Nothing to copy. Select some text first.'); return false }
+        const copiedRevision = selectionRevision
+        const copiedRange = terminal.getSelectionPosition()
+        void writeClipboard(selection).then(() => {
+          if (disposed) return
+          const range = terminal.getSelectionPosition()
+          if (selectionRevision === copiedRevision && range && copiedRange &&
+            range.start.x === copiedRange.start.x && range.start.y === copiedRange.start.y &&
+            range.end.x === copiedRange.end.x && range.end.y === copiedRange.end.y) terminal.clearSelection()
+          handlers.onNotice?.(null)
+        }, () => { if (!disposed) handlers.onNotice?.('Could not copy. Your selection is kept. Try Ctrl+C again.') })
         return false
       }
       if (inputEnabled) handlers.onInterrupt()
@@ -224,7 +242,17 @@ export const createXtermView = (handlers: TerminalViewHandlers, { resolveColor =
       return { cols: terminal.cols, rows: terminal.rows }
     },
     focus() { terminal.focus() },
-    dispose() { retheme.disconnect(); systemMotion.removeEventListener('change', followMotion); releaseRenderer(); terminal.dispose(); element.remove() },
+    dispose() {
+      disposed = true
+      selectionChanges.dispose()
+      element.removeEventListener('pointerdown', startSelection, true)
+      element.removeEventListener('mousedown', startSelection, true)
+      retheme.disconnect()
+      systemMotion.removeEventListener('change', followMotion)
+      releaseRenderer()
+      terminal.dispose()
+      element.remove()
+    },
   }
   return view
 }

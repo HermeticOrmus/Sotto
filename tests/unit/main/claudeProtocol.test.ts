@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { CLAUDE_MAX_FRAME_BYTES, ClaudeProtocol, ClaudeRejected, type ClaudeFrame } from '../../../src/main/agents/claudeProtocol'
+import { CLAUDE_MAX_FRAME_BYTES, ClaudeProtocol, ClaudeRejected, ClaudeWritePending, type ClaudeFrame } from '../../../src/main/agents/claudeProtocol'
 
 vi.mock('node:child_process', () => ({ spawn: vi.fn() }))
 
@@ -36,7 +36,7 @@ function split(bytes: Buffer, size: number): Buffer[] {
   return chunks
 }
 
-afterEach(() => { vi.mocked(spawn).mockReset() })
+afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); vi.mocked(spawn).mockReset() })
 
 describe('ClaudeProtocol framing', () => {
   it('joins one frame split across many chunks, including inside a multi-byte character', async () => {
@@ -174,5 +174,26 @@ describe('ClaudeProtocol control requests', () => {
     child.emit('close', 0)
     await protocol.closed
     expect(onExit).not.toHaveBeenCalled()
+  })
+})
+
+
+describe('ClaudeProtocol delayed writes', () => {
+  it.each(['success', 'error', 'destroyed'] as const)('keeps the original callback after a deadline until %s', async outcome => {
+    vi.useFakeTimers()
+    const { child, protocol } = start(15_000)
+    let callback!: (error?: Error | null) => void
+    const write = vi.spyOn(child.stdin, 'write').mockImplementation(((_chunk: string, done: typeof callback) => {
+      callback = done; return false
+    }) as typeof child.stdin.write)
+    const pending = protocol.write({ type: 'control_response' }).catch((error: unknown) => error)
+    await vi.advanceTimersByTimeAsync(15_000)
+    const error = await pending as ClaudeWritePending
+    expect(error).toBeInstanceOf(ClaudeWritePending)
+    const completion = error.completion.then(() => 'delivered', () => 'failed')
+    if (outcome === 'destroyed') { child.stdin.destroy(); await vi.runAllTimersAsync() }
+    else callback(outcome === 'error' ? new Error('Pipe failed') : undefined)
+    expect(await completion).toBe(outcome === 'success' ? 'delivered' : 'failed')
+    expect(write).toHaveBeenCalledTimes(1)
   })
 })

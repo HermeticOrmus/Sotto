@@ -1,3 +1,4 @@
+import { writeClipboard } from '../../agents/richActions'
 import React, { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Check, Circle, Clock, Copy, LoaderCircle, X } from 'lucide-react'
 import { HOST_SETUP_STEPS, type HostSetupStep, type HostStatus } from '../../../../shared/hosts'
@@ -54,7 +55,7 @@ function FixCommand({ fix }: { readonly fix: NonNullable<HostStatus['fix']> }): 
   const [copied, setCopied] = useState<'copied' | 'failed' | null>(null)
   useEffect(() => { if (!copied) return; const timer = setTimeout(() => setCopied(null), 1500); return () => clearTimeout(timer) }, [copied])
   const copy = async (): Promise<void> => {
-    try { await navigator.clipboard.writeText(fix.command); setCopied('copied') } catch { setCopied('failed') }
+    try { await writeClipboard(fix.command); setCopied('copied') } catch { setCopied('failed') }
   }
   return <>
     <p>{fix.text}</p>

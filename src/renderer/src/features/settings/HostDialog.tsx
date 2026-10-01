@@ -1,3 +1,4 @@
+import { isCompositionKey } from '../../agents/composerKeys'
 import React, { useEffect, useId, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode } from 'react'
 import { LoaderCircle } from 'lucide-react'
 import { DEFAULT_HOST_DATA_DIRECTORY, DEFAULT_HOST_INSTALL_PATH, type HostsBridge, type HostsState, type HostStatus, type RemoteHost } from '../../../../shared/hosts'
@@ -291,7 +292,7 @@ export function HostDialog({ mode, bridge, state, tailscale, onClose }: {
     <pre className="hosts-challenge">{prompt.text}</pre>
     {prompt.kind !== 'host-key' ? <div className="tt-field"><label className="tt-field__label" htmlFor={answerId}>{prompt.kind === 'passphrase' ? 'Key passphrase' : 'SSH password'}</label>
       <input id={answerId} className="tt-input tt-focusable" type="password" autoComplete="off" autoFocus value={answer} onChange={event => setAnswer(event.target.value)}
-        onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); void answerPrompt() } }} /></div> : null}
+        onKeyDown={event => { if (isCompositionKey(event.nativeEvent)) { event.stopPropagation(); return } if (event.key === 'Enter') { event.preventDefault(); void answerPrompt() } }} /></div> : null}
     <div className="hosts-prompt__actions"><Button autoFocus={prompt.kind === 'host-key'} disabled={answering} onClick={() => void answerPrompt()}>{prompt.kind === 'host-key' ? 'Trust host and continue' : 'Continue'}</Button></div>
   </div> : null
   const openGuide = (): void => { void window.sotto?.openExternalLink?.(TAILSCALE_GUIDE_URL) }
@@ -328,7 +329,7 @@ export function HostDialog({ mode, bridge, state, tailscale, onClose }: {
     <p className="hosts-dialog__intro">{editing ? 'The new connection is used the next time Sotto connects. A host that is on connects again now.' : 'Pick a machine Sotto can reach over SSH, then add it yourself or have an agent set it up.'}</p>
     {!editing && tailscale ? <TailscalePrompt control={tailscale} /> : null}
     <form ref={formRef} className="hosts-dialog__fields" onSubmit={event => { event.preventDefault(); go() }}
-      onKeyDown={event => { const target = event.target as HTMLElement; if (event.key === 'Enter' && target instanceof HTMLInputElement && target.type !== 'radio') { event.preventDefault(); go() } }}>
+      onKeyDown={event => { if (isCompositionKey(event.nativeEvent)) { event.stopPropagation(); return } const target = event.target as HTMLElement; if (event.key === 'Enter' && target instanceof HTMLInputElement && target.type !== 'radio') { event.preventDefault(); go() } }}>
       {typing ? <div className="tt-field">
         <label className="tt-field__label" htmlFor={hostId}>SSH host</label>
         <input id={hostId} className="tt-input tt-focusable" value={host} disabled={fieldsDisabled} aria-describedby={hintId} autoComplete="off" autoCapitalize="none" spellCheck={false} maxLength={MAX_TARGET_LENGTH}

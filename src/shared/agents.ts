@@ -232,6 +232,7 @@ export const agentRequestSchema = z.object({
   permissionChoices: z.array(z.object({ id, label: text, kind: z.enum(['allow-once', 'allow-session', 'allow-always', 'deny', 'cancel']), description: text.optional() })).optional(),
   context: z.object({ toolName: text.optional(), toolCallId: id.optional(), command: text.optional(), cwd: text.optional(), details: text.optional() }).optional(),
   delivery: z.literal('uncertain').optional(),
+  answerRetryReady: z.literal(true).optional(),
 })
 export const agentQuestionAnswersSchema = z.record(id, z.object({ optionIds: z.array(id).max(100), text: text.optional() }).strict())
 export type AgentQuestionAnswers = z.infer<typeof agentQuestionAnswersSchema>
@@ -258,6 +259,14 @@ const agentThreadSummarySchema = z.object({
   runningTurnStartedAt: z.string().optional(),
 }).strict()
 export type AgentThreadSummary = z.infer<typeof agentThreadSummarySchema>
+export const worktreeReclaimPreviewSchema = z.object({
+  path: z.string(), branch: z.string().optional(), dirty: z.boolean(), ignored: z.array(z.string()),
+  repositories: z.array(z.object({ path: z.string(), changeCount: z.number().int().nonnegative(), unpushedCommitCount: z.number().int().nonnegative().optional(), kind: z.enum(['worktree', 'repository']) })),
+  items: z.array(z.object({ path: z.string(), bytes: z.number().nonnegative(), fileCount: z.number().int().nonnegative() })),
+  untracked: z.array(z.string()),
+  outsideLink: z.string().optional(),
+}).strict()
+export type WorktreeReclaimPreview = z.infer<typeof worktreeReclaimPreviewSchema>
 export const agentWorktreeSchema = z.object({
   mode: z.enum(['independent', 'shared']), status: z.enum(['pending', 'ready', 'error']),
   path: z.string().optional(), repositoryRoot: z.string().optional(), branch: z.string().optional(),
@@ -593,6 +602,7 @@ export type AgentDelivery = z.infer<typeof agentDeliverySchema>
 export const agentDeliveryReceiptsSchema = z.array(z.object({ threadId: id, draftId: z.uuid() })).max(MAX_DELIVERED_DRAFTS)
 export const providerUpgradeSchema = z.object({ recoveryPath: z.string(), migratedAt: z.number() })
 export const agentStateSchema = z.object({
+  worktreeReclaimPreview: worktreeReclaimPreviewSchema.optional(),
   clientScoped: z.boolean().optional(),
   connections: z.array(z.object({ hostId: z.uuid(), name: z.string(), kind: z.enum(['local', 'remote']), connected: z.boolean() })).optional(),
   hostId: z.uuid().optional(),
@@ -862,7 +872,8 @@ export const agentCommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('restore-thread-branch'), threadId: id, withUncommittedChanges: z.boolean().optional() }).strict(),
   /** Remove the thread's own worktree folder and keep its branch (ADR-0041). `withUncommittedChanges`
    * is the user's answer to the confirmation; without it a folder with uncommitted work is left alone. */
-  z.object({ type: z.literal('reclaim-thread-worktree'), threadId: id, withUncommittedChanges: z.boolean().optional() }).strict(),
+  z.object({ type: z.literal('preview-reclaim-thread-worktree'), threadId: id }).strict(),
+  z.object({ type: z.literal('reclaim-thread-worktree'), threadId: id, withUncommittedChanges: z.boolean().optional(), confirmedIgnored: z.array(z.string()).optional(), confirmedItems: z.array(z.object({ path: z.string(), fileCount: z.number().int().nonnegative() }).strict()).optional(), confirmedRepositories: z.array(z.object({ path: z.string(), changeCount: z.number().int().nonnegative(), unpushedCommitCount: z.number().int().nonnegative().optional(), kind: z.enum(['worktree', 'repository']) }).strict()).optional() }).strict(),
   agentWorkingCopySelectionSchema.extend({ type: z.literal('configure-thread-working-copy'), threadId: id }).strict(),
   /** T3's stacked Git action on the thread's folder: commit, push, create the pull request, or a prefix of the three (ADR-0027).
    * `filePaths` limits the commit to those files; `featureBranch` commits on a new `feature/` branch first; `allowDefaultBranch`

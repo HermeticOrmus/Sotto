@@ -228,6 +228,10 @@ export async function startSocketServer(options: SocketServerOptions) {
       draftRequestId: input.type === 'send' || input.type === 'compose' ? draftRequestId : undefined,
       clientUpdates: options.clientUpdates === true })
     if (refusal) throw new Refusal(refusal)
+    if (input.type === 'preview-reclaim-thread-worktree') {
+      const result = await service.command(input, peer.client)
+      return { ...shell(peer), error: result.error, ...(result.worktreeReclaimPreview ? { worktreeReclaimPreview: result.worktreeReclaimPreview } : {}) }
+    }
     const recorded = !UNRECEIPTED.has(input.type)
     if (recorded) makeRoomForReceipt()
     if (input.type === 'answer') {

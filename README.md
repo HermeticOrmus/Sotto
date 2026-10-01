@@ -29,11 +29,14 @@ If Codex asks for an approval Sotto cannot show, Sotto refuses it and tells you.
 - **Tools beside each thread.** A browser, a terminal, the thread's files and its changes. Terminal input stays in order; if input is refused, Sotto says so before you try again.
 - **Codex's Computer Use.** In a Codex thread set to Full access, with the Codex app open, Codex can operate the apps on your computer.
 - **Git in one press.** Commit, push and open a pull request. Leave the message empty and the agent writes it. Selected files keep staged hunks; files left out keep their staging.
-- **Worktrees for parallel work.** Choose the current checkout, a new worktree, or one of five recent worktrees under the composer. Search finds older worktrees. Remove a thread's own folder when you're done.
+- **Worktrees for parallel work.** Choose the current checkout, a new worktree, or one of five recent worktrees under the composer. Search finds older worktrees. Remove a thread's own folder when you're done, after reviewing any ignored files and their file counts. Nested repositories and worktrees are listed too, including uncommitted work and repository commits not on any remote, including history in clean or deinitialized submodules. They are removed only after your acknowledgement.
 - **Dictation anywhere.** Press `Ctrl+Shift+Space` (`⌃⇧Space` on a Mac), speak, and press it again. The text is copied and can be pasted at your cursor.
 
 Thread drafts save automatically while you type, including while other threads are working.
 
+Claude Code keeps background work running when remembered preferences change. Messages continue with the chat's previous context while that work runs. The first send after it ends refreshes the context. Deleting a memory the client is using forces a restart on the next send and stops that background work. After you type in the Claude CLI, the next send from Sotto resumes the updated native history, even if the restart stops background work.
+
+If a Claude Code answer is unconfirmed, **Check again** checks the request without sending anything. A delayed write keeps your original choice; another answer is allowed only after the write fails outright or the client is gone.
 Pressing the dictation shortcut again while the microphone is connecting cancels the session as soon as it is ready. No audio is kept or transcribed.
 
 Settings → Application sets the working-copy default for new threads. Expand **Project defaults** to choose a different default for one project. Previously saved project choices are kept when Sotto updates.
