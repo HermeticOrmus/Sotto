@@ -17,8 +17,10 @@ export interface ConfirmationDialogProps {
   readonly failureMessage?: ReactNode
   readonly pendingStatus?: ReactNode
   readonly fallbackFocusRef?: RefObject<HTMLElement | null>
-  /** Host questions start at their answer; other confirmations keep their secondary action focused. */
+  /** Host questions start at their field or key text; other confirmations focus their secondary action. */
   readonly initialFocus?: 'confirm' | RefObject<HTMLElement | null>
+  /** Reach the affirmative action first from an answer, preserving the buttons' visual layout. */
+  readonly confirmFirst?: boolean
 }
 
 export function ConfirmationDialog({
@@ -35,6 +37,7 @@ export function ConfirmationDialog({
   pendingStatus,
   fallbackFocusRef,
   initialFocus,
+  confirmFirst = false,
 }: ConfirmationDialogProps): ReactNode {
   const [submitting, setSubmitting] = useState(false)
   const [failed, setFailed] = useState(false)
@@ -51,7 +54,7 @@ export function ConfirmationDialog({
   const dialogRef = useDialogFocus({ onEscape: () => { if (!submittingRef.current) onDismissRef.current() }, initialFocus: initialFocus === 'confirm' ? confirmRef : initialFocus ?? cancelRef, fallbackFocus: fallbackFocusRef })
 
   const confirm = async (): Promise<void> => {
-    if (submittingRef.current) return
+    if (submittingRef.current || confirmDisabled) return
     submittingRef.current = true
     setFailed(false)
     setSubmitting(true)
@@ -69,6 +72,10 @@ export function ConfirmationDialog({
     }
   }
 
+  const confirmButton = <Button ref={confirmRef} variant={danger ? 'danger' : 'primary'} disabled={submitting || confirmDisabled} onClick={() => void confirm()}>
+    {confirmLabel}
+  </Button>
+
   return (
     <div className="tt-dialog-backdrop" role="presentation">
       <section
@@ -79,6 +86,12 @@ export function ConfirmationDialog({
         aria-labelledby={titleId}
         aria-describedby={descriptionId}
         aria-busy={submitting || undefined}
+        onKeyDown={event => {
+          if (event.key !== 'Enter' || event.nativeEvent.isComposing || !(event.target instanceof HTMLInputElement)) return
+          event.preventDefault()
+          event.stopPropagation()
+          void confirm()
+        }}
       >
         <h2 id={titleId}>{title}</h2>
         <div id={descriptionId} className="tt-dialog__description">{description}</div>
@@ -88,13 +101,12 @@ export function ConfirmationDialog({
         {failed && failureMessage !== undefined
           ? <div className="tt-dialog__status tt-dialog__status--error" role="alert">{failureMessage}</div>
           : null}
-        <div className="tt-dialog__actions">
+        <div className={`tt-dialog__actions${confirmFirst ? ' tt-dialog__actions--confirm-first' : ''}`}>
+          {confirmFirst && confirmButton}
           <Button ref={cancelRef} variant="secondary" disabled={submitting} onClick={onCancel}>
             {cancelLabel}
           </Button>
-          <Button ref={confirmRef} variant={danger ? 'danger' : 'primary'} disabled={submitting || confirmDisabled} onClick={() => void confirm()}>
-            {confirmLabel}
-          </Button>
+          {!confirmFirst && confirmButton}
         </div>
       </section>
     </div>

@@ -29,6 +29,7 @@ export function HostQuestionDialog({ bridge = window.sotto?.hosts }: { readonly 
   const [error, setError] = useState<string | null>(null)
   const hostsDialogOpen = useHostsModalOpen()
   const answerRef = useRef<HTMLInputElement>(null)
+  const hostKeyRef = useRef<HTMLPreElement>(null)
   const fallbackFocusRef = useRef<HTMLElement | null>(null)
   // Keep the page's focus across consecutive questions: the next dialog may inherit body.
   useEffect(() => {
@@ -82,7 +83,7 @@ export function HostQuestionDialog({ bridge = window.sotto?.hosts }: { readonly 
       {...(error ? { failureMessage: error } : {})}
       description={<p>{`An agent is setting up ${name}, and Tailscale SSH asks you to approve this computer's connection before the setup goes on. Open the approval page and approve it in your browser.${putOff}`}</p>} />
     const hostKey = prompt.kind === 'host-key'
-    return <ConfirmationDialog key={setupKey} danger={false} initialFocus={hostKey ? 'confirm' : answerRef} fallbackFocusRef={fallbackFocusRef}
+    return <ConfirmationDialog key={setupKey} danger={false} confirmFirst initialFocus={hostKey ? hostKeyRef : answerRef} fallbackFocusRef={fallbackFocusRef}
       title={hostKey ? `Trust the SSH host ${name}?` : `Unlock the SSH connection to ${name}`}
       confirmLabel={hostKey ? 'Trust host' : 'Continue'} cancelLabel="Not now" onCancel={dismiss}
       // The dialog stays until main clears the question, which it does once SSH has the answer.
@@ -91,14 +92,14 @@ export function HostQuestionDialog({ bridge = window.sotto?.hosts }: { readonly 
       description={<div className="hosts-dialog__fields">
         <p>{(hostKey ? `An agent is setting up ${name}, and SSH has not seen this host before. Check its key, then trust it to continue.`
           : `An agent is setting up ${name}, and SSH needs your ${prompt.kind === 'passphrase' ? 'key passphrase' : 'password'} to sign in.`) + putOff}</p>
-        <pre className="hosts-challenge">{prompt.text}</pre>
+        <pre ref={hostKeyRef} className="hosts-challenge" role={hostKey ? 'region' : undefined} aria-label={hostKey ? 'SSH host key' : undefined} tabIndex={hostKey ? 0 : undefined}>{prompt.text}</pre>
         {!hostKey && <div className="tt-field"><label className="tt-field__label" htmlFor="hosts-prompt-answer">{prompt.kind === 'passphrase' ? 'Key passphrase' : 'SSH password'}</label>
           <input ref={answerRef} id="hosts-prompt-answer" className="tt-input tt-focusable" type="password" autoComplete="off" value={answer} onChange={event => setAnswer(event.target.value)} /></div>}
       </div>} />
   }
   if (!prompt) return null
   const hostKey = prompt.kind === 'host-key'
-  return <ConfirmationDialog key={savedKey} danger={false} initialFocus={hostKey ? 'confirm' : answerRef} fallbackFocusRef={fallbackFocusRef}
+  return <ConfirmationDialog key={savedKey} danger={false} confirmFirst initialFocus={hostKey ? hostKeyRef : answerRef} fallbackFocusRef={fallbackFocusRef}
     title={hostKey ? `Trust the SSH host ${host.name}?` : `Unlock the SSH connection to ${host.name}`}
     confirmLabel={hostKey ? 'Trust host' : 'Continue'} cancelLabel="Switch it off"
     onDismiss={dismiss}
@@ -109,7 +110,7 @@ export function HostQuestionDialog({ bridge = window.sotto?.hosts }: { readonly 
     description={<div className="hosts-dialog__fields">
       <p>{hostKey ? `Sotto is connecting to ${host.name}, and SSH has not seen this host before. Check its key, then trust it to continue.`
         : `Sotto is connecting to ${host.name}, and SSH needs your ${prompt.kind === 'passphrase' ? 'key passphrase' : 'password'} to sign in.`}</p>
-      <pre className="hosts-challenge">{prompt.text}</pre>
+      <pre ref={hostKeyRef} className="hosts-challenge" role={hostKey ? 'region' : undefined} aria-label={hostKey ? 'SSH host key' : undefined} tabIndex={hostKey ? 0 : undefined}>{prompt.text}</pre>
       {!hostKey && <div className="tt-field"><label className="tt-field__label" htmlFor="hosts-prompt-answer">{prompt.kind === 'passphrase' ? 'Key passphrase' : 'SSH password'}</label>
         <input ref={answerRef} id="hosts-prompt-answer" className="tt-input tt-focusable" type="password" autoComplete="off" value={answer} onChange={event => setAnswer(event.target.value)} /></div>}
     </div>} />

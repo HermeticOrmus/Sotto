@@ -692,8 +692,34 @@ it.each(['passphrase', 'password', 'host-key'] as const)('opens a saved host %s 
   const { bridge } = fixture([host({ phase: 'connecting', prompt: { id: 'focus-prompt', kind, text: 'Synthetic question' } })])
   render(<HostQuestionDialog bridge={bridge} />)
   const dialog = await screen.findByRole('dialog')
-  const target = kind === 'host-key' ? within(dialog).getByRole('button', { name: 'Trust host' }) : within(dialog).getByLabelText(kind === 'password' ? 'SSH password' : 'Key passphrase')
+  const target = kind === 'host-key' ? within(dialog).getByRole('region', { name: 'SSH host key' }) : within(dialog).getByLabelText(kind === 'password' ? 'SSH password' : 'Key passphrase')
   expect(document.activeElement).toBe(target)
+})
+
+it('requires deliberate keyboard navigation before trusting a saved host key', async () => {
+  const { bridge, command } = fixture([host({ phase: 'connecting', prompt: { id: 'trust-prompt', kind: 'host-key', text: 'Synthetic host key' } })]), user = userEvent.setup()
+  render(<HostQuestionDialog bridge={bridge} />)
+  const dialog = await screen.findByRole('dialog')
+  await user.keyboard('{Enter}')
+  expect(command).not.toHaveBeenCalled()
+  await user.tab()
+  expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: 'Trust host' }))
+  await user.keyboard('{Enter}')
+  expect(command).toHaveBeenCalledExactlyOnceWith({ type: 'ssh-answer', id: REMOTE, promptId: 'trust-prompt', answer: 'yes' })
+})
+
+it.each(['passphrase', 'password'] as const)('submits a saved host %s on Enter and reaches Continue before Switch it off', async kind => {
+  const { bridge, command } = fixture([host({ phase: 'connecting', prompt: { id: 'enter-prompt', kind, text: 'Synthetic question' } })]), user = userEvent.setup()
+  render(<HostQuestionDialog bridge={bridge} />)
+  const dialog = await screen.findByRole('dialog')
+  const field = within(dialog).getByLabelText(kind === 'password' ? 'SSH password' : 'Key passphrase')
+  expect(document.activeElement).toBe(field)
+  await user.tab()
+  expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: 'Continue' }))
+  await user.tab()
+  expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: 'Switch it off' }))
+  await user.type(field, 'synthetic{Enter}')
+  await waitFor(() => expect(command).toHaveBeenCalledExactlyOnceWith({ type: 'ssh-answer', id: REMOTE, promptId: 'enter-prompt', answer: 'synthetic' }))
 })
 
 it('returns to a dismissed question from its host row and sends the answer', async () => {

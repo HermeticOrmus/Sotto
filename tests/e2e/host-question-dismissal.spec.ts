@@ -38,7 +38,7 @@ test('Escape dismisses saved host questions and only Switch it off disables the 
       })
     }, { channel: HOSTS_COMMAND, changedChannel: HOSTS_CHANGED })
     const id = '33333333-3333-4333-8333-333333333333'
-    for (const kind of ['passphrase', 'host-key'] as const) {
+    for (const kind of ['passphrase', 'password', 'host-key'] as const) {
       const state: HostsState = {
         localHostEnabled: false, localHostRunning: false, localHostId: id, activeHostId: id,
         hosts: [{ id, name: 'forge', target: 'forge', identityFile: '', installPath: '/opt/sotto', dataDirectory: '/data', enabled: true, phase: 'connecting', prompt: { id: `${kind}-question`, kind, text: 'Synthetic SSH question' } }],
@@ -52,7 +52,22 @@ test('Escape dismisses saved host questions and only Switch it off disables the 
       await send()
       const dialog = page.getByRole('dialog')
       await expect(dialog).toBeVisible()
-      await expect(kind === 'host-key' ? dialog.getByRole('button', { name: 'Trust host' }) : dialog.getByLabel('Key passphrase')).toBeFocused()
+      const answer = kind === 'host-key' ? dialog.getByRole('region', { name: 'SSH host key' }) : dialog.getByLabel(kind === 'password' ? 'SSH password' : 'Key passphrase')
+      await expect(answer).toBeFocused()
+      if (kind === 'host-key') {
+        await page.keyboard.press('Enter')
+        expect(await launched.app.evaluate(() => (globalThis as unknown as { hostQuestionCommands: HostsCommand[] }).hostQuestionCommands)).toEqual([])
+        await expect(dialog).toBeVisible()
+      }
+      await page.keyboard.press('Tab')
+      const continueButton = dialog.getByRole('button', { name: kind === 'host-key' ? 'Trust host' : 'Continue', exact: true })
+      await expect(continueButton).toBeFocused()
+      await page.keyboard.press('Tab')
+      await expect(dialog.getByRole('button', { name: 'Switch it off' })).toBeFocused()
+      const primaryBounds = await continueButton.boundingBox(), secondaryBounds = await dialog.getByRole('button', { name: 'Switch it off' }).boundingBox()
+      expect(secondaryBounds!.x + secondaryBounds!.width).toBeLessThan(primaryBounds!.x)
+      await page.keyboard.press('Tab')
+      await expect(answer).toBeFocused()
       for (const [width, height] of [[1600, 1000], [1280, 800], [820, 560]] as const) {
         await resizeWindow(launched, width, height)
         for (const appearance of ['dark', 'light'] as const) {
@@ -74,7 +89,7 @@ test('Escape dismisses saved host questions and only Switch it off disables the 
           await page.screenshot({ path: join(shots, `host-answer-${width}-${appearance}.png`), animations: 'disabled' })
           await row.getByRole('button', { name: 'Answer forge' }).click()
           await expect(dialog).toBeVisible()
-          await expect(kind === 'host-key' ? dialog.getByRole('button', { name: 'Trust host' }) : dialog.getByLabel('Key passphrase')).toBeFocused()
+          await expect(answer).toBeFocused()
         }
       }
       await page.keyboard.press('Escape')
@@ -84,8 +99,9 @@ test('Escape dismisses saved host questions and only Switch it off disables the 
       await expect(dialog).toHaveCount(0)
       const row = page.getByRole('region', { name: 'forge', exact: true })
       await row.getByRole('button', { name: 'Answer forge' }).click()
-      if (kind === 'passphrase') await dialog.getByLabel('Key passphrase').fill('synthetic')
-      await dialog.getByRole('button', { name: kind === 'host-key' ? 'Trust host' : 'Continue', exact: true }).click()
+      if (kind === 'host-key') await page.keyboard.press('Tab')
+      else await answer.fill('synthetic')
+      await page.keyboard.press('Enter')
       expect(await launched.app.evaluate(() => (globalThis as unknown as { hostQuestionCommands: HostsCommand[] }).hostQuestionCommands)).toEqual([{ type: 'ssh-answer', id, promptId: `${kind}-question`, answer: kind === 'host-key' ? 'yes' : 'synthetic' }])
       await expect(dialog).toHaveCount(0)
       await expect(row.getByRole('button', { name: 'Answer forge' })).toHaveCount(0)
@@ -117,7 +133,7 @@ test('Escape dismisses saved host questions and only Switch it off disables the 
     }, { channel: HOSTS_CHANGED, state: queued })
     await expect(page.getByRole('dialog', { name: 'Unlock the SSH connection to forge' }).getByLabel('SSH password')).toBeFocused()
     await page.keyboard.press('Escape')
-    await expect(page.getByRole('dialog', { name: 'Trust the SSH host spark?' }).getByRole('button', { name: 'Trust host' })).toBeFocused()
+    await expect(page.getByRole('dialog', { name: 'Trust the SSH host spark?' }).getByRole('region', { name: 'SSH host key' })).toBeFocused()
     await page.keyboard.press('Escape')
     await expect(page.getByRole('dialog')).toHaveCount(0)
     await expect(previous).toBeFocused()

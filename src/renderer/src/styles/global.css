@@ -2363,6 +2363,11 @@ textarea.tt-input {
   font-size: 13px;
 }
 
+.tt-dialog__actions--confirm-first {
+  flex-direction: row-reverse;
+  justify-content: flex-start;
+}
+
 /* ---- wave motion overrides ----
 
    Mirrors widget.css: both the media query and the app's own override have to
