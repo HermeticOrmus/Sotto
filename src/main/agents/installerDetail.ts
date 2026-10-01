@@ -3,7 +3,9 @@ import { homedir, userInfo } from 'node:os'
 // Spaces belong to paths too. Quotes, diagnostic separators and the end of the
 // line bound them; an ambiguous unquoted suffix is removed rather than leaked.
 // A path cannot start inside a URL or a package name such as aqua:openai/codex.
-const QUOTED_ABSOLUTE_PATH = /(["'])(?:[A-Za-z]:[\\/]|\\\\|\/\/|\/(?=[^\s/]))[^\r\n]*?\1(?=\s|[,;:)]|$)/gu
+// An account folder can contain the same quote as its surrounding message.
+// Prefer the last matching quote, stopping earlier only at a quoted rename.
+const QUOTED_ABSOLUTE_PATH = /(["'])(?:[A-Za-z]:[\\/]|\\\\|\/\/|\/(?=[^\s/]))(?:(?!\1\s+->\s+["'](?:[A-Za-z]:[\\/]|\\\\|\/\/|\/(?=[^\s/])))[^\r\n])*\1/gu
 const ABSOLUTE_PATH = /(?<![\w:/\\])(?:[A-Za-z]:[\\/]|\\\\|\/\/|\/(?=[^\s/]))[^\r\n"<>|]*?(?=\s+->(?:\s|$)|["<>|\r\n]|$)/gu
 
 /** The lines worth showing: not blank, and not npm's pointer to a log that sits in the home folder. */

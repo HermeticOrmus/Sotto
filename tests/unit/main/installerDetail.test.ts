@@ -13,10 +13,14 @@ it.each([
   '/opt/tools/client',
   String.raw`C:\Users\Smith, John\AppData\Local\npm-cache`,
   String.raw`C:\Users\John O'Neil\AppData\Local\npm-cache`,
+  String.raw`C:\Users\Chris' Work\AppData\Local\npm-cache`,
 ])('redacts the whole installer path %s in both presentations', path => {
   expect(installerDetail(`Cannot write ${path}`)).toBe('Cannot write …')
   expect(installerOutput(`First line\nCannot write "${path}"; permission denied`))
     .toBe('First line\nCannot write "…"; permission denied')
+  expect(installerDetail(`Cannot write '${path}'`)).toBe("Cannot write '…'")
+  expect(installerOutput(`First line\nCannot write '${path}'`))
+    .toBe("First line\nCannot write '…'")
 })
 
 it('keeps the operation and separators around multiple quoted or unquoted paths', () => {
