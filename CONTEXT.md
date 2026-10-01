@@ -86,6 +86,8 @@ Sotto is a desktop dictation app that is becoming a voice development coordinato
 
 **Thread pane.** A view of one thread within the Threads page, with its own reading position and input. Closing a pane leaves the thread and its running work intact.
 
+**Unreadable-request notice.** A line in the owning thread's pane saying that a native request could not be shown and was refused. It is neither a pending request nor the user's answer, and grants no approval.
+
 **Thread activity.** Provider-reported work alongside a thread's messages, including commands, file changes, visible summaries, tool results and subagent states. Activity is observational history, not a user message, an assignment or permission to act.
 
 **Computer Use.** Codex's own tool for seeing and operating the apps on the computer, named as Codex names it. In a Codex thread it works only in Full access and while the Codex desktop app is open; its calls show in the thread activity as Computer Use, and a call stopped by either condition says which. Sotto relays it and changes nothing about how Codex runs it. Avoid: using it for Sotto's own browser, which is the Tools panel's.
