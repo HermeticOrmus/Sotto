@@ -37,6 +37,7 @@ import { ThemeEditorHost } from './features/settings/themes/ThemeEditor'
 import { appearancePreview, applyAppearance, systemPrefersDark, useAppearancePreviewVersion, useSystemPrefersDark } from './state/appearance'
 
 const recoveryMessages = {
+  OPENROUTER_KEY_MIGRATION_FAILED: 'The OpenRouter key could not be stored securely. Enter it again in Settings → Transcription.',
   SETTINGS_RECOVERED: 'Sotto restored default settings after a local settings file could not be read. The original file was preserved.',
   CREDENTIALS_RECOVERED: 'Sotto could not read its saved keys. The encrypted file was preserved. Add your keys again in Settings.',
   HISTORY_RECOVERED: 'Sotto started with an empty history after its local history file could not be read. The original file was preserved.',
@@ -367,6 +368,7 @@ export function App({ createMicrophoneTest = () => new BrowserMicrophoneTest() }
       case 'settings':
         view = <SettingsView
           settings={app.settings}
+          openRouterKeyMigrationFailed={app.recoveryNotices.some(notice => notice.code === 'OPENROUTER_KEY_MIGRATION_FAILED')}
           platform={app.platform}
           statusText={statusText}
           updateStatus={app.update}

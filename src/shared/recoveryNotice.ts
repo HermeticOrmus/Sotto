@@ -4,6 +4,7 @@ export const recoveryNoticeSchema = z
   .object({
     code: z.enum([
       'SETTINGS_RECOVERED',
+      'OPENROUTER_KEY_MIGRATION_FAILED',
       'HISTORY_RECOVERED',
       'CREDENTIALS_RECOVERED',
       'ACCESSIBILITY_PERMISSION_REQUIRED',
