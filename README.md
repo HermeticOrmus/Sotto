@@ -24,6 +24,8 @@ Saved Codex conversations keep both sides after a restart. Opening a thread also
 
 - **One sidebar for every agent.** Each provider keeps its own sign-in and models. Sotto keeps the threads. Stop still reaches running work when its last prompt is unconfirmed.
 - **You answer every request.** Anything a thread's permissions don't already allow waits for you. A desktop connected through your SSH account can answer requests and change thread permissions as soon as setup finishes. A phone or another device paired by code needs your separate permission to do those things.
+
+If Codex asks for an approval Sotto cannot show, Sotto refuses it and tells you. This includes an unknown child thread on a thread's own Codex process. Nothing is approved; answer in Codex meanwhile.
 - **Tools beside each thread.** A browser, a terminal, the thread's files and its changes. Terminal input stays in order; if input is refused, Sotto says so before you try again.
 - **Codex's Computer Use.** In a Codex thread set to Full access, with the Codex app open, Codex can operate the apps on your computer.
 - **Git in one press.** Commit, push and open a pull request. Leave the message empty and the agent writes it. Selected files keep staged hunks; files left out keep their staging.
@@ -40,7 +42,9 @@ Settings → Application sets the working-copy default for new threads. Expand *
 
 New threads open in Unsettled with the defaults saved in Settings → Agents. An existing empty thread is reused only while it is unsettled, its known model, effort and permission choices match those defaults, and no setting change is pending.
 
-In Settings, **Test microphone** checks the same input selected for dictation. Changing the input clears the previous test.
+In Settings, **Test microphone** checks the same input selected for dictation. **Stop test**, hiding the window, or leaving Dictation closes the microphone. Changing the input clears the previous test. A quiet test asks you to check that the microphone is not muted.
+
+The personal dictionary holds up to 4,000 characters. It saves when you leave the field or Settings. A paste cut to fit the limit is announced, and a failed save after leaving Settings says where to enter the unsaved edits again.
 
 Terminal mode keeps closed terminals on its Closed shelf until you quit. Reopen starts the same command with fresh output; Stop keeps the output readable.
 
@@ -84,7 +88,7 @@ Your data leaves your computer only when a feature you use needs it, and only to
 - **Updating a host's clients**, when you press **Update** or **Update all** on a host's tiles in Settings → Hosts, runs the client's own installer on that host. For a client mise installed that is `mise upgrade`, which reaches whatever mise is set up to use for that tool: its version lookups and the tool's own downloads, such as GitHub releases or `registry.npmjs.org`. Nothing about you or your threads is sent.
 - **Only if you use them:** `api.openai.com` and `api.x.ai` for optional reasoning and reply voices, `open-vsx.org` (with `openvsxorg.blob.core.windows.net` and `openvsx.eclipsecontent.org`) for themes, `huggingface.co` for the natural voice download, SSH hosts you add, and pages you open in Sotto's browser. When an SSH host you add uses Tailscale SSH and Tailscale asks you to approve the connection, Add host offers to open the `login.tailscale.com` page Tailscale gives for it, in your browser, only when you press it.
 
-Dictation history stays on your computer, and you can turn it off. Older dictation transcripts can still be deleted while history is off. If completed dictation cannot reach the clipboard, Dictate keeps selectable text with **Copy text** until you dismiss it or close Sotto. With history off, that recovery stays in memory. Screenshots you attach to a thread are kept as files on the computer that runs the thread, only while an unsent draft, a queued message or a recent message's preview needs them and for an hour after; with history off, new ones stay in memory and are not written to disk. Keys are kept in your operating system's credential store.
+Dictation history stays on your computer, and you can turn it off. Older dictation transcripts can still be deleted while history is off. If completed dictation cannot reach the clipboard, Dictate keeps selectable text with **Copy text** until you dismiss it or close Sotto. With history off, that recovery stays in memory. Screenshots you attach to a thread are kept as files on the computer that runs the thread, only while an unsent draft, a queued message or a recent message's preview needs them and for an hour after; with history off, new ones stay in memory and are not written to disk. Keys are kept in your operating system's credential store. If Sotto cannot read its saved keys, it preserves the encrypted file and shows a notice. Add your keys again in Settings.
 
 If thread messages cannot be saved, Sotto keeps them in memory and retries while it is open. The warning stays until they are saved. Restore storage access before quitting; unsaved messages cannot survive a restart.
 

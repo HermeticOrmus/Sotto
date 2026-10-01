@@ -86,6 +86,8 @@ Sotto is a desktop dictation app that is becoming a voice development coordinato
 
 **Thread pane.** A view of one thread within the Threads page, with its own reading position and input. Closing a pane leaves the thread and its running work intact.
 
+**Unreadable-request notice.** A line in the owning thread's pane saying that a native request could not be shown and was refused. It is neither a pending request nor the user's answer, and grants no approval.
+
 **Thread activity.** Provider-reported work alongside a thread's messages, including commands, file changes, visible summaries, tool results and subagent states. Activity is observational history, not a user message, an assignment or permission to act.
 
 **Computer Use.** Codex's own tool for seeing and operating the apps on the computer, named as Codex names it. In a Codex thread it works only in Full access and while the Codex desktop app is open; its calls show in the thread activity as Computer Use, and a call stopped by either condition says which. Sotto relays it and changes nothing about how Codex runs it. Avoid: using it for Sotto's own browser, which is the Tools panel's.
@@ -314,7 +316,7 @@ Answering a question or permission request and creating a project are also part 
 
 **OpenRouter key.** The one API key the user supplies, stored encrypted in the operating system credential store under the `formatting` slot and never returned to the renderer. It pays for transcription, the cleanup pass and any OpenRouter-hosted reasoning. In settings code it is still the `llmApiKey` field.
 
-**Personal dictionary.** The user's list of names and terms, one per line (`llmDictionary`). It is sent with every transcription request as an Azure phrase list so MAI spells those words as written, and it is also quoted in the cleanup prompt. Avoid: "vocabulary hints" in user-facing text.
+**Personal dictionary.** The user's list of names and terms, one per line (`llmDictionary`), up to 4,000 characters. Its draft saves when the field loses focus or Settings is left. It is sent with every transcription request as an Azure phrase list so MAI spells those words as written, and it is also quoted in the cleanup prompt. Avoid: "vocabulary hints" in user-facing text.
 
 **Cleanup pass.** The optional LLM pass over the finished transcript (punctuation, fillers, self-corrections, lists), run through OpenRouter chat completions at the chosen quality tier and skipped for very short transcripts. Audio never goes through it. Avoid: "polish" in user-facing text (the code still says `polish`).
 
@@ -336,7 +338,7 @@ Answering a question or permission request and creating a project are also part 
 
 **Memory (hidden).** The Memory page and its link, the questionnaire that greets the Agents room, and the preferences a turn would retrieve from the store are all hidden for the beta behind `memoryEnabled` in settings, which defaults to false; the renderer asks `useMemoryEnabled()` and the main process reads the setting once at start and hands neither the agent control nor the personal chats a preferences source. The store still opens and its IPC stays registered, and nothing is deleted (ADR-0013).
 
-**Memory store probe.** The check that proves the shipped build can use the store: the packaged executable is launched in a probe mode that opens the real memory store in a temporary user-data folder, migrates, inserts, answers a full-text query and prints its evidence. The packaged-resource verifier fails the build without it. A direct Node-only probe (`scripts/probe-memory-store.mjs`) exists for the Mac runtime check.
+**Memory store probe.** The check that proves the shipped build can use the store: the packaged executable is launched in an isolated profile and its debugger invokes the bundled probe, which opens the real memory store in a temporary user-data folder, migrates, inserts, answers a full-text query and returns its evidence. The unused environment probe launch mode has been removed. The packaged-resource verifier fails the build without it. A direct Node-only probe (`scripts/probe-memory-store.mjs`) exists for the Mac runtime check.
 
 ## Authority
 
@@ -396,7 +398,7 @@ Answering a question or permission request and creating a project are also part 
 
 **Footer status.** The one-line status text supplied by whichever page is open (for example the model and paste mode in the Dictate room, or whether History still holds older transcripts once it is off). Beside the sidebar it sits in a thin foot under the room; on Settings and Chats it sits in the room's bottom-right corner; under a strip it sits on the right of the footer links. The Threads page has no footer status; a thread says what it is doing in its own row and pane.
 
-**Update control.** The small round button at the end of the sidebar foot, or at the far right of the footer under a strip, the one place the updater shows itself in the window. Idle it offers a check; when a release is found it wears a download glyph, a progress ring while the installer downloads, and a restart glyph once the installer is on disk. Its accessible name says exactly what a press does. A press that downloads or fails gets a toast; a press that installs asks first, because the restart interrupts dictation and agent work. Automatic checks run fifteen seconds after launch and every four minutes, only on the installed Windows app and only while the setting allows, and never install anything on quit. "Check for Updates…" in the tray menu (and the macOS application menu) presses the control from outside the window.
+**Update control.** The small round button at the end of the sidebar foot, or at the far right of the footer under a strip, the one place the updater shows itself in the window. Idle it offers a check; when a release is found it wears a download glyph, a progress ring while the installer downloads, and a restart glyph once the installer is on disk. Its accessible name says exactly what a press does. A press that downloads or fails gets a toast; a press that installs asks first, because the restart interrupts dictation and agent work. Automatic checks run fifteen seconds after launch and every four minutes, only on the installed Windows app and only while the setting allows and no download is in progress or ready to install, and never install anything on quit. "Check for Updates…" in the tray menu (and the macOS application menu) presses the control from outside the window.
 
 ## Where things live
 

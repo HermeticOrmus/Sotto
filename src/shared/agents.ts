@@ -347,6 +347,8 @@ export const agentThreadSchema = z.object({
   lastTurn: z.object({ id: z.string(), status: z.enum(['running', 'completed', 'interrupted', 'failed']) }).optional(),
   /** Omitted by providers that already supply history; absence means ready. */
   historyStatus: z.enum(['loading', 'ready', 'error']).optional(), historyError: z.string().optional(),
+  /** A native request refused because Sotto could not show it; never a pending request or an approval. */
+  requestNotice: z.string().max(600).optional(),
   /** Changes only on a confirmed native rewind; cached activity must not cross it. */
   historyEpoch: z.string().optional(),
 })

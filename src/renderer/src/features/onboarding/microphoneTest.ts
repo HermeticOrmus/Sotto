@@ -12,6 +12,8 @@ export type MicrophoneTestOutcome = Exclude<MicrophoneTestState, 'idle' | 'reque
 
 interface MediaTrackLike {
   stop(): void
+  addEventListener?(type: 'ended', listener: () => void): void
+  removeEventListener?(type: 'ended', listener: () => void): void
 }
 
 interface MediaStreamLike {
@@ -46,7 +48,7 @@ export interface MicrophoneTestDependencies {
 export type MicrophoneTestConstraints = MicrophoneConstraints
 
 export interface MicrophoneTestController {
-  start(onLevel: (level: number) => void, selectedDeviceId?: string): Promise<MicrophoneTestOutcome>
+  start(onLevel: (level: number) => void, selectedDeviceId?: string, onEnded?: (outcome: 'missing') => void): Promise<MicrophoneTestOutcome>
   stop(): Promise<void>
 }
 
@@ -89,10 +91,11 @@ export class BrowserMicrophoneTest implements MicrophoneTestController {
   private analyser: AnalyserLike | null = null
   private frame: number | null = null
   private generation = 0
+  private trackListeners: Array<{ track: MediaTrackLike; listener: () => void }> = []
 
   constructor(private readonly dependencies: MicrophoneTestDependencies = productionDependencies()) {}
 
-  async start(onLevel: (level: number) => void, selectedDeviceId?: string): Promise<MicrophoneTestOutcome> {
+  async start(onLevel: (level: number) => void, selectedDeviceId?: string, onEnded?: (outcome: 'missing') => void): Promise<MicrophoneTestOutcome> {
     const generation = ++this.generation
     await this.releaseOwnedResources()
     if (generation !== this.generation) return 'error'
@@ -121,6 +124,15 @@ export class BrowserMicrophoneTest implements MicrophoneTestController {
       this.context = context
       this.source = source
       this.analyser = analyser
+      for (const track of stream.getTracks()) {
+        const listener = (): void => {
+          if (generation !== this.generation) return
+          void this.stop()
+          onEnded?.('missing')
+        }
+        this.trackListeners.push({ track, listener })
+        track.addEventListener?.('ended', listener)
+      }
       this.scheduleLevel(generation, onLevel)
       return 'ready'
     } catch (error: unknown) {
@@ -177,6 +189,10 @@ export class BrowserMicrophoneTest implements MicrophoneTestController {
   }
 
   private clearOwnedResources(): void {
+    for (const { track, listener } of this.trackListeners) {
+      try { track.removeEventListener?.('ended', listener) } catch { /* continue cleanup */ }
+    }
+    this.trackListeners = []
     this.frame = null
     this.analyser = null
     this.source = null

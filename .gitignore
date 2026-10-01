@@ -96,6 +96,7 @@ artifacts/screenshot-resize-run/
 artifacts/workflow-agent-rows-run/
 
 artifacts/review-*/
+artifacts/review-644/
 
 # Workspace menu layout verification
 artifacts/workspace-picker/
@@ -104,6 +105,11 @@ artifacts/codex-restored-replies/
 # Native iPhone Focus verification captures; force-add only images cited by the note.
 artifacts/ios-focus/
 
+# Main infrastructure verification captures; retain only the images cited by the note.
+artifacts/main-infra-bundle/
+
+# Settings fixes: retain only the captures cited by the verification note.
+artifacts/pkg-18-e2e/
 # Generated captures from the Forge hand test; force-add only images cited by the note.
 artifacts/forge-hand-test/
 

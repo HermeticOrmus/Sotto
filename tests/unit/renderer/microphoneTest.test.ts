@@ -12,7 +12,8 @@ function deferred<Value>() {
 }
 
 function createHarness() {
-  const track = { stop: vi.fn() }
+  const events = new EventTarget()
+  const track = { stop: vi.fn(), addEventListener: events.addEventListener.bind(events), removeEventListener: vi.fn(events.removeEventListener.bind(events)) }
   const stream = { getTracks: vi.fn(() => [track]) }
   const source = { connect: vi.fn(), disconnect: vi.fn() }
   const analyser = {
@@ -39,7 +40,7 @@ function createHarness() {
     }),
     cancelFrame: vi.fn((handle) => { frames.delete(handle) }),
   }
-  return { analyser, context, dependencies, frames, source, stream, track }
+  return { analyser, context, dependencies, events, frames, source, stream, track }
 }
 
 describe('browser microphone setup test', () => {
@@ -52,6 +53,26 @@ describe('browser microphone setup test', () => {
       channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true,
     } })
     await test.stop()
+    expect(harness.track.stop).toHaveBeenCalledOnce()
+  })
+
+  it('releases every resource and reports missing when the input track ends', async () => {
+    const harness = createHarness()
+    const missing = vi.fn()
+    const test = new BrowserMicrophoneTest(harness.dependencies)
+    await test.start(vi.fn(), 'headset', missing)
+    harness.events.dispatchEvent(new Event('ended'))
+    await Promise.resolve()
+    expect(missing).toHaveBeenCalledExactlyOnceWith('missing')
+    expect(harness.track.stop).toHaveBeenCalledOnce()
+    expect(harness.source.disconnect).toHaveBeenCalledOnce()
+    expect(harness.analyser.disconnect).toHaveBeenCalledOnce()
+    expect(harness.context.close).toHaveBeenCalledOnce()
+    expect(harness.dependencies.cancelFrame).toHaveBeenCalledOnce()
+    expect(harness.track.removeEventListener).toHaveBeenCalledWith('ended', expect.any(Function))
+    await test.stop()
+    harness.events.dispatchEvent(new Event('ended'))
+    expect(missing).toHaveBeenCalledOnce()
     expect(harness.track.stop).toHaveBeenCalledOnce()
   })
 
