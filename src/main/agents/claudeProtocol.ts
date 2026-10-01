@@ -13,6 +13,7 @@ export class ClaudeRejected extends Error {}
 // Native user replay and transcript entries include base64 image data. Honor the
 // shared aggregate attachment limit plus room for prompt/protocol metadata.
 export const CLAUDE_MAX_FRAME_BYTES = Math.ceil(AGENT_MAX_ATTACHMENT_BYTES / 3) * 4 + 1024 * 1024
+const OUTPUT_DRAIN_GRACE_MS = 300
 
 /** Native newline-framed control channel. Deadlines never resend a mutation. */
 export class ClaudeProtocol {
@@ -25,6 +26,11 @@ export class ClaudeProtocol {
     onFrame: (frame: ClaudeFrame) => void, onExit: () => void) {
     this.child = spawn(executable, args, { cwd, env: withCliPath(env, executable), windowsHide: true, shell: false, stdio: 'pipe' })
     this.closed = new Promise(resolve => this.child.once('close', () => { this.fail(); resolve(); if (!this.stopping) onExit() }))
+    // Let final output drain, then release handles a descendant may still hold.
+    this.child.once('exit', () => {
+      const timer = setTimeout(() => { this.child.stdout.destroy(); this.child.stderr.destroy() }, OUTPUT_DRAIN_GRACE_MS)
+      timer.unref(); this.child.once('close', () => clearTimeout(timer))
+    })
     // The unfinished line is kept as fragments with a running byte count, so a large frame arriving in
     // many chunks costs one pass over each chunk and one join, not a rescan of everything so far.
     let fragments: string[] = []; let pendingBytes = 0; let stderrBytes = 0
