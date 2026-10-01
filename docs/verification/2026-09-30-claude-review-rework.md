@@ -109,3 +109,15 @@ Separate Standards and Spec integration reviews found no material findings. Type
 
 
 On the synchronized source, `npm run typecheck`, `npm run lint`, and `npm run notices:verify` passed (174 components). `npm test -- --maxWorkers=2` passed 6,662 tests with 153 skipped (499 files passed, 39 skipped). The first Windows run on `af9d6276` failed only the two obsolete fixture properties, matching the reproduced local typecheck errors; the next push contains their fix. The fresh Windows result is linked from the PR.
+
+### Final socket follow-up and main sync
+
+Main advanced through `51d367db` while verification ran. Merged it in `da48fe76`; the README conflict keeps both Claude recovery paragraphs and incoming microphone cancellation guidance. The integrated source passed 387 affected tests across 13 files covering Claude recovery, turn diagnostics, checkpoints, shared themes and microphone controls.
+
+The additional socket finding was confirmed by the independent Spec review and the subsequent PR follow-up. The authenticated-socket regression publishes request removal, then returns an uncertain provider result with an already-resolved true completion. It failed with the stale uncertainty error before `3986cc57`; it now returns a delivered receipt without that error. Existing disappearance-only cases still return false delivery receipts.
+
+A further Spec review found completion during final command diagnostics could leave the socket response's cached failure unchanged. `09a23403` retains the original uncertainty object until the response is returned and checks its delivery state again. An independent persistence failure discards that uncertainty reference and keeps its own failure. The new authenticated-socket case resolves completion during turn recording, after the catch has already observed uncertainty; it failed with a false delivery receipt before the fix and passes afterward.
+
+The final affected run passed 204 tests in five files: Claude safety/settings, request-draft delivery, authenticated socket and coordinator recovery. Typecheck, lint and notices passed (174 components). The final rebuild and all eight Electron cases passed in the request/activity, composer recovery, refused approval and checkpoint specs. Inspected complete-app retained-answer and checkpoint captures at minimum light and full-size dark; generated activity/checkpoint captures were restored. No design baseline changed.
+
+Both independent final Standards and Spec reviews found no material actionable findings. The full local suite was restarted on the fixed source after the socket findings, and its final count and fresh pushed-head Windows result are recorded in the PR. Earlier incomplete full runs stopped to fix those findings are not counted as passes. Replies on both actionable PR comments name their fixing commits. The PR remains open and unmerged.
