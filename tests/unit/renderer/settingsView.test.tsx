@@ -1310,6 +1310,35 @@ describe('Project thread defaults in Application settings', () => {
 
 
 describe('Personal dictionary draft acknowledgements', () => {
+  it('keeps the paste status mounted and clears it when edits return below the limit', async () => {
+    render(<SettingsView {...baseProps()} />)
+    await selectCategory('Cleanup')
+    const input = screen.getByRole('textbox', { name: 'Personal dictionary' }) as HTMLTextAreaElement
+    const status = screen.getByRole('status')
+    expect(status).toBeEmptyDOMElement()
+    fireEvent.change(input, { target: { value: 'a'.repeat(3990) } })
+    input.setSelectionRange(3990, 3990)
+    fireEvent.paste(input, { clipboardData: { getData: () => 'b'.repeat(20) } })
+    fireEvent.change(input, { target: { value: 'a'.repeat(3990) + 'b'.repeat(10) } })
+    expect(screen.getByRole('status')).toBe(status)
+    expect(status).toHaveTextContent('The pasted text was cut to fit the 4,000-character limit.')
+    fireEvent.change(input, { target: { value: 'a'.repeat(3999) } })
+    expect(screen.getByRole('status')).toBe(status)
+    expect(status).toBeEmptyDOMElement()
+  })
+
+  it('clears the cut-paste message after deleting text below the limit', async () => {
+    render(<SettingsView {...baseProps()} />)
+    await selectCategory('Cleanup')
+    const input = screen.getByRole('textbox', { name: 'Personal dictionary' }) as HTMLTextAreaElement
+    fireEvent.change(input, { target: { value: 'a'.repeat(4000) } })
+    input.setSelectionRange(4000, 4000)
+    fireEvent.paste(input, { clipboardData: { getData: () => 'extra' } })
+    expect(screen.getByText('The pasted text was cut to fit the 4,000-character limit.')).toBeVisible()
+    fireEvent.change(input, { target: { value: 'a'.repeat(3999) } })
+    expect(screen.queryByText('The pasted text was cut to fit the 4,000-character limit.')).not.toBeInTheDocument()
+  })
+
   it('announces only pastes cut by the dictionary limit, accounting for the selection', async () => {
     render(<SettingsView {...baseProps()} />)
     await selectCategory('Cleanup')
@@ -1398,7 +1427,7 @@ describe('Personal dictionary draft acknowledgements', () => {
     f.publish('Sotto\nZach')
     await act(async () => f.answers[1]!.resolve(true))
     expect(f.input).toHaveValue('Sotto\nZach')
-    expect(screen.getByRole('status')).toHaveTextContent('Dictionary saved.')
+    expect(screen.getByText('Dictionary saved.')).toHaveAttribute('role', 'status')
   })
 
   it('retains the latest draft through repeated blur and refocus while earlier saves are queued', async () => {

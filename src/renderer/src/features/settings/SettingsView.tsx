@@ -530,10 +530,11 @@ export function SettingsView({
                         setDictionaryPasteCut(input.value.length - (input.selectionEnd - input.selectionStart) + pasted.length > input.maxLength)
                       }} onBlur={() => void saveDictionary()} onChange={(event) => {
                         const value = event.currentTarget.value
+                        if (value.length < event.currentTarget.maxLength) setDictionaryPasteCut(false)
                         llmDictionaryDraft.edit(value)
                       }} />
                     </Field>
-                    {dictionaryPasteCut ? <p className="settings-disclosure" role="status">The pasted text was cut to fit the 4,000-character limit.</p> : null}
+                    <p className="settings-disclosure" role="status">{dictionaryPasteCut ? 'The pasted text was cut to fit the 4,000-character limit.' : ''}</p>
 
                   </div>
                   <Toggle label="Generated thread titles" checked={settings.threadTitles} onCheckedChange={(checked) => void save({ threadTitles: checked })} description="Ask a thread's own model to name the thread from its first exchange, and a new worktree branch from its first prompt, only while local history is kept. Names you choose are never replaced." />
