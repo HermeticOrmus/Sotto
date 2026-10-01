@@ -1,7 +1,10 @@
 import { homedir, userInfo } from 'node:os'
 
-/** A home folder in a line the installer printed: `C:\Users\<name>\…`, `/home/<name>/…`, `/Users/<name>/…`, `/root/…`. */
-const HOME_PATH = /[A-Za-z]:\\[^\s"']+|\/(?:home|Users|root)\/[^\s"']+/gu
+// Spaces belong to paths too. Quotes, diagnostic separators and the end of the
+// line bound them; an ambiguous unquoted suffix is removed rather than leaked.
+// A path cannot start inside a URL or a package name such as aqua:openai/codex.
+const QUOTED_ABSOLUTE_PATH = /(["'])(?:[A-Za-z]:[\\/]|\\\\|\/\/|\/(?=[^\s/]))[^\r\n]*?\1(?=\s|[,;:)]|$)/gu
+const ABSOLUTE_PATH = /(?<![\w:/\\])(?:[A-Za-z]:[\\/]|\\\\|\/\/|\/(?=[^\s/]))[^\r\n"<>|]*?(?=\s+->(?:\s|$)|["<>|\r\n]|$)/gu
 
 /** The lines worth showing: not blank, and not npm's pointer to a log that sits in the home folder. */
 function shownLines(output: string): string[] {
@@ -21,7 +24,7 @@ function ownNames(): RegExp[] {
 }
 const escaped = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
 const redact = (line: string): string => {
-  let shown = line.replace(HOME_PATH, '…')
+  let shown = line.replace(QUOTED_ABSOLUTE_PATH, '$1…$1').replace(ABSOLUTE_PATH, '…')
   for (const name of ownNames()) shown = shown.replace(name, '…')
   return shown.trim()
 }
