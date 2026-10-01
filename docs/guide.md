@@ -55,7 +55,7 @@ Native clients retain their own subscription sign-in and model catalogs. Wake co
 
 ### Questions and permissions
 
-If delivery of your answer to Claude Code is uncertain, press **Check again** to check its state, read the thread's activity, or press **Stop** to interrupt the work. Checking sends no answer. While the original write is pending, another answer cannot be sent. If that write finishes, Sotto keeps your original choice and marks it answered. If the write fails outright or the client is gone, **Check again** can reopen a request that is still pending so you can choose and send another answer. Sotto never retries it on its own.
+If delivery of your answer to Claude Code is uncertain, press **Check again** to check its state, read the thread's activity, or press **Stop** to interrupt the work. Checking sends no answer. While the original write is pending, another answer cannot be sent. If that write finishes, Sotto keeps your original choice and marks it answered. If the write fails outright or the client is gone, **Check again** can reopen a request that is still pending so you can choose and send another answer. Sotto never retries it on its own. An unconfirmed answer from a phone is reported to that phone only; it raises no desktop notice or spoken reply.
 
 In split threads, **Ctrl+Shift+M** zooms the focused pane or returns to all panes. If dictation uses that shortcut, use the pane's **Zoom** or **Show all panes** button instead.
 
@@ -99,6 +99,8 @@ You can create a thread from the Threads page while another thread has a saved c
 Stop can cancel running work even when the provider has not confirmed the last prompt. That prompt stays unconfirmed until the provider reports receiving it; stopping does not resend it or discard its saved identity. A failure to save the queue pause does not block Stop. Your queued messages stay saved; check them before sending another message. A refused Stop leaves management unchanged. Other storage failures can still prevent cancellation; Sotto reports the failure.
 
 ### History and copying
+
+Long replies are saved in full. If one history event cannot be saved, the thread says part of its history could not be kept; other valid messages still save. Copy any missing text before closing Sotto. Storage failures keep their events for retry.
 
 A thread's messages and retained activity are Sotto's own record, kept in `threads.sqlite` in the app's data folder rather than rebuilt from the provider each time Sotto starts. A thread pane opens on its newest ten turns; press **Show earlier messages** above the oldest one to read further back. A provider session starts when you open or send to a thread, not at connect, and one left idle for thirty minutes is stopped until the next time it is needed. With **Keep local history** off, no message text or activity output is written to disk; turning it off removes the text already written, and what was not kept cannot be recovered. See [ADR-0016](adr/0016-sotto-owned-history-on-an-event-store.md).
 
