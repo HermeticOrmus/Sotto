@@ -98,6 +98,7 @@ artifacts/workflow-agent-rows-run/
 artifacts/review-*/
 artifacts/renderer-other-bundle-run/
 artifacts/review-644/
+artifacts/review-667/
 
 # Workspace menu layout verification
 artifacts/workspace-picker/
