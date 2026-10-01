@@ -192,38 +192,40 @@ export class TurnRecorder {
     await this.enqueue(() => this.scrub())
   }
 
+  private async retryLocked<T>(operation: () => Promise<T>): Promise<T> {
+    for (let attempt = 0; ; attempt += 1) {
+      try { return await operation() } catch (error) {
+        if (attempt >= 3 || (!hasErrorCode(error, 'EPERM') && !hasErrorCode(error, 'EBUSY'))) throw error
+        await delay(50)
+      }
+    }
+  }
+
   private async scrub(): Promise<void> {
     if (this.scrubbed) return
-    let contents: string
-    try { contents = await readFile(this.path(), 'utf8') } catch (error) {
-      if (!hasErrorCode(error, 'ENOENT')) throw error
-      this.scrubbed = true
-      return
-    }
-    const lines: string[] = []
-    for (const line of contents.split(/\r?\n/u)) {
-      if (!line) continue
-      try {
-        const record = turnRecordSchema.safeParse(JSON.parse(line))
-        if (record.success) {
-          if (record.data.outcome === 'failed' && record.data.failureCode === null) record.data.failureCode = 'unknown'
-          lines.push(JSON.stringify(record.data))
-        }
-      } catch { /* Discard corrupt legacy lines rather than retaining unknown content. */ }
-    }
-    const cleaned = lines.length ? `${lines.join('\n')}\n` : ''
-    if (cleaned !== contents) {
-      try {
-        for (let attempt = 0; ; attempt += 1) {
-          try { await this.replace(cleaned); break } catch (error) {
-            if (attempt >= 3 || (!hasErrorCode(error, 'EPERM') && !hasErrorCode(error, 'EBUSY'))) throw error
-            await delay(50)
+    try {
+      let contents: string
+      try { contents = await this.retryLocked(() => readFile(this.path(), 'utf8')) } catch (error) {
+        if (!hasErrorCode(error, 'ENOENT')) throw error
+        this.scrubbed = true
+        return
+      }
+      const lines: string[] = []
+      for (const line of contents.split(/\r?\n/u)) {
+        if (!line) continue
+        try {
+          const record = turnRecordSchema.safeParse(JSON.parse(line))
+          if (record.success) {
+            if (record.data.outcome === 'failed' && record.data.failureCode === null) record.data.failureCode = 'unknown'
+            lines.push(JSON.stringify(record.data))
           }
-        }
-      } catch {
-        try { await rm(this.path(), { force: true }) } catch {
-          throw new Error('Sotto could not remove text from old turn records or delete the file. Close other apps using turns.jsonl, then restart Sotto. Diagnostic records may be lost.')
-        }
+        } catch { /* Discard corrupt legacy lines rather than retaining unknown content. */ }
+      }
+      const cleaned = lines.length ? `${lines.join('\n')}\n` : ''
+      if (cleaned !== contents) await this.retryLocked(() => this.replace(cleaned))
+    } catch {
+      try { await rm(this.path(), { force: true }) } catch {
+        throw new Error('Sotto could not remove text from old turn records or delete the file. Close other apps using turns.jsonl, then restart Sotto. Diagnostic records may be lost.')
       }
     }
     this.scrubbed = true

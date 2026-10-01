@@ -15,7 +15,7 @@ import { immediatePublishScheduler } from '../../fixtures/publishScheduler'
 
 vi.mock('node:fs/promises', async importOriginal => {
   const actual = await importOriginal<typeof import('node:fs/promises')>()
-  return { ...actual, rename: vi.fn(actual.rename), rm: vi.fn(actual.rm) }
+  return { ...actual, readFile: vi.fn(actual.readFile), rename: vi.fn(actual.rename), rm: vi.fn(actual.rm) }
 })
 
 const roots: string[] = []
@@ -90,6 +90,7 @@ async function lastRawRecord(root: string) {
 
 afterEach(async () => {
   const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+  vi.mocked(readFile).mockReset().mockImplementation(actual.readFile)
   vi.mocked(rename).mockReset().mockImplementation(actual.rename)
   vi.mocked(rm).mockReset().mockImplementation(actual.rm)
   for (const control of controls.splice(0)) control.dispose()
@@ -280,6 +281,29 @@ describe('coordinator turn records', () => {
     expect(raw).not.toContain('"text"')
     expect(raw).not.toContain('"error"')
     expect((await upgraded.recent(1))[0]?.outcome).toBe('failed')
+  })
+
+  it.each(['EPERM', 'EBUSY'])('retries a temporarily locked initial read (%s)', async code => {
+    const f = await fixture()
+    const record = (await f.recorder.recent(1))[0]!
+    await writeFile(f.recorder.path(), `${JSON.stringify({ ...record, text: 'Private prompt' })}\n`)
+    vi.mocked(readFile).mockRejectedValueOnce(Object.assign(new Error('Locked'), { code }))
+    const upgraded = new TurnRecorder({ directory: f.root, resolveSession: () => undefined })
+    await upgraded.initialize()
+    expect(await readFile(upgraded.path(), 'utf8')).not.toContain('Private prompt')
+    expect(await upgraded.recent(1)).toHaveLength(1)
+  })
+
+  it.each(['EPERM', 'EACCES'])('deletes diagnostics after a persistent initial read failure (%s)', async code => {
+    const f = await fixture()
+    await writeFile(f.recorder.path(), 'Private prompt\n')
+    vi.mocked(readFile).mockRejectedValue(Object.assign(new Error('Unreadable'), { code }))
+    const upgraded = new TurnRecorder({ directory: f.root, resolveSession: () => undefined })
+    await expect(upgraded.initialize()).resolves.toBeUndefined()
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+    await expect(actual.readFile(upgraded.path(), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    vi.mocked(readFile).mockReset().mockImplementation(actual.readFile)
+    expect(await upgraded.recent(1)).toEqual([])
   })
 
   it.each(['EPERM', 'EBUSY'])('retries a temporarily locked scrub (%s)', async code => {
