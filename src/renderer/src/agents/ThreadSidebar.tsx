@@ -62,7 +62,7 @@ export interface PaneActions {
  * row whose thread the update did not touch keeps every prop it had and does not re-render. Its props stay
  * cheap to compare — no object or array is built for it here.
  */
-const ThreadNavRow = memo(function ThreadNavRow({ row, current, open, busy, unseen, liveClock, onOpen, command, panes }: {
+const ThreadNavRow = memo(function ThreadNavRow({ row, current, open, busy, unseen, liveClock, onOpen, command, panes, settle }: {
   readonly row: ThreadRow; readonly current: boolean; readonly open: boolean; readonly onOpen: (threadId: string) => void; readonly command: Command
   /** This thread's own lane is running a command. Another thread's work leaves this row's actions live. */
   readonly busy: boolean
@@ -70,6 +70,7 @@ const ThreadNavRow = memo(function ThreadNavRow({ row, current, open, busy, unse
   readonly unseen: boolean
   readonly liveClock: boolean
   readonly panes: PaneActions
+  readonly settle: ReturnType<typeof useSettleThread>['settle']
 }): ReactNode {
   const title = row.thread.title
   const label = row.settledBy === 'provider' ? row.stateLabel : row.state === 'done' && row.settledBy !== null ? 'Settled' : row.stateLabel
@@ -77,7 +78,6 @@ const ThreadNavRow = memo(function ThreadNavRow({ row, current, open, busy, unse
   const status = finished ? 'Just finished' : label
   const besideAvailable = panes.currentThreadId !== null && !current
   const [renaming, setRenaming] = useState(false)
-  const { settle, dialog: settleDialog } = useSettleThread(command)
   // The button's name is the title alone; the state sentence is its description, or the label would swallow it.
   const statusId = useId()
   const timeId = useId()
@@ -128,7 +128,6 @@ const ThreadNavRow = memo(function ThreadNavRow({ row, current, open, busy, unse
           ? <button type="button" className="thread-nav__action tt-focusable" aria-label={`Restore ${title}`} title="Restore thread" disabled={busy} onClick={() => void command({ type: 'restore-thread', threadId: row.thread.id })}><ArchiveRestore size={16} aria-hidden="true" /></button>
           : null}
     </span>
-    {settleDialog}
   </li>
 })
 
@@ -136,13 +135,14 @@ const ThreadNavRow = memo(function ThreadNavRow({ row, current, open, busy, unse
 const folderKey = (section: Section, folderId: string): string => `${section}:${folderId}`
 
 /** One project folder and its rows. Memoised for the same reason a row is: its folder is shared across updates. */
-const FolderView = memo(function FolderView({ folder, section, panes, activeProjectId, expanded, unseen, liveClock, onToggle, onOpen, onNewThread, command, globalLaneBusy, busyThreadIds, host, newThreadShortcut }: {
+const FolderView = memo(function FolderView({ folder, section, panes, activeProjectId, expanded, unseen, liveClock, onToggle, onOpen, onNewThread, command, settle, globalLaneBusy, busyThreadIds, host, newThreadShortcut }: {
   readonly folder: ProjectFolder; readonly section: Section; readonly panes: PaneActions; readonly activeProjectId: string | null
   /** The host the project is on, once a remote host is connected; its badge tells same-named projects apart. */
   readonly host?: ListedHost | undefined
   readonly expanded: boolean; readonly onToggle: (key: string) => void; readonly onOpen: (threadId: string) => void
   readonly unseen: ReadonlySet<string>; readonly liveClock: boolean
   readonly onNewThread: (projectId: string) => void; readonly command: Command
+  readonly settle: ReturnType<typeof useSettleThread>['settle']
   /** Settling or restoring a whole project moves every thread of it at once, so it waits on the global lane. */
   readonly globalLaneBusy: boolean
   /** The threads whose own lane is running; each row reads only its own entry. */
@@ -173,7 +173,7 @@ const FolderView = memo(function FolderView({ folder, section, panes, activeProj
     </div>
     {expanded ? <ul className="thread-folder__rows" id={listId}>
       {folder.rows.map(row => <ThreadNavRow key={row.thread.id} row={row} current={panes.currentThreadId === row.thread.id} open={panes.openThreadIds.includes(row.thread.id)} busy={isThreadBusy({ busyThreadIds }, row.thread.id)}
-        unseen={unseen.has(row.thread.id)} liveClock={liveClock} onOpen={onOpen} command={command} panes={panes} />)}
+        unseen={unseen.has(row.thread.id)} liveClock={liveClock} onOpen={onOpen} command={command} panes={panes} settle={settle} />)}
       {!folder.rows.length ? <li className="thread-nav__empty">{section === 'open' ? 'No open threads.' : 'No threads yet.'}</li> : null}
     </ul> : null}
   </div>
@@ -202,6 +202,8 @@ export function ThreadSidebar({ state, command, organization, query, liveClock =
   readonly newThreadShortcut?: { readonly suffix: string; readonly keys: string } | undefined
 }): ReactNode {
   const [settledOpen, setSettledOpen] = useState(false)
+  const settledButton = useRef<HTMLButtonElement>(null)
+  const { settle, dialog: settleDialog } = useSettleThread(command, settledButton)
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set())
   // One object for the whole list, rebuilt only when a pane action actually changes: every row compares it.
   const panes = useMemo<PaneActions>(() => ({ currentThreadId, openThreadIds, onOpenBeside, onDragThread }),
@@ -223,7 +225,7 @@ export function ThreadSidebar({ state, command, organization, query, liveClock =
     const hostId = hosts.length ? hostIdOf(folder.project) ?? hostIdOf({ id: folder.id }) ?? folder.rows[0]?.thread.hostId : undefined
     return <FolderView key={key} folder={folder} section={section} panes={panes} activeProjectId={state.activeProjectId} unseen={unseen} liveClock={liveClock}
       host={hosts.find(item => item.hostId === hostId)} newThreadShortcut={newThreadShortcut}
-      expanded={searching || !collapsed.has(key)} onToggle={toggle} onOpen={onOpen} onNewThread={onNewThread} command={command} globalLaneBusy={state.globalLaneBusy} busyThreadIds={state.busyThreadIds} />
+      expanded={searching || !collapsed.has(key)} onToggle={toggle} onOpen={onOpen} onNewThread={onNewThread} command={command} settle={settle} globalLaneBusy={state.globalLaneBusy} busyThreadIds={state.busyThreadIds} />
   }
   const { open, settled } = organization
   const settledThreads = settled.reduce((count, folder) => count + folder.rows.length, 0)
@@ -244,7 +246,7 @@ export function ThreadSidebar({ state, command, organization, query, liveClock =
         {!open.length ? <p className="thread-nav__empty">{searching ? 'No matching open threads.' : state.host.projects.length ? 'All caught up.' : 'Add a project folder to start.'}</p> : null}
       </section>
       <section aria-label="Settled" className="thread-nav__shelf">
-        <button className="thread-nav__settled tt-focusable" type="button" aria-expanded={settledShown} onClick={() => setSettledOpen(!settledOpen)}
+        <button ref={settledButton} className="thread-nav__settled tt-focusable" type="button" aria-expanded={settledShown} onClick={() => setSettledOpen(!settledOpen)}
           aria-label={[`Settled ${plural(settledThreads, 'thread')}`, settledNeeds ? `${settledNeeds} waiting on you` : '', settledWorking ? `${settledWorking} working` : ''].filter(Boolean).join(', ')}>
           <ChevronRight size={13} aria-hidden="true" className="thread-folder__chevron" />
           <span>Settled</span>
@@ -253,5 +255,6 @@ export function ThreadSidebar({ state, command, organization, query, liveClock =
         {settledShown ? <div>{settled.map(folderView('settled'))}{!settled.length ? <p className="thread-nav__empty">No settled threads.</p> : null}</div> : null}
       </section>
       {searching && !organization.matching ? <p className="thread-nav__empty">Nothing matches "{query}".</p> : null}
+      {settleDialog}
   </SidebarFrame>
 }

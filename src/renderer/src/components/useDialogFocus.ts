@@ -17,7 +17,7 @@ export function useDialogFocus({ onEscape, initialFocus, fallbackFocus }: {
   const escape = useRef(onEscape)
   escape.current = onEscape
   useEffect(() => {
-    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const previous = document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null
     initialFocus.current?.focus()
     const onKey = (event: KeyboardEvent): void => {
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); escape.current(); return }

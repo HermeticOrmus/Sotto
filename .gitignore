@@ -118,3 +118,6 @@ artifacts/iphone-new-threads/
 
 # Composer recovery captures; retain only the images cited by the verification note.
 artifacts/crossing/pkg-43-*.png
+
+# Renderer bug bundle: retain only captures cited by its verification note.
+artifacts/bh-pkg-19/

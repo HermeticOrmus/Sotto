@@ -222,7 +222,7 @@ export function ReclaimWorktreeDialog({ facts, dirty, title, threadId, command, 
  * settles at once, as it always has; the question is a separate one, answered by Keep folder or Escape.
  * With the on-settle rule turned on, a clean folder goes without the question and a dirty one still asks.
  */
-export function useSettleThread(command: AgentConnection['command']) {
+export function useSettleThread(command: AgentConnection['command'], fallbackFocusRef?: React.RefObject<HTMLElement | null>) {
   const app = useOptionalApp()
   const [removalError, setRemovalError] = useState<string | null>(null)
   const onSettleRule = app?.settings?.worktreeCleanup.onSettle === true
@@ -235,7 +235,7 @@ export function useSettleThread(command: AgentConnection['command']) {
     setRemovalError(null)
     setAsking({ thread, project, dirty })
   }, [command, onSettleRule])
-  const dialog = asking ? <ReclaimWorktreeDialog facts={describeWorkingCopy(asking.thread, asking.project)} dirty={asking.dirty} title="Remove its worktree too?" removalError={removalError} threadId={asking.thread.id} command={command}
+  const dialog = asking ? <ReclaimWorktreeDialog facts={describeWorkingCopy(asking.thread, asking.project)} dirty={asking.dirty} title="Remove its worktree too?" removalError={removalError} threadId={asking.thread.id} command={command} fallbackFocusRef={fallbackFocusRef}
     onCancel={() => setAsking(null)}
     onConfirm={async preview => {
       setRemovalError(null)
