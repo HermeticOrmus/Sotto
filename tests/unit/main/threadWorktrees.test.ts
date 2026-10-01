@@ -25,14 +25,14 @@ async function fixture(commit = true) {
   }
   return { root, project, service: new ThreadWorktrees(root) }
 }
-async function submoduleHistoryFixture(reference: 'branch' | 'tag' | 'no-remote' = 'branch') {
+async function submoduleHistoryFixture(reference: 'branch' | 'tag' | 'no-remote' | 'deinitialized-branch' | 'deinitialized-tag' = 'branch', moduleName = 'module') {
   const f = await fixture()
   const origin = join(f.root, 'module-origin'); await mkdir(origin)
   await git(origin, ['init'])
   await writeFile(join(origin, 'module.txt'), 'published baseline')
   await git(origin, ['add', '.'])
   await git(origin, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'Module baseline'])
-  await git(f.project, ['-c', 'protocol.file.allow=always', 'submodule', 'add', origin, 'module'])
+  await git(f.project, ['-c', 'protocol.file.allow=always', 'submodule', 'add', '--name', moduleName, origin, 'module'])
   await git(f.project, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-am', 'Add module'])
   const a = await f.service.ensure(await f.service.allocate(f.project, 'independent'))
   await git(a.path!, ['-c', 'protocol.file.allow=always', 'submodule', 'update', '--init'])
@@ -44,10 +44,11 @@ async function submoduleHistoryFixture(reference: 'branch' | 'tag' | 'no-remote'
   await git(module, ['add', '.'])
   await git(module, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'Private module work'])
   const privateCommit = (await git(module, ['rev-parse', 'HEAD'])).trim()
-  if (reference === 'tag') await git(module, ['tag', 'private-save'])
+  if (reference === 'tag' || reference === 'deinitialized-tag') await git(module, ['tag', 'private-save'])
   await git(module, ['checkout', '--detach', recorded])
-  if (reference === 'tag') await git(module, ['branch', '-D', 'private'])
+  if (reference === 'tag' || reference === 'deinitialized-tag') await git(module, ['branch', '-D', 'private'])
   if (reference === 'no-remote') await git(module, ['remote', 'remove', 'origin'])
+  if (reference.startsWith('deinitialized-')) await git(a.path!, ['submodule', 'deinit', '--', 'module'])
   return { ...f, a, module, gitDirectory, privateCommit }
 }
 /** Removes only a test-owned checkout under the fixture root; the production implementation has no removal path. */
@@ -779,6 +780,19 @@ describe('independent working-copy allocation', () => {
     expect(historyReads).toBe(2)
     expect(await git(f.module, ['cat-file', '-t', f.privateCommit])).toBe('commit\n')
     expect((await lstat(f.gitDirectory)).isDirectory()).toBe(true)
+  })
+  it.each(['deinitialized-branch', 'deinitialized-tag'] as const)('requires acknowledgement of retained submodule history (%s)', async reference => {
+    const f = await submoduleHistoryFixture(reference, reference === 'deinitialized-tag' ? 'kept.history' : 'module')
+    await expect(lstat(join(f.module, '.git'))).rejects.toMatchObject({ code: 'ENOENT' })
+    expect((await lstat(f.gitDirectory)).isDirectory()).toBe(true)
+    const preview = await f.service.reclaimFacts(f.a)
+    expect(preview.dirty).toBe(false)
+    expect(preview.repositories).toEqual([{ path: 'module/', changeCount: 0, kind: 'repository', unpushedCommitCount: 1 }])
+    await expect(f.service.reclaim(f.a, { automatic: true })).rejects.toThrow('a rule leaves it alone')
+    await expect(f.service.reclaim(f.a)).rejects.toThrow('Choose Remove worktree to review them')
+    expect(await git(f.gitDirectory, ['--git-dir', f.gitDirectory, 'cat-file', '-t', f.privateCommit])).toBe('commit\n')
+    expect((await f.service.reclaim(f.a, { confirmedItems: preview.items, confirmedIgnored: preview.ignored, confirmedRepositories: preview.repositories })).reclaimedAt).toBeTruthy()
+    await expect(lstat(f.gitDirectory)).rejects.toMatchObject({ code: 'ENOENT' })
   })
   it.each(['clean', 'recursive', 'dirty-hidden'])('reclaims initialized submodules safely (%s)', async mode => {
     const recursive = mode === 'recursive'

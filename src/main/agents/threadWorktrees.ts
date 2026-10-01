@@ -1,6 +1,6 @@
 import { execFile, spawn } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { lstat, mkdir, opendir, readlink, realpath, stat } from 'node:fs/promises'
+import { lstat, mkdir, opendir, readFile, readlink, realpath, stat } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { RECLAIM_WORKTREE_NEEDS_CONFIRMATION, type AgentWorkingCopyOptions, type AgentWorkingCopySelection, type AgentWorktree } from '../../shared/agents'
 import { nativeEnvironment } from './subscriptionCodex'
@@ -447,6 +447,7 @@ export class ThreadWorktrees {
     const items: Array<{ path: string; bytes: number; fileCount: number }> = []
     const repositories: Array<{ path: string; changeCount: number; unpushedCommitCount?: number | undefined; kind: 'worktree' | 'repository' }> = []
     const submodules: string[] = []
+    const inspectedSubmoduleDirectories = new Set<string>()
     const nestedWorktrees: { path: string; commonDirectory: string }[] = []
     const canonicalRoot = await realpath(path)
     let outsideLink: string | undefined
@@ -481,7 +482,11 @@ export class ThreadWorktrees {
             // Its history is at risk even when its checkout matches the parent's recorded commit.
             const kind = !submodule && gitMarker?.isFile() ? 'worktree' : 'repository'
             const history = kind === 'repository' ? { unpushedCommitCount: Number((await this.git(full, ['rev-list', '--count', '--all', '--not', '--remotes'])).trim()) } : {}
-            if (submodule) submodules.push(local)
+            if (submodule) {
+              submodules.push(local)
+              const directory = gitMarker!.isFile() ? resolve(full, (await readFile(join(full, '.git'), 'utf8')).trim().replace(/^gitdir: /u, '')) : join(full, '.git')
+              inspectedSubmoduleDirectories.add(pathKey(await realpath(directory)))
+            }
             if (!submodule && gitMarker?.isFile()) {
               const commonDirectory = (await this.git(full, ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim()
               const registration = registeredWorktrees(await this.git(commonDirectory, ['worktree', 'list', '--porcelain', '-z'])).find(item => pathKey(item.path) === pathKey(full))
@@ -512,6 +517,57 @@ export class ThreadWorktrees {
       }
     }
     await visit(path)
+    // Deinitializing a submodule empties its checkout but keeps its history in this worktree's
+    // Git directory. Force removal destroys that metadata too, including recursive submodules.
+    const rootMarker = await lstat(join(path, '.git'))
+    if (rootMarker.isFile()) {
+      const gitDirectory = resolve(path, (await readFile(join(path, '.git'), 'utf8')).trim().replace(/^gitdir: /u, ''))
+      const modulesDirectory = join(gitDirectory, 'modules')
+      let modulePaths: Map<string, string> | undefined
+      const retainedModules = async (directory: string): Promise<void> => {
+        const info = await lstat(directory).catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return undefined; throw error })
+        if (!info) return
+        if (info.isSymbolicLink()) { outsideLink ??= '.git/modules/'; return }
+        if (!info.isDirectory()) return
+        const head = await lstat(join(directory, 'HEAD')).catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return undefined; throw error })
+        if (head?.isFile()) {
+          if (!inspectedSubmoduleDirectories.has(pathKey(await realpath(directory)))) {
+            const unpushedCommitCount = Number((await this.git(directory, ['--git-dir', directory, 'rev-list', '--count', '--all', '--not', '--remotes'])).trim())
+            if (unpushedCommitCount) {
+              // Git removes core.worktree on deinit. Read the checkout path from .gitmodules when
+              // it is still recorded; orphaned or recursive metadata retains its own visible path.
+              if (!modulePaths) {
+                modulePaths = new Map()
+                if (await lstat(join(path, '.gitmodules')).then(info => info.isFile(), (error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return false; throw error })) {
+                  for (const record of (await this.git(path, ['config', '--file', join(path, '.gitmodules'), '--null', '--list'])).split('\0')) {
+                    const match = /^submodule\.(.+)\.path\n([\s\S]+)$/u.exec(record)
+                    if (match) modulePaths.set(match[1]!, match[2]!)
+                  }
+                }
+              }
+              const moduleName = relative(modulesDirectory, directory).split(sep).join('/')
+              const recordedPath = modulePaths.get(moduleName)
+              const checkout = recordedPath ? relative(canonicalRoot, resolve(path, recordedPath)) : ''
+              const metadataPath = `.git/modules/${moduleName}/`
+              const local = checkout && !isAbsolute(checkout) && checkout !== '..' && !checkout.startsWith(`..${sep}`) ? checkout.split(sep).join('/') + '/' : metadataPath
+              // A replacement checkout may already have its own row; retained history still needs one.
+              const repositoryPath = repositories.some(item => item.path === local) ? metadataPath : local
+              const existingRow = items.find(item => item.path === repositoryPath)
+              const row = existingRow ?? { path: repositoryPath, bytes: 0, fileCount: 0 }
+              repositories.push({ path: repositoryPath, changeCount: 0, unpushedCommitCount, kind: 'repository' })
+              if (!ignored.includes(repositoryPath)) ignored.push(repositoryPath)
+              if (!existingRow) items.push(row)
+              await visit(directory, row, true)
+            }
+          }
+          await retainedModules(join(directory, 'modules'))
+          return
+        }
+        const handle = await opendir(directory)
+        for await (const entry of handle) await retainedModules(join(directory, entry.name))
+      }
+      await retainedModules(modulesDirectory)
+    }
     ignored.sort()
     repositories.sort((a, b) => a.path.localeCompare(b.path))
     return { ...(identity ? { identity } : {}), submodules, nestedWorktrees, facts: { path, branch: inspected.branch, dirty: inspected.dirty === true, ignored, items, repositories, untracked: untrackedListing.split('\0').filter(Boolean).sort(), outsideLink } }

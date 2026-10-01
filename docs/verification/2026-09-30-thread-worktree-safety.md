@@ -91,4 +91,9 @@ Light and dark were checked at 1600x1000, 1280x800 and 820x560 with reduced moti
 - `artifacts/reclaim-worktrees/submodule-history-820x560-dark.png`
 - `artifacts/reclaim-worktrees/submodule-history-1600x1000-light.png`
 
-Incidental recaptures were restored and design baselines were not regenerated. Main through `a43ce556` merged cleanly before verification. Typecheck, lint and notices verification passed; the full suite and independent reviews are recorded below once complete.
+Incidental recaptures were restored and design baselines were not regenerated. Main through `a43ce556` merged cleanly before verification. Typecheck, lint and notices verification passed; the first full run passed 6,659 tests with 153 skipped across 493 passing files and 39 skipped files, before the deinitialization follow-up below.
+
+
+The independent Spec review found that deinitialization leaves the module Git directory behind even though its checkout has no `.git` marker. Private branch and tag regressions reproduced the missing row before the follow-up. Sotto now inspects retained module metadata recursively with an explicit Git directory, lists its unpublished history, and requires the same confirmed counts. A recorded module uses its checkout path; orphaned or recursive metadata without a current recorded path uses its relative `.git/modules/` path. Initialized metadata is not counted twice. The named-module regression uses a module name different from its checkout path. All nine focused submodule cases passed.
+
+The expanded Electron case checks deinitialization in the pane and Settle questions too. It initially caught a confirmation-record key-order mismatch after command validation; retained rows now use the same field order as existing repository rows. The rebuilt journey passed in 22.2 seconds after that fix. No deadline or assertion was weakened. The coordinator guide's obsolete cache-file sentence was corrected to the binding file-count rule. The reviewers' shared confirmation-type refactor suggestion remains outside this safety batch.

@@ -635,6 +635,16 @@ test('clean submodule branch and tag history is listed and requires the tick in 
     expect(git(module, 'cat-file', '-t', branchCommit)).toBe('commit')
     expect(git(module, 'cat-file', '-t', tagCommit)).toBe('commit')
     expect(existsSync(gitDirectory)).toBe(true)
+    // Emptying the submodule checkout keeps its private history in metadata removed with the parent.
+    git(worktreePath, 'submodule', 'deinit', '--', 'module')
+    expect(existsSync(join(module, '.git'))).toBe(false)
+    await page.getByRole('group', { name: 'Working copy details' }).getByRole('button', { name: 'Remove worktree folder, keeping its branch', exact: true }).click()
+    await expect(question.getByText('module/', { exact: true })).toBeVisible()
+    await expect(question).toContainText('2 commits not on any remote')
+    await expect(question.getByRole('button', { name: 'Remove with these files', exact: true })).toBeDisabled()
+    await page.keyboard.press('Escape')
+    await expect(question).toHaveCount(0)
+    expect(git(gitDirectory, '--git-dir', gitDirectory, 'cat-file', '-t', tagCommit)).toBe('commit')
     await resize(launched, 1280, 800)
     await page.getByRole('button', { name: 'More actions', exact: true }).click()
     await page.getByRole('menuitem', { name: 'Settle', exact: true }).click()
@@ -647,7 +657,11 @@ test('clean submodule branch and tag history is listed and requires the tick in 
     await page.keyboard.press('Space')
     await expect(remove).toBeEnabled()
     await remove.click()
-    await expect(settle).toHaveCount(0)
+    await expect.poll(async () => {
+      if (await settle.count() === 0) return 'removed'
+      const refusal = settle.getByRole('alert')
+      return await refusal.count() ? await refusal.textContent() : 'removing'
+    }).toBe('removed')
     await expect.poll(() => existsSync(worktreePath)).toBe(false)
     expect(existsSync(gitDirectory)).toBe(false)
     expect(git(repo, 'branch', '--list', branch)).toContain(branch)
