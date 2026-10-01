@@ -19,6 +19,7 @@ export function shellForProtocolV1(state: AgentState) {
   return { ...state, membership: { status: 'beta' as const, label: '', expiresAt: null },
     configuration: { ...state.configuration, membershipEndpoint: '' } }
 }
+const hostClientShellSchema = agentStateSchema.extend({ clientCapabilities: z.object({ mayAnswer: z.boolean() }).optional() })
 /** Older hosts carry retired fields; strip them before the strict domain schemas read them. */
 export const protocolAgentStateSchema = z.preprocess(value => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return value
@@ -29,7 +30,7 @@ export const protocolAgentStateSchema = z.preprocess(value => {
   const current = { ...configuration } as Record<string, unknown>
   delete current.membershipEndpoint
   return { ...state, configuration: current }
-}, agentStateSchema)
+}, hostClientShellSchema)
 /**
  * The host features this build offers: parts of v1 beyond its base, which a client uses only when a
  * host lists them. `detail-delta`: a client that accepts it is sent what changed in an observed thread
@@ -149,15 +150,20 @@ export type HostErrorCode = 'unauthenticated' | 'invalid_request' | 'stale_reque
 export interface HostProtocolError { code: HostErrorCode; message: string }
 export type HostResponse = { v: 1; id: string; ok: true; result: unknown } | { v: 1; id: string; ok: false; error: HostProtocolError }
 /** `error` stands in for a push that would not fit in one frame, instead of the host closing the socket. */
-export type HostPush = { v: 1; event: 'shell'; state: AgentState; eventPage?: HostEventPage | undefined } | { v: 1; event: 'detail'; detail: AgentThreadDetail | null; threadId: string }
+export type HostClientShell = AgentState & { clientCapabilities?: { mayAnswer: boolean } | undefined }
+export type HostPush = { v: 1; event: 'shell'; state: HostClientShell; eventPage?: HostEventPage | undefined } | { v: 1; event: 'detail'; detail: AgentThreadDetail | null; threadId: string }
   | { v: 1; event: 'detail-delta'; threadId: string; delta: AgentThreadDetailDelta }
   | { v: 1; event: 'error'; threadId?: string | undefined; error: HostProtocolError }
 export interface HostEventPage { events: StoredThreadEvent[]; latestSeq: number; hasMore: boolean }
 /** `capabilities` is what this client may do on this host; `features` is what the host's protocol offers. */
-export interface HostHello extends HostEventPage { hostId: string; clientId: string; shell: AgentState; capabilities: { mayAnswer: boolean }; sottoVersion: string; features: string[] }
+export interface HostHello extends HostEventPage { hostId: string; clientId: string; shell: HostClientShell; capabilities: { mayAnswer: boolean }; sottoVersion: string; features: string[] }
 export interface HostSession { v: 1; hostId: string; clientId: string; session: string; expiresAt: string }
 export interface HostPairing { v: 1; hostId: string; clientId: string; token: string }
-export interface HostReceipt { status: 'pending' | 'completed' | 'unknown'; error?: HostProtocolError | undefined }
+export interface HostReceipt {
+  status: 'pending' | 'completed' | 'unknown'; error?: HostProtocolError | undefined
+  /** This answer command's own successful outcome. Older hosts omit it; completion alone proves none. */
+  answerDelivered?: boolean | undefined
+}
 /** Written to host-listener.json and served, with `status`, as /v1/health. */
 export interface HostDescriptor { v: 1; pid: number; hostId: string; port: number; sottoVersion: string; features: string[] }
 export interface HostHealth extends HostDescriptor {
@@ -194,4 +200,4 @@ export const hostPushSchema = z.discriminatedUnion('event', [
   z.object({ v: z.literal(1), event: z.literal('detail-delta'), threadId: id, delta: agentThreadDetailDeltaSchema }),
   z.object({ v: z.literal(1), event: z.literal('error'), threadId: id.optional(), error: hostProtocolErrorSchema }),
 ])
-export const hostReceiptSchema = z.object({ status: z.enum(['pending', 'completed', 'unknown']), error: hostProtocolErrorSchema.optional() })
+export const hostReceiptSchema = z.object({ status: z.enum(['pending', 'completed', 'unknown']), error: hostProtocolErrorSchema.optional(), answerDelivered: z.boolean().optional() })

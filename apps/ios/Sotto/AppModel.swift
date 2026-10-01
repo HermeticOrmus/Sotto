@@ -22,6 +22,11 @@ struct Live {
 /// Every paired computer, each with its own connection, session and state. A computer that can't be
 /// reached, or fails, never holds up the others. Everything that names a thread names its computer too.
 @MainActor final class AppModel: ObservableObject {
+    private static let requestNoLongerWaiting = "That request is no longer waiting."
+    private static let markersUnreadable = "Saved unconfirmed actions could not be read. Check your threads before sending again. Nothing was resent."
+    private static func pairingWarning(_ hostID: String) -> String {
+        "Pair computer \(hostID) again. Its saved connection details could not be read."
+    }
     /// In the order they were added. Credentials live in the Keychain, one item per host ID.
     @Published private(set) var computers: [SavedComputer] = []
     @Published private(set) var live: [String: Live] = [:]
@@ -33,7 +38,11 @@ struct Live {
     /// The computer being removed, while its pairing is revoked.
     @Published private(set) var removing: String?
     /// What just happened on the tabs.
-    @Published var feedback: String?
+    @Published var feedback: String? { didSet { feedbackOperations = [] } }
+    private var feedbackOperations: Set<String> = []
+    private var dispatchingAnswers: Set<String> = []
+    /// More than one check can await the same computer; keep markers until every check returns.
+    private var deliveryChecks: [String: Int] = [:]
     /// What went wrong while finding or pairing a computer.
     @Published var pairFeedback: String?
     /// Unsent replies, by `ThreadRef.id`.
@@ -50,7 +59,8 @@ struct Live {
     @Published var show = ComputerFilter.all
     @Published private var openDetail: ThreadDetail?
     @Published private(set) var detailProblem: String?
-    private let keychain = KeychainStore()
+    private let keychain: KeychainStore
+    private var computerIndexAccount: String? = ComputerStore.indexAccount
     /// Finds and pairs computers; each paired computer gets its own connection.
     private let finder = HostConnection()
     private var connections: [String: HostConnection] = [:]
@@ -126,6 +136,10 @@ struct Live {
             live[host] = Live(status: host == laptop ? .online : .unreachable, shell: shell, mayAnswer: false, features: ["host-folders"])
         }
         storageReady = true
+        let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains("--ui-feedback-request-gone") { feedback = Self.requestNoLongerWaiting }
+        if arguments.contains("--ui-feedback-markers-unreadable") { feedback = Self.markersUnreadable }
+        if arguments.contains("--ui-feedback-computer-unreadable") { feedback = "Recovered the saved computer list. " + Self.pairingWarning(studio) }
     }
     #endif
 
@@ -168,7 +182,8 @@ struct Live {
         return (capabilities(for: ref)?.submit ?? false) && (source == nil || source?.connection == "connected")
     }
     func canInterrupt(_ ref: ThreadRef) -> Bool {
-        canAct(on: ref) && thread(ref)?.status == "running" && (capabilities(for: ref)?.interrupt ?? false)
+        online(ref.hostID) && pending(for: ref).allSatisfy { $0.kind == "reply" }
+            && thread(ref)?.status == "running" && (capabilities(for: ref)?.interrupt ?? false)
     }
     func canAnswer(_ request: AgentRequest, in ref: ThreadRef) -> Bool {
         guard canAct(on: ref), mayAnswer(ref.hostID), request.supported else { return false }
@@ -178,52 +193,89 @@ struct Live {
 
     // MARK: Starting and stopping
 
-    init() {
+    init(keychain: KeychainStore = KeychainStore()) {
+        self.keychain = keychain
         #if DEBUG && os(iOS)
         if ProcessInfo.processInfo.arguments.contains("--ui-fixture") {
             loadUIFixture()
             return
         }
         #endif
+        loadComputers()
+    }
+    /// Secure storage may be locked during a prewarmed launch. Publish nothing until all reads succeed.
+    private func loadComputers() {
+        guard !storageReady else { return }
+        let storageProblem = "Secure connection details could not be read. Unlock this iPhone and return to Sotto."
         do {
-            let index = try keychain.read([String].self, account: ComputerStore.indexAccount)
-            let legacy = try readComputer(ComputerStore.legacyAccount)
+            var warnings: [String] = []
+            var index: [String]?
+            var indexAccount: String? = ComputerStore.indexAccount
+            var recoveredIndex = false
+            do { index = try keychain.read([String].self, account: ComputerStore.indexAccount) }
+            catch is KeychainStore.UndecodableItem {
+                // Preserve the original bytes. A separate index keeps the recovered order on later
+                // launches and is the one pairing and removal may update from now on.
+                recoveredIndex = true; indexAccount = ComputerStore.recoveredIndexAccount
+                do { index = try keychain.read([String].self, account: ComputerStore.recoveredIndexAccount) }
+                catch is KeychainStore.UndecodableItem { index = nil; indexAccount = nil }
+                let accounts = try keychain.accounts()
+                let discovered = accounts.filter { $0.hasPrefix("computer.") }.map { String($0.dropFirst("computer.".count)) }.sorted()
+                index = (index ?? []) + discovered
+            }
+            var legacy: SavedComputer?
+            do { legacy = try readComputer(ComputerStore.legacyAccount) }
+            catch is KeychainStore.UndecodableItem { warnings.append("The computer saved by an earlier version needs pairing again.") }
             let plan = ComputerStore.plan(index: index, legacy: legacy)
-            // The single pairing from before many computers becomes the first computer: its own item
-            // first, then the index naming it, then the old item goes.
-            if let adopt = plan.adopt { try keychain.write(adopt, account: ComputerStore.account(adopt.hostID)) }
-            if plan.index != index { try keychain.write(plan.index, account: ComputerStore.indexAccount) }
-            if plan.removeLegacy { try keychain.remove(account: ComputerStore.legacyAccount) }
             var kept: [SavedComputer] = []
             for hostID in plan.index {
-                if let computer = try readComputer(ComputerStore.account(hostID)), computer.hostID == hostID { kept.append(computer) }
+                do {
+                    let computer = try plan.adopt.flatMap { $0.hostID == hostID ? $0 : nil }
+                        ?? readComputer(ComputerStore.account(hostID))
+                    if let computer, computer.hostID == hostID { kept.append(computer) }
+                    else { warnings.append(Self.pairingWarning(hostID)) }
+                } catch is KeychainStore.UndecodableItem {
+                    warnings.append(Self.pairingWarning(hostID))
+                }
             }
-            let markers = try keychain.read([PendingOperation].self, account: ComputerStore.pendingAccount) ?? []
+            var markers: [PendingOperation] = []
+            do { markers = try keychain.read([PendingOperation].self, account: ComputerStore.pendingAccount) ?? [] }
+            catch is KeychainStore.UndecodableItem {
+                warnings.append(Self.markersUnreadable)
+            }
+            // All reads must succeed before migration writes: a locked item never looks missing.
+            if let adopt = plan.adopt { try keychain.write(adopt, account: ComputerStore.account(adopt.hostID)) }
+            if let indexAccount, recoveredIndex || plan.index != index { try keychain.write(plan.index, account: indexAccount) }
+            if plan.removeLegacy { try keychain.remove(account: ComputerStore.legacyAccount) }
             pending = markers.filter { marker in kept.contains { marker.matches(hostID: $0.hostID, clientID: $0.pairing.clientId) } }
-            computers = kept
+            computers = kept; computerIndexAccount = indexAccount
             for computer in kept { live[computer.hostID] = Live() }
             storageReady = true
+            if recoveredIndex { warnings.insert(kept.isEmpty ? "The saved computer list could not be recovered." : "Recovered the saved computer list.", at: 0) }
+            if !warnings.isEmpty { feedback = warnings.joined(separator: " "); pairFeedback = feedback }
+            else {
+                if feedback == storageProblem { feedback = nil }
+                if pairFeedback == storageProblem { pairFeedback = nil }
+            }
         } catch {
-            feedback = "Secure connection details could not be read. Unlock this iPhone and reopen Sotto."
+            feedback = storageProblem
             pairFeedback = feedback
         }
     }
-    /// A computer's item, or nil when it is missing or can't be read as one. Secure storage that can't
-    /// be opened still throws, so a locked iPhone isn't mistaken for one with nothing paired.
+    /// Invalid records need pairing again. A Keychain access failure still refuses the entire load.
     private func readComputer(_ account: String) throws -> SavedComputer? {
-        do {
-            guard let computer = try keychain.read(SavedComputer.self, account: account) else { return nil }
-            try computer.validate()
-            return computer
-        } catch let error as ClientError where error == KeychainStore.failure { throw error }
-        catch { return nil }
+        guard let computer = try keychain.read(SavedComputer.self, account: account) else { return nil }
+        do { try computer.validate(); return computer }
+        catch { throw KeychainStore.UndecodableItem(account: account) }
     }
     func phase(_ phase: ScenePhase) {
         #if DEBUG && os(iOS)
         if isUIFixture { return }
         #endif
         if phase == .active {
-            guard !active else { return }; active = true
+            let wasStorageReady = storageReady
+            loadComputers()
+            guard !active || (!wasStorageReady && storageReady) else { return }; active = true
             Task { await reconnectAll() }
         } else if phase == .background {
             cancelDetailReload()
@@ -266,9 +318,11 @@ struct Live {
             guard let endpoint = saved.endpoint else { throw ClientError.invalidHost }
             let greeting = try await connection(hostID).connect(endpoint: endpoint, pairing: saved.pairing)
             guard generations[hostID] == current else { return }
-            try applyShell(greeting.value.shell, from: hostID, sequence: greeting.sequence)
+            try applyShell(greeting.value.shell, from: hostID, sequence: greeting.sequence, reconcileAnswers: false)
             update(hostID) {
-                $0.mayAnswer = greeting.value.capabilities.mayAnswer; $0.status = .online
+                $0.status = .online
+                // An older host can push a newer shell before hello finishes, without this field.
+                if $0.shell?.clientCapabilities == nil { $0.mayAnswer = greeting.value.capabilities.mayAnswer }
                 $0.features = greeting.value.features ?? []
             }
             if let selected, selected.hostID == hostID, thread(selected) == nil { self.selected = nil }
@@ -341,7 +395,7 @@ struct Live {
             let pairing = try await finder.pair(endpoint: found.endpoint, expectedHostID: found.health.hostId, code: code)
             let computer = SavedComputer(address: found.endpoint.url.absoluteString, pairing: pairing, reportedName: found.health.computerName)
             try keychain.write(computer, account: ComputerStore.account(computer.hostID))
-            try keychain.write(computers.map(\.hostID).filter { $0 != computer.hostID } + [computer.hostID], account: ComputerStore.indexAccount)
+            if let computerIndexAccount { try keychain.write(computers.map(\.hostID).filter { $0 != computer.hostID } + [computer.hostID], account: computerIndexAccount) }
             // Markers from an earlier pairing with this computer must never attach to the new client.
             let markers = pending.filter { $0.hostID != computer.hostID }
             try keychain.write(markers, account: ComputerStore.pendingAccount)
@@ -387,7 +441,7 @@ struct Live {
         do { try keychain.remove(account: ComputerStore.account(hostID)) } catch { feedback = error.localizedDescription; return }
         let rest = computers.filter { $0.hostID != hostID }
         let markers = pending.filter { $0.hostID != hostID }
-        try? keychain.write(rest.map(\.hostID), account: ComputerStore.indexAccount)
+        if let computerIndexAccount { try? keychain.write(rest.map(\.hostID), account: computerIndexAccount) }
         try? keychain.write(markers, account: ComputerStore.pendingAccount)
         generations[hostID] = UUID(); connecting.remove(hostID)
         connections[hostID]?.close(); connections[hostID] = nil
@@ -543,13 +597,15 @@ struct Live {
     }
     @discardableResult private func dispatch(_ command: JSONValue, operation: PendingOperation) async -> Shell? {
         let hostID = operation.hostID, current = generations[hostID]
-        guard let connection = connections[hostID] else { feedback = ClientError.uncertain.localizedDescription; return nil }
+        if operation.kind == "answer" { dispatchingAnswers.insert(operation.id) }
+        defer { dispatchingAnswers.remove(operation.id) }
+        guard let connection = connections[hostID] else { operationFeedback(ClientError.uncertain.localizedDescription, operations: [operation.id]); return nil }
         do {
             let result = try await connection.callReceived(["op": .string("command"), "command": command], id: operation.id)
             guard generations[hostID] == current else { return nil }
             let next = try await Wire.readValue(result.value, as: Shell.self)
             guard generations[hostID] == current else { return nil }
-            try applyShell(next, from: hostID, sequence: result.sequence)
+            try applyShell(next, from: hostID, sequence: result.sequence, reconcileAnswers: false)
             await checkDelivery(hostID)
             guard generations[hostID] == current else { return nil }
             if let error = next.error {
@@ -567,27 +623,32 @@ struct Live {
             if error.failure.code == "forbidden" { update(hostID) { $0.mayAnswer = false } }
             if error.failure.code == "unauthenticated" { update(hostID) { $0.status = .unreachable; $0.problem = error.localizedDescription } }
             feedback = error.localizedDescription
-        } catch { if generations[hostID] == current { feedback = "Delivery is unconfirmed. Reconnect and check the thread before sending again." } }
+        } catch { if generations[hostID] == current { operationFeedback("Delivery is unconfirmed. Reconnect and check the thread before sending again.", operations: [operation.id]) } }
         return nil
     }
     func checkDelivery(_ hostID: String) async {
         guard online(hostID), !scoped(hostID).isEmpty, let connection = connections[hostID] else { return }
         let current = generations[hostID]
+        deliveryChecks[hostID, default: 0] += 1
+        defer { deliveryChecks[hostID, default: 0] -= 1 }
         do {
             let fresh = try await connection.callReceived(["op": .string("shell")])
             guard generations[hostID] == current else { return }
             let next = try await Wire.readValue(fresh.value, as: Shell.self)
             guard generations[hostID] == current else { return }
-            try applyShell(next, from: hostID, sequence: fresh.sequence)
+            try applyShell(next, from: hostID, sequence: fresh.sequence, reconcileAnswers: false)
             for item in scoped(hostID) {
                 let receipt = try await connection.call(["op": .string("receipt"), "commandId": .string(item.id)]).decode(Receipt.self)
                 guard generations[hostID] == current else { return }
                 guard scoped(hostID).contains(where: { $0.id == item.id }) else { continue }
                 try settle(item, receipt: receipt, shell: live[hostID]?.shell)
             }
-        } catch { if generations[hostID] == current { feedback = "Delivery to \(name(hostID)) could not be checked. Nothing was resent. Reconnect to try again." } }
+        } catch { if generations[hostID] == current { operationFeedback("Delivery to \(name(hostID)) could not be checked. Nothing was resent. Reconnect to try again.", operations: Set(scoped(hostID).map(\.id))) } }
     }
-    private func settle(_ item: PendingOperation, receipt: Receipt, shell: Shell?) throws {
+    private func operationFeedback(_ words: String, operations: Set<String>) {
+        feedback = words; feedbackOperations = operations
+    }
+    private func settle(_ item: PendingOperation, receipt: Receipt? = nil, shell: Shell?) throws {
         // A phone-minted Sotto ID identifies this exact creation even after its receipt expired.
         if item.kind == "create-thread", shell?.host.threads.contains(where: { $0.id == item.threadID }) == true {
             try forgetMarker(item.id)
@@ -597,15 +658,25 @@ struct Live {
         let delivered = shell?.deliveredDrafts?.contains { $0.threadId == item.threadID && $0.draftId == item.draftID } == true
         let accepted = delivered || delivery?.status == "accepted"
         let thread = shell?.host.threads.first { $0.id == item.threadID }
-        let uncertainRequest = thread?.requests.contains { $0.id == item.requestID && $0.delivery == "uncertain" } == true
-        if delivery?.status == "failed" {
+        // Only this command's own receipt confirms the phone's answer. A request can also leave
+        // after a desktop answer, a stopped turn or provider cancellation.
+        let noLongerWaiting = item.kind == "answer" && item.requestID != nil && thread != nil
+            && thread?.requests.contains(where: { $0.id == item.requestID }) == false
+        if item.kind == "answer" {
+            let confirmed = receipt?.confirmsAnswer == true
+            guard confirmed || noLongerWaiting else { return }
+            try forgetMarker(item.id)
+            if feedback == nil || feedbackOperations.contains(item.id) {
+                feedback = confirmed ? "Answer sent." : Self.requestNoLongerWaiting
+            }
+        } else if delivery?.status == "failed" {
             try rejectOperation(item)
             // Named, because the thread open now may be another one, on another computer.
             let title = thread.map { "“\($0.title)”" } ?? "a thread"
             feedback = "Your reply to \(title) on \(name(item.hostID)) wasn’t sent. Its text is back in that thread."
-        } else if accepted || (shell?.error == nil && !uncertainRequest && item.reconciled(receipt: receipt, deliveries: shell?.deliveries ?? [])) {
+        } else if accepted || receipt.map({ item.reconciled(receipt: $0, deliveries: shell?.deliveries ?? []) }) == true {
             try forgetMarker(item.id)
-            feedback = item.kind == "answer" ? "Answer sent." : nil
+            if feedbackOperations.remove(item.id) != nil, feedbackOperations.isEmpty { feedback = nil }
         }
     }
     private func rejectOperation(_ operation: PendingOperation) throws {
@@ -756,12 +827,24 @@ struct Live {
 
     // MARK: Updates from a computer
 
-    private func applyShell(_ next: Shell, from hostID: String, sequence: Int) throws {
+    private func applyShell(_ next: Shell, from hostID: String, sequence: Int, reconcileAnswers: Bool = true) throws {
         guard computer(hostID) != nil else { throw ClientError.invalidIdentity }
         try next.validate(hostID: hostID)
         guard sequence > (shellSequences[hostID] ?? 0) else { return }
         shellSequences[hostID] = sequence
-        update(hostID) { $0.shell = next }
+        update(hostID) {
+            $0.shell = next
+            if let allowed = next.clientCapabilities?.mayAnswer { $0.mayAnswer = allowed }
+        }
+        // Live evidence can arrive after the acknowledgement timed out. Never resend to settle it.
+        // A Keychain write failure is local feedback, not a lost connection to the computer.
+        for item in scoped(hostID) {
+            // A connect, dispatch or solicited shell is followed by a receipt check. Keep its
+            // answer markers through intervening pushes until their own receipts are read.
+            if item.kind == "answer", !reconcileAnswers || connecting.contains(hostID) || dispatchingAnswers.contains(item.id) || (deliveryChecks[hostID] ?? 0) > 0 { continue }
+            do { try settle(item, shell: next) }
+            catch { feedback = error.localizedDescription }
+        }
         if let selected, selected.hostID == hostID, !next.host.threads.contains(where: { $0.id == selected.threadID }) {
             cancelDetailReload(); self.selected = nil; openDetail = nil; detailProblem = nil
         }
