@@ -73,3 +73,27 @@ Windows CI run `36794039476` passed on `850b7658`: 6,538 tests passed, 150 skipp
 Windows CI run `36795839402` passed on `f79dcc80`: 6,540 tests passed, 150 skipped, and 174 notice components verified. Linux passed; iOS was skipped. The closing fetch then found `origin/main` at `b6d4f35e`. Its host/socket and iPhone changes merged cleanly, including the fake-host boot-lease check beside the descriptor retry. The coordinator's socket receipt reports this command's delivery outcome; a removed request does not turn an uncertain answer into confirmed delivery. The native Claude callback hold and single attribution remain intact.
 
 This base snapshot passed typecheck, lint and notices, followed by 283 affected host/socket/phone and Claude tests with three platform cases skipped (nine files passed, two workers). After rebuilding, the host identity, Hosts, Phones, personal request and activity journeys passed all eight Electron cases. The complete-app retained-input capture and minimum-size light host/phone captures were inspected. Generated activity captures were restored; no baseline was regenerated. The PR records Windows CI for the synchronized pushed revision. The incoming native iPhone changes were not compiled locally on Windows.
+
+
+## Third review
+
+The two remaining P2 findings were confirmed and fixed in new commits. Native CLI takeover is tracked separately from changed retrieved memories. The takeover forces the next send to resume the updated native history even while background work runs; ordinary retrieval changes still wait, and committed memory deletion still forces a restart. The existing takeover regression now leaves background work running before typing in the native CLI and checks that the next send resumes.
+
+Answer uncertainty is recorded before observing its completion. The public command catch recognizes that already-recorded error and cannot restore it after delivery or overwrite a newer error. Both early cases use an already-resolved completion; both late cases resolve after awaiting the public command. The tests assert the actual completion/return order, receipt settlement, an empty uncertain outbox, and the final visible error.
+
+A context restart uses the existing stopped-work notice, names what stopped, and explains that the provider session resumes with updated context before the pending message is sent. The shared wording applies to project threads and personal chats. The guide, coordinator documentation and ADR-0023 clarify the takeover boundary and the deletion exception.
+
+Fetched and merged `origin/main` through `0a1da256` in `e8a56387`. The guide conflict preserves both the Claude uncertain-answer recovery paragraph and the incoming pane-zoom shortcut paragraph. Incoming protocol, storage, settings and renderer changes were retained.
+
+Verification:
+
+- The takeover and already-completed-answer regressions failed before their fixes: no native resume, and a delivered receipt with a stale uncertainty error, respectively.
+- The four-file focused run passed 98 tests. After the final notice wording and explicit order assertions, the Claude safety, settings and request-draft files passed all 76 tests.
+- Final `npm run typecheck`, `npm run lint`, and `npm run notices:verify` passed; 174 components verified. `npm test -- --maxWorkers=2` passed 6,662 tests with 153 skipped (497 files passed, 39 skipped), on the fixed final source.
+- Rebuilt from the final source and ran `npx playwright test tests/e2e/thread-activity.spec.ts tests/e2e/phase-three-personal-requests.spec.ts`: five passed. The complete-app common request form retains a refused answer; the activity cases cover failed-turn feedback, keyboard expansion, light/dark themes, the minimum width and reduced motion. Native Claude ordering and takeover are established by adapter/coordinator regressions, not these scripted Codex captures.
+- Inspected the complete-app question/retained-choice captures and the minimum-width light activity transcript. The isolated activity fixture still lacks complete sidebar styling and establishes transcript readability only. Generated captures were restored, and no design baseline changed.
+- The throwaway state prototype is retained locally on `prototype/claude-third-review` at `b89cfaf3`, beside the adapter on that branch. Its guided cases cover early/late delivery, a newer error and deletion stopping work. Its rendered notice was inspected. The requested behavior is fixed by the review brief; no production layout changed.
+- Independent Standards and Spec reviews used gpt-6.1-sol at high reasoning. Standards prompted the takeover documentation and full provider-session wording; Spec prompted explicit ordering assertions in the newer-error tests. Final reviews found no remaining material findings. The initial read-only reviewer processes failed to access files because of Windows sandbox ACL setup; their successful replacements remained read-only by instruction.
+- An earlier full run overlapped the notice wording edits and failed the deletion notice assertion with mismatched source/test versions. It was stopped and discarded. The final full run began after the source was fixed and stayed unchanged throughout that run.
+
+Live laptop-wake and Claude background-task ordering, and macOS file modes, remain unverified locally. Restarting context does not erase earlier native conversation history. The PR remains open for review and is not merged.
