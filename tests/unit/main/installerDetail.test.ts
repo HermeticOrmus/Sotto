@@ -80,8 +80,10 @@ it('leaves URLs, package names and ordinary diagnostic text readable', () => {
 it.each([
   'Failed to download https://registry.npmjs.org/@openai/codex/-/codex-1.0.tgz: connection reset',
   'Cannot write /home/John Smith/codex: see https://registry.npmjs.org/@openai/codex/-/codex-1.0.tgz',
+  'Cannot write "/home/John Smith/codex": see https://registry.npmjs.org/@openai/codex/-/codex-1.0.tgz',
+  String.raw`Cannot write "C:\Users\John Smith\codex.exe": see https://registry.npmjs.org/@openai/codex/-/codex-1.0.tgz`,
 ])('preserves npm tarball URLs: %s', line => {
-  const expected = line.replace('/home/John Smith/codex', '…')
+  const expected = line.replace('/home/John Smith/codex', '…').replace(String.raw`C:\Users\John Smith\codex.exe`, '…')
   expect(installerDetail(line)).toBe(expected)
   expect(installerOutput(line)).toBe(expected)
 })

@@ -28,7 +28,7 @@ function redactPaths(line: string): string {
       const after = span.slice(closing + 1)
       if (closing > 0 && (/^\s*$/u.test(after)
         || next && /^\s*(?:->|to|,)\s*$/u.test(after)
-        || /^\s*[,;:)]/u.test(after) && !/[\\/]/u.test(after))) suffix = after
+        || /^\s*[,;:)]/u.test(after) && !/[\\/]/u.test(after.replace(NON_FILE_URL, '')))) suffix = after
     } else {
       // Spaces belong to account folders too. Only clear diagnostic delimiters
       // end an unquoted path; skip the drive colon when finding that boundary.
