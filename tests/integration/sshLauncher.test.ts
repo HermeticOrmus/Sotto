@@ -121,7 +121,8 @@ it('sets up desktop permissions through the verified SSH host, carrying no crede
   await expect(connection.ensureDesktopAnswers('bad\nclient')).rejects.toThrow('valid paired client')
 })
 it('asks for a password once per connect although three ssh processes sign in, and never records it', async () => {
-  const { launcher, events } = await fixture('password')
+  // Password reuse is the assertion here; allow the same sign-in budget as the real launcher.
+  const { launcher, events } = await fixture('password', { authenticationTimeoutMs: 120_000 })
   const prompts: SshPrompt[] = []
   const promptReady = Promise.withResolvers<SshPrompt>()
   let waiting: SshPrompt | null = null
