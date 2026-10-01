@@ -100,7 +100,7 @@ it('code: shows eight characters with a countdown, spelled out for a screen read
   await user.click(screen.getByRole('button', { name: 'Show a pairing code' }))
   const box = await screen.findByRole('group', { name: 'Pairing code' })
   expect(box).toBe(document.activeElement)
-  expect(within(box).getByLabelText('Pairing code K 7 M X 3 Q P D').textContent).toBe('K7MX3QPD')
+  expect(within(box).getByRole('img', { name: 'Pairing code K 7 M X 3 Q P D' }).textContent).toBe('K7MX3QPD')
   expect(box.textContent).toMatch(/Works once\. Expires in 4:5\d/u)
   expect(within(box).getByRole('button', { name: 'Make a new code' })).toBeTruthy()
   await user.keyboard('{Escape}')
