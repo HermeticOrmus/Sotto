@@ -53,6 +53,7 @@ final class AppModelTests: XCTestCase {
     @MainActor func testFailedConnectionsBackOffToThirtySeconds() async throws {
         _ = try fixture()
         HostConnection.failConnect = true
+        defer { HostConnection.failConnect = false }
         let clock = RetryClock()
         let capped = expectation(description: "Retry delay reaches its cap")
         let model = AppModel(keychain: TestKeychain.store, retrySleep: { delay in
