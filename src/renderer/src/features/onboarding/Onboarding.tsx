@@ -1,4 +1,4 @@
-﻿import { Check, KeyRound, Keyboard, Mic2, ShieldCheck } from 'lucide-react'
+import { Check, KeyRound, Keyboard, Mic2, ShieldCheck } from 'lucide-react'
 import React, {
   useEffect,
   useRef,
