@@ -194,10 +194,12 @@ it('saves the name phones show on Enter, and Escape puts the saved one back', as
 it.each([{ isComposing: true }, { keyCode: 229 }])('keeps the computer name while composing Enter (%j)', async composition => {
   const { update } = show(READY)
   const field = await screen.findByRole('textbox', { name: 'Name on phones' })
-  fireEvent.change(field, { target: { value: 'Forge' } })
+  const user = userEvent.setup()
+  await user.type(field, 'Forge')
+  expect(field).toHaveValue('Forge')
   fireEvent.keyDown(field, { key: 'Enter', ...composition })
   expect(update).not.toHaveBeenCalled()
-  fireEvent.keyDown(field, { key: 'Enter' })
+  await user.keyboard('{Enter}')
   expect(update).toHaveBeenCalledWith({ phoneAccessName: 'Forge' })
 })
 
