@@ -237,7 +237,8 @@ export const agentRequestSchema = z.object({
 export const agentQuestionAnswersSchema = z.record(id, z.object({ optionIds: z.array(id).max(100), text: text.optional() }).strict())
 export type AgentQuestionAnswers = z.infer<typeof agentQuestionAnswersSchema>
 export const agentMessageSchema = z.object({
-  id, role: z.enum(['user', 'assistant']), text, createdAt: z.string(),
+  // A projected message combines bounded events and can exceed any one event's limit.
+  id, role: z.enum(['user', 'assistant']), text: z.string(), createdAt: z.string(),
   commandId: z.string().optional(),
   attachments: z.array(agentAttachmentReferenceSchema).optional(),
 })
@@ -355,6 +356,7 @@ export const agentThreadSchema = z.object({
   lastTurn: z.object({ id: z.string(), status: z.enum(['running', 'completed', 'interrupted', 'failed']) }).optional(),
   /** Omitted by providers that already supply history; absence means ready. */
   historyStatus: z.enum(['loading', 'ready', 'error']).optional(), historyError: z.string().optional(),
+  historySaveNotice: z.string().max(600).optional(),
   /** A native request refused because Sotto could not show it; never a pending request or an approval. */
   requestNotice: z.string().max(600).optional(),
   /** Changes only on a confirmed native rewind; cached activity must not cross it. */
@@ -745,7 +747,7 @@ export const agentThreadDetailRequestSchema = id
  */
 export const agentMessageDeltaSchema = z.union([
   z.object({ message: agentMessageSchema }).strict(),
-  z.object({ id, appendText: text }).strict(),
+  z.object({ id, appendText: z.string() }).strict(),
 ])
 export type AgentMessageDelta = z.infer<typeof agentMessageDeltaSchema>
 export const agentActivityDeltaSchema = z.union([
