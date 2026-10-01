@@ -149,7 +149,7 @@ Older hosts omit the field. The iPhone keeps their still-waiting answers unconfi
 
 ## October 1 amendment: draft commands follow client selection
 
-Remote navigation belongs to each client and never selects the coordinator’s own thread. The listener passes that client’s selected Sotto thread ID to the host service for compose, send, cancel-draft, pause-draft and cancel-request. Drafts on other threads stay intact. The v1 allow-list retains these commands; question drafts and sends still require remote-answer authority (#489). This replaces the September 30 narrowing, which broke the managed composer and contradicted v1’s additive compatibility rule.
+Remote navigation belongs to each client and never selects the coordinator’s own thread. The listener passes that client’s selected Sotto thread ID to the host service for compose, send, cancel-draft, pause-draft and cancel-request. Drafts on other threads stay intact. Each peer projects its active remote edits into the existing composer fields, so successive edits and Send remain available without resuming a paused draft or exposing another thread’s active draft. An ordinary draft retains its null question binding when a question arrives. The v1 allow-list retains these commands; question drafts and sends still require remote-answer authority (#489). This replaces the September 30 narrowing, which broke the managed composer and contradicted v1’s additive compatibility rule.
 
 ## September 30 amendment: connection liveness and phone recovery
 

@@ -43,7 +43,7 @@ class Refusal extends Error { constructor(readonly code: HostErrorCode, message 
  * `deltas` is set by the client's hello: only a client that accepts `detail-delta` is sent one. `clientUpdates` likewise:
  * only a client that accepts `client-updates` is sent the mise channel and the waiting state in its shell's client updates.
  */
-interface Peer { frames: SocketFrames; client: ClientIdentity; session: string; observed: Set<string>; inFlight: number; window: number; count: number; pageWindow: number; pages: number; preview: boolean; afterSeq: number; selectedThreadId: string | null; selectedProjectId: string | null; deltas: boolean; messageAliases: boolean; clientUpdates: boolean }
+interface Peer { frames: SocketFrames; client: ClientIdentity; session: string; observed: Set<string>; inFlight: number; window: number; count: number; pageWindow: number; pages: number; preview: boolean; afterSeq: number; selectedThreadId: string | null; selectedProjectId: string | null; editingThreadId: string | null; deltas: boolean; messageAliases: boolean; clientUpdates: boolean }
 export interface SocketServerOptions {
   service: HostService; pairing: PairedClients; port?: number; origins?: readonly string[]
   mayAnswer?: (client: ClientIdentity) => boolean
@@ -140,7 +140,14 @@ export async function startSocketServer(options: SocketServerOptions) {
   const identity = (clientId: string): ClientIdentity => ({ clientId, user: pairing.list().find(client => client.clientId === clientId)?.name ?? 'Paired client', transport: 'socket' })
   const shell = (peer: Peer) => {
     const state = service.shell()
+    const draft = peer.editingThreadId === peer.selectedThreadId
+      ? state.threadDrafts?.find(item => item.threadId === peer.selectedThreadId) : undefined
+    const composer = draft ? { composing: true, draft: draft.text, draftAttachments: draft.attachments,
+      draftThreadId: draft.threadId, draftRequestId: draft.requestId }
+      : state.draftThreadId === peer.selectedThreadId ? {}
+        : { composing: false, draft: '', draftAttachments: [], draftThreadId: null, draftRequestId: null }
     const own = shellForProtocolV1({ ...state, activeThreadId: peer.selectedThreadId, activeProjectId: peer.selectedProjectId,
+      ...composer,
       clientCapabilities: { mayAnswer: options.mayAnswer?.(peer.client) ?? false } })
     // A client from before #480 reads the client updates' channel and state against the values it knows, and one it
     // does not know would make it refuse the whole shell: it is sent them as it knew them.
@@ -255,7 +262,11 @@ export async function startSocketServer(options: SocketServerOptions) {
         } else if (input.type === 'observe-threads') {
           peer.observed = new Set(input.threadIds); await observe()
         } else {
+          const previousEditor = peer.editingThreadId
+          if (input.type === 'compose') peer.editingThreadId = peer.selectedThreadId
           const result = await service.command(input, { ...peer.client, selectedThreadId: peer.selectedThreadId })
+          if (input.type === 'compose' && result.error) peer.editingThreadId = previousEditor
+          if (['pause-draft', 'cancel-draft', 'send'].includes(input.type) && !result.error) peer.editingThreadId = null
           if (input.type === 'answer') {
             receipt.answerDelivered = result.error == null
             if (!receipt.answerDelivered) receipt.error = { code: 'unavailable', message: errors.unavailable }
@@ -451,7 +462,7 @@ export async function startSocketServer(options: SocketServerOptions) {
     const accept = createHash('sha1').update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64')
     stream.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' + accept + '\r\n\r\n')
     const frames = new SocketFrames(stream, false, text => onMessage(peer, text))
-    const peer: Peer = { frames, client: identity(clientId), session, observed: new Set(), inFlight: 0, window: Date.now(), count: 0, pageWindow: 0, pages: 0, preview: false, afterSeq: 0, selectedThreadId: null, selectedProjectId: null, messageAliases: false, deltas: false, clientUpdates: false }
+    const peer: Peer = { frames, client: identity(clientId), session, observed: new Set(), inFlight: 0, window: Date.now(), count: 0, pageWindow: 0, pages: 0, preview: false, afterSeq: 0, selectedThreadId: null, selectedProjectId: null, editingThreadId: null, messageAliases: false, deltas: false, clientUpdates: false }
     peers.add(peer)
     frames.startHeartbeat()
     frames.onClose(() => { peers.delete(peer); if (!closing) { track(observe().catch(() => undefined)); options.onPeersChanged?.() } })
