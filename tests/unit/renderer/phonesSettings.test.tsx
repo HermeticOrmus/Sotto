@@ -30,6 +30,26 @@ function show(state: PhonesState, options: { answer?: (command: PhonesCommand, s
 }
 const step = (name: string) => screen.getByText(name, { selector: 'b' }).closest('li')!
 
+it('shows failed setting saves beside each control and clears them after a successful retry', async () => {
+  const { bridge } = fixture(OFF)
+  const update = vi.fn(async () => false)
+  const user = userEvent.setup()
+  const { container } = render(<PhonesSettings phoneAccess={false} phoneAccessName="" onUpdateSettings={update} onOpenHosts={vi.fn()} bridge={bridge} />)
+  const toggle = screen.getByRole('switch', { name: 'Let phones connect' })
+  await user.click(toggle)
+  expect(await within(container.querySelector('.phones-switch')!).findByRole('alert')).toHaveTextContent('Phone access could not be saved. Nothing was changed. Try again.')
+  expect(toggle).toHaveAttribute('aria-checked', 'false')
+  const input = await screen.findByRole('textbox', { name: 'Name on phones' })
+  await user.type(input, 'My computer{Enter}')
+  expect(await within(container.querySelector('.phones-name')!).findByRole('alert')).toHaveTextContent('The name could not be saved. Phones still use the previous name. Try again.')
+  expect(input).toHaveValue('My computer')
+  update.mockResolvedValue(true)
+  await user.keyboard('{Enter}')
+  await waitFor(() => expect(within(container.querySelector('.phones-name')!).queryByRole('alert')).toBeNull())
+  await user.click(toggle)
+  await waitFor(() => expect(within(container.querySelector('.phones-switch')!).queryByRole('alert')).toBeNull())
+})
+
 it('copies the phone address through main when browser clipboard access is denied', async () => {
   const user = userEvent.setup()
   const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockRejectedValue(new Error('Permission denied'))

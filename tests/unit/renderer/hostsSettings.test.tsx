@@ -10,6 +10,18 @@ import type { HostDevice, TailscaleConnectOutcome, TailscaleSummary } from '../.
 import { hostVersionMismatch } from '../../../src/shared/hostProtocol'
 
 afterEach(cleanup)
+
+it('shows a failed local host save beside the switch and clears it on retry', async () => {
+  const change = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true)
+  const user = userEvent.setup()
+  const { container } = render(<HostsSettings localHostEnabled onLocalHostChange={change} bridge={fixture().bridge} />)
+  const toggle = screen.getByRole('switch', { name: 'Run the local host' })
+  await user.click(toggle)
+  expect(await within(container.querySelector('.hosts-local')!).findByRole('alert')).toHaveTextContent('The local host setting could not be saved. Nothing was changed. Try again.')
+  expect(toggle).toHaveAttribute('aria-checked', 'true')
+  await user.click(toggle)
+  await waitFor(() => expect(within(container.querySelector('.hosts-local')!).queryByRole('alert')).toBeNull())
+})
 const LOCAL = '11111111-1111-4111-8111-111111111111'
 const REMOTE = '22222222-2222-4222-8222-222222222222'
 const DAY = 24 * 60 * 60_000

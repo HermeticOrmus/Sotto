@@ -156,6 +156,7 @@ export function HostsSettings({ localHostEnabled, onLocalHostChange, bridge = wi
 }): ReactNode {
   const [state, setState] = useState<HostsState | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [localSaveFailed, setLocalSaveFailed] = useState(false)
   const [dialog, setDialog] = useState<HostDialogMode | null>(null)
   const [renameId, setRenameId] = useState<string | null>(null)
   const [forgetId, setForgetId] = useState<string | null>(null)
@@ -198,7 +199,10 @@ export function HostsSettings({ localHostEnabled, onLocalHostChange, bridge = wi
     <div className="hosts-local">
       <span className="hosts-row__icon hosts-row__icon--local" aria-hidden="true"><Laptop size={18} /></span>
       <div className="hosts-local__copy"><h3>This computer</h3><p>Runs threads on this computer beside your remote hosts. A change takes effect after you restart Sotto. Saved data stays.</p></div>
-      <Toggle label="Run the local host" checked={localHostEnabled} onCheckedChange={enabled => { void onLocalHostChange(enabled) }} />
+      <div>
+        <Toggle label="Run the local host" checked={localHostEnabled} onCheckedChange={enabled => { void onLocalHostChange(enabled).then(saved => setLocalSaveFailed(!saved)) }} />
+        {localSaveFailed ? <p className="tt-field__error" role="alert">The local host setting could not be saved. Nothing was changed. Try again.</p> : null}
+      </div>
     </div>
     {bridge ? <TailscaleRow control={tailscale} /> : null}
     {state && state.localHostRunning !== localHostEnabled && <div className="hosts-restart"><p>Restart Sotto to apply the local host setting.</p><Button variant="secondary" onClick={() => void run({ type: 'restart' })}>Restart Sotto</Button></div>}

@@ -42,7 +42,7 @@ export function Field({ label, description, error, children, className = '' }: F
       )}
       {control}
       {error === undefined ? null : (
-        <p className="tt-field__error" id={errorId}>{error}</p>
+        <p className="tt-field__error" id={errorId} role="alert">{error}</p>
       )}
     </div>
   )

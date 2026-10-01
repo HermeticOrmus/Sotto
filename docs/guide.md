@@ -306,6 +306,8 @@ If secure storage is locked at launch, unlock the iPhone and return to Sotto. A 
 
 ## Phones
 
+If **Let phones connect** or **Name on phones** cannot be saved, the control says so beside it. The previous setting stays in use. Retry the switch or press Enter in the name field to save again.
+
 *Development feature.*
 
 **Settings > Phones** lets Sotto on your iPhone reach the threads this computer runs, over your own tailnet. It needs Tailscale installed and signed in on both, and the local host running (**Settings > Hosts**); with the local host off, the page says so and offers **Go to Hosts**. Each computer shares only its own threads: a phone paired with this computer sees what this window's local host runs, and not your remote hosts.

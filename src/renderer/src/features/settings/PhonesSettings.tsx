@@ -81,9 +81,14 @@ function PhoneRow({ phone, answersAvailable, onCanAnswer, onRemove }: {
 /** The name phones show for this computer, saved when the field loses focus or on Enter. */
 function NameField({ name, defaultName, onSave }: { readonly name: string; readonly defaultName: string; readonly onSave: (name: string) => Promise<boolean> }): ReactNode {
   const [draft, setDraft] = useState(name)
+  const [failed, setFailed] = useState(false)
   useEffect(() => { setDraft(name) }, [name])
-  const save = (): void => { const next = draft.trim(); if (next !== name) void onSave(next); else setDraft(name) }
-  return <Field label="Name on phones" description={`Phones list this computer’s threads under this name. Leave it empty to use ${defaultName}.`}>
+  const save = (): void => {
+    const next = draft.trim()
+    if (next !== name) void onSave(next).then(saved => setFailed(!saved))
+    else { setDraft(name); setFailed(false) }
+  }
+  return <Field label="Name on phones" {...(failed ? { error: 'The name could not be saved. Phones still use the previous name. Try again.' } : {})} description={`Phones list this computer’s threads under this name. Leave it empty to use ${defaultName}.`}>
     <input className="tt-input" value={draft} placeholder={defaultName} maxLength={63} spellCheck={false}
       onChange={event => setDraft(event.target.value)} onBlur={save}
       onKeyDown={event => { if (isCompositionKey(event.nativeEvent)) { event.stopPropagation(); return } if (event.key === 'Enter') { event.preventDefault(); save() } else if (event.key === 'Escape' && draft !== name) { event.preventDefault(); event.stopPropagation(); setDraft(name) } }} />
@@ -99,6 +104,7 @@ export function PhonesSettings({ phoneAccess, phoneAccessName, onUpdateSettings,
 }): ReactNode {
   const [state, setState] = useState<PhonesState | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [accessSaveFailed, setAccessSaveFailed] = useState(false)
   const [copied, setCopied] = useState(false)
   const [removeId, setRemoveId] = useState<string | null>(null)
   const [announcement, setAnnouncement] = useState('')
@@ -192,8 +198,9 @@ export function PhonesSettings({ phoneAccess, phoneAccessName, onUpdateSettings,
     </div> : null}
     <div className="phones-switch">
       <Toggle label="Let phones connect" checked={phoneAccess} disabled={!bridge || (!localHostRunning && !phoneAccess)}
-        onCheckedChange={enabled => { setError(null); void onUpdateSettings({ phoneAccess: enabled }) }}
+        onCheckedChange={enabled => { setError(null); void onUpdateSettings({ phoneAccess: enabled }).then(saved => setAccessSaveFailed(!saved)) }}
         description={`Sotto adds this computer to Tailscale Serve on port ${PHONE_ACCESS_SERVE_PORT}, so phones on your tailnet can find it. Only phones you pair can connect. Turning this off removes the setting.`} />
+      {accessSaveFailed ? <p className="tt-field__error" role="alert">Phone access could not be saved. Nothing was changed. Try again.</p> : null}
     </div>
     <ol className="phones-steps" aria-label="Setup" aria-busy={starting || undefined}>
       <li data-step={tailscaleStep}>
