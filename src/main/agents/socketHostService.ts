@@ -122,7 +122,7 @@ export class SocketHostService implements HostService {
       const request = (url.protocol === 'https:' ? httpsRequest : httpRequest)(url, { signal: opening.signal, headers: { Upgrade: 'websocket', Connection: 'Upgrade', 'Sec-WebSocket-Version': '13', 'Sec-WebSocket-Key': key, Authorization: 'Bearer ' + session.session } })
       request.setTimeout(15000, () => request.destroy(new Error('Host connection timed out.')))
       request.on('error', () => reject(new HostConnectionError('The host connection could not be opened.', 'disconnected')))
-      request.on('response', response => { response.resume(); reject(refusal(response.statusCode ?? 503, 'The host refused this connection. Connect again.', 'unavailable', response.statusCode === 401)) })
+      request.on('response', response => { response.resume(); reject(refusal(response.statusCode ?? 503, 'The host refused this connection. Connect again.', 'unavailable')) })
       request.on('upgrade', (response, stream, head) => {
         if (response.headers['sec-websocket-accept'] !== expected) { stream.destroy(); reject(new HostConnectionError('The host did not accept this protocol.', 'invalid_request')); return }
         stream.setTimeout(0)
