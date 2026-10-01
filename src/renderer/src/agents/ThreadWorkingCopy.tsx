@@ -226,23 +226,24 @@ export function useSettleThread(command: AgentConnection['command'], fallbackFoc
   const app = useOptionalApp()
   const [removalError, setRemovalError] = useState<string | null>(null)
   const onSettleRule = app?.settings?.worktreeCleanup.onSettle === true
-  const [asking, setAsking] = useState<{ thread: WorkingCopyThread; project: Pick<AgentProject, 'path'> | undefined; dirty: boolean } | null>(null)
+  const [questions, setQuestions] = useState<readonly { thread: WorkingCopyThread; project: Pick<AgentProject, 'path'> | undefined; dirty: boolean }[]>([])
+  const asking = questions[0]
+  const nextQuestion = (): void => { setRemovalError(null); setQuestions(current => current.slice(1)) }
   const settle = useCallback(async (thread: WorkingCopyThread, project: Pick<AgentProject, 'path'> | undefined): Promise<void> => {
     const result = await command({ type: 'settle-thread', threadId: thread.id })
     if (!result || result.error || !isReclaimable(thread)) return
     const dirty = thread.worktree?.dirty === true
     if (onSettleRule && !dirty) { await command({ type: 'reclaim-thread-worktree', threadId: thread.id }); return }
-    setRemovalError(null)
-    setAsking({ thread, project, dirty })
+    setQuestions(current => current.some(question => question.thread.id === thread.id) ? current : [...current, { thread, project, dirty }])
   }, [command, onSettleRule])
-  const dialog = asking ? <ReclaimWorktreeDialog facts={describeWorkingCopy(asking.thread, asking.project)} dirty={asking.dirty} title="Remove its worktree too?" removalError={removalError} threadId={asking.thread.id} command={command} fallbackFocusRef={fallbackFocusRef}
-    onCancel={() => setAsking(null)}
+  const dialog = asking ? <ReclaimWorktreeDialog key={asking.thread.id} facts={describeWorkingCopy(asking.thread, asking.project)} dirty={asking.dirty} title="Remove its worktree too?" removalError={removalError} threadId={asking.thread.id} command={command} fallbackFocusRef={fallbackFocusRef}
+    onCancel={nextQuestion}
     onConfirm={async preview => {
       setRemovalError(null)
       const result = await command({ type: 'reclaim-thread-worktree', threadId: asking.thread.id, withUncommittedChanges: asking.dirty || preview.dirty, confirmedIgnored: preview.ignored, confirmedItems: preview.items.map(({ path, fileCount }) => ({ path, fileCount })), confirmedRepositories: preview.repositories })
       if (result && !result.error) return true
       setRemovalError(result?.error ?? null)
-      if (!asking.dirty && result?.error === RECLAIM_WORKTREE_NEEDS_CONFIRMATION) setAsking({ ...asking, dirty: true })
+      if (!asking.dirty && result?.error === RECLAIM_WORKTREE_NEEDS_CONFIRMATION) setQuestions(current => current.map(question => question.thread.id === asking.thread.id ? { ...question, dirty: true } : question))
       return false
     }} /> : null
   return { settle, dialog }
