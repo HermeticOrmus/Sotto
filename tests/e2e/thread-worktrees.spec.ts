@@ -575,6 +575,88 @@ test('a worktree can be reclaimed from the pane or on settle, keeps its branch, 
   }
 })
 
+test('clean submodule branch and tag history is listed and requires the tick in both removal questions', async () => {
+  test.setTimeout(120_000)
+  const root = await mkdtemp(join(tmpdir(), 'sotto-e2e-submodule-history-')), repo = join(root, 'repo-app'), origin = join(root, 'module-origin')
+  await mkdir(repo); await mkdir(origin)
+  git(repo, 'init', '-q'); git(origin, 'init', '-q')
+  await commitFile(repo, 'README.md', 'Parent checkout\n')
+  await commitFile(origin, 'module.txt', 'Published module\n')
+  git(repo, '-c', 'protocol.file.allow=always', 'submodule', 'add', origin, 'module')
+  git(repo, 'commit', '-q', '-am', 'Add module')
+  let launched: LaunchedSotto | undefined
+  try {
+    launched = await launch([['repo-app', repo]])
+    const { page } = launched
+    await createByKeyboard(page, 'repo-app', 'Submodule history', true)
+    await send(page, 'Work independently.')
+    const thread = await activeThread(page), worktreePath = thread.worktree!.path!, branch = thread.worktree!.branch!
+    git(worktreePath, '-c', 'protocol.file.allow=always', 'submodule', 'update', '--init')
+    const module = join(worktreePath, 'module'), recorded = git(module, 'rev-parse', 'HEAD')
+    const gitDirectory = git(module, 'rev-parse', '--absolute-git-dir')
+    git(module, 'checkout', '-q', '-b', 'private')
+    await commitFile(module, 'branch.txt', 'Private branch\n')
+    const branchCommit = git(module, 'rev-parse', 'HEAD')
+    await commitFile(module, 'tag.txt', 'Private tag\n')
+    const tagCommit = git(module, 'rev-parse', 'HEAD')
+    git(module, 'tag', 'private-save')
+    git(module, 'checkout', '-q', '--detach', recorded)
+    git(module, 'branch', '-f', 'private', branchCommit)
+    expect(git(module, 'status', '--porcelain')).toBe('')
+    expect(git(worktreePath, 'status', '--porcelain', '--ignore-submodules=none')).toBe('')
+
+    await page.getByRole('button', { name: `Working copy: ${branch}`, exact: true }).click()
+    await page.getByRole('group', { name: 'Working copy details' }).getByRole('button', { name: 'Refresh', exact: true }).click()
+    await expect.poll(async () => (await activeThread(page)).worktree?.dirty).toBe(false)
+    await page.getByRole('group', { name: 'Working copy details' }).getByRole('button', { name: 'Remove worktree folder, keeping its branch', exact: true }).click()
+    const question = page.getByRole('dialog', { name: 'Remove this worktree?', exact: true })
+    await expect(question.getByText('module/', { exact: true })).toBeVisible()
+    await expect(question).toContainText('Nested repository · 0 uncommitted changes · 2 commits not on any remote')
+    await expect(question).not.toContainText('This folder has uncommitted changes.')
+    await expect(question.getByRole('button', { name: 'Remove with these files', exact: true })).toBeDisabled()
+    await expect(question.getByRole('checkbox')).not.toBeChecked()
+    await mkdir(RECLAIM_SHOTS, { recursive: true })
+    for (const [width, height] of [[1600, 1000], [1280, 800], [820, 560]] as const) {
+      await resize(launched, width, height)
+      for (const appearance of ['dark', 'light'] as const) {
+        await page.evaluate(async mode => window.sotto!.updateSettings({ appearance: mode }), appearance)
+        await page.emulateMedia({ reducedMotion: 'reduce' })
+        await expect(question.getByText('module/', { exact: true })).toBeInViewport()
+        await expect(question.getByRole('checkbox')).toBeInViewport()
+        await expect(question.getByRole('button', { name: 'Remove with these files', exact: true })).toBeInViewport()
+        await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+        if ((width === 820 && appearance === 'dark') || (width === 1600 && appearance === 'light')) {
+          await page.screenshot({ path: `${RECLAIM_SHOTS}/submodule-history-${width}x${height}-${appearance}.png`, animations: 'disabled' })
+        }
+      }
+    }
+    await page.keyboard.press('Escape')
+    await expect(question).toHaveCount(0)
+    expect(git(module, 'cat-file', '-t', branchCommit)).toBe('commit')
+    expect(git(module, 'cat-file', '-t', tagCommit)).toBe('commit')
+    expect(existsSync(gitDirectory)).toBe(true)
+    await resize(launched, 1280, 800)
+    await page.getByRole('button', { name: 'More actions', exact: true }).click()
+    await page.getByRole('menuitem', { name: 'Settle', exact: true }).click()
+    const settle = page.getByRole('dialog', { name: 'Remove its worktree too?', exact: true })
+    await expect(settle.getByText('module/', { exact: true })).toBeVisible()
+    await expect(settle).toContainText('2 commits not on any remote')
+    const remove = settle.getByRole('button', { name: 'Remove with these files', exact: true })
+    await expect(remove).toBeDisabled()
+    await settle.getByRole('checkbox').focus()
+    await page.keyboard.press('Space')
+    await expect(remove).toBeEnabled()
+    await remove.click()
+    await expect(settle).toHaveCount(0)
+    await expect.poll(() => existsSync(worktreePath)).toBe(false)
+    expect(existsSync(gitDirectory)).toBe(false)
+    expect(git(repo, 'branch', '--list', branch)).toContain(branch)
+  } finally {
+    if (launched) await closeSotto(launched)
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 /** Every run writes here (ignored); the images the verification note names are copied to artifacts/worktree-origin-fallback/. */
 const ORIGIN_SHOTS = 'artifacts/worktree-origin-fallback-run'
 test('a new worktree with Start from origin on starts from the local branch when origin does not have it, and says so', async () => {

@@ -477,6 +477,10 @@ export class ThreadWorktrees {
             const submodule = indexEntry.split('\0').some(record => record.startsWith('160000 ') && record.slice(record.indexOf('\t') + 1) === indexedPath)
             const status = bare ? '' : await this.git(full, ['status', '--porcelain', '--untracked-files=all', '-z'])
             const ignoredModule = submodule ? (await this.git(full, ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z'])).split('\0').filter(item => item && !DEPENDENCY_FOLDER.test(item)) : []
+            // A submodule's .git file points into metadata removed with the parent worktree.
+            // Its history is at risk even when its checkout matches the parent's recorded commit.
+            const kind = !submodule && gitMarker?.isFile() ? 'worktree' : 'repository'
+            const history = kind === 'repository' ? { unpushedCommitCount: Number((await this.git(full, ['rev-list', '--count', '--all', '--not', '--remotes'])).trim()) } : {}
             if (submodule) submodules.push(local)
             if (!submodule && gitMarker?.isFile()) {
               const commonDirectory = (await this.git(full, ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim()
@@ -486,14 +490,12 @@ export class ThreadWorktrees {
               // A repository inside the removed folder loses its own registry with it.
               if (isAbsolute(delta) || delta === '..' || delta.startsWith(`..${sep}`)) nestedWorktrees.push({ path: full, commonDirectory })
             }
-            if (!submodule || status.length || ignoredModule.length) {
+            if (!submodule || status.length || ignoredModule.length || history.unpushedCommitCount) {
               const records = status.split('\0').filter(Boolean)
               // Porcelain -z gives a second path for renames, not a second change.
               let changeCount = 0
               for (let i = 0; i < records.length; i++) { changeCount++; if (/^[RC]|^.[RC]/u.test(records[i]!)) i++ }
               const repositoryPath = local + '/'
-              const kind = gitMarker?.isFile() ? 'worktree' : 'repository'
-              const history = kind === 'repository' ? { unpushedCommitCount: Number((await this.git(full, ['rev-list', '--count', '--all', '--not', '--remotes'])).trim()) } : {}
               repositories.push({ path: repositoryPath, changeCount, ...history, kind })
               if (!ignored.includes(repositoryPath)) { ignored.push(repositoryPath); items.push({ path: repositoryPath, bytes: 0, fileCount: 0 }) }
             }

@@ -25,6 +25,31 @@ async function fixture(commit = true) {
   }
   return { root, project, service: new ThreadWorktrees(root) }
 }
+async function submoduleHistoryFixture(reference: 'branch' | 'tag' | 'no-remote' = 'branch') {
+  const f = await fixture()
+  const origin = join(f.root, 'module-origin'); await mkdir(origin)
+  await git(origin, ['init'])
+  await writeFile(join(origin, 'module.txt'), 'published baseline')
+  await git(origin, ['add', '.'])
+  await git(origin, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'Module baseline'])
+  await git(f.project, ['-c', 'protocol.file.allow=always', 'submodule', 'add', origin, 'module'])
+  await git(f.project, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-am', 'Add module'])
+  const a = await f.service.ensure(await f.service.allocate(f.project, 'independent'))
+  await git(a.path!, ['-c', 'protocol.file.allow=always', 'submodule', 'update', '--init'])
+  const module = join(a.path!, 'module')
+  const recorded = (await git(module, ['rev-parse', 'HEAD'])).trim()
+  const gitDirectory = (await git(module, ['rev-parse', '--absolute-git-dir'])).trim()
+  await git(module, ['checkout', '-b', 'private'])
+  await writeFile(join(module, 'private.txt'), 'local-only history')
+  await git(module, ['add', '.'])
+  await git(module, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'Private module work'])
+  const privateCommit = (await git(module, ['rev-parse', 'HEAD'])).trim()
+  if (reference === 'tag') await git(module, ['tag', 'private-save'])
+  await git(module, ['checkout', '--detach', recorded])
+  if (reference === 'tag') await git(module, ['branch', '-D', 'private'])
+  if (reference === 'no-remote') await git(module, ['remote', 'remove', 'origin'])
+  return { ...f, a, module, gitDirectory, privateCommit }
+}
 /** Removes only a test-owned checkout under the fixture root; the production implementation has no removal path. */
 async function removeTestCheckout(root: string, path: string) {
   expect(resolve(path).startsWith(resolve(root) + '\\') || resolve(path).startsWith(resolve(root) + '/')).toBe(true)
@@ -720,6 +745,41 @@ describe('independent working-copy allocation', () => {
     await expect(service.reclaim(a, { confirmedItems: preview.items, confirmedIgnored: preview.ignored, confirmedRepositories: preview.repositories })).rejects.toThrow('files changed')
     expect(await readFile(join(a.path!, kind === 'ignored' ? 'new.env' : 'unsaved.txt'), 'utf8')).toBe('keep me')
   })
+  it.each(['branch', 'tag', 'no-remote'] as const)('requires acknowledgement of clean submodule history outside HEAD (%s)', async reference => {
+    const f = await submoduleHistoryFixture(reference)
+    expect((await lstat(join(f.module, '.git'))).isFile()).toBe(true)
+    expect(await git(f.module, ['status', '--porcelain'])).toBe('')
+    const preview = await f.service.reclaimFacts(f.a)
+    expect(preview.dirty).toBe(false)
+    expect(preview.repositories).toEqual([{ path: 'module/', changeCount: 0, kind: 'repository', unpushedCommitCount: reference === 'no-remote' ? 2 : 1 }])
+    expect(preview.ignored).toEqual(['module/'])
+    expect(preview.items.find(item => item.path === 'module/')?.fileCount).toBeGreaterThan(0)
+    await expect(f.service.reclaim(f.a, { automatic: true })).rejects.toThrow('a rule leaves it alone')
+    await expect(f.service.reclaim(f.a)).rejects.toThrow('Choose Remove worktree to review them')
+    await expect(f.service.reclaim(f.a, { confirmedItems: preview.items, confirmedIgnored: preview.ignored })).rejects.toThrow('The nested work changed')
+    expect((await lstat(f.gitDirectory)).isDirectory()).toBe(true)
+    expect(await git(f.module, ['cat-file', '-t', f.privateCommit])).toBe('commit\n')
+    expect((await f.service.reclaim(f.a, { confirmedItems: preview.items, confirmedIgnored: preview.ignored, confirmedRepositories: preview.repositories })).reclaimedAt).toBeTruthy()
+    await expect(lstat(f.gitDirectory)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+  it('rechecks unpublished submodule history inside the registry lane', async () => {
+    const f = await submoduleHistoryFixture()
+    const preview = await f.service.reclaimFacts(f.a)
+    let historyReads = 0
+    const service = new ThreadWorktrees(f.root, async (cwd, args) => {
+      if (cwd === f.module && args[0] === 'rev-list' && ++historyReads === 2) {
+        // Only refs change: the clean checkout and its file count stay the same.
+        const tree = (await git(f.module, ['rev-parse', `${f.privateCommit}^{tree}`])).trim()
+        const unseen = (await git(f.module, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit-tree', tree, '-p', f.privateCommit, '-m', 'Unseen module history'])).trim()
+        await git(f.module, ['update-ref', 'refs/heads/private', unseen])
+      }
+      return git(cwd, args)
+    })
+    await expect(service.reclaim(f.a, { confirmedItems: preview.items, confirmedIgnored: preview.ignored, confirmedRepositories: preview.repositories })).rejects.toThrow('The files changed')
+    expect(historyReads).toBe(2)
+    expect(await git(f.module, ['cat-file', '-t', f.privateCommit])).toBe('commit\n')
+    expect((await lstat(f.gitDirectory)).isDirectory()).toBe(true)
+  })
   it.each(['clean', 'recursive', 'dirty-hidden'])('reclaims initialized submodules safely (%s)', async mode => {
     const recursive = mode === 'recursive'
     const f = await fixture()
@@ -746,7 +806,7 @@ describe('independent working-copy allocation', () => {
       await writeFile(join(a.path!, 'module', 'module.txt'), 'uncommitted module work')
       const facts = await f.service.reclaimFacts(a)
       expect(facts.dirty).toBe(true)
-      expect(facts.repositories).toEqual([{ path: 'module/', changeCount: 1, kind: 'worktree' }])
+      expect(facts.repositories).toEqual([{ path: 'module/', changeCount: 1, kind: 'repository', unpushedCommitCount: 0 }])
       await expect(f.service.reclaim(a, { automatic: true })).rejects.toThrow('besides installed dependencies')
       expect((await f.service.reclaim(a, { withUncommittedChanges: true, confirmedItems: facts.items, confirmedIgnored: facts.ignored, confirmedRepositories: facts.repositories })).reclaimedAt).toBeTruthy()
       return

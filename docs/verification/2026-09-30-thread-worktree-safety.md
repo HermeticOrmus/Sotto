@@ -76,3 +76,19 @@ Main then advanced to `d343d76a`, bringing wake preparation recovery, unique ADR
 Windows CI on `880d44ae` passed 6,508 tests with 150 skipped, but one existing SSH password-reuse case hit its 10-second fixture sign-in budget at 10,859 ms. The worktree cases passed. Twenty isolated repetitions passed locally. A temporary clock-controlled 11-second route hold reproduced the same connection-timeout failure in 1.18 seconds; a 15-second fixture budget let the same three-process password flow complete in 1.57 seconds. Ordinary SSH success fixtures now use the whole 15-second test budget. Production deadlines and the whole-test deadline are unchanged, and deadline assertions retain explicit budgets, including 10 seconds for the helper-start case. All 45 SSH/askpass tests passed afterward. The spontaneous CI delay itself was not reproduced locally; the budget explanation is supported by the controlled reproduction. The throwaway reproduction was removed.
 
 Main's coordinator and key-recovery fixes through `1f9a5597` merged at `79a0a686`. The one adjacent-test conflict retained both the client-only preview test and all new Stop recovery cases. Both reviewers found no integration findings. Typecheck, lint and notices passed, and the full local suite passed 6,544 tests with 153 skipped; 487 files passed and 39 were skipped. No failures. Main's later encoding and discovery guards through `df0a0468` merged cleanly; both reviewers confirmed that they still discover every worktree and SSH test and do not change removal behavior.
+
+
+## Third-review submodule history
+
+The open review comment on `threadWorktrees.ts:496` reproduced unseen loss of a clean submodule's local-only branch or tag. Four new real-Git regressions failed before the fix: branch, tag, no remote and a refs-only change inside the registry lane. Every initialized submodule now has all local refs counted against remote refs and is classified as a repository even with a `.git` file. A nonzero count makes a flagged row and blocks rules. Manual removal requires the row in the confirmed set, checked again inside the lane. Folder comparisons still use file counts only.
+
+All seven submodule regressions passed, including the existing clean, recursive and hidden-dirty cases. Refused removal leaves the private commit readable and the module Git directory present. Deliberately acknowledged manual removal deletes that listed history with the folder, as variant B permits; it does not promise to retain a submodule's private branch.
+
+`npm run build` and `npx playwright test tests/e2e/thread-worktrees.spec.ts --workers=1` passed all six journeys. The new Electron case keeps local-only branch and tag commits away from HEAD in a clean submodule and parent checkout. Both pane and Settle questions list **2 commits not on any remote** and disable removal until the tick. Escape leaves both commits recoverable; acknowledged removal deletes the module metadata and keeps the parent's branch. After tightening the clean-parent assertion and refreshing its previously observed status, the new journey passed again.
+
+Light and dark were checked at 1600x1000, 1280x800 and 820x560 with reduced motion. The submodule path, tick and button stay visible; these two retained captures were visually inspected:
+
+- `artifacts/reclaim-worktrees/submodule-history-820x560-dark.png`
+- `artifacts/reclaim-worktrees/submodule-history-1600x1000-light.png`
+
+Incidental recaptures were restored and design baselines were not regenerated. Main through `a43ce556` merged cleanly before verification. Typecheck, lint and notices verification passed; the full suite and independent reviews are recorded below once complete.
