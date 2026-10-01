@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -12,6 +12,11 @@ import { TrayController } from '../../../src/main/tray/trayController'
 import { E2EAgentHost } from '../../../src/main/e2e/agentEffects'
 import type { AgentConfiguration } from '../../../src/shared/agents'
 import { immediatePublishScheduler } from '../../fixtures/publishScheduler'
+
+vi.mock('node:fs/promises', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  return { ...actual, rename: vi.fn(actual.rename), rm: vi.fn(actual.rm) }
+})
 
 const roots: string[] = []
 const controls: AgentControl[] = []
@@ -84,6 +89,9 @@ async function lastRawRecord(root: string) {
 }
 
 afterEach(async () => {
+  const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+  vi.mocked(rename).mockReset().mockImplementation(actual.rename)
+  vi.mocked(rm).mockReset().mockImplementation(actual.rm)
   for (const control of controls.splice(0)) control.dispose()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
@@ -272,6 +280,39 @@ describe('coordinator turn records', () => {
     expect(raw).not.toContain('"text"')
     expect(raw).not.toContain('"error"')
     expect((await upgraded.recent(1))[0]?.outcome).toBe('failed')
+  })
+
+  it.each(['EPERM', 'EBUSY'])('retries a temporarily locked scrub (%s)', async code => {
+    const f = await fixture()
+    const record = (await f.recorder.recent(1))[0]!
+    await writeFile(f.recorder.path(), `${JSON.stringify({ ...record, text: 'Private prompt' })}\n`)
+    vi.mocked(rename).mockRejectedValueOnce(Object.assign(new Error('Locked'), { code }))
+    const upgraded = new TurnRecorder({ directory: f.root, resolveSession: () => undefined })
+    await upgraded.initialize()
+    expect(await readFile(upgraded.path(), 'utf8')).not.toContain('Private prompt')
+    expect(await upgraded.recent(1)).toHaveLength(1)
+  })
+
+  it('deletes diagnostics when scrub retries cannot replace the file', async () => {
+    const f = await fixture()
+    await writeFile(f.recorder.path(), 'Private prompt\n')
+    vi.mocked(rename).mockRejectedValue(Object.assign(new Error('Locked'), { code: 'EPERM' }))
+    const upgraded = new TurnRecorder({ directory: f.root, resolveSession: () => undefined })
+    await expect(upgraded.initialize()).resolves.toBeUndefined()
+    await expect(readFile(upgraded.path(), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(await upgraded.recent(1)).toEqual([])
+  })
+
+  it('explains how to restart when old diagnostics cannot be deleted', async () => {
+    const f = await fixture()
+    await writeFile(f.recorder.path(), 'Private prompt\n')
+    vi.mocked(rename).mockRejectedValue(Object.assign(new Error('Locked'), { code: 'EBUSY' }))
+    vi.mocked(rm).mockImplementation(async (path, options) => {
+      if (path === f.recorder.path()) throw new Error('Private error')
+      return (await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')).rm(path, options)
+    })
+    const upgraded = new TurnRecorder({ directory: f.root, resolveSession: () => undefined })
+    await expect(upgraded.initialize()).rejects.toThrow('Close other apps using turns.jsonl, then restart Sotto.')
   })
 
   it('keeps overlapping finishes in order while compacting', async () => {

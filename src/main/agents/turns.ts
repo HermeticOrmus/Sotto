@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { appendFile, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { setTimeout as delay } from 'node:timers/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
 import type { AgentVoiceTiming } from '../../shared/agents'
@@ -206,7 +207,20 @@ export class TurnRecorder {
       } catch { /* Discard corrupt legacy lines rather than retaining unknown content. */ }
     }
     const cleaned = lines.length ? `${lines.join('\n')}\n` : ''
-    if (cleaned !== contents) await this.replace(cleaned)
+    if (cleaned !== contents) {
+      try {
+        for (let attempt = 0; ; attempt += 1) {
+          try { await this.replace(cleaned); break } catch (error) {
+            if (attempt >= 3 || (!hasErrorCode(error, 'EPERM') && !hasErrorCode(error, 'EBUSY'))) throw error
+            await delay(50)
+          }
+        }
+      } catch {
+        try { await rm(this.path(), { force: true }) } catch {
+          throw new Error('Sotto could not remove text from old turn records or delete the file. Close other apps using turns.jsonl, then restart Sotto. Diagnostic records may be lost.')
+        }
+      }
+    }
     this.scrubbed = true
   }
 
