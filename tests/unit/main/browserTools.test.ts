@@ -25,6 +25,8 @@ vi.mock('electron', async () => {
     close() { this.destroyed = true; this.emit('destroyed') }
   }
   class IsolatedSession extends EventEmitter {
+    setSpellCheckerDictionaryDownloadURL = vi.fn()
+    setSpellCheckerEnabled = vi.fn()
     setPermissionRequestHandler = vi.fn(); setPermissionCheckHandler = vi.fn(); setDevicePermissionHandler = vi.fn()
     webRequest = { onBeforeRequest: vi.fn() }
     closeAllConnections = vi.fn().mockResolvedValue(undefined)
@@ -122,6 +124,13 @@ async function browserFixture(withWindow = false, gone: ReadonlySet<string> = ne
 }
 
 describe('browser agent boundaries', () => {
+  it('blocks dictionary downloads on an isolated browser session without disabling spellcheck', async () => {
+    await browserFixture()
+    const options = vi.mocked(WebContentsView).mock.calls.at(-1)![0]!
+    const isolated = options.webPreferences!.session!
+    expect(isolated.setSpellCheckerDictionaryDownloadURL).toHaveBeenCalledWith('data:,')
+    expect(isolated.setSpellCheckerEnabled).not.toHaveBeenCalled()
+  })
   it('requires explicit sharing and keeps tasks and pages with their owning thread', async () => {
     const { service, target } = await browserFixture()
     expect(await service.startTask({ ...target, description: 'Check the form' })).toMatchObject({ ok: false, error: { code: 'blocked' } })

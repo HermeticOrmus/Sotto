@@ -7,6 +7,7 @@ import type { FilesService } from '../files/service'
 import { BrowserAutomation } from './browserAutomation'
 import { BrowserGrants, grantCovers } from './browserGrants'
 import { ToolOperations, fail, parse, workspace } from './common'
+import { blockSpellcheckDictionaryDownloads } from '../security'
 
 interface CaptureLease { count: number; window: BaseWindow; bounds: BrowserBounds; throttling: boolean; temporary: boolean }
 interface PageRecord { page: BrowserPage; view: WebContentsView; generation: number; automation: BrowserAutomation; initial: boolean; selection: { id: string; generation: number; capture: BrowserCapture; expiresAt: number } | null }
@@ -60,6 +61,7 @@ export class BrowserService extends ToolOperations {
     const existing = this.sessions.get(workspaceId)
     if (existing) return existing
     const isolated = session.fromPartition(`sotto-browser-${this.namespace}-${workspaceId}`)
+    blockSpellcheckDictionaryDownloads(isolated)
     isolated.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
     isolated.setPermissionCheckHandler(() => false)
     isolated.setDevicePermissionHandler(() => false)
