@@ -1,5 +1,5 @@
 import React from 'react'
-import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, expect, it, vi } from 'vitest'
 import { HostsSettings } from '../../../src/renderer/src/features/settings/HostsSettings'
@@ -438,7 +438,12 @@ it('turns Add host into the setup checklist once pressed, asks SSH questions on 
   expect(signIn.getAttribute('aria-current')).toBe('step')
   const passphrase = within(signIn).getByLabelText('Key passphrase')
   expect(document.activeElement).toBe(passphrase)
-  await user.type(passphrase, 'synthetic{Enter}')
+  await user.type(passphrase, 'synthetic')
+  for (const composition of [{ isComposing: true }, { keyCode: 229 }]) {
+    fireEvent.keyDown(passphrase, { key: 'Enter', ...composition })
+    expect(command).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'ssh-answer' }))
+  }
+  await user.keyboard('{Enter}')
   expect(command).toHaveBeenCalledWith({ type: 'ssh-answer', id: sent.host.id, promptId: 'prompt-1', answer: 'synthetic' })
   push({ adding: { ...adding, step: 'start' } })
   expect(steps().slice(0, 4)).toEqual(['Done: Reached forge', 'Done: Signed in', 'Done: Host installed', 'In progress: Starting the host…'])
@@ -692,4 +697,30 @@ it('names a host with a long name within the limit, and says in words when the h
   await user.click(within(again).getByRole('button', { name: 'Add host' }))
   expect(second.command).not.toHaveBeenCalled()
   expect(within(again).getByRole('alert').textContent).toBe('This SSH host and username are too long together. Nothing was saved. Use a shorter alias from your SSH configuration.')
+})
+
+it.each([{ isComposing: true }, { keyCode: 229 }])('leaves a host rename for Enter after composition (%j)', async composition => {
+  const { bridge, command } = fixture(), user = userEvent.setup()
+  settings(bridge)
+  await user.click(await screen.findByRole('button', { name: 'More for Build box' }))
+  await user.click(screen.getByRole('menuitem', { name: 'Rename' }))
+  const field = screen.getByRole('textbox', { name: 'Host name' })
+  fireEvent.change(field, { target: { value: 'Forge' } })
+  fireEvent.keyDown(field, { key: 'Enter', ...composition })
+  expect(command).not.toHaveBeenCalled()
+  fireEvent.keyDown(field, { key: 'Enter' })
+  expect(command).toHaveBeenCalledWith({ type: 'rename', id: REMOTE, name: 'Forge' })
+})
+
+it.each([{ isComposing: true }, { keyCode: 229 }])('leaves a connection save for Enter after composition (%j)', async composition => {
+  const { bridge, command } = fixture(), user = userEvent.setup()
+  settings(bridge)
+  await user.click(await screen.findByRole('button', { name: 'More for Build box' }))
+  await user.click(screen.getByRole('menuitem', { name: 'Edit connection' }))
+  const field = screen.getByRole('textbox', { name: 'SSH host' })
+  fireEvent.change(field, { target: { value: 'forge' } })
+  fireEvent.keyDown(field, { key: 'Enter', ...composition })
+  expect(command).not.toHaveBeenCalled()
+  fireEvent.keyDown(field, { key: 'Enter' })
+  expect(command).toHaveBeenCalledWith({ type: 'save', host: expect.objectContaining({ target: 'forge' }) })
 })
