@@ -27,7 +27,7 @@ final class AppModelTests: XCTestCase {
         let marker = PendingOperation(hostID: ref.hostID, clientID: "phone", threadID: ref.threadID, draftID: "draft", kind: "reply")
         try TestKeychain.store.write([marker], account: ComputerStore.pendingAccount)
         let waiting = expectation(description: "A disconnected computer schedules a retry")
-        let model = AppModel(keychain: TestKeychain.store, retrySleep: { delay in
+        let model = AppModel(keychain: TestKeychain.store, retryJitter: { 1 }, retrySleep: { delay in
             waiting.fulfill()
             try await clock.wait(delay)
         })
@@ -56,7 +56,7 @@ final class AppModelTests: XCTestCase {
         defer { HostConnection.failConnect = false }
         let clock = RetryClock()
         let capped = expectation(description: "Retry delay reaches its cap")
-        let model = AppModel(keychain: TestKeychain.store, retrySleep: { delay in
+        let model = AppModel(keychain: TestKeychain.store, retryJitter: { 1 }, retrySleep: { delay in
             let count = await clock.record(delay)
             if count == 6 { capped.fulfill(); throw CancellationError() }
         })
@@ -66,11 +66,51 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(delays, [1, 2, 4, 8, 16, 30].map { UInt64($0) * 1_000_000_000 })
         model.phase(.background)
     }
+    @MainActor func testShortConnectionsKeepBackoffUntilLivenessSucceeds() async throws {
+        let (_, ref) = try fixture()
+        let clock = RetryClock()
+        let model = AppModel(keychain: TestKeychain.store, retryJitter: { 1 }, retrySleep: { delay in
+            _ = await clock.record(delay)
+            throw CancellationError()
+        })
+        model.phase(.active)
+        await model.connect(ref.hostID)
+        let connection = try XCTUnwrap(HostConnection.instances.last)
+        connection.onDisconnect?()
+        while await clock.delays.count < 1 { await Task.yield() }
+        await model.connect(ref.hostID)
+        connection.onDisconnect?()
+        while await clock.delays.count < 2 { await Task.yield() }
+        let shortDelays = await clock.delays
+        XCTAssertEqual(shortDelays, [1_000_000_000, 2_000_000_000])
+        await model.connect(ref.hostID)
+        connection.onLiveness?()
+        connection.onDisconnect?()
+        while await clock.delays.count < 3 { await Task.yield() }
+        let recoveredDelays = await clock.delays
+        XCTAssertEqual(recoveredDelays, [1_000_000_000, 2_000_000_000, 1_000_000_000])
+        model.phase(.background)
+    }
+    @MainActor func testReconnectDelayIncludesJitterAndKeepsThirtySecondCap() async throws {
+        _ = try fixture()
+        HostConnection.failConnect = true
+        defer { HostConnection.failConnect = false }
+        let clock = RetryClock()
+        let capped = expectation(description: "Jittered retry reaches cap")
+        let model = AppModel(keychain: TestKeychain.store, retryJitter: { 1.2 }, retrySleep: { delay in
+            if await clock.record(delay) == 6 { capped.fulfill(); throw CancellationError() }
+        })
+        model.phase(.active)
+        await fulfillment(of: [capped], timeout: 10)
+        let delays = await clock.delays
+        XCTAssertEqual(delays, [1.2, 2.4, 4.8, 9.6, 19.2, 30].map { UInt64($0 * 1_000_000_000) })
+        model.phase(.background)
+    }
     @MainActor func testBackgroundCancelsScheduledReconnect() async throws {
         let (_, ref) = try fixture()
         let clock = RetryClock()
         let waiting = expectation(description: "Retry scheduled")
-        let model = AppModel(keychain: TestKeychain.store, retrySleep: { delay in
+        let model = AppModel(keychain: TestKeychain.store, retryJitter: { 1 }, retrySleep: { delay in
             waiting.fulfill()
             try await clock.wait(delay)
         })

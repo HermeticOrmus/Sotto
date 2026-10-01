@@ -45,6 +45,7 @@ struct HostRefusal: Error, LocalizedError {
     static var folderHandler: ((String, JSONValue) async throws -> JSONValue)?
     static var receipts: [String: JSONValue] = [:]
     var onPush: ((IncomingFrame, Int) -> Void)?
+    var onLiveness: (() -> Void)?
     var onDisconnect: (() -> Void)?
     var operations: [String] = []
     var commands: [JSONValue] = []

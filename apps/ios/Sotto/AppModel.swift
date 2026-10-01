@@ -71,6 +71,7 @@ struct Live {
     private var active = false
     private var retries: [String: Task<Void, Never>] = [:]
     private var retryAttempts: [String: Int] = [:]
+    private let retryJitter: @Sendable () -> Double
     private let retrySleep: @Sendable (UInt64) async throws -> Void
     private var pairGeneration = UUID()
     private var detailVersion = 0
@@ -199,9 +200,11 @@ struct Live {
     // MARK: Starting and stopping
 
     init(keychain: KeychainStore = KeychainStore(),
+         retryJitter: @escaping @Sendable () -> Double = { Double.random(in: 0.8...1.2) },
          retrySleep: @escaping @Sendable (UInt64) async throws -> Void = { try await Task.sleep(nanoseconds: $0) }) {
         self.keychain = keychain
         self.retrySleep = retrySleep
+        self.retryJitter = retryJitter
         #if DEBUG && os(iOS)
         if ProcessInfo.processInfo.arguments.contains("--ui-fixture") {
             loadUIFixture()
@@ -354,7 +357,6 @@ struct Live {
             scheduleRetry(hostID)
             return
         }
-        retryAttempts[hostID] = nil
         retries.removeValue(forKey: hostID)?.cancel()
         // A refused or slow thread read does not mean the computer's connection was lost.
         do { try await observeAndRead(hostID) }
@@ -365,7 +367,7 @@ struct Live {
         guard active, computer(hostID) != nil, retries[hostID] == nil else { return }
         let attempt = retryAttempts[hostID] ?? 0
         retryAttempts[hostID] = min(attempt + 1, 5)
-        let delay = UInt64(min(30, 1 << min(attempt, 5))) * 1_000_000_000
+        let delay = UInt64(min(30, Double(1 << min(attempt, 5)) * retryJitter()) * 1_000_000_000)
         let sleep = retrySleep
         retries[hostID] = Task { [weak self] in
             do { try await sleep(delay) } catch { return }
@@ -384,6 +386,7 @@ struct Live {
     private func connection(_ hostID: String) -> HostConnection {
         if let existing = connections[hostID] { return existing }
         let made = HostConnection()
+        made.onLiveness = { [weak self] in self?.retryAttempts[hostID] = nil }
         made.onPush = { [weak self] frame, sequence in self?.push(frame, from: hostID, sequence: sequence) }
         made.onDisconnect = { [weak self] in
             self?.generations[hostID] = UUID(); self?.connecting.remove(hostID)
