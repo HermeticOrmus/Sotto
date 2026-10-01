@@ -5,7 +5,7 @@ import { agentCommandSchema, type AgentCommand } from '../../../src/shared/agent
 import { hostRequestSchema } from '../../../src/shared/hostProtocol'
 
 /** Commands that stay on the host machine. A new command type must land here or in REMOTE_COMMANDS. */
-const HOST_LOCAL = ['credential', 'check-reasoning', 'update-client', 'preview-voice', 'utterance', 'voice', 'voice-state', 'open-thread-folder', 'membership']
+const HOST_LOCAL = ['credential', 'check-reasoning', 'update-client', 'preview-voice', 'utterance', 'voice', 'voice-state', 'open-thread-folder', 'membership', 'compose', 'send', 'cancel-draft', 'pause-draft', 'cancel-request']
 type Option = { shape: { type: { value?: string; options?: string[] } } & Record<string, unknown> }
 const schemaFields = new Map((agentCommandSchema.options as unknown as Option[]).flatMap(option => {
   const types = option.shape.type.options ?? [option.shape.type.value!]
@@ -53,15 +53,15 @@ describe('remote command allow-list', () => {
     expect(refuse({ type: 'configure', patch: { membershipEndpoint: 'https://untrusted.example' } } as AgentCommand, true)).toBe('forbidden')
     expect(refuse({ type: 'interrupt', threadId: 'thread' })).toBeNull()
     expect(remoteCommandRefusal({ type: 'send' }, { mayAnswer: false, draftRequestId: 'request' })).toBe('forbidden')
-    expect(remoteCommandRefusal({ type: 'send' }, { mayAnswer: true, draftRequestId: 'request' })).toBeNull()
-    expect(remoteCommandRefusal({ type: 'send' }, { mayAnswer: false, draftRequestId: null })).toBeNull()
+    expect(remoteCommandRefusal({ type: 'send' }, { mayAnswer: true, draftRequestId: 'request' })).toBe('forbidden')
+    expect(remoteCommandRefusal({ type: 'send' }, { mayAnswer: false, draftRequestId: null })).toBe('forbidden')
     expect(refuse({ type: 'save-thread-draft', threadId: 'thread', draftId: 'draft', text: 'Blue' })).toBeNull()
   })
   it('applies command admission consistently while composing', () => {
     const command = { type: 'compose', text: 'Draft text' } as const
     expect(remoteCommandRefusal(command, { mayAnswer: false, draftRequestId: 'request' })).toBe('forbidden')
-    expect(remoteCommandRefusal(command, { mayAnswer: true, draftRequestId: 'request' })).toBeNull()
-    expect(remoteCommandRefusal(command, { mayAnswer: false, draftRequestId: null })).toBeNull()
+    expect(remoteCommandRefusal(command, { mayAnswer: true, draftRequestId: 'request' })).toBe('forbidden')
+    expect(remoteCommandRefusal(command, { mayAnswer: false, draftRequestId: null })).toBe('forbidden')
   })
   it('asks for the answer policy before a permission setting or discarding uncommitted work', () => {
     const gated: AgentCommand[] = [

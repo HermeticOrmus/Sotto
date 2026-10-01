@@ -524,3 +524,5 @@ Builds are ad-hoc signed and not notarized, so anyone installing the disk image 
   ```
 
 - **Sotto quits immediately after launching:** Check that the Mac has Apple silicon (Apple menu → About This Mac). Intel Macs are not supported and the arm64 build cannot run on them.
+
+Remote clients send prompts and save drafts with an explicit Sotto thread ID. The host refuses commands that use its own selected thread or spoken draft: compose, send, cancel draft, pause draft and cancel request. Those controls belong to the host computer.

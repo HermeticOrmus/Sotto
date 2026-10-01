@@ -110,3 +110,5 @@ npm run dev
 ## License
 
 [MIT](LICENSE.md). Third-party licenses are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+Remote clients send prompts and save drafts with an explicit Sotto thread ID. The host refuses commands that use its own selected thread or spoken draft: compose, send, cancel draft, pause draft and cancel request. Those controls belong to the host computer.

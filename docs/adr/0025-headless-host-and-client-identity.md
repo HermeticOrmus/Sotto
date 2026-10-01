@@ -142,3 +142,7 @@ A completed transport receipt did not establish answer delivery: the coordinator
 For a socket answer, the coordinator returns the command-local failure as the response's error, separately from the published shell. The socket uses that outcome to add optional `answerDelivered` evidence to the existing v1 receipt. Only a completed receipt with no error and `answerDelivered: true` confirms the phone's answer. Refusal or uncertainty records false with a generic error. The command still answers with the existing shell, and neither a receipt nor its replay sends another answer.
 
 Older hosts omit the field. The iPhone keeps their still-waiting answers unconfirmed and clears a vanished request with neutral copy, never claiming the phone's answer arrived. This adds evidence rather than authority: the user's explicit answer and the host's policy remain the only grants. No additional host, network request or permission is introduced.
+
+## September 30 amendment: implicit draft commands stay local
+
+Remote navigation belongs to each client and never selects the coordinator’s own thread. Compose, send, cancel-draft, pause-draft and cancel-request therefore stay host-local. A paired client uses the existing explicit-thread prompt and draft commands instead; even remote-answer authority does not admit an implicit target. This narrows the remote command list to preserve client-owned navigation (#489).
