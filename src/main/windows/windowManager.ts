@@ -1,4 +1,4 @@
-import { APP_MAXIMIZED, WIDGET_VISIBILITY } from '../../shared/channels'
+import { APP_MAXIMIZED, APP_WINDOW_HIDDEN, WIDGET_VISIBILITY } from '../../shared/channels'
 import { APP_NAME } from '../../shared/constants'
 import type {
   WidgetDragPayload,
@@ -156,9 +156,9 @@ export interface WebContentsLike {
 
 export interface BrowserWindowLike {
   readonly webContents: WebContentsLike
-  on(event: 'close' | 'closed' | 'moved' | 'maximize' | 'unmaximize', listener: (event: CloseEventLike) => void): void
+  on(event: 'close' | 'closed' | 'moved' | 'maximize' | 'unmaximize' | 'hide' | 'minimize', listener: (event: CloseEventLike) => void): void
   removeListener(
-    event: 'close' | 'closed' | 'moved' | 'maximize' | 'unmaximize',
+    event: 'close' | 'closed' | 'moved' | 'maximize' | 'unmaximize' | 'hide' | 'minimize',
     listener: (event: CloseEventLike) => void,
   ): void
   hide(): void
@@ -931,11 +931,18 @@ export class WindowManager {
     window.on('maximize', onMaximized)
     const onUnmaximized = (): void => onMaximized()
     window.on('unmaximize', onUnmaximized)
+    // Capture can keep Chromium's page visible after the native window hides.
+    const onHidden = (): void => window.webContents.send(APP_WINDOW_HIDDEN, null)
+    const onMinimized = (): void => onHidden()
+    window.on('hide', onHidden)
+    window.on('minimize', onMinimized)
     window.on('close', onClose)
     window.on('closed', onClosed)
     this.addCleanup(window, () => {
       window.removeListener('maximize', onMaximized)
       window.removeListener('unmaximize', onUnmaximized)
+      window.removeListener('hide', onHidden)
+      window.removeListener('minimize', onMinimized)
       window.removeListener('close', onClose)
       window.removeListener('closed', onClosed)
     })

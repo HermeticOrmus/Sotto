@@ -176,6 +176,7 @@ export class PhoneAccess {
         if (!policy) throw new Error('Permission policies are unavailable on this computer, so a phone cannot be allowed to answer. Nothing was changed.')
         if (!this.pairing.list().some(client => client.clientId === command.clientId)) throw new Error('That phone is no longer paired. Nothing was changed.')
         policy.setRemoteAnswers(command.clientId, command.allowed, ANSWERS_NOTE)
+        this.listener?.refreshCapabilities()
         break
       }
       case 'remove':

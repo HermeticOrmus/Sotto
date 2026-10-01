@@ -136,7 +136,8 @@ export async function startSocketServer(options: SocketServerOptions) {
   const identity = (clientId: string): ClientIdentity => ({ clientId, user: pairing.list().find(client => client.clientId === clientId)?.name ?? 'Paired client', transport: 'socket' })
   const shell = (peer: Peer) => {
     const state = service.shell()
-    const own = { ...state, activeThreadId: peer.selectedThreadId, activeProjectId: peer.selectedProjectId }
+    const own = { ...state, activeThreadId: peer.selectedThreadId, activeProjectId: peer.selectedProjectId,
+      clientCapabilities: { mayAnswer: options.mayAnswer?.(peer.client) ?? false } }
     // A client from before #480 reads the client updates' channel and state against the values it knows, and one it
     // does not know would make it refuse the whole shell: it is sent them as it knew them.
     return peer.clientUpdates || !state.clientUpdates ? own : { ...own, clientUpdates: state.clientUpdates.map(clientUpdateForOlderClient) }
@@ -245,7 +246,13 @@ export async function startSocketServer(options: SocketServerOptions) {
           peer.selectedProjectId = input.projectId; peer.selectedThreadId = null
         } else if (input.type === 'observe-threads') {
           peer.observed = new Set(input.threadIds); await observe()
-        } else await service.command(input, peer.client)
+        } else {
+          const result = await service.command(input, peer.client)
+          if (input.type === 'answer') {
+            receipt.answerDelivered = result.error == null
+            if (!receipt.answerDelivered) receipt.error = { code: 'unavailable', message: errors.unavailable }
+          }
+        }
         receipt.status = 'completed'
       } catch { receipt.status = 'completed'; receipt.error = { code: 'unavailable', message: errors.unavailable }; throw new Refusal('unavailable') }
     })()
@@ -383,6 +390,7 @@ export async function startSocketServer(options: SocketServerOptions) {
           else if (request.url === '/v1/admin/allow-answers' || request.url === '/v1/admin/deny-answers') {
             if (!pairing.list().some(client => client.clientId === input.clientId) || !options.setAnswers) throw new Refusal('invalid_request')
             options.setAnswers(input.clientId, request.url.endsWith('/allow-answers'))
+            shellPublisher.publish(service.shell())
           } else throw new Refusal('invalid_request')
           respond(response, 200, { v: 1, hostId, ok: true }); return
         }
@@ -457,6 +465,8 @@ export async function startSocketServer(options: SocketServerOptions) {
     peers: (): number => peers.size,
     /** The paired clients holding an open socket now, each once. */
     connectedClients: (): string[] => [...new Set([...peers].map(peer => peer.client.clientId))],
+    /** A changed policy is reflected in every client's own next shell without reopening its session. */
+    refreshCapabilities: (): void => { shellPublisher.publish(service.shell()) },
     /** Closes at once every socket whose client is no longer paired, after a revocation made outside this listener. */
     dropRevoked: (): void => { for (const peer of peers) if (!authenticated(peer)) peer.frames.close() },
     close: async (): Promise<void> => {

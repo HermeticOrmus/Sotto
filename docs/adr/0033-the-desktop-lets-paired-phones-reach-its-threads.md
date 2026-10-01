@@ -28,6 +28,12 @@ Pairing codes are issued only from the Phones page: one live code at a time, eig
 
 A paired phone reads threads and replies. Its answers to questions and permissions count only after the owner turns on **Can answer** for it on the Phones page, which writes the `remote-answer` policy record scoped to that phone (ADR-0004); the switch is the only thing that writes one, and turning it off revokes it. **Remove** asks first, then revokes the pairing, revokes any such record, and closes the phone's sockets at once. The headless host's own allow and deny commands and the Phones page now share one helper, `PolicyStore.setRemoteAnswers`, so a client never holds two records that disagree.
 
+## Paired clients may choose reasoning (September 30, 2026)
+
+The owner decided in #609 that pairing also lets a phone change the coordinator's `reasoning` provider and `reasoningModel`, without **Can answer**. These choices can send assignment text and relevant thread context to a different reasoning host named in the README's Privacy and cost section, using credentials already saved on the computer. Pairing therefore trusts the phone to choose where coordinator reasoning runs, as well as to read threads and send replies. This records the existing remote configuration allow-list; it adds no command or destination.
+
+This choice grants no permission to an agent and writes no policy record. Answers to questions and permissions still require the phone's `remote-answer` policy (ADR-0004). Credentials, endpoints and the voice engine stay host-local; a paired phone cannot supply a key or an arbitrary reasoning endpoint.
+
 ## Consequences
 
 - The desktop now has a production listener, on loopback only, while phone access is on. Everything that reaches it comes through Tailscale Serve on the owner's tailnet and then through pairing and signed sessions; nothing outside the tailnet can reach it, and nothing on the tailnet can do more than a paired client may (the remote command list in ADR-0025 applies unchanged).

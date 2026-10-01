@@ -34,7 +34,7 @@ const os = require('node:os');
 const http = require('node:http');
 const net = require('node:net');
 const crypto = require('node:crypto');
-const { spawn } = require('node:child_process');
+const { spawn, execFile } = require('node:child_process');
 const cfg = JSON.parse(process.argv[process.argv[1] === '-' ? 2 : 1]);
 const resolvePath = value => path.resolve(value.startsWith('~/') ? path.join(os.homedir(), value.slice(2)) : value);
 const data = resolvePath(cfg.dataDirectory);
@@ -61,6 +61,21 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const exists = async file => { try { await fs.access(file); return true; } catch { return false; } };
 // The host's own rule: a process another account owns (EPERM) is still running.
 const alive = pid => { try { process.kill(pid, 0); return true; } catch (error) { return !!error && error.code === 'EPERM'; } };
+// Match src/host/lock.ts: an earlier boot cannot still own a lease, even if its PID was reused.
+const runBootProbe = (file, args) => new Promise((resolve, reject) => execFile(file, args, { timeout: 5000, windowsHide: true, encoding: 'utf8' }, (error, stdout) => error ? reject(error) : resolve(stdout)));
+const readBootId = async () => {
+  try {
+    let value;
+    if (process.platform === 'linux') value = (await fs.readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim();
+    else if (process.platform === 'darwin') value = (await runBootProbe('/usr/sbin/sysctl', ['-n', 'kern.bootsessionuuid'])).trim();
+    else if (process.platform === 'win32') {
+      const output = await runBootProbe('reg', ['query', 'HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Memory Management\\PrefetchParameters', '/v', 'BootId']);
+      value = /BootId\s+REG_DWORD\s+(0x[0-9a-f]+)/i.exec(output)?.[1]?.toLowerCase();
+    }
+    return value ? process.platform + ':' + value : undefined;
+  } catch { return undefined; }
+};
+const bootIdentity = readBootId();
 // The version the current pointer names, or null for a flat install.
 const currentVersion = async () => { try { const value = (await fs.readFile(pointerPath, 'utf8')).trim(); return RELEASE.test(value) ? value : null; } catch { return null; } };
 const entryOf = version => version ? path.join(versionsPath, version, 'host', 'index.js') : path.join(install, 'host', 'index.js');
@@ -101,7 +116,11 @@ const portAnswers = port => new Promise(resolve => {
   socket.once('error', () => resolve(false));
 });
 const lockHolder = async () => {
-  try { const value = JSON.parse(await fs.readFile(lockPath, 'utf8')); return Number.isInteger(value.pid) && alive(value.pid) ? value.pid : null; }
+  try {
+    const value = JSON.parse(await fs.readFile(lockPath, 'utf8')), boot = await bootIdentity;
+    if (typeof value.boot === 'string' && boot !== undefined && value.boot !== boot) return null;
+    return Number.isInteger(value.pid) && value.pid > 0 && alive(value.pid) ? value.pid : null;
+  }
   catch { return null; }
 };
 // Finds the running host, or starts the one the installation folder names, and answers once it listens.
