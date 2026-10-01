@@ -186,7 +186,7 @@ export class CheckpointService extends ToolOperations {
   }
   async forgetThread(threadId: string): Promise<void> { return this.serial(async () => {
     await this.load()
-    for (const record of this.records.values()) if (record.threadId === threadId) this.records.delete(record.id)
+    for (const record of this.records.values()) if (record.threadId === threadId && !this.unresolved(record)) this.records.delete(record.id)
     await this.save()
     // A recovery copy must not retain a forgotten thread's records either. Match the
     // identifier field without requiring the rest of a damaged document to parse.

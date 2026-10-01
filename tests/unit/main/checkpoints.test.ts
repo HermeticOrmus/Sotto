@@ -110,7 +110,7 @@ describe('completed native turn checkpoints', () => {
       expect(report).toHaveBeenCalledWith('checkpoint-cleanup-failed')
     } finally { remove.mockRestore() }
   })
-  it.each(['age', 'size', 'history off'])('keeps unfinished revert guards and blobs through %s cleanup', async limit => {
+  it.each(['age', 'size', 'history off', 'forget thread'])('keeps unfinished revert guards and blobs through %s cleanup', async limit => {
     const f = await fixture(), request = await f.complete()
     f.refresh.mockRejectedValueOnce(new Error('interrupted after native acceptance'))
     expect(await f.service.revertCheckpoint({ ...request, confirmed: true })).toMatchObject({ ok: false })
@@ -118,7 +118,8 @@ describe('completed native turn checkpoints', () => {
     if (limit === 'age') f.dependencies.now = () => Date.now() + 31 * 24 * 60 * 60 * 1000
     if (limit === 'size') f.dependencies.maxBytes = 1
     if (limit === 'history off') f.dependencies.historyEnabled = () => false
-    await f.service.privacyChanged()
+    if (limit === 'forget thread') await f.service.forgetThread('thread-a')
+    else await f.service.privacyChanged()
     const restarted = new CheckpointService(f.dependencies); cleanup.push(async () => restarted.dispose())
     await restarted.initialize()
     expect(await restarted.isWorkspaceBlocked('thread-b')).toBe(true)
@@ -126,6 +127,20 @@ describe('completed native turn checkpoints', () => {
     expect((await readdir(join(f.dependencies.directory, 'blobs'))).sort()).toEqual(blobs)
     expect(unwrap(await restarted.recoverCheckpoint(request)).status).toBe('reverted')
     expect(f.rollback).toHaveBeenCalledTimes(1)
+  })
+  it('keeps a reverting journal and its blobs when its thread is forgotten', async () => {
+    const f = await fixture(); await f.complete()
+    const path = join(f.dependencies.directory, 'checkpoints.json')
+    const saved = JSON.parse(await readFile(path, 'utf8'))
+    saved.records[0].status = 'reverting'
+    await writeFile(path, JSON.stringify(saved))
+    const restarted = new CheckpointService(f.dependencies); cleanup.push(async () => restarted.dispose())
+    await restarted.initialize()
+    const blobs = (await readdir(join(f.dependencies.directory, 'blobs'))).sort()
+    await restarted.forgetThread('thread-a')
+    expect(await restarted.isWorkspaceBlocked('thread-b')).toBe(true)
+    expect(JSON.parse(await readFile(path, 'utf8')).records[0].status).toBe('reverting')
+    expect((await readdir(join(f.dependencies.directory, 'blobs'))).sort()).toEqual(blobs)
   })
   it('never cleans through a blob directory junction or removes non-blob entries', async () => {
     const f = await fixture(); await f.complete()
