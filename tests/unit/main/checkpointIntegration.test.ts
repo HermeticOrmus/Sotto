@@ -4,6 +4,7 @@ import { workspaceFixture } from '../../fixtures/workspaceFixture'
 import { connectCheckpoints } from '../../../src/main/tools/checkpointIntegration'
 import { FilesService } from '../../../src/main/files/service'
 import { resolveFilesBinding } from '../../../src/main/files/binding'
+import type { GitActions } from '../../../src/main/agents/gitActions'
 import type { AgentControl } from '../../../src/main/agents/control'
 import type { GitChangesService } from '../../../src/main/tools/gitChanges'
 
@@ -18,14 +19,45 @@ it('excludes an unallocated worktree from shared-folder checkpoint guards while 
     await f.host.execute({ type: 'create-thread', commandId: 'pending', threadId: 'pending', projectId: project.id, modelId: model.id, title: 'Pending', workingCopy: 'independent' })
     const files = new FilesService({ resolveBinding: id => resolveFilesBinding(f.host.workspaceSnapshot(), id), copyPath: vi.fn(), reveal: vi.fn() })
     const pending = vi.fn(() => false)
+    const subscribe = vi.fn<AgentControl['subscribe']>(() => () => undefined)
     const hooks = vi.spyOn(f.host, 'setCheckpointHooks')
-    integration = connectCheckpoints({ files, directory: f.root, host: f.host, registry: f.registry,
-      control: { subscribe: () => () => undefined, hasPendingThreadWork: pending } as unknown as AgentControl,
+    let historyEnabled = true
+    integration = connectCheckpoints({ historyEnabled: () => historyEnabled, files, directory: f.root, host: f.host, registry: f.registry,
+      control: { subscribe, hasPendingThreadWork: pending } as unknown as AgentControl,
       git: () => ({ isMutating: async () => false }) as unknown as GitChangesService, report: vi.fn() })
     await expect(Promise.resolve(hooks.mock.calls[0]![0].isBlocked('pending'))).resolves.toBe(false)
     await expect(integration.canMutate('pending')).resolves.toBe(false)
     await expect(integration.canMutate('ready')).resolves.toBe(true)
     expect(pending).not.toHaveBeenCalledWith('pending')
+    // A revert holds the checkpoint queue while validating files. Git commands
+    // hold the real host lane while consulting the integration guard.
+    const internals = integration.checkpoints as unknown as { locks: Set<string>; serial<T>(work: () => Promise<T>): Promise<T> }
+    let release!: () => void, entered!: () => void
+    const paused = new Promise<void>(resolve => { release = resolve })
+    const checking = new Promise<void>(resolve => { entered = resolve })
+    const revert = internals.serial(async () => {
+      internals.locks.add('ready'); entered(); await paused
+      await f.host.rollbackThread('ready', 1, []).catch(() => undefined)
+      internals.locks.delete('ready')
+    })
+    await checking
+    f.host.setGitActions({} as GitActions)
+    f.host.setMutationGuard(integration.canMutate)
+    const git = f.host.pullThreadBranch('ready')
+    const refused = expect(git).rejects.toThrow('Wait for active or pending thread work')
+    release()
+    await refused
+    await revert
+    const forgotten = vi.spyOn(integration.checkpoints, 'forgetThread').mockResolvedValue()
+    subscribe.mock.calls[0]![0]({ host: { ...f.host.workspaceSnapshot(), threads: [] } } as unknown as Parameters<Parameters<AgentControl['subscribe']>[0]>[0])
+    expect(forgotten).toHaveBeenCalledWith('ready')
+    expect(forgotten).toHaveBeenCalledWith('pending')
+    const privacy = vi.spyOn(integration.checkpoints, 'privacyChanged').mockResolvedValue()
+    await hooks.mock.calls[0]![0].privacyChanged?.()
+    expect(privacy).not.toHaveBeenCalled()
+    historyEnabled = false
+    await hooks.mock.calls[0]![0].privacyChanged?.()
+    expect(privacy).toHaveBeenCalledOnce()
     f.adapters.codex.state.threads[0]!.status = 'running'; f.adapters.codex.emit()
     await expect(integration.canMutate('ready')).resolves.toBe(false)
   } finally {
