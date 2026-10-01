@@ -32,6 +32,7 @@ export interface ThreadFiles {
 export type PathAction = 'copyPath' | 'reveal'
 
 const ROOT = ''
+const REQUEST_QUEUE_WAIT_MS = 10_000
 const unavailableBridge: FilesError = { code: 'unavailable', message: 'Files is not available in this window.' }
 
 function freshThread(threadId: string, generation = 0, workspaceChanged = false): ThreadFiles {
@@ -277,7 +278,16 @@ export class FilesBrowserStore {
 
   private async call<T>(request: () => Promise<FilesResult<T>>): Promise<FilesResult<T>> {
     if (this.activeRequests >= FILES_MAX_CONCURRENT_REQUESTS) {
-      await new Promise<void>(resolve => { this.waitingRequests.push(resolve) })
+      const admitted = await new Promise<boolean>(resolve => {
+        const admit = (): void => { clearTimeout(timeout); resolve(true) }
+        const timeout = setTimeout(() => {
+          const index = this.waitingRequests.indexOf(admit)
+          if (index !== -1) this.waitingRequests.splice(index, 1)
+          resolve(false)
+        }, REQUEST_QUEUE_WAIT_MS)
+        this.waitingRequests.push(admit)
+      })
+      if (!admitted) return { ok: false, error: { code: 'busy', message: 'Files is busy. Try again shortly.' } }
     } else this.activeRequests++
     try { return await request() }
     catch { return { ok: false, error: { code: 'unavailable', message: 'Files could not be reached.' } } }

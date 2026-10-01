@@ -13,6 +13,44 @@ function workshop(token = TOKEN_A): FakeFolders[string] {
 }
 
 describe('Files browsing model', () => {
+  it('ends queued lists, previews and Retry with busy when all request slots stall', async () => {
+    const bridge = fakeFilesBridge({ t1: workshop(), t2: workshop() })
+    const store = new FilesBrowserStore()
+    store.activate(bridge, 't1')
+    await settle()
+    const list = bridge.list
+    const releases: (() => void)[] = []
+    bridge.list = vi.fn(async request => {
+      await new Promise<void>(resolve => { releases.push(resolve) })
+      return list(request)
+    })
+    vi.useFakeTimers()
+    try {
+      for (let i = 0; i < 4; i++) store.reloadDirectory(bridge, 't1', `held${i}`)
+      store.activate(bridge, 't2')
+      store.openFile(bridge, 't1', 'README.md')
+      await vi.advanceTimersByTimeAsync(10_000)
+      const busy = { status: 'error', error: { code: 'busy', message: 'Files is busy. Try again shortly.' } }
+      expect(store.thread('t2')?.listings.get('')).toMatchObject(busy)
+      expect(store.thread('t1')?.preview).toMatchObject(busy)
+      store.openFile(bridge, 't1', 'README.md')
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(store.thread('t1')?.preview).toMatchObject(busy)
+      expect(bridge.preview).not.toHaveBeenCalled()
+      expect(bridge.list).toHaveBeenCalledTimes(4)
+
+      // Expired waiters must not consume a slot when the stalled requests finally finish.
+      for (const release of releases.splice(0)) release()
+      await vi.advanceTimersByTimeAsync(0)
+      bridge.list = list
+      store.openFile(bridge, 't1', 'README.md')
+      store.reloadDirectory(bridge, 't2', '')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(store.thread('t1')?.preview?.status).toBe('ready')
+      expect(store.thread('t2')?.listings.get('')?.status).toBe('ready')
+    } finally { vi.useRealTimers() }
+  })
+
   it.each([4, 5])('opens a Changes file %i folders deep without exceeding the service request limit', async depth => {
     const folders = Array.from({ length: depth }, (_, index) => Array.from({ length: index + 1 }, (_, part) => `folder${part}`).join('/'))
     const path = `${folders.at(-1)!}/app.ts`
