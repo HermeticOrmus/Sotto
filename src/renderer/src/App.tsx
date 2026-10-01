@@ -252,7 +252,16 @@ export function App({ createMicrophoneTest = () => new BrowserMicrophoneTest() }
       ) {
         setMicrophoneLevel(level)
       }
-    }, latestSettingsRef.current?.microphoneId ?? undefined).catch(() => 'error' as const)
+    }, latestSettingsRef.current?.microphoneId ?? undefined, () => {
+      if (
+        !microphoneMountedRef.current ||
+        microphoneGenerationRef.current !== generation ||
+        microphoneRef.current !== controller
+      ) return
+      microphoneRef.current = null
+      setMicrophoneLevel(0)
+      commitMicrophoneState('missing')
+    }).catch(() => 'error' as const)
     if (
       !microphoneMountedRef.current ||
       microphoneGenerationRef.current !== generation ||

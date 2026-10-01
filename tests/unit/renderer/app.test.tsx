@@ -813,7 +813,33 @@ describe('Sotto application onboarding integration', () => {
     renderApp(createBridge({ getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, microphoneId: 'saved-headset' })) }), () => microphone)
     await userEvent.click(await screen.findByRole('button', { name: /continue/i }))
     await userEvent.click(screen.getByRole('button', { name: /test microphone/i }))
-    await waitFor(() => expect(microphone.start).toHaveBeenCalledWith(expect.any(Function), 'saved-headset'))
+    await waitFor(() => expect(microphone.start).toHaveBeenCalledWith(expect.any(Function), 'saved-headset', expect.any(Function)))
+  })
+
+  it('reports an ended onboarding input and ignores an older ended callback after retry', async () => {
+    const ended: Array<(outcome: 'missing') => void> = []
+    const start = vi.fn<MicrophoneTestController['start']>(async (onLevel, _id, onEnded) => {
+      ended.push(onEnded!)
+      onLevel(0.6)
+      return 'ready'
+    })
+    renderApp(createBridge(), () => ({ start, stop: vi.fn(async () => undefined) }))
+    await reachMicrophoneStep(userEvent.setup())
+    await userEvent.click(screen.getByRole('button', { name: 'Test microphone' }))
+    await screen.findByText(/Microphone ready/i)
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled()
+    act(() => ended[0]!('missing'))
+    expect(screen.getByText('No microphone was found.')).toBeVisible()
+    expect(screen.queryByRole('meter', { name: 'Microphone level' })).not.toBeInTheDocument()
+    expect(document.querySelector('.onboarding-microphone-test .voice-wave')).toHaveAttribute('data-stage', 'idle')
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled()
+    await userEvent.click(screen.getByRole('button', { name: 'Try microphone again' }))
+    await screen.findByText(/Microphone ready/i)
+    act(() => ended[0]!('missing'))
+    expect(screen.getByText(/Microphone ready/i)).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled()
+    act(() => ended[1]!('missing'))
+    expect(screen.getByText('No microphone was found.')).toBeVisible()
   })
 
   it('releases an active microphone test across StrictMode unmount cleanup', async () => {
