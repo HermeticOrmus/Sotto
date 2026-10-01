@@ -583,11 +583,17 @@ export class ThreadDraftStore {
     if (entry === undefined || !hasDraftContent(entry.draft)) return null
     this.flush(threadId)
     const draft = entry.draft
+    // Once its restored revision is sent, that exact submission owns the recovery copy too.
+    // Keep one retry ID while unresolved, then let delivery or queue ownership retire it.
+    const recovered = this.submissionList.find(item => item.recovered && item.threadId === threadId && item.restoredAs === draft.draftId)
     const submission: Submission = {
       threadId, draftId: draft.draftId, mode, text: draft.text.trim(), submittedAt, startedAt: new Date().toISOString(), resolved: false, error: null,
       attachments: draft.attachments.map(attachment => ({ ...attachment })), skills: [...draft.skills], files: [...draft.files],
+      ...(recovered ? { recovered: true } : {}),
     }
-    const submissions = [...this.submissionList.filter(item => key(item.threadId, item.draftId) !== key(threadId, draft.draftId)), submission]
+    const submissions = this.submissionList.filter(item => key(item.threadId, item.draftId) !== key(threadId, draft.draftId))
+      .map(item => item === recovered ? submission : item)
+    if (!recovered) submissions.push(submission)
     const recent = new Set(submissions.filter(item => !item.recovered).slice(-MAX_DELIVERED_DRAFTS))
     this.submissionList = submissions.filter(item => item.recovered || recent.has(item))
     this.revise(threadId, { text: '', attachments: [], skills: [], files: [], requestId: null })

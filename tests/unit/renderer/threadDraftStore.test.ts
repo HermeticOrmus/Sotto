@@ -34,6 +34,33 @@ beforeEach(() => { vi.useFakeTimers() })
 afterEach(() => { vi.useRealTimers() })
 
 describe('ThreadDraftStore revisions and saves', () => {
+  it.each(['receipt', 'delivery', 'queue'] as const)('retires recovered content when its restored revision has %s ownership', evidence => {
+    const store = new ThreadDraftStore(heldCommand().command, 250, uuids())
+    const images = Array.from({ length: 8 }, (_, index) => ({ id: `shot-${index}`, name: `shot-${index}.png`, mimeType: 'image/png' as const, sizeBytes: 8, digest: 'e'.repeat(64) }))
+    store.edit('source', { text: 'First prompt', attachments: images })
+    store.submit('source', 1)
+    store.edit('source', { text: 'Newer prompt', attachments: [{ ...images[0]!, id: 'newer' }] })
+    store.carryRefusedCreation('source', 'project')
+    store.restoreRefusedCreation('target', 'project')
+    const [first, overflow] = store.submissions()
+    const sent = store.submit('target', 2)!
+    store.receive(baseState())
+    expect(store.submissions().map(item => item.draftId)).toEqual([sent.draftId, overflow!.draftId])
+    expect(store.retry('target', first!.draftId, 3)).toBeNull()
+    store.resolve('target', sent.draftId, 'Nothing was sent.', true)
+    expect(store.submissions().find(item => item.draftId === sent.draftId)).toMatchObject({ text: 'First prompt', notSent: true })
+    const at = new Date().toISOString()
+    const receipt = { threadId: 'target', draftId: sent.draftId }
+    store.receive(baseState(evidence === 'receipt' ? { deliveredDrafts: [receipt] }
+      : evidence === 'queue' ? { followupReceipts: [receipt] }
+      : { deliveries: [{ ...receipt, status: 'accepted', createdAt: at, updatedAt: at }] }))
+    expect(store.submissions()).toHaveLength(1)
+    expect(store.submissions()[0]).toMatchObject({ draftId: overflow!.draftId, text: 'Newer prompt', notSent: true })
+    expect(store.retry('target', first!.draftId, 4)).toBeNull()
+    store.restore('target', overflow!.draftId)
+    expect(store.draft('target')).toMatchObject({ text: 'Newer prompt', attachments: [{ ...images[0]!, id: 'newer' }] })
+  })
+
   it.each(['count', 'bytes', 'text'] as const)('retains separate, valid recovery revisions when their combined %s exceeds a limit', reason => {
     const held = heldCommand()
     const store = new ThreadDraftStore(held.command, 250, uuids())
@@ -60,10 +87,10 @@ describe('ThreadDraftStore revisions and saves', () => {
     store.submit('target', 2)
     store.receive(baseState())
     expect(store.draft('target').text).toBe('')
-    expect(store.submissions().filter(item => item.threadId === 'target' && item.notSent)).toHaveLength(2)
+    expect(store.submissions().filter(item => item.threadId === 'target')).toHaveLength(2)
     store.restore('target', retained[1]!.draftId)
     expect(store.draft('target')).toMatchObject(second)
-    store.restore('target', retained[0]!.draftId)
+    store.restore('target', store.submissions().find(item => item.threadId === 'target' && item.text === first.text)!.draftId)
     expect(store.draft('target')).toMatchObject(first)
   })
 
