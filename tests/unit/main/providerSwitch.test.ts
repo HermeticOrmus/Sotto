@@ -223,7 +223,7 @@ describe('independent thread providers', () => {
     const project = initial.projects.find(project => project.providerId === 'codex')!
     const model = initial.models.find(model => model.providerId === 'claude')!
     const create = { type: 'create-thread' as const, commandId: 'first', threadId: 'new-thread', title: 'New task', projectId: project.id, modelId: model.id }
-    const write = vi.spyOn(AtomicJsonStore.prototype, 'write').mockRejectedValueOnce(new Error('EPERM'))
+    const write = vi.spyOn((f.host as unknown as { registrationStore: AtomicJsonStore<string[]> }).registrationStore, 'write').mockRejectedValueOnce(new Error('EPERM'))
     await expect(f.host.execute(create)).rejects.toThrow('EPERM')
     expect(f.adapters.claude.commands).toEqual([])
     write.mockRestore()
