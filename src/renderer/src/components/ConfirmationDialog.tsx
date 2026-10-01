@@ -19,7 +19,7 @@ export interface ConfirmationDialogProps {
   readonly fallbackFocusRef?: RefObject<HTMLElement | null>
   /** Host questions start at their field or key text; other confirmations focus their secondary action. */
   readonly initialFocus?: 'confirm' | RefObject<HTMLElement | null>
-  /** Reach the affirmative action first from an answer, preserving the buttons' visual layout. */
+  /** Put the affirmative action first in both the visual row and keyboard order. */
   readonly confirmFirst?: boolean
   /** Credential questions may submit their answer field with Enter. Other confirmations opt out. */
   readonly submitOnEnter?: boolean
@@ -104,7 +104,7 @@ export function ConfirmationDialog({
         {failed && failureMessage !== undefined
           ? <div className="tt-dialog__status tt-dialog__status--error" role="alert">{failureMessage}</div>
           : null}
-        <div className={`tt-dialog__actions${confirmFirst ? ' tt-dialog__actions--confirm-first' : ''}`}>
+        <div className="tt-dialog__actions">
           {confirmFirst && confirmButton}
           <Button ref={cancelRef} variant="secondary" disabled={submitting} onClick={onCancel}>
             {cancelLabel}

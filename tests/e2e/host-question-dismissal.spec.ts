@@ -65,7 +65,7 @@ test('Escape dismisses saved host questions and only Switch it off disables the 
       await page.keyboard.press('Tab')
       await expect(dialog.getByRole('button', { name: 'Switch it off' })).toBeFocused()
       const primaryBounds = await continueButton.boundingBox(), secondaryBounds = await dialog.getByRole('button', { name: 'Switch it off' }).boundingBox()
-      expect(secondaryBounds!.x + secondaryBounds!.width).toBeLessThan(primaryBounds!.x)
+      expect(primaryBounds!.x + primaryBounds!.width).toBeLessThan(secondaryBounds!.x)
       await page.keyboard.press('Tab')
       await expect(answer).toBeFocused()
       for (const [width, height] of [[1600, 1000], [1280, 800], [820, 560]] as const) {
@@ -86,6 +86,8 @@ test('Escape dismisses saved host questions and only Switch it off disables the 
             const box = element.getBoundingClientRect()
             return box.left >= 0 && box.right <= innerWidth && box.top >= 0 && box.bottom <= innerHeight && element.scrollWidth <= element.clientWidth
           })).toBe(true)
+          const primary = await continueButton.boundingBox(), secondary = await dialog.getByRole('button', { name: 'Switch it off' }).boundingBox()
+          expect(primary!.x + primary!.width).toBeLessThan(secondary!.x)
           await page.screenshot({ path: join(shots, `host-answer-${width}-${appearance}.png`), animations: 'disabled' })
           await row.getByRole('button', { name: 'Answer forge' }).click()
           await expect(dialog).toBeVisible()
@@ -140,6 +142,52 @@ test('Escape dismisses saved host questions and only Switch it off disables the 
     for (const status of await page.getByText('Waiting for your answer', { exact: true }).all()) await expect(status).toBeHidden()
     await expect(page.getByRole('button', { name: /^Answer (forge|spark)$/ })).toHaveCount(0)
     expect(await launched.app.evaluate(() => (globalThis as unknown as { hostQuestionCommands: HostsCommand[] }).hostQuestionCommands)).toEqual([])
+    // The setup question uses the same confirmation row with Not now as its secondary action.
+    for (const kind of ['passphrase', 'password', 'host-key'] as const) {
+      const state: HostsState = {
+        localHostEnabled: false, localHostRunning: false, localHostId: id, activeHostId: id, hosts: [],
+        setup: {
+          id, name: 'forge', target: 'forge', threadTitle: 'Set up forge', modelName: 'Synthetic model', phase: 'running', byAgent: [],
+          attempt: { id, name: 'forge', target: 'forge', identityFile: '', installPath: '/opt/sotto', dataDirectory: '/data', enabled: true,
+            phase: 'connecting', purpose: 'check', prompt: { id: `setup-${kind}-question`, kind, text: 'Synthetic SSH question' } },
+        },
+      }
+      await launched.app.evaluate(({ BrowserWindow }, { channel, state }) => {
+        BrowserWindow.getAllWindows().find(item => item.webContents.getURL().endsWith('/index.html'))!.webContents.send(channel, state)
+      }, { channel: HOSTS_CHANGED, state })
+      const dialog = page.getByRole('dialog')
+      const answer = kind === 'host-key' ? dialog.getByRole('region', { name: 'SSH host key' }) : dialog.getByLabel(kind === 'password' ? 'SSH password' : 'Key passphrase')
+      const primary = dialog.getByRole('button', { name: kind === 'host-key' ? 'Trust host' : 'Continue', exact: true })
+      const secondary = dialog.getByRole('button', { name: 'Not now', exact: true })
+      await expect(answer).toBeFocused()
+      if (kind === 'host-key') {
+        await page.keyboard.press('Enter')
+        expect(await launched.app.evaluate(() => (globalThis as unknown as { hostQuestionCommands: HostsCommand[] }).hostQuestionCommands)).toEqual([])
+      }
+      for (const [width, height] of [[1600, 1000], [1280, 800], [820, 560]] as const) {
+        await resizeWindow(launched, width, height)
+        for (const appearance of ['dark', 'light'] as const) {
+          await page.evaluate(async appearance => window.sotto!.updateSettings({ appearance }), appearance)
+          await expect(page.locator('html')).toHaveAttribute('data-theme', appearance)
+          await page.keyboard.press('Tab')
+          await expect(primary).toBeFocused()
+          await page.keyboard.press('Tab')
+          await expect(secondary).toBeFocused()
+          await page.keyboard.press('Tab')
+          await expect(answer).toBeFocused()
+          const primaryBounds = await primary.boundingBox(), secondaryBounds = await secondary.boundingBox()
+          expect(primaryBounds!.x + primaryBounds!.width).toBeLessThan(secondaryBounds!.x)
+          expect(await dialog.evaluate(element => {
+            const box = element.getBoundingClientRect()
+            return box.left >= 0 && box.right <= innerWidth && box.top >= 0 && box.bottom <= innerHeight && element.scrollWidth <= element.clientWidth
+          })).toBe(true)
+          await page.screenshot({ path: join(shots, `host-setup-${kind}-${width}-${appearance}.png`), animations: 'disabled' })
+        }
+      }
+      await page.keyboard.press('Escape')
+      await expect(dialog).toHaveCount(0)
+      expect(await launched.app.evaluate(() => (globalThis as unknown as { hostQuestionCommands: HostsCommand[] }).hostQuestionCommands)).toEqual([])
+    }
   } finally {
     await closeSotto(launched)
     await rm(requireOwnedE2EProfile(profile), { recursive: true, force: true })
