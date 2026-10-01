@@ -198,31 +198,37 @@ function createBufferedSubscription<Output>(
   capacity: number,
 ): (listener: (payload: Output) => void) => () => void {
   const buffered: Output[] = []
-  let listener: ((payload: Output) => void) | null = null
+  const listeners = new Set<(payload: Output) => void>()
   renderer.on(channel, (_event, ...args) => {
     if (args.length !== 1) return
     const result = schema.safeParse(args[0])
     if (!result.success) return
-    if (listener !== null) {
-      listener(result.data)
+    if (listeners.size > 0) {
+      for (const listener of [...listeners]) {
+        if (listeners.has(listener)) listener(result.data)
+      }
     } else {
       buffered.push(result.data)
       if (buffered.length > capacity) buffered.splice(0, buffered.length - capacity)
     }
   })
   return (nextListener) => {
-    listener = nextListener
+    // Each registration owns its unsubscribe, even when callers use the same callback.
+    const listener = (payload: Output): void => {
+      try { nextListener(payload) }
+      catch { /* A subscriber cannot stop delivery to others. Never log state or exception bodies. */ }
+    }
+    listeners.add(listener)
     const replay = buffered.splice(0)
     for (const payload of replay) {
-      if (listener !== nextListener) break
-      nextListener(payload)
+      if (!listeners.has(listener)) break
+      listener(payload)
     }
     let subscribed = true
     return () => {
       if (!subscribed) return
       subscribed = false
-      if (listener === nextListener) listener = null
-      buffered.splice(0)
+      listeners.delete(listener)
     }
   }
 }
