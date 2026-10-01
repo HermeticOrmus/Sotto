@@ -6,7 +6,7 @@ import type { HostService, ClientIdentity } from '../main/agents/hostService'
 import { PairedClients, originAllowed, SESSION_LIFETIME_MS } from '../main/agents/pairing'
 import { coalesceAgentStatePublishes, coalesceAgentThreadDetailPublishes } from '../main/agents/control'
 import { RefusedImage } from '../main/agents/attachmentStore'
-import { clientUpdateForOlderClient, HOST_BUSY, HOST_EVENT_PAGE_SIZE, HOST_FEATURES, HOST_MAX_FRAME_BYTES, HOST_SESSION_REJECTED, hostRequestEnvelopeSchema, hostRequestSchema, type HostDescriptor, type HostErrorCode, type HostPush, type HostReceipt, type HostRequest, type HostResponse } from '../shared/hostProtocol'
+import { shellForProtocolV1, clientUpdateForOlderClient, HOST_BUSY, HOST_EVENT_PAGE_SIZE, HOST_FEATURES, HOST_MAX_FRAME_BYTES, HOST_SESSION_REJECTED, hostRequestEnvelopeSchema, hostRequestSchema, type HostDescriptor, type HostErrorCode, type HostPush, type HostReceipt, type HostRequest, type HostResponse } from '../shared/hostProtocol'
 import type { AgentCommand, AgentThreadDetail } from '../shared/agents'
 import { isAgentThreadDetailDelta } from '../shared/agentThreadDetail'
 import { resolveModel } from '../shared/modelCatalog'
@@ -136,8 +136,8 @@ export async function startSocketServer(options: SocketServerOptions) {
   const identity = (clientId: string): ClientIdentity => ({ clientId, user: pairing.list().find(client => client.clientId === clientId)?.name ?? 'Paired client', transport: 'socket' })
   const shell = (peer: Peer) => {
     const state = service.shell()
-    const own = { ...state, activeThreadId: peer.selectedThreadId, activeProjectId: peer.selectedProjectId,
-      clientCapabilities: { mayAnswer: options.mayAnswer?.(peer.client) ?? false } }
+    const own = shellForProtocolV1({ ...state, activeThreadId: peer.selectedThreadId, activeProjectId: peer.selectedProjectId,
+      clientCapabilities: { mayAnswer: options.mayAnswer?.(peer.client) ?? false } })
     // A client from before #480 reads the client updates' channel and state against the values it knows, and one it
     // does not know would make it refuse the whole shell: it is sent them as it knew them.
     return peer.clientUpdates || !state.clientUpdates ? own : { ...own, clientUpdates: state.clientUpdates.map(clientUpdateForOlderClient) }

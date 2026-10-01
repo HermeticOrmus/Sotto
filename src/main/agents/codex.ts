@@ -1364,11 +1364,16 @@ export class CodexAppServerHost implements AgentHost {
         this.fileSummaries.get(z.object({ itemId: z.string().optional() }).parse(frame.params).itemId ?? '')) : undefined
       if (!parsed) {
         try { server.write({ id: frame.id, error: { code: -32601, message: 'Sotto does not handle this request.' } }) } catch { /* A closed process asks nothing more. */ }
-        // Codex treats the refusal as the answer, so a renamed or reshaped approval would otherwise read
-        // as the user declining. Requests Sotto never answers, and foreign threads, stay quiet.
-        if (id && needsPerson(frame.method) && this.state.error !== unreadableRequest('Codex')) {
-          this.state.error = unreadableRequest('Codex')
-          this.emit()
+        // A session's app-server can ask for a child whose ID Sotto cannot resolve. Its ownership
+        // establishes where the refusal came from, without assuming the child's request payload.
+        const owner = id ?? [...this.runtimes].find(([, runtime]) => runtime.server === server)?.[0]
+        if (owner && needsPerson(frame.method)) {
+          const notice = id ? unreadableRequest('Codex')
+            : 'Codex asked for an approval Sotto could not show. The request was refused. Nothing was approved. Answer it in Codex, and check for a Sotto or Codex update.'
+          const thread = this.ensureThread(owner)
+          if (this.state.error !== notice || thread.requestNotice !== notice) {
+            thread.requestNotice = notice; this.state.error = notice; this.emit()
+          }
         }
         return
       }

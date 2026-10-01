@@ -38,8 +38,6 @@ async function startControl(root: string, host: SottoThreadHost): Promise<AgentC
   const control = new AgentControl({ schedule: immediatePublishScheduler, directory: root, host, credentials,
     reasoner: { intent: async () => ({ type: 'clarify', text: 'Choose a thread.' }),
       decide: async () => ({ decision: 'human', text: 'Review this.' }) },
-    membership: { status: async () => ({ status: 'beta', label: 'Fixture beta', expiresAt: null }),
-      action: async () => ({ status: 'beta', label: 'Fixture beta', expiresAt: null }) },
   })
   controls.push(control)
   await control.start()

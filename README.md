@@ -24,6 +24,8 @@ Saved Codex conversations keep both sides after a restart. Opening a thread also
 
 - **One sidebar for every agent.** Each provider keeps its own sign-in and models. Sotto keeps the threads. Stop still reaches running work when its last prompt is unconfirmed.
 - **You answer every request.** Anything a thread's permissions don't already allow waits for you. A desktop connected through your SSH account can answer requests and change thread permissions as soon as setup finishes. A phone or another device paired by code needs your separate permission to do those things.
+
+If Codex asks for an approval Sotto cannot show, Sotto refuses it and tells you. This includes an unknown child thread on a thread's own Codex process. Nothing is approved; answer in Codex meanwhile.
 - **Tools beside each thread.** A browser, a terminal, the thread's files and its changes. Terminal input stays in order; if input is refused, Sotto says so before you try again.
 - **Codex's Computer Use.** In a Codex thread set to Full access, with the Codex app open, Codex can operate the apps on your computer.
 - **Git in one press.** Commit, push and open a pull request. Leave the message empty and the agent writes it. Selected files keep staged hunks; files left out keep their staging.

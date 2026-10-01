@@ -49,10 +49,6 @@ async function fixture(authority?: Authority) {
     schedule: immediatePublishScheduler, directory: root, host, credentials,
     reasoner, logFailure,
     ...(authority === undefined ? {} : { authority }),
-    membership: {
-      status: async () => ({ status: 'beta', label: 'Fixture beta', expiresAt: null }),
-      action: async () => ({ status: 'beta', label: 'Fixture beta', expiresAt: null }),
-    },
   })
   controls.push(control)
   await control.start()

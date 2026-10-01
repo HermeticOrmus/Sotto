@@ -13,7 +13,6 @@ import { SottoThreadHost, ThreadRegistry } from './threads'
 import { WorkspaceHost } from './workspace'
 import { AgentControl } from './control'
 import { TurnRecorder } from './turns'
-import { AgentMembershipClient } from './membership'
 import { ConfiguredAgentReasoner } from './reasoning'
 import { ClaudeSubscriptionClient } from './subscriptionClaude'
 import { CodexSubscriptionClient } from './subscriptionCodex'
@@ -123,16 +122,13 @@ export async function createAgentRuntime(options: AgentRuntimeOptions) {
   const turns = new TurnRecorder({ directory, historyEnabled: options.historyEnabled,
     resolveSession: id => { const binding = threadRegistry?.byThread(id); return binding ? { provider: binding.provider, sessionId: binding.sessionId } : undefined },
   })
-  const membership = new AgentMembershipClient({ configuration: () => agentControl.configuration(),
-    credentials, directory, openExternal: options.openExternal,
-  })
   const reasoner = options.reasoner ?? new ConfiguredAgentReasoner(() => agentControl.configuration(), credentials, {
       claude: new ClaudeSubscriptionClient(join(directory, 'reasoning', 'claude')),
       codex: new CodexSubscriptionClient(join(directory, 'reasoning', 'codex')),
       grok: new GrokSubscriptionClient(join(directory, 'reasoning', 'grok')),
     })
   const agentControl: AgentControl = new AgentControl({
-    directory, host: agentHost, credentials, membership, turns,
+    directory, host: agentHost, credentials, turns,
     historyEnabled: options.historyEnabled, coordinatorEnabled: options.coordinatorEnabled,
     ...(options.observeActiveThread === undefined ? {} : { observeActiveThread: options.observeActiveThread }),
     ...(options.authority ? { authority: options.authority } : {}),
@@ -182,5 +178,5 @@ export async function createAgentRuntime(options: AgentRuntimeOptions) {
     throw error
   }
   const hostService = new LocalHostService({ control: agentControl, events: agentHost })
-  return { agentHost, agentControl, threadRegistry, turns, membership, hostService, shortTextWriter, worktreeCleanup, close }
+  return { agentHost, agentControl, threadRegistry, turns, hostService, shortTextWriter, worktreeCleanup, close }
 }
