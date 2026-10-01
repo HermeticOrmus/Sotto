@@ -182,7 +182,8 @@ describe('authority at dispatch', () => {
   it.each([false, true])('retains an ordinary selected draft binding when answer permission is %s', async allowed => {
     const client: ClientIdentity = { clientId: 'fixture-client', user: 'Fixture client', transport: 'socket', selectedThreadId: 'workshop' }
     const f = await fixture({ authorizes: () => ({ allowed: false, reason: 'no-policy' }),
-      mayGrant: identity => ({ allowed: identity.transport === 'ipc' || allowed, reason: 'fixture' }) })
+      mayGrant: identity => identity.transport === 'ipc' ? { allowed: true, reason: 'local-window' }
+        : { allowed, reason: allowed ? 'paired-client' : 'no-policy' } })
     await f.control.commandShell({ type: 'compose', text: 'Ordinary prompt' }, client)
     f.host.event({ type: 'question', threadId: 'workshop', requestId: 'choice', text: 'Which color?' })
     await vi.waitFor(() => expect(f.control.get().queue.some(item => item.requestId === 'choice')).toBe(true))
