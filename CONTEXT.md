@@ -320,6 +320,8 @@ Answering a question or permission request and creating a project are also part 
 
 **Segment.** One slice of a dictation, cut at a pause while streaming transcription is on, transcribed as its own request so the final text is ready almost as soon as the user stops. Avoid: "chunk".
 
+Pressing Stop or the dictation shortcut again while the microphone is connecting cancels the session as soon as the microphone is ready. No audio is kept or transcribed.
+
 ## Memory
 
 **Memory.** One remembered fact about the user, a project or the world, with the metadata the spec requires: type, scope, content, source class (explicit, observed, inferred, imported, agent-confirmed), confidence, evidence count, importance, temporal fields (created, last confirmed, last used, valid from, valid to), provenance, tags, state (active, superseded, disputed, temporary, archived) and authority (preference, policy, permission). Avoid: "fact", "note", "record".
