@@ -1,3 +1,4 @@
+import { stderrRateExceeded } from './stderrRate'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { AGENT_MAX_ATTACHMENT_BYTES } from '../../shared/agents'
@@ -38,7 +39,7 @@ export class ClaudeProtocol {
     })
     // The unfinished line is kept as fragments with a running byte count, so a large frame arriving in
     // many chunks costs one pass over each chunk and one join, not a rescan of everything so far.
-    let fragments: string[] = []; let pendingBytes = 0; let stderrBytes = 0
+    let fragments: string[] = []; let pendingBytes = 0
     this.child.stdout.setEncoding('utf8')
     this.child.stdout.on('data', (chunk: string) => {
       pendingBytes += Buffer.byteLength(chunk)
@@ -72,7 +73,8 @@ export class ClaudeProtocol {
         else { const rest = chunk.slice(start); fragments = rest ? [rest] : []; pendingBytes = Buffer.byteLength(rest) }
       }
     })
-    this.child.stderr.on('data', (chunk: Buffer) => { stderrBytes += chunk.length; if (stderrBytes > 1024 * 1024) this.abort() })
+    const stderrExceeded = stderrRateExceeded()
+    this.child.stderr.on('data', (chunk: Buffer) => { if (stderrExceeded(chunk.length)) this.abort() })
     this.child.on('error', () => this.abort()); this.child.stdin.on('error', () => this.abort()); this.child.stdin.on('close', () => this.fail())
   }
   control(request: ClaudeFrame): Promise<ClaudeFrame> {
