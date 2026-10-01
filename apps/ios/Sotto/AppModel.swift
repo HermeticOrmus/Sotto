@@ -65,7 +65,9 @@ struct Live {
     private let finder = HostConnection()
     private var connections: [String: HostConnection] = [:]
     private var generations: [String: UUID] = [:]
-    private var connecting: Set<String> = []
+    private var connecting: Set<String> = [] { didSet { releaseConnectWaiters() } }
+    /// Requests to connect a computer that was already connecting, each waiting for that attempt to end.
+    private var connectWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
     private var active = false
     private var retries: [String: Task<Void, Never>] = [:]
     private var retryAttempts: [String: Int] = [:]
@@ -310,11 +312,17 @@ struct Live {
         for item in awaited { await item.task.value }
     }
     /// A fresh session, shell and open-thread detail from one computer. Only that computer's state changes.
+    /// While the computer is already connecting, this waits for that attempt, delivery check included,
+    /// rather than starting another, so a refresh or reconnect never returns before the computer is ready.
     func connect(_ hostID: String) async {
         #if DEBUG && os(iOS)
         if isUIFixture { return }
         #endif
-        guard storageReady, active, !connecting.contains(hostID), let saved = computer(hostID) else { return }
+        guard storageReady, active, let saved = computer(hostID) else { return }
+        if connecting.contains(hostID) {
+            await withCheckedContinuation { connectWaiters[hostID, default: []].append($0) }
+            return
+        }
         retries.removeValue(forKey: hostID)?.cancel()
         let current = UUID(); generations[hostID] = current; connecting.insert(hostID)
         shellSequences[hostID] = 0
@@ -364,6 +372,13 @@ struct Live {
             guard !Task.isCancelled, let self, self.active, self.computer(hostID) != nil else { return }
             self.retries[hostID] = nil
             await self.connect(hostID)
+        }
+    }
+    /// An attempt ends when its computer leaves `connecting`: it finished, or a disconnect, removal or
+    /// the app going to the background ended it early.
+    private func releaseConnectWaiters() {
+        for hostID in Array(connectWaiters.keys) where !connecting.contains(hostID) {
+            connectWaiters.removeValue(forKey: hostID)?.forEach { $0.resume() }
         }
     }
     private func connection(_ hostID: String) -> HostConnection {

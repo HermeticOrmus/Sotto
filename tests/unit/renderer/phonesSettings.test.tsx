@@ -153,3 +153,29 @@ it('saves the name phones show on Enter, and Escape puts the saved one back', as
   await user.type(field, 'Den{Enter}')
   expect(update).toHaveBeenCalledWith({ phoneAccessName: 'Den' })
 })
+
+it('shows unfinished cleanup and offers a retry while the setting is off', async () => {
+  const { command } = show({ ...OFF, phase: 'cleanup-failed', serve: { status: 'failed', reason: 'cleanup' } })
+  expect(await screen.findByText(/Phones can’t connect/)).toBeTruthy()
+  await userEvent.setup().click(screen.getByRole('button', { name: 'Try again' }))
+  expect(command).toHaveBeenCalledWith({ type: 'retry' })
+})
+
+
+it('explains when phone access settings could not be saved', async () => {
+  show({ ...OFF, enabled: true, phase: 'failed', serve: { status: 'failed', reason: 'record' } })
+  expect(await screen.findByText(/Phone access wasn’t started/)).toBeTruthy()
+})
+
+
+it('explains cleanup when the saved record could not be read', async () => {
+  show({ ...OFF, phase: 'cleanup-failed', serve: { status: 'failed', reason: 'cleanup-record' } })
+  expect(await screen.findByText(/couldn’t read its saved cleanup record/)).toBeVisible()
+  expect(screen.getByText(/Remove the setting on port 8443 in Tailscale, then press Try again/)).toBeVisible()
+})
+
+
+it('keeps pairing unavailable as soon as the setting turns off', async () => {
+  show({ ...READY, enabled: false })
+  expect(await screen.findByRole('button', { name: 'Show a pairing code' })).toBeDisabled()
+})

@@ -28,7 +28,12 @@ export const fileWorkspaceSchema = z.object({
   threadId: z.string(), projectId: z.string(), workingDirectory: z.string(), workspaceId: workspaceIdSchema,
 }).strict()
 export type FileWorkspace = z.infer<typeof fileWorkspaceSchema>
-const fileEntrySchema = z.object({ name: z.string(), path: fileRelativePathSchema, kind: z.enum(['directory', 'file', 'unavailable']) }).strict()
+// Unavailable entries retain their observed name/path for display only. Requests
+// still require a canonical path before any filesystem operation.
+const fileEntrySchema = z.discriminatedUnion('kind', [
+  z.object({ name: z.string(), path: fileRelativePathSchema, kind: z.enum(['directory', 'file']) }).strict(),
+  z.object({ name: z.string(), path: z.string().max(4096), kind: z.literal('unavailable') }).strict(),
+])
 export const fileListingSchema = z.object({ workspace: fileWorkspaceSchema, path: fileRelativePathSchema,
   entries: z.array(fileEntrySchema).max(FILES_MAX_ENTRIES), truncated: z.boolean() }).strict()
 export type FileListing = z.infer<typeof fileListingSchema>
