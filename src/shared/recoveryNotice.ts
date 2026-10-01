@@ -16,7 +16,7 @@ export type RecoveryNotice = z.infer<typeof recoveryNoticeSchema>
 
 export const recoveryNoticesSchema = z
   .array(recoveryNoticeSchema)
-  .max(4)
+  .max(recoveryNoticeSchema.shape.code.options.length)
   .transform((notices) =>
     Object.freeze(notices.map((notice) => Object.freeze(notice))),
   )
