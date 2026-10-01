@@ -507,7 +507,7 @@ describe('composition navigation and explicit spoken controls', () => {
     expect(next.activeThreadId).toBe('workshop')
   })
 
-  it.each(['con.txt', 'NUL.log', 'aux.archive.tar', 'COM1.txt', 'lpt9.log'])('refuses the Windows device folder name %s before creating it', async title => {
+  it.each(['con.txt', 'NUL.log', 'aux.archive.tar', 'COM1.txt', 'lpt9.log', 'LPT¹', 'com³.txt', 'nul .txt', 'CON  .log'])('refuses the Windows device folder name %s before creating it', async title => {
     const f = await fixture()
     const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
     Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
