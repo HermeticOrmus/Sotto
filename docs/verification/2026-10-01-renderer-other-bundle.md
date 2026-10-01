@@ -78,3 +78,11 @@ The two existing retained feedback captures were refreshed from this run.
 
 - [Questionnaire progress](../../artifacts/renderer-save-feedback/questionnaire-readable-progress.png)
 - [Pairing code, 820x560 dark](../../artifacts/renderer-save-feedback/pairing-code-820-dark.png)
+
+The final rework run passed all four required local gates.
+`npm test -- --maxWorkers=2` completed with 507 passed and 39 skipped files:
+6,901 tests passed and 154 skipped in 21.2 minutes. Typecheck and lint passed
+again after the Electron assertion edits; notices verified 174 components.
+The built Electron run passed all seven tests in 5.6 minutes, including both
+Tools rail and Changes-scope journeys that failed on earlier revisions.
+The independent Standards and Spec reviews have no remaining findings.
