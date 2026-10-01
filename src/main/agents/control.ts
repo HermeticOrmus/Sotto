@@ -2095,7 +2095,7 @@ export class AgentControl {
         if (!(targetProvider?.capabilities ?? this.state.host.capabilities).projects) throw new Error('This provider does not support creating projects.')
         // The name is a folder's on this host, so this host's own rules decide it: Windows refuses more than Linux or macOS.
         const unusableName = process.platform === 'win32'
-          ? /[<>:"/\\|?*]/u.test(command.title) || /[. ]$/u.test(command.title) || /^(\.|\.\.|con|prn|aux|nul|com\d|lpt\d)$/iu.test(command.title)
+          ? /[<>:"/\\|?*]/u.test(command.title) || /[. ]$/u.test(command.title) || /^(\.|\.\.|con|prn|aux|nul|com\d|lpt\d)$/iu.test(command.title.split('.')[0]!)
           : command.title.includes('/') || /^\.\.?$/u.test(command.title)
         if (unusableName) throw new Error('Choose a project name that can be used as a folder name.')
         const target = command.path || (this.state.configuration.projectsDirectory ? join(this.state.configuration.projectsDirectory, command.title) : '')
