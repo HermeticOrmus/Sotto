@@ -425,6 +425,7 @@ export async function startSocketServer(options: SocketServerOptions) {
   })
   server.headersTimeout = 5000; server.requestTimeout = 10000; server.keepAliveTimeout = 1000
   server.on('upgrade', (request, stream: Duplex, head) => {
+    stream.on('error', () => stream.destroy())
     const reject = (): void => { stream.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n') }
     const session = bearer(request), clientId = pairing.verifySession(session)
     const key = request.headers['sec-websocket-key']
@@ -439,6 +440,7 @@ export async function startSocketServer(options: SocketServerOptions) {
     options.onPeersChanged?.()
   })
   await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(options.port ?? 0, '127.0.0.1', () => { server.removeListener('error', reject); resolve() }) })
+  server.on('error', () => { console.error('host_listener_error') })
   const address = server.address()
   if (!address || typeof address === 'string') throw new Error('The host listener did not receive a loopback port.')
   // The descriptor is also the body of /v1/health: a client reads the host's Sotto version and features
