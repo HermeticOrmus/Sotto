@@ -1360,8 +1360,9 @@ export class CodexAppServerHost implements AgentHost {
     if (frame.method && frame.id !== undefined) {
       const params = z.object({ threadId: z.string() }).safeParse(frame.params)
       const id = params.success ? this.sessionId(params.data.threadId) : undefined
+      const item = z.object({ itemId: z.string().optional() }).safeParse(frame.params)
       const parsed = id ? pendingRequest(frame.id, frame.method, frame.params, id,
-        this.fileSummaries.get(z.object({ itemId: z.string().optional() }).parse(frame.params).itemId ?? '')) : undefined
+        this.fileSummaries.get(item.success ? item.data.itemId ?? '' : '')) : undefined
       if (!parsed) {
         try { server.write({ id: frame.id, error: { code: -32601, message: 'Sotto does not handle this request.' } }) } catch { /* A closed process asks nothing more. */ }
         // A session's app-server can ask for a child whose ID Sotto cannot resolve. Its ownership

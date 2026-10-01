@@ -7,8 +7,11 @@ import { WorkspaceHost } from '../../src/main/agents/workspace'
 import { ThreadStore } from '../../src/main/agents/threadStore'
 import { SubagentStore } from '../../src/main/agents/subagentStore'
 import type { ThreadHostEvent } from '../../src/main/agents/host'
-import type { ThreadEvent } from '../../src/shared/threadEvents'
+import { threadEventSchema, type ThreadEvent } from '../../src/shared/threadEvents'
 import { FakeProviderHost } from '../fixtures/fakeProviderHost'
+
+vi.mock('electron', () => ({ contextBridge: { exposeInMainWorld: vi.fn() }, ipcRenderer: { invoke: vi.fn(), on: vi.fn(), removeListener: vi.fn() } }))
+import { createSottoBridge } from '../../src/preload'
 
 class EventProvider extends FakeProviderHost {
   private readonly events = new Set<(event: ThreadHostEvent) => void>()
@@ -212,4 +215,50 @@ it('discards private pending events if retention resumes after an interrupted pr
   disk.open()
   try { expect(disk.readMessages('session-workshop').messages).toMatchObject([{ id: 'new', text: 'New retained reply' }]) }
   finally { disk.close() }
+})
+
+
+it('saves oversized additions, appends and replacements in full across replay', async () => {
+  const { directory, adapter, host } = await fixture()
+  const bridge = createSottoBridge({ invoke: vi.fn(async () => ({ threadId: 'session-workshop', revision: 1, messages: host.threadMessages('session-workshop') })), on: vi.fn(), removeListener: vi.fn() }, 'win32')
+  const first = 'a'.repeat(99_999) + '🙂' + 'a'.repeat(100_001)
+  expect(threadEventSchema.safeParse(added('reply', first)).success).toBe(false)
+  adapter.publish(added('reply', first))
+  expect(host.threadMessages('session-workshop')[0]?.text).toBe(first)
+  expect((await bridge.agents!.threadDetail!('session-workshop'))?.messages[0]?.text).toBe(first)
+  const suffix = 'b'.repeat(100_001)
+  adapter.publish(appended(suffix))
+  expect(host.threadMessages('session-workshop')[0]?.text).toBe(first + suffix)
+  const replacement = 'c'.repeat(300_001)
+  adapter.publish({ kind: 'message-replaced', at, message: { id: 'reply', role: 'assistant', text: replacement, createdAt: at } })
+  expect(host.threadMessages('session-workshop')[0]?.text).toBe(replacement)
+  expect((await bridge.agents!.threadDetail!('session-workshop'))?.messages[0]?.text).toBe(replacement)
+  const events = host.eventsAfter(0)
+  expect(events.every(({ event }) => event.kind !== 'message-text-appended' || event.appendText.length <= 100_000)).toBe(true)
+  await host.close()
+  const reopened = new WorkspaceHost(new EventProvider(), directory)
+  cleanup.push(() => reopened.close())
+  await reopened.initialize()
+  reopened.observeThreads(['session-workshop'])
+  const replay = new ThreadStore(join(directory, 'threads.sqlite'))
+  replay.open()
+  replay.rebuild()
+  expect(replay.readMessages('session-workshop').messages[0]?.text).toBe(replacement)
+  replay.close()
+  expect(reopened.threadMessages('session-workshop')[0]?.text).toBe(replacement)
+  expect(reopened.eventsAfter(0)).toEqual(events)
+})
+
+it('sets aside an invalid event while saving the rest of its batch in order', async () => {
+  const { adapter, host } = await fixture()
+  const log = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+  adapter.publish(added())
+  adapter.publish({ kind: 'message-text-appended', at: '', messageId: 'reply', appendText: 'invalid private words' })
+  adapter.publish(appended())
+  expect(host.threadMessages('session-workshop')[0]?.text).toBe('First chunk continued')
+  expect(host.eventsAfter(0).map(row => row.event.kind)).toEqual(['message-added', 'message-text-appended'])
+  expect(host.workspaceSnapshot().threads.find(thread => thread.id === 'session-workshop')?.historySaveNotice).toContain('Part of this thread’s history could not be saved')
+  expect(host.workspaceSnapshot().error).toBeUndefined()
+  expect(log).toHaveBeenCalledExactlyOnceWith('thread-history-event-invalid')
+  await expect(host.close()).resolves.toBeUndefined()
 })
