@@ -16,7 +16,7 @@ async function lock() {
   for (let attempt = 0; attempt < 2; attempt++) {
     try { const handle = await fs.open(lockPath, 'wx'); await handle.writeFile(JSON.stringify({ pid: process.pid, nonce: String(Math.random()) })); await handle.close(); return true }
     catch (error) { if (error.code !== 'EEXIST') throw error }
-    try { if (alive(JSON.parse(await fs.readFile(lockPath, 'utf8')).pid)) return false } catch { return false }
+    try { const lease = JSON.parse(await fs.readFile(lockPath, 'utf8')); if (!(lease.boot && process.env.FAKE_HOST_BOOT && lease.boot !== process.env.FAKE_HOST_BOOT) && alive(lease.pid)) return false } catch { return false }
     await fs.rm(lockPath, { force: true })
   }
   return false
