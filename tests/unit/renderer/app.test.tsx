@@ -24,6 +24,34 @@ import { agentWireBridge } from '../../fixtures/agentBridge'
 
 const OK = Object.freeze({ ok: true as const })
 
+it.each(['unmount', 'blur'] as const)('shows dictionary save failures after Settings closes (%s)', async trigger => {
+  const pending = deferred<AppSettings>()
+  const bridge = createBridge({
+    getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, onboardingComplete: true })),
+    updateSettings: vi.fn(() => pending.promise),
+  })
+  render(<AppProvider bridge={bridge}><NavigationProbe /><App /></AppProvider>)
+  await openPage('settings')
+  await userEvent.click(screen.getByRole('tab', { name: 'Cleanup' }))
+  const dictionary = screen.getByRole('textbox', { name: 'Personal dictionary' })
+  await userEvent.type(dictionary, 'Sotto')
+  if (trigger === 'blur') await userEvent.tab()
+  act(() => shell.navigate('history'))
+  await act(async () => { pending.reject(new Error('Synthetic save failure')) })
+  expect(await screen.findByText('Your dictionary edits were not saved. Open Settings, choose Cleanup and enter them again.')).toBeVisible()
+  expect(screen.getByText('Your dictionary edits were not saved. Open Settings, choose Cleanup and enter them again.')).toHaveAttribute('role', 'alert')
+  if (trigger === 'blur') {
+    await userEvent.click(screen.getByRole('button', { name: 'Dismiss dictionary save notice' }))
+  } else {
+    vi.mocked(bridge.updateSettings).mockResolvedValueOnce({ ...DEFAULT_SETTINGS, onboardingComplete: true, llmDictionary: 'Recovered dictionary' })
+    act(() => shell.navigate('settings'))
+    await userEvent.click(screen.getByRole('tab', { name: 'Cleanup' }))
+    await userEvent.type(screen.getByRole('textbox', { name: 'Personal dictionary' }), 'Recovered dictionary')
+    await userEvent.tab()
+  }
+  await waitFor(() => expect(screen.queryByText('Your dictionary edits were not saved. Open Settings, choose Cleanup and enter them again.')).not.toBeInTheDocument())
+})
+
 it('retains failed dictation across navigation and later dictation, and copies without retranscription or paste', async () => {
   let recordings = 0
   const transcribe = vi.fn(async () => ({ text: `Completed words ${++recordings}`, language: 'en' }))
@@ -119,6 +147,7 @@ function createBridge(overrides: Partial<SottoBridge> = {}): SottoBridge {
     toggleMaximizeApp: vi.fn(async () => undefined),
     getWindowMaximized: vi.fn(async () => false),
     onWindowMaximized: vi.fn(() => () => undefined),
+    onWindowHidden: vi.fn(() => () => undefined),
     quitApp: vi.fn(async () => undefined),
     ...overrides,
   }
@@ -786,7 +815,33 @@ describe('Sotto application onboarding integration', () => {
     renderApp(createBridge({ getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, microphoneId: 'saved-headset' })) }), () => microphone)
     await userEvent.click(await screen.findByRole('button', { name: /continue/i }))
     await userEvent.click(screen.getByRole('button', { name: /test microphone/i }))
-    await waitFor(() => expect(microphone.start).toHaveBeenCalledWith(expect.any(Function), 'saved-headset'))
+    await waitFor(() => expect(microphone.start).toHaveBeenCalledWith(expect.any(Function), 'saved-headset', expect.any(Function)))
+  })
+
+  it('reports an ended onboarding input and ignores an older ended callback after retry', async () => {
+    const ended: Array<(outcome: 'missing') => void> = []
+    const start = vi.fn<MicrophoneTestController['start']>(async (onLevel, _id, onEnded) => {
+      ended.push(onEnded!)
+      onLevel(0.6)
+      return 'ready'
+    })
+    renderApp(createBridge(), () => ({ start, stop: vi.fn(async () => undefined) }))
+    await reachMicrophoneStep(userEvent.setup())
+    await userEvent.click(screen.getByRole('button', { name: 'Test microphone' }))
+    await screen.findByText(/Microphone ready/i)
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled()
+    act(() => ended[0]!('missing'))
+    expect(screen.getByText('No microphone was found.')).toBeVisible()
+    expect(screen.queryByRole('meter', { name: 'Microphone level' })).not.toBeInTheDocument()
+    expect(document.querySelector('.onboarding-microphone-test .voice-wave')).toHaveAttribute('data-stage', 'idle')
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled()
+    await userEvent.click(screen.getByRole('button', { name: 'Try microphone again' }))
+    await screen.findByText(/Microphone ready/i)
+    act(() => ended[0]!('missing'))
+    expect(screen.getByText(/Microphone ready/i)).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeEnabled()
+    act(() => ended[1]!('missing'))
+    expect(screen.getByText('No microphone was found.')).toBeVisible()
   })
 
   it('releases an active microphone test across StrictMode unmount cleanup', async () => {
