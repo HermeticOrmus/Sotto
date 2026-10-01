@@ -2021,6 +2021,7 @@ export class AgentControl {
       case 'utterance': await this.utterance(command.text.trim(), turn, selectionRevision); return
       case 'compose': {
         if (!this.state.composing) this.startDraft()
+        if (this.state.draftRequestId) this.guardClientGrant(client)
         const previous = this.state.threadDrafts?.find(item => item.threadId === this.state.draftThreadId && item.requestId === this.state.draftRequestId)
         if (command.attachments !== undefined) this.state.draftAttachments = agentAttachmentHandlesSchema.parse(command.attachments)
         this.state.draft = command.text
