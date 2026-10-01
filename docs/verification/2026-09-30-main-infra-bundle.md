@@ -21,7 +21,7 @@ Electron 43.1.0's [dictionary URL patch](https://github.com/electron/electron/bl
 
 The revised helper also compiled under native Windows PowerShell, emitted `ready` and exited cleanly without dispatching a paste.
 
-`npm run build` succeeded. `npx playwright test tests/e2e/dictation-recovery.spec.ts tests/e2e/agent-browser.spec.ts tests/e2e/spellcheck-privacy.spec.ts tests/e2e/new-thread-settings.spec.ts tests/e2e/git-actions.spec.ts --workers=1` passed all seven journeys on the merged revision. `npx playwright test tests/e2e/files-panel.spec.ts --workers=1` passed its working-folder journey, including the exact copied path through the E2E clipboard adapter and no paste command. The spellcheck journey uses the actual production browser session.
+`npm run build` succeeded. The second review reran `npx playwright test tests/e2e/dictation-recovery.spec.ts tests/e2e/agent-browser.spec.ts tests/e2e/spellcheck-privacy.spec.ts tests/e2e/new-thread-settings.spec.ts tests/e2e/git-actions.spec.ts tests/e2e/files-panel.spec.ts --workers=1`: eight journeys passed, including the exact copied path through the E2E clipboard adapter and no paste command. After tightening the temporary-file matcher and rebuilding, `npx playwright test tests/e2e/app.spec.ts --grep 'onboards, dictates|paste rejection' --workers=1` passed both first-use dictation/history and rejected-paste copied-result journeys. The spellcheck journey uses the actual production browser session.
 
 The dictation journey covers clipboard-failure recovery, keyboard Copy text, navigation, later dictation, and history off. It checks dark and light at 1600x1000, 1280x800 and 820x560 with reduced motion enabled. The browser journeys cover real local-page actions, user decisions, default grants, Stop, keyboard actions, themes, sizes and the focused-thread player. These are fixture-driven journeys; they do not establish live provider or native target-app behavior.
 
@@ -31,5 +31,7 @@ Inspected captures:
 - [Browser in Tools at 1280x800, dark](../../artifacts/main-infra-bundle/tools-1280-dark.png): a native window capture includes the actual local page beside the thread. Renderer-only screenshots omit the separate native browser view, so this retained image uses the native capture.
 
 No design baseline was regenerated. Existing tracked captures overwritten by the journeys were restored; only the two images cited here are retained.
+
+The second review also inspected fresh dark and light recovery captures at 820x560. The final local gates passed: typecheck, lint, notices, and `npm test -- --maxWorkers=2` with 6,542 passed and 153 skipped (489 files passed, 39 skipped). All 93 focused history, helper and output cases passed. Runtime verification passed. Independent Standards and Spec reviews by gpt-6.1-sol at high reasoning report no remaining findings after the malformed-name fix. The inline paste-settle comment is answered with fix commit `4e97eee6`.
 
 Full gate results and final revision are recorded in the pull request. No UI design, shortcut, setting, provider protocol, authority policy, production dependency or allowed host changed.
