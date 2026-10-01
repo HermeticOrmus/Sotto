@@ -100,3 +100,5 @@ The expanded Electron case checks deinitialization in the pane and Settle questi
 
 
 The fresh full run on `59a8fce6` passed 6,660 tests with 153 skipped and one failure: `workspace.test.ts` waited only one second for its branch-name writer to start. The unchanged file passed all 41 tests in isolation. Comparing with current main showed that an earlier integration had replaced main's explicit fixture start signals in two naming cases with polls. Those two signals were restored exactly from main, retaining all assertions and the normal whole-test deadline. No production naming behavior changed.
+
+The next full run hit the default 15-second ceiling in five new multi-step real-Git submodule scenarios while four worktrees ran full suites on the shared machine. Running those same five scenarios with a 60-second ceiling passed all five in 51.2 seconds of test execution. Those scenarios now have a 60-second failure ceiling for fixture creation and repeated removal checks; assertions and production deadlines are unchanged. The superseded full run was stopped before restarting on current main.

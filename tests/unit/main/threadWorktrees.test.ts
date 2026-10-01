@@ -762,7 +762,7 @@ describe('independent working-copy allocation', () => {
     expect(await git(f.module, ['cat-file', '-t', f.privateCommit])).toBe('commit\n')
     expect((await f.service.reclaim(f.a, { confirmedItems: preview.items, confirmedIgnored: preview.ignored, confirmedRepositories: preview.repositories })).reclaimedAt).toBeTruthy()
     await expect(lstat(f.gitDirectory)).rejects.toMatchObject({ code: 'ENOENT' })
-  })
+  }, 60_000)
   it('rechecks unpublished submodule history inside the registry lane', async () => {
     const f = await submoduleHistoryFixture()
     const preview = await f.service.reclaimFacts(f.a)
@@ -793,7 +793,7 @@ describe('independent working-copy allocation', () => {
     expect(await git(f.gitDirectory, ['--git-dir', f.gitDirectory, 'cat-file', '-t', f.privateCommit])).toBe('commit\n')
     expect((await f.service.reclaim(f.a, { confirmedItems: preview.items, confirmedIgnored: preview.ignored, confirmedRepositories: preview.repositories })).reclaimedAt).toBeTruthy()
     await expect(lstat(f.gitDirectory)).rejects.toMatchObject({ code: 'ENOENT' })
-  })
+  }, 60_000)
   it.each(['clean', 'recursive', 'dirty-hidden'])('reclaims initialized submodules safely (%s)', async mode => {
     const recursive = mode === 'recursive'
     const f = await fixture()
