@@ -312,7 +312,7 @@ If secure storage is locked at launch, unlock the iPhone and return to Sotto. A 
 
 *Development feature.*
 
-While Sotto is open on the iPhone, a dropped connection retries with increasing waits, from about one second up to thirty seconds, with a small random variation. A successful liveness check resets the wait; merely connecting does not. Incoming bytes keep a slow thread download alive. A fresh connection refreshes threads and checks unconfirmed actions; it never resends them. Backgrounding stops connection attempts, and returning to Sotto connects again. A changed computer identity or lost pairing still asks you to add the computer again.
+While Sotto is open on the iPhone, a dropped connection retries with increasing waits, from about one second up to thirty seconds, with a small random variation. A successful liveness check resets the wait; merely connecting does not. Pending reads keep slow thread downloads connected for up to two minutes. A fresh connection refreshes threads and checks unconfirmed actions; it never resends them. Backgrounding stops connection attempts, and returning to Sotto connects again. A changed computer identity or lost pairing still asks you to add the computer again.
 
 **Settings > Phones** lets Sotto on your iPhone reach the threads this computer runs, over your own tailnet. It needs Tailscale installed and signed in on both, and the local host running (**Settings > Hosts**); with the local host off, the page says so and offers **Go to Hosts**. Each computer shares only its own threads: a phone paired with this computer sees what this window's local host runs, and not your remote hosts.
 

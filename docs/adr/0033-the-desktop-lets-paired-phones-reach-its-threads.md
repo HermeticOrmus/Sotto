@@ -51,3 +51,7 @@ The active phone reconnects with exponential waits from about one second to a th
 ## October 1 amendment: older idle clients
 
 Client-owned pings require `client-liveness` in hello's `accepts`, an additive v1 feature. Only opted-in peers get the 75-second idle close, deferred while output is buffered. Older clients keep host pings every 25 seconds; a missed pong closes them only when no other traffic arrived and no output remains buffered. Their WebSocket implementations can answer host pings while the app is idle. This replaces the earlier listener-only-answer rule for clients without the opt-in.
+
+## October 1 amendment: phone reads on slow links
+
+The phone no longer relies on the WebSocket task's byte counter. Each ten-second liveness round checks completed messages and pong replies, and closes only after two consecutive silent rounds. A request still awaiting its reply within its own deadline prevents silence from accumulating. Detail and observe reads have 120-second deadlines; other requests retain 30 seconds. A connection with no requests closes at the second round, about 60 seconds after opening; an unanswered detail expires at 120 seconds and cannot protect a dead connection indefinitely. Only an actual message or pong resets reconnect backoff. This replaces the earlier byte-progress rule.

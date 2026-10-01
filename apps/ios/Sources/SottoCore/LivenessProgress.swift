@@ -1,9 +1,20 @@
-/// A partial message is progress even when its pong is still waiting behind the body.
+/// Complete messages and pongs confirm liveness; pending reads protect slow transfers.
 public struct LivenessProgress: Sendable {
-    public let bytes: Int64
-    public let messages: Int
-    public init(bytes: Int64, messages: Int) { self.bytes = bytes; self.messages = messages }
-    public func isAlive(bytes: Int64, messages: Int, pong: Bool) -> Bool {
-        pong || bytes > self.bytes || messages > self.messages
+    private var silentRounds = 0
+    private var requestDeadlines: [String: Double] = [:]
+    public init() {}
+    public static func requestTimeout(operation: String) -> Double {
+        operation == "detail" || operation == "observe" ? 120 : 30
+    }
+    public mutating func beginRequest(id: String, operation: String, now: Double) {
+        requestDeadlines[id] = now + Self.requestTimeout(operation: operation)
+    }
+    public mutating func finishRequest(id: String) { requestDeadlines.removeValue(forKey: id) }
+    /// Returns true only after two consecutive silent rounds outside all request deadlines.
+    public mutating func shouldDisconnect(now: Double, messagesAdvanced: Bool, pong: Bool) -> Bool {
+        requestDeadlines = requestDeadlines.filter { $0.value > now }
+        if messagesAdvanced || pong || !requestDeadlines.isEmpty { silentRounds = 0; return false }
+        silentRounds += 1
+        return silentRounds >= 2
     }
 }

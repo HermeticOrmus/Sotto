@@ -103,7 +103,7 @@ The iPhone app opens on **Threads**: questions and permissions first, working th
 
 Remote navigation belongs to each client. Compose, send and draft controls act on the thread that client picked, preserving drafts on other threads. Answers still require Can answer.
 
-The iPhone checks each connection while Sotto is open. Received bytes keep slow thread downloads alive. After a drop it retries with increasing waits and a small random variation, up to thirty seconds; a successful liveness check resets the wait. It refreshes threads and checks unconfirmed actions without sending them again. Returning from the background opens a fresh connection.
+The iPhone checks each connection while Sotto is open. Pending reads keep slow thread downloads connected for up to two minutes. After a drop it retries with increasing waits and a small random variation, up to thirty seconds; a successful liveness check resets the wait. It refreshes threads and checks unconfirmed actions without sending them again. Returning from the background opens a fresh connection.
 
 ## Build from source
 

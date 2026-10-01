@@ -12,6 +12,7 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
     var onDisconnect: (() -> Void)?
     var onLiveness: (() -> Void)?
     private var answeredPing: UUID?
+    private var liveness = LivenessProgress()
     private let redirects = NoRedirects()
     private var made: URLSession?
     /// Made on first use. A session holds its delegate until it is invalidated, so `close()` ends it.
@@ -91,7 +92,7 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
                 do { try await Task.sleep(nanoseconds: interval) } catch { return }
                 guard let self, self.generation == current else { return }
                 let ping = UUID()
-                let progress = LivenessProgress(bytes: task.countOfBytesReceived, messages: self.received)
+                let messages = self.received
                 task.sendPing { [weak self] error in
                     Task { @MainActor in
                         guard let self, self.generation == current, error == nil else { return }
@@ -100,10 +101,11 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
                 }
                 do { try await Task.sleep(nanoseconds: 10_000_000_000) } catch { return }
                 guard self.generation == current else { return }
-                guard progress.isAlive(bytes: task.countOfBytesReceived, messages: self.received, pong: self.answeredPing == ping) else {
+                let alive = self.received > messages || self.answeredPing == ping
+                if self.liveness.shouldDisconnect(now: ProcessInfo.processInfo.systemUptime, messagesAdvanced: self.received > messages, pong: self.answeredPing == ping) {
                     self.disconnect(); self.onDisconnect?(); return
                 }
-                self.onLiveness?()
+                if alive { self.onLiveness?() }
                 interval = 15_000_000_000
             }
         }
@@ -118,7 +120,7 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
         disconnect(); made?.invalidateAndCancel(); made = nil
     }
     func disconnect() {
-        generation = UUID(); received = 0; answeredPing = nil; reader?.cancel(); reader = nil
+        generation = UUID(); liveness = LivenessProgress(); received = 0; answeredPing = nil; reader?.cancel(); reader = nil
         heartbeat?.cancel(); heartbeat = nil
         socket?.cancel(with: .goingAway, reason: nil); socket = nil; session = ""
         let waiting = pending; pending.removeAll()
@@ -134,8 +136,11 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
         guard data.count <= Wire.maximumFrameBytes else { throw ClientError.invalidRequest }
         return try await withCheckedThrowingContinuation { continuation in
             pending[id] = continuation
+            let operationName = operation["op"]?.string ?? ""
+            liveness.beginRequest(id: id, operation: operationName, now: ProcessInfo.processInfo.systemUptime)
+            let timeout = UInt64(LivenessProgress.requestTimeout(operation: operationName) * 1_000_000_000)
             deadlines[id] = Task { [weak self] in
-                do { try await Task.sleep(nanoseconds: 30_000_000_000) } catch { return }
+                do { try await Task.sleep(nanoseconds: timeout) } catch { return }
                 self?.finish(id: id, result: .failure(ClientError.uncertain))
             }
             Task { [weak self] in
@@ -153,6 +158,7 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
         }
     }
     private func finish(id: String, result: Result<Received<JSONValue>, Error>) {
+        liveness.finishRequest(id: id)
         deadlines.removeValue(forKey: id)?.cancel(); pending.removeValue(forKey: id)?.resume(with: result)
     }
     private func post(endpoint: HostEndpoint, route: String, token: String? = nil, body: JSONValue? = nil) async throws -> JSONValue {
