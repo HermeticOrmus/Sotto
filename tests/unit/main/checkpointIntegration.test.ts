@@ -21,7 +21,8 @@ it('excludes an unallocated worktree from shared-folder checkpoint guards while 
     const pending = vi.fn(() => false)
     const subscribe = vi.fn<AgentControl['subscribe']>(() => () => undefined)
     const hooks = vi.spyOn(f.host, 'setCheckpointHooks')
-    integration = connectCheckpoints({ files, directory: f.root, host: f.host, registry: f.registry,
+    let historyEnabled = true
+    integration = connectCheckpoints({ historyEnabled: () => historyEnabled, files, directory: f.root, host: f.host, registry: f.registry,
       control: { subscribe, hasPendingThreadWork: pending } as unknown as AgentControl,
       git: () => ({ isMutating: async () => false }) as unknown as GitChangesService, report: vi.fn() })
     await expect(Promise.resolve(hooks.mock.calls[0]![0].isBlocked('pending'))).resolves.toBe(false)
@@ -52,6 +53,9 @@ it('excludes an unallocated worktree from shared-folder checkpoint guards while 
     expect(forgotten).toHaveBeenCalledWith('ready')
     expect(forgotten).toHaveBeenCalledWith('pending')
     const privacy = vi.spyOn(integration.checkpoints, 'privacyChanged').mockResolvedValue()
+    await hooks.mock.calls[0]![0].privacyChanged?.()
+    expect(privacy).not.toHaveBeenCalled()
+    historyEnabled = false
     await hooks.mock.calls[0]![0].privacyChanged?.()
     expect(privacy).toHaveBeenCalledOnce()
     f.adapters.codex.state.threads[0]!.status = 'running'; f.adapters.codex.emit()

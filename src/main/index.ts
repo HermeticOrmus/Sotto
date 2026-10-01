@@ -1,3 +1,4 @@
+import { cleanSettingsHistory } from './settings/privacyCleanup'
 import { registerQuitDrain } from './app/quitDrain'
 import { HOSTS_CHANGED } from '../shared/hosts'
 import { parseHostEntityKey } from '../shared/clientIdentity'
@@ -1000,13 +1001,9 @@ async function createRuntime(): Promise<NativeRuntimeController> {
       worktreeCleanup?.settingsChanged()
       phoneAccess.settingsChanged()
       if (grantDefaultChanged) browserService?.settingChanged()
-      const historyChanged = agentHistoryEnabled !== settings.historyEnabled
       agentHistoryEnabled = settings.historyEnabled
       agentVoiceCoordinatorEnabled = settings.voiceCoordinatorEnabled
-      if (historyChanged) {
-        await agentControl.privacyChanged()
-        await personalChats.privacyChanged()
-      }
+      await cleanSettingsHistory(agentControl, personalChats)
       showWidgetWhenIdle = settings.showWidgetWhenIdle
       widgetPresentation = widgetPresentationFor(settings)
       if (!dictationLifecycle.isIdle()) {

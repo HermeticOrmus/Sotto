@@ -60,8 +60,14 @@ export function connectCheckpoints(options: { files: FilesService; directory: st
     // A first send has no folder yet. Honor any thread recovery record, then let setup allocate it.
     return unallocated(threadId) ? checkpoints.isBlocked(threadId) : checkpoints.isWorkspaceBlocked(threadId)
   }
+  let historyEnabled = options.historyEnabled?.()
   host.setCheckpointHooks({
-    privacyChanged: () => checkpoints.privacyChanged(),
+    privacyChanged: async () => {
+      const next = options.historyEnabled?.()
+      if (next === historyEnabled) return
+      await checkpoints.privacyChanged()
+      historyEnabled = next
+    },
     isBlocked: async threadId => await blocked(threadId) || !unallocated(threadId) && await options.git().isMutating(threadId),
     beforeTurn: async threadId => {
       await checkpoints.initialize()
