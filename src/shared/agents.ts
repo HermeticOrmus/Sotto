@@ -237,7 +237,8 @@ export const agentRequestSchema = z.object({
 export const agentQuestionAnswersSchema = z.record(id, z.object({ optionIds: z.array(id).max(100), text: text.optional() }).strict())
 export type AgentQuestionAnswers = z.infer<typeof agentQuestionAnswersSchema>
 export const agentMessageSchema = z.object({
-  id, role: z.enum(['user', 'assistant']), text, createdAt: z.string(),
+  // A projected message combines bounded events and can exceed any one event's limit.
+  id, role: z.enum(['user', 'assistant']), text: z.string(), createdAt: z.string(),
   commandId: z.string().optional(),
   attachments: z.array(agentAttachmentReferenceSchema).optional(),
 })
@@ -746,7 +747,7 @@ export const agentThreadDetailRequestSchema = id
  */
 export const agentMessageDeltaSchema = z.union([
   z.object({ message: agentMessageSchema }).strict(),
-  z.object({ id, appendText: text }).strict(),
+  z.object({ id, appendText: z.string() }).strict(),
 ])
 export type AgentMessageDelta = z.infer<typeof agentMessageDeltaSchema>
 export const agentActivityDeltaSchema = z.union([

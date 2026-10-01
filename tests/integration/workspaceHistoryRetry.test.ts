@@ -7,8 +7,11 @@ import { WorkspaceHost } from '../../src/main/agents/workspace'
 import { ThreadStore } from '../../src/main/agents/threadStore'
 import { SubagentStore } from '../../src/main/agents/subagentStore'
 import type { ThreadHostEvent } from '../../src/main/agents/host'
-import type { ThreadEvent } from '../../src/shared/threadEvents'
+import { threadEventSchema, type ThreadEvent } from '../../src/shared/threadEvents'
 import { FakeProviderHost } from '../fixtures/fakeProviderHost'
+
+vi.mock('electron', () => ({ contextBridge: { exposeInMainWorld: vi.fn() }, ipcRenderer: { invoke: vi.fn(), on: vi.fn(), removeListener: vi.fn() } }))
+import { createSottoBridge } from '../../src/preload'
 
 class EventProvider extends FakeProviderHost {
   private readonly events = new Set<(event: ThreadHostEvent) => void>()
@@ -217,15 +220,19 @@ it('discards private pending events if retention resumes after an interrupted pr
 
 it('saves oversized additions, appends and replacements in full across replay', async () => {
   const { directory, adapter, host } = await fixture()
+  const bridge = createSottoBridge({ invoke: vi.fn(async () => ({ threadId: 'session-workshop', revision: 1, messages: host.threadMessages('session-workshop') })), on: vi.fn(), removeListener: vi.fn() }, 'win32')
   const first = 'a'.repeat(99_999) + '🙂' + 'a'.repeat(100_001)
+  expect(threadEventSchema.safeParse(added('reply', first)).success).toBe(false)
   adapter.publish(added('reply', first))
   expect(host.threadMessages('session-workshop')[0]?.text).toBe(first)
+  expect((await bridge.agents!.threadDetail!('session-workshop'))?.messages[0]?.text).toBe(first)
   const suffix = 'b'.repeat(100_001)
   adapter.publish(appended(suffix))
   expect(host.threadMessages('session-workshop')[0]?.text).toBe(first + suffix)
   const replacement = 'c'.repeat(300_001)
   adapter.publish({ kind: 'message-replaced', at, message: { id: 'reply', role: 'assistant', text: replacement, createdAt: at } })
   expect(host.threadMessages('session-workshop')[0]?.text).toBe(replacement)
+  expect((await bridge.agents!.threadDetail!('session-workshop'))?.messages[0]?.text).toBe(replacement)
   const events = host.eventsAfter(0)
   expect(events.every(({ event }) => event.kind !== 'message-text-appended' || event.appendText.length <= 100_000)).toBe(true)
   await host.close()

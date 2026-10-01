@@ -17,6 +17,7 @@ import { SCREENSHOT_NOT_ITS_TYPE, type AgentCommand, type AgentThreadDetail, typ
 import { hostVersionMismatch } from '../../src/shared/hostProtocol'
 import { version as packageVersion } from '../../package.json'
 import { rawPeer } from '../fixtures/rawHostPeer'
+import { ThreadStore } from '../../src/main/agents/threadStore'
 import { TurnRecorder } from '../../src/main/agents/turns'
 import { HOST_BUSY, HOST_EVENT_PAGE_SIZE } from '../../src/shared/hostProtocol'
 
@@ -693,6 +694,49 @@ describe('thread detail over the socket', () => {
         expect(updates.at(-1)).toEqual(delta(2, 3, '!'))
       } finally { legacy.frames.close() }
     } finally { await client.close(); await server.close() }
+  })
+
+  it('delivers saved long messages in whole details and replacement deltas and reopens without disconnecting', async () => {
+    const { stream, server, client, connected, pushErrors } = await streamingHost()
+    const store = new ThreadStore(join(root, 'long-replies.sqlite'))
+    store.open()
+    const text = 'a'.repeat(200_001)
+    const replacement = 'b'.repeat(300_001)
+    const save = (kind: 'message-added' | 'message-replaced', text: string) => {
+      store.appendMany('streaming', [
+        { kind, at: message('').createdAt, message: message(text.slice(0, 100_000)) },
+        ...Array.from({ length: Math.ceil(text.length / 100_000) - 1 }, (_, index) => ({
+          kind: 'message-text-appended' as const, at: message('').createdAt, messageId: 'reply', appendText: text.slice((index + 1) * 100_000, (index + 2) * 100_000),
+        })),
+      ])
+    }
+    try {
+      save('message-added', text)
+      stream.current = { threadId: 'streaming', revision: 2, messages: store.readMessages('streaming').messages }
+      stream.emit(stream.current)
+      await expect.poll(() => client.threadDetail('streaming')?.messages[0]?.text).toBe(text)
+      save('message-replaced', replacement)
+      stream.current = { threadId: 'streaming', revision: 3, messages: store.readMessages('streaming').messages }
+      stream.emit({ threadId: 'streaming', baseRevision: 2, revision: 3, messageDeltas: [{ message: stream.current.messages[0]! }], activityDeltas: [] })
+      await expect.poll(() => client.threadDetail('streaming')?.messages[0]?.text).toBe(replacement)
+      expect(connected()).toBe(true)
+      expect(pushErrors).toEqual([])
+      const suffix = 'c'.repeat(150_001)
+      stream.current = { ...stream.current, revision: 4, messages: [message(replacement + suffix)] }
+      stream.emit(delta(3, 4, suffix))
+      await expect.poll(() => client.threadDetail('streaming')?.messages[0]?.text).toBe(replacement + suffix)
+      expect(connected()).toBe(true)
+      store.close()
+      store.open()
+      store.rebuild()
+      stream.current = { ...stream.current, messages: store.readMessages('streaming').messages }
+      await client.close()
+      await client.connect()
+      await client.observe(['streaming'])
+      expect((await client.readThreadDetail('streaming'))?.messages[0]?.text).toBe(replacement)
+      expect(connected()).toBe(true)
+      expect(pushErrors).toEqual([])
+    } finally { store.close(); await client.close(); await server.close() }
   })
 
   it('reads the whole thread once when a delta does not follow the revision the client holds', async () => {
