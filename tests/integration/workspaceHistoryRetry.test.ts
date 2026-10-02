@@ -6,6 +6,9 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { WorkspaceHost } from '../../src/main/agents/workspace'
 import { ThreadStore } from '../../src/main/agents/threadStore'
 import { SubagentStore } from '../../src/main/agents/subagentStore'
+import { AgentControl } from '../../src/main/agents/control'
+import { AgentCredentials } from '../../src/main/agents/credentials'
+import { e2eAgentReasoner } from '../../src/main/e2e/agentEffects'
 import type { ThreadHostEvent } from '../../src/main/agents/host'
 import { threadEventSchema, type ThreadEvent } from '../../src/shared/threadEvents'
 import { FakeProviderHost } from '../fixtures/fakeProviderHost'
@@ -171,6 +174,31 @@ it('keeps a failed thread warning while another thread commits, then restores re
   expect(host.workspaceSnapshot().error).toBeUndefined()
   expect(host.threadMessages('session-workshop')).toMatchObject([{ id: 'replacement', text: 'After reset' }])
   expect(host.eventsAfter(0, 'session-workshop').map(row => row.event.kind)).toEqual(['message-added', 'messages-reset', 'message-added'])
+})
+
+it('retries a failed thread-store privacy switch and removes the retained words without restarting', async () => {
+  let history = true
+  const { directory, adapter, host } = await fixture(() => history)
+  adapter.publish(added('reply', 'PRIVATE FAILED REDACTION'))
+  host.workspaceSnapshot()
+  const credentials = new AgentCredentials(directory, { isEncryptionAvailable: () => false, encryptString: text => Buffer.from(text), decryptString: bytes => bytes.toString() })
+  await credentials.load()
+  const control = new AgentControl({ directory, host, credentials, reasoner: e2eAgentReasoner, historyEnabled: () => history })
+  vi.useFakeTimers()
+  await control.start()
+  cleanup.push(async () => { control.dispose(); await control.closed() })
+  const transition = vi.spyOn(ThreadStore.prototype, 'becomeEphemeral').mockImplementationOnce(() => { throw new Error('Synthetic failed redaction') })
+  history = false
+  await expect(control.privacyChanged()).rejects.toThrow('Thread messages could not be removed')
+  const disk = new ThreadStore(join(directory, 'threads.sqlite'))
+  disk.open()
+  try { expect(disk.readMessages('session-workshop').messages).toMatchObject([{ text: 'PRIVATE FAILED REDACTION' }]) }
+  finally { disk.close() }
+  await vi.advanceTimersByTimeAsync(30_000)
+  expect(transition).toHaveBeenCalledTimes(2)
+  disk.open()
+  try { expect(disk.readMessages('session-workshop').messages).toEqual([]) }
+  finally { disk.close() }
 })
 
 it('does not retry into the durable connection if another privacy store fails before it switches', async () => {

@@ -1745,7 +1745,11 @@ export class WorkspaceHost implements AgentHost {
               for (const thread of this.state.snapshot.threads) this.threadStore.redactActivityIdentities(thread.id, (thread.activities ?? []).map(activity => activity.id))
             } finally { this.threadStore.becomeEphemeral() }
           }
-        } catch { this.storeUnavailable = true; this.saveError = HISTORY_OPEN_ERROR }
+        } catch {
+          this.saveError = wanted ? HISTORY_OPEN_ERROR : 'Thread messages could not be removed. Restore access to local storage and try again.'
+          // Keep the transition retryable by the coordinator's privacy maintenance.
+          throw new Error(this.saveError)
+        }
         // The switch emptied the store either way, so what mirrored it is no longer true.
         this.known.clear()
         this.hidden.clear()

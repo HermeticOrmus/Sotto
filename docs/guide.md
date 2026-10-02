@@ -386,7 +386,7 @@ Settings:
 - Application and privacy: launch at login, start minimized, local history, retention, clear history, and reset settings; for threads, the working-copy default and the worktree cleanup rules
 - Git: every Git setting, grouped under when it acts: the Commit and pull request style with its example; Follow pull request templates, Default merge method and Auto-settle merged threads; the diff defaults for Changes and Proactive panels; the Git fetch interval and Automatically pull
 
-Turning **Keep local history** off stops saving new dictation transcripts. Older dictation transcripts stay on disk until you delete them or clear history. **Delete** removes a retained transcript from this computer even while history is off; turning history back on does not restore it.
+Turning **Keep local history** off stops saving new dictation transcripts. Older dictation transcripts stay on disk until you delete them or clear history. **Delete** removes a retained transcript from this computer even while history is off; turning history back on does not restore it. Thread and personal-chat cleanup run independently. If thread cleanup fails, Sotto retries while open; another Settings save retries both cleanups.
 
 **Clear history** also removes dictation history backups and temporary files left by an interrupted save. Sotto removes those temporary files when it starts, without changing saved history.
 

@@ -1011,20 +1011,21 @@ async function createRuntime(): Promise<NativeRuntimeController> {
       if (grantDefaultChanged) browserService?.settingChanged()
       agentHistoryEnabled = settings.historyEnabled
       agentVoiceCoordinatorEnabled = settings.voiceCoordinatorEnabled
-      await cleanSettingsHistory(agentControl, personalChats)
-      showWidgetWhenIdle = settings.showWidgetWhenIdle
-      widgetPresentation = widgetPresentationFor(settings)
-      if (!dictationLifecycle.isIdle()) {
-        await dictationLifecycle.repaint()
-      } else if (settings.onboardingComplete) {
-        // Re-seed the resting sliver so theme/shortcut changes repaint it and
-        // the idle-visibility reveal/conceal decision is re-evaluated.
-        await publishIdleWidgetState(settings)
-      } else if (!settings.showWidgetWhenIdle) {
-        windows.hideWidget()
-      }
-      const delivered = await messageDelivery.sendToMain(SETTINGS_CHANGED, settings)
-      if (!delivered) logOperational('native-main-send-failed')
+      await cleanSettingsHistory(agentControl, personalChats, async () => {
+        showWidgetWhenIdle = settings.showWidgetWhenIdle
+        widgetPresentation = widgetPresentationFor(settings)
+        if (!dictationLifecycle.isIdle()) {
+          await dictationLifecycle.repaint()
+        } else if (settings.onboardingComplete) {
+          // Re-seed the resting sliver so theme/shortcut changes repaint it and
+          // the idle-visibility reveal/conceal decision is re-evaluated.
+          await publishIdleWidgetState(settings)
+        } else if (!settings.showWidgetWhenIdle) {
+          windows.hideWidget()
+        }
+        const delivered = await messageDelivery.sendToMain(SETTINGS_CHANGED, settings)
+        if (!delivered) logOperational('native-main-send-failed')
+      })
     },
   })
   const trayController = new TrayController(trayAdapter, {
