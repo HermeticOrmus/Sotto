@@ -365,17 +365,17 @@ export class WorkspaceHost implements AgentHost {
   }
   /**
    * T3's stacked action, run on the thread's lane so nothing is sent to the thread while its folder
-   * changes. Progress lands on the thread record as it comes; the result or the refusal stays there
-   * for the notice, and the folder's status is read again with the remote once it is over.
+   * changes. Admission refusals preserve the previous result. Once admitted, progress and the
+   * result stay on the thread record, and the folder's status is read again with the remote afterward.
    */
   runGitAction(command: { threadId: string; actionId: string; action: GitStackedAction; commitMessage?: string | undefined; featureBranch?: boolean | undefined; filePaths?: readonly string[] | undefined; allowDefaultBranch?: boolean | undefined }): Promise<AgentHostSnapshot> {
     return this.onLane(command.threadId, async () => {
       await this.initialize()
       this.thread(command.threadId)
+      const release = await this.acquireCheckoutMutation(command.threadId)
       const startedAt = new Date().toISOString()
       let progress: GitActionProgress = { actionId: command.actionId, action: command.action, status: 'running', phases: [], phase: null, stage: null, hook: null, startedAt, finishedAt: null, result: null, error: null }
       const update = (change: Partial<GitActionProgress>): void => { progress = { ...progress, ...change }; this.setGitActionProgress(command.threadId, progress) }
-      update({})
       const onProgress = (event: GitActionEvent): void => {
         if (event.kind === 'action_started') update({ phases: [...event.phases], stage: event.stages[0] ?? null })
         else if (event.kind === 'phase_started') update({ phase: event.phase, stage: event.stage, hook: null })
@@ -383,13 +383,14 @@ export class WorkspaceHost implements AgentHost {
         else if (event.kind === 'hook_output') update({ hook: { name: event.hookName ?? progress.hook?.name ?? 'hook', output: event.text } })
         else if (event.kind === 'hook_finished') update({ hook: null })
       }
-      let release: (() => void) | undefined
+      let started = false
       try {
         try {
-          release = await this.acquireCheckoutMutation(command.threadId)
           const actions = this.gitActionsOrRefuse()
           const cwd = await this.threadWorkingDirectory(command.threadId)
           if (this.mutationGuard && !await this.mutationGuard(command.threadId)) throw new GitActionRefusal('Wait for active or pending thread work before changing Git.')
+          started = true
+          update({})
           const result = await actions.runStackedAction({ threadId: command.threadId, cwd, action: command.action, commitMessage: command.commitMessage, featureBranch: command.featureBranch, filePaths: command.filePaths, allowDefaultBranch: command.allowDefaultBranch, onProgress })
           update({ status: 'done', phase: null, stage: null, hook: null, finishedAt: new Date().toISOString(), result })
           // The pull request the action created, or the open one it found, is linked to the thread the way T3 links it.
@@ -397,12 +398,13 @@ export class WorkspaceHost implements AgentHost {
             this.linkPullRequestRecord(command.threadId, { number: result.pr.number, url: result.pr.url, title: result.pr.title ?? `Pull request #${result.pr.number}`, state: 'open', draft: false }, 'created')
           }
         } catch (error) {
+          if (!started) throw error
           update({ status: 'failed', phase: null, stage: null, hook: null, finishedAt: new Date().toISOString(), error: error instanceof Error ? error.message : 'The Git action failed.' })
         }
         try { await this.flush() } catch { this.saveError = GIT_ACTION_SAVE_ERROR }
-        if (release) await this.refreshAfterGitAction(command.threadId)
+        await this.refreshAfterGitAction(command.threadId)
         return this.workspaceSnapshot()
-      } finally { release?.() }
+      } finally { release() }
     })
   }
   /** A commit, push, switch or pull moved the folder: the worktree record and the status follow at once. */

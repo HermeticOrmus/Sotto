@@ -68,6 +68,25 @@ it('names a post-turn checkpoint read when a sibling tries to change Git', async
   } finally { release?.(); await f.stop(); await f.remove() }
 })
 
+it.each(['checkpoint read', 'desktop guard'] as const)('keeps the last Git result and PR link when a new press is refused by a %s', async reason => {
+  const f = await fixture()
+  let release: (() => void) | undefined
+  try {
+    const runStackedAction = vi.fn(async () => ({ action: 'create_pr', branch: { status: 'skipped_not_requested' }, commit: { status: 'skipped_not_requested' }, push: { status: 'skipped_not_requested' },
+      pr: { status: 'created', url: 'https://github.com/o/r/pull/9', number: 9, title: 'Keep this result' }, toast: { title: 'Created PR #9', cta: { kind: 'open_pr', label: 'View PR', url: 'https://github.com/o/r/pull/9' } } }))
+    f.host.setGitActions({ runStackedAction } as unknown as GitActions)
+    await f.host.runGitAction({ threadId: 'a', actionId: 'previous', action: 'create_pr' })
+    const previous = f.host.workspaceSnapshot().threads.find(thread => thread.id === 'a')!.gitAction
+    if (reason === 'checkpoint read') release = await f.host.acquireCheckoutRead('b')
+    else f.host.setMutationGuard(() => false)
+    await expect(f.host.runGitAction({ threadId: 'a', actionId: 'refused', action: 'commit' })).rejects.toThrow(reason === 'checkpoint read' ? 'Sotto is saving a checkpoint' : 'Wait for active or pending thread work')
+    expect(f.host.workspaceSnapshot().threads.find(thread => thread.id === 'a')?.gitAction).toEqual(previous)
+    expect(previous?.result?.pr.url).toBe('https://github.com/o/r/pull/9')
+    expect(runStackedAction).toHaveBeenCalledTimes(1)
+    expect(await f.host.isCheckoutMutating('a')).toBe(false)
+  } finally { release?.(); await f.stop(); await f.remove() }
+})
+
 it('holds a checkout throughout a Git action and refuses a sibling send and branch restore without desktop checkpoint wiring', async () => {
   const f = await fixture(), pause = barrier()
   let action: Promise<unknown> | undefined
