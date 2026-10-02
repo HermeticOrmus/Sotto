@@ -8,6 +8,7 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
 }
 
 @MainActor final class HostConnection {
+    private static let httpTimeout: TimeInterval = 30
     var onPush: ((IncomingFrame, Int) -> Void)?
     var onDisconnect: (() -> Void)?
     var onLiveness: (() -> Void)?
@@ -15,13 +16,14 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
     private var liveness = LivenessProgress()
     private let redirects = NoRedirects()
     private var made: URLSession?
+    private let configuration: URLSessionConfiguration
+    init(configuration: URLSessionConfiguration = .ephemeral) { self.configuration = configuration }
     /// Made on first use. A session holds its delegate until it is invalidated, so `close()` ends it.
     private var network: URLSession {
         if let made { return made }
-        let configuration = URLSessionConfiguration.ephemeral
         configuration.httpCookieStorage = nil; configuration.urlCredentialStorage = nil
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
-        configuration.timeoutIntervalForRequest = 30
+        configuration.timeoutIntervalForRequest = Self.httpTimeout
         let session = URLSession(configuration: configuration, delegate: redirects, delegateQueue: nil)
         made = session
         return session
@@ -29,22 +31,23 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
     private var socket: URLSessionWebSocketTask?
     private var reader: Task<Void, Never>?
     private var heartbeat: Task<Void, Never>?
-    private var pending: [String: CheckedContinuation<Received<JSONValue>, Error>] = [:]
+    private var pending: [String: CheckedContinuation<Received<Data>, Error>] = [:]
     private var received = 0
     private var deadlines: [String: Task<Void, Never>] = [:]
     private var session = ""
     private var generation = UUID()
 
-    /// Confirms Sotto is listening at the address before a code is spent on it. Ten seconds, because
-    /// finding a computer may try two ports and nothing answering on the first is the usual miss.
-    func health(endpoint: HostEndpoint) async throws -> Health {
+    /// Confirms Sotto is listening before pairing, reconnecting or removing a computer.
+    func health(endpoint: HostEndpoint, reconnecting: Bool = false) async throws -> Health {
         let name = endpoint.machine
-        var request = URLRequest(url: endpoint.route("/v1/health")); request.httpMethod = "GET"; request.timeoutInterval = 10
+        var request = URLRequest(url: endpoint.route("/v1/health")); request.httpMethod = "GET"; request.timeoutInterval = Self.httpTimeout
         let fetched: (Data, URLResponse)
         do { fetched = try await network.data(for: request) } catch { throw ClientError.hostUnreachable(name) }
         let (data, response) = fetched
-        guard let response = response as? HTTPURLResponse, response.url == endpoint.route("/v1/health"),
-              (200..<300).contains(response.statusCode),
+        guard let response = response as? HTTPURLResponse, response.url == endpoint.route("/v1/health") else { throw ClientError.notASottoHost(name) }
+        if response.statusCode == 429 { throw ClientError.rateLimited }
+        if reconnecting && [502, 503].contains(response.statusCode) { throw ClientError.sottoNotRunning(name) }
+        guard (200..<300).contains(response.statusCode),
               let health = try? Wire.decode(data).decode(Health.self) else { throw ClientError.notASottoHost(name) }
         try health.validate()
         return health
@@ -56,13 +59,18 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
         guard pairing.hostId == expectedHostID else { throw ClientError.invalidIdentity }
         return pairing
     }
-    func revoke(endpoint: HostEndpoint, token: String) async throws {
-        let result = try await post(endpoint: endpoint, route: "/v1/revoke", token: token)
+    func revoke(endpoint: HostEndpoint, pairing: Pairing) async throws {
+        let health = try await health(endpoint: endpoint, reconnecting: true)
+        guard health.hostId == pairing.hostId else { throw ClientError.invalidIdentity }
+        let result = try await post(endpoint: endpoint, route: "/v1/revoke", token: pairing.token)
         guard result["revoked"].bool == true else { throw ClientError.invalidProtocol }
     }
     func connect(endpoint: HostEndpoint, pairing: Pairing) async throws -> Received<Hello> {
         disconnect()
         let current = generation
+        let health = try await health(endpoint: endpoint, reconnecting: true)
+        guard current == generation else { throw CancellationError() }
+        guard health.hostId == pairing.hostId else { throw ClientError.invalidIdentity }
         let result = try await post(endpoint: endpoint, route: "/v1/session", token: pairing.token)
         guard current == generation else { throw CancellationError() }
         let access = try result.decode(HostSession.self); try access.validate(pairing: pairing)
@@ -115,8 +123,8 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
                 interval = 15_000_000_000
             }
         }
-        let helloResult = try await callReceived(Wire.snapshotHello)
-        let hello = try await Wire.readValue(helloResult.value, as: Hello.self)
+        let helloResult = try await callReceived(Wire.snapshotHello, as: Hello.self)
+        let hello = helloResult.value
         guard hello.hostId == pairing.hostId, hello.clientId == pairing.clientId else { disconnect(); throw ClientError.invalidIdentity }
         try hello.shell.validate(hostID: pairing.hostId)
         return Received(hello, sequence: helloResult.sequence)
@@ -134,9 +142,17 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
         waiting.values.forEach { $0.resume(throwing: ClientError.disconnected) }
     }
     func call(_ operation: [String: JSONValue], id: String = UUID().uuidString) async throws -> JSONValue {
-        try await callReceived(operation, id: id).value
+        try await call(operation, as: JSONValue.self, id: id)
     }
-    func callReceived(_ operation: [String: JSONValue], id: String = UUID().uuidString) async throws -> Received<JSONValue> {
+    func call<T: Decodable & Sendable>(_ operation: [String: JSONValue], as type: T.Type, id: String = UUID().uuidString) async throws -> T {
+        try await callReceived(operation, as: type, id: id).value
+    }
+    func callReceived<T: Decodable & Sendable>(_ operation: [String: JSONValue], as type: T.Type, id: String = UUID().uuidString) async throws -> Received<T> {
+        let reply = try await request(operation, id: id)
+        let value = try await Wire.readReply(reply.value, as: type)
+        return Received(value, sequence: reply.sequence)
+    }
+    private func request(_ operation: [String: JSONValue], id: String) async throws -> Received<Data> {
         guard let socket, !session.isEmpty else { throw ClientError.disconnected }
         let data = try Wire.request(id: id, session: session, operation: operation)
         guard data.count <= Wire.maximumFrameBytes else { throw ClientError.invalidRequest }
@@ -147,28 +163,29 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
             let timeout = UInt64(LivenessProgress.requestTimeout(operation: operationName) * 1_000_000_000)
             deadlines[id] = Task { [weak self] in
                 do { try await Task.sleep(nanoseconds: timeout) } catch { return }
-                self?.finish(id: id, result: .failure(ClientError.uncertain))
+                self?.finish(id: id, result: .failure(Self.requestFailure(operation: operationName)))
             }
             Task { [weak self] in
                 do { try await socket.send(.string(String(decoding: data, as: UTF8.self))) }
-                catch { self?.finish(id: id, result: .failure(ClientError.uncertain)) }
+                catch { self?.finish(id: id, result: .failure(Self.requestFailure(operation: operationName))) }
             }
         }
     }
     private func receive(_ frame: IncomingFrame) {
         received += 1
         switch frame {
-        case .reply(let id, let result): finish(id: id, result: .success(Received(result, sequence: received)))
+        case .reply(let id, let data): finish(id: id, result: .success(Received(data, sequence: received)))
         case .refusal(let id, let failure): finish(id: id, result: .failure(HostRefusal(failure: failure)))
         default: onPush?(frame, received)
         }
     }
-    private func finish(id: String, result: Result<Received<JSONValue>, Error>) {
+    private func finish(id: String, result: Result<Received<Data>, Error>) {
         liveness.finishRequest(id: id)
         deadlines.removeValue(forKey: id)?.cancel(); pending.removeValue(forKey: id)?.resume(with: result)
     }
     private func post(endpoint: HostEndpoint, route: String, token: String? = nil, body: JSONValue? = nil) async throws -> JSONValue {
         var request = URLRequest(url: endpoint.route(route)); request.httpMethod = "POST"
+        request.timeoutInterval = Self.httpTimeout
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if let token { request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization") }
         if let body { request.httpBody = try JSONEncoder().encode(body) }
@@ -182,8 +199,16 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
 }
 extension HostConnection {
     /// What a refused request means. Only 401 and 403 say the pairing is gone; anything else from a
-    /// computer that answered (a 502 from Tailscale Serve while Sotto is closed there) means Sotto isn't running.
+    /// computer that answered means Sotto isn't running, apart from a rate limit's explicit wait.
+    nonisolated static func requestFailure(operation: String) -> ClientError {
+        switch operation {
+        case "hello": return .connectionTimedOut
+        case "command": return .uncertain
+        default: return .readTimedOut
+        }
+    }
     nonisolated static func refusal(route: String, status: Int, name: String) -> ClientError {
+        if status == 429 { return .rateLimited }
         if route == "/v1/pair" && (400..<500).contains(status) {
             return .rejected("That code didn't work. Codes work once and last five minutes; get a new one on that computer.")
         }

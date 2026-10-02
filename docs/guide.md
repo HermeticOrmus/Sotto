@@ -304,6 +304,8 @@ The iPhone app reads and answers threads on your computers over Tailscale. It pa
 
 The first time, the app opens on these two steps. After that, **Add computer** at the top of **Computers** opens them as a sheet.
 
+If connecting does not finish, try connecting again. A read that times out asks you to try again; an unconfirmed send asks you to check the thread first. Too many connection attempts asks you to wait a minute before trying again.
+
 The app opens on **Threads**. Questions and permissions lead the list, working threads have their own cards below, and recent threads follow in quieter rows. Tap a question or permission to open its thread and review the request before answering. The Threads tab counts waiting requests; there is no separate Needs you page. Waiting requests remain visible even when their thread or project is settled.
 
 The search pill stays beneath the heading and computer selector. Choose all computers or one computer to narrow the list, then search for a thread. **Settled** expands threads put aside on desktop, including settled projects; searching reveals matching settled threads. A finished turn stays visible until its thread is settled. Confirmed background agents keep a thread Working after its turn ends. A background command alone reads Waiting; running compaction reads Compacting context. Both count as ongoing work until the computer confirms they have finished. Reachable threads with ongoing work stay under **Working now** even when settled.

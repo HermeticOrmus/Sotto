@@ -123,3 +123,5 @@ artifacts/crossing/pkg-43-*.png
 
 # Shared-checkout Git verification; retain only captures cited by the note.
 artifacts/pkg-34-workspace-git/
+
+/artifacts/pkg-17-hostconnection/

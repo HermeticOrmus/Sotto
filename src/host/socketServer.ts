@@ -43,7 +43,7 @@ class Refusal extends Error { constructor(readonly code: HostErrorCode, message 
  * `deltas` is set by the client's hello: only a client that accepts `detail-delta` is sent one. `clientUpdates` likewise:
  * only a client that accepts `client-updates` is sent the mise channel and the waiting state in its shell's client updates.
  */
-interface Peer { frames: SocketFrames; client: ClientIdentity; session: string; observed: Set<string>; inFlight: number; window: number; count: number; pageWindow: number; pages: number; preview: boolean; afterSeq: number; selectedThreadId: string | null; selectedProjectId: string | null; editingThreadId: string | null; deltas: boolean; messageAliases: boolean; clientUpdates: boolean }
+interface Peer { frames: SocketFrames; client: ClientIdentity; session: string; observed: Set<string>; inFlight: number; window: number; count: number; pageWindow: number; pages: number; preview: boolean; ready: boolean; afterSeq: number; selectedThreadId: string | null; selectedProjectId: string | null; editingThreadId: string | null; deltas: boolean; messageAliases: boolean; clientUpdates: boolean }
 export interface SocketServerOptions {
   service: HostService; pairing: PairedClients; port?: number; origins?: readonly string[]
   mayAnswer?: (client: ClientIdentity) => boolean
@@ -189,6 +189,7 @@ export async function startSocketServer(options: SocketServerOptions) {
   const shellPublisher = coalesceAgentStatePublishes(() => {
     for (const peer of peers) {
       if (!authenticated(peer)) { peer.frames.close(); continue }
+      if (!peer.ready) continue
       const state = shell(peer), eventPage = events(peer, peer.afterSeq)
       const full = JSON.stringify({ v: 1, event: 'shell', state, eventPage })
       if (fits(full)) { peer.frames.sendText(full); peer.afterSeq = eventPage.latestSeq }
@@ -293,9 +294,9 @@ export async function startSocketServer(options: SocketServerOptions) {
       case 'hello':
         peer.frames.setClientLiveness(request.accepts?.includes('client-liveness') ?? false)
         peer.messageAliases = request.accepts?.includes('message-aliases') ?? false
-        peer.afterSeq = request.afterSeq ?? 0; peer.deltas = request.accepts?.includes('detail-delta') ?? false
+        peer.afterSeq = request.afterSeq ?? Number.MAX_SAFE_INTEGER; peer.deltas = request.accepts?.includes('detail-delta') ?? false
         peer.clientUpdates = request.accepts?.includes('client-updates') ?? false
-        return { hostId, clientId: peer.client.clientId, shell: shell(peer), capabilities: { mayAnswer: options.mayAnswer?.(peer.client) ?? false }, sottoVersion, features: [...features], ...events(peer, request.afterSeq ?? 0) }
+        return { hostId, clientId: peer.client.clientId, shell: shell(peer), capabilities: { mayAnswer: options.mayAnswer?.(peer.client) ?? false }, sottoVersion, features: [...features], ...events(peer, peer.afterSeq) }
       case 'shell': return shell(peer)
       case 'detail': return service.threadDetail(request.threadId)
       case 'events': return events(peer, request.afterSeq, request.threadId)
@@ -388,7 +389,12 @@ export async function startSocketServer(options: SocketServerOptions) {
       catch (error) { const code = error instanceof Refusal ? error.code : 'unavailable'; response = { v: 1, id: request.id, ok: false, error: { code, message: error instanceof Refusal ? error.message : errors[code] } } }
       // A revocation while an operation was pending also denies its response.
       if (!authenticated(peer)) { peer.frames.send({ v: 1, id: request.id, ok: false, error: { code: 'unauthenticated', message: errors.unauthenticated } }); peer.frames.close() }
-      else deliver(peer, response, request.op === 'detail' ? 'thread' : request.op === 'preview' || request.op === 'attachment-content' ? 'preview' : 'list')
+      else if (deliver(peer, response, request.op === 'detail' ? 'thread' : request.op === 'preview' || request.op === 'attachment-content' ? 'preview' : 'list')
+        && response.ok && (request.op === 'hello' || (request.op === 'events' && !request.threadId))) {
+        if (request.op === 'hello') peer.ready = true
+        const latestSeq = (response.result as { latestSeq: number }).latestSeq
+        peer.afterSeq = peer.afterSeq === Number.MAX_SAFE_INTEGER ? latestSeq : Math.max(peer.afterSeq, latestSeq)
+      }
     })().finally(() => { peer.inFlight-- }))
   }
   const bearer = (request: IncomingMessage): string => /^Bearer ([A-Za-z0-9_.-]{1,2048})$/.exec(request.headers.authorization ?? '')?.[1] ?? ''
@@ -465,7 +471,7 @@ export async function startSocketServer(options: SocketServerOptions) {
     const accept = createHash('sha1').update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64')
     stream.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' + accept + '\r\n\r\n')
     const frames = new SocketFrames(stream, false, text => onMessage(peer, text))
-    const peer: Peer = { frames, client: identity(clientId), session, observed: new Set(), inFlight: 0, window: Date.now(), count: 0, pageWindow: 0, pages: 0, preview: false, afterSeq: 0, selectedThreadId: null, selectedProjectId: null, editingThreadId: null, messageAliases: false, deltas: false, clientUpdates: false }
+    const peer: Peer = { frames, client: identity(clientId), session, observed: new Set(), inFlight: 0, window: Date.now(), count: 0, pageWindow: 0, pages: 0, preview: false, ready: false, afterSeq: Number.MAX_SAFE_INTEGER, selectedThreadId: null, selectedProjectId: null, editingThreadId: null, messageAliases: false, deltas: false, clientUpdates: false }
     peers.add(peer)
     frames.startHeartbeat()
     frames.onClose(() => { peers.delete(peer); if (!closing) { track(observe().catch(() => undefined)); options.onPeersChanged?.() } })

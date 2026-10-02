@@ -31,7 +31,7 @@ public enum JSONValue: Codable, Equatable, Sendable {
 }
 
 public enum ClientError: Error, LocalizedError, Equatable {
-    case invalidHost, invalidProtocol, invalidIdentity, invalidRequest, disconnected, uncertain, rejected(String)
+    case invalidHost, invalidProtocol, invalidIdentity, invalidRequest, disconnected, uncertain, connectionTimedOut, readTimedOut, rateLimited, rejected(String)
     case hostNotFound(String), hostUnreachable(String), notASottoHost(String), sottoNotRunning(String), invalidCode
     public var errorDescription: String? {
         switch self {
@@ -45,6 +45,9 @@ public enum ClientError: Error, LocalizedError, Equatable {
         case .invalidIdentity: return "A different computer answered at this address. Remove it and add it again if you meant to change computers."
         case .invalidRequest: return "This request changed or is not supported on this iPhone. Refresh the thread or answer on the computer."
         case .disconnected: return "Connection lost. Work carries on on the computer. Reconnect to check the thread."
+        case .connectionTimedOut: return "The computer didn't finish connecting. Work carries on there. Try connecting again."
+        case .readTimedOut: return "Sotto did not answer in time. Try again."
+        case .rateLimited: return "Too many connection attempts. Wait a minute and try again."
         case .uncertain: return "Delivery is unconfirmed. Check the thread before sending again."
         case .rejected(let message): return message
         }

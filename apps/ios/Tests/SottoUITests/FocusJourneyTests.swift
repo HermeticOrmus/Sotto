@@ -270,6 +270,34 @@ import XCTest
         }
     }
 
+    func testFolderReadTimeoutInBothAppearances() {
+        app.terminate()
+        app.launchArguments = ["--ui-fixture", "--reset-ui-preferences", "--ui-folder-timeout"]
+        app.launch()
+        for appearance in ["dark", "light"] {
+            if appearance == "light" {
+                app.tabBars.buttons["Settings"].tap()
+                app.buttons["setting-light"].tap()
+                let larger = app.switches["setting-larger-text"]
+                reveal(larger); larger.tap()
+                app.tabBars.buttons["Threads"].tap()
+            }
+            app.buttons["new-thread"].tap()
+            app.buttons["new-thread-computer-\(laptop)"].tap()
+            let browse = app.buttons["browse-project-folder"]
+            reveal(browse); browse.tap()
+            let problem = app.staticTexts["Sotto did not answer in time. Try again."]
+            XCTAssertTrue(problem.waitForExistence(timeout: 5))
+            reveal(problem)
+            XCTAssertFalse(app.staticTexts["Delivery is unconfirmed. Check the thread before sending again."].exists)
+            capture("folder-read-timeout-" + appearance)
+            app.buttons["Home"].tap()
+            XCTAssertTrue(problem.waitForExistence(timeout: 5))
+            app.buttons["Back"].tap()
+            app.buttons["Cancel"].tap()
+        }
+    }
+
     func testAppearanceAndLargerTextPersist() {
         app.tabBars.buttons["Settings"].tap()
         let light = app.buttons["setting-light"]

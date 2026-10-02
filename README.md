@@ -111,6 +111,8 @@ Remote navigation belongs to each client. Compose, send and draft controls act o
 
 The iPhone checks each connection while Sotto is open. Pending reads keep slow thread downloads connected for up to two minutes. After a drop it retries with increasing waits and a small random variation, up to thirty seconds; a successful liveness check resets the wait. It refreshes threads and checks unconfirmed actions without sending them again. Returning from the background opens a fresh connection.
 
+The iPhone distinguishes connection and read waits from unconfirmed sends, and says when to wait before trying again.
+
 Older phones and desktop connections allow two missed keep-alive rounds. Sending frames and receiving partial frames keep slow transfers from counting as silence.
 
 ## Build from source

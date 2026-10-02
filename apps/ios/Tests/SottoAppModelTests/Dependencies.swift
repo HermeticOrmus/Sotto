@@ -32,6 +32,7 @@ struct HostRefusal: Error, LocalizedError {
     static var instances: [HostConnection] = []
     static var failDetail = false
     static var failConnect = false
+    static var revokeFailure: ClientError?
     static var holdDetail = false
     static var shell: JSONValue = .null
     static var detail: JSONValue = .null
@@ -67,11 +68,14 @@ struct HostRefusal: Error, LocalizedError {
         return Received(hello, sequence: sequence)
     }
     func push(_ frame: IncomingFrame) { received += 1; onPush?(frame, received) }
-    func callReceived(_ operation: [String: JSONValue], id: String = UUID().uuidString) async throws -> Received<JSONValue> {
+    func callReceived<T: Decodable & Sendable>(_ operation: [String: JSONValue], as type: T.Type, id: String = UUID().uuidString) async throws -> Received<T> {
         let value = try await call(operation, id: id)
         received += 1; let sequence = received
         afterReply?(operation["op"]?.string ?? "")
-        return Received(value, sequence: sequence)
+        return Received(try value.decode(type), sequence: sequence)
+    }
+    func call<T: Decodable & Sendable>(_ operation: [String: JSONValue], as type: T.Type, id: String = UUID().uuidString) async throws -> T {
+        try await call(operation, id: id).decode(type)
     }
     func call(_ operation: [String: JSONValue], id: String = UUID().uuidString) async throws -> JSONValue {
         let op = operation["op"]?.string ?? ""
@@ -104,5 +108,7 @@ struct HostRefusal: Error, LocalizedError {
     func close() { disconnect() }
     func health(endpoint: HostEndpoint) async throws -> Health { throw ClientError.disconnected }
     func pair(endpoint: HostEndpoint, expectedHostID: String, code: String) async throws -> Pairing { throw ClientError.disconnected }
-    func revoke(endpoint: HostEndpoint, token: String) async throws {}
+    func revoke(endpoint: HostEndpoint, pairing: Pairing) async throws {
+        if let failure = Self.revokeFailure { throw failure }
+    }
 }

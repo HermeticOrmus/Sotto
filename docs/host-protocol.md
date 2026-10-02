@@ -57,7 +57,7 @@ Each request is `{ v: 1, id, session, op, ... }`: `id` is the client's own (at m
 
 | `op` | Fields | Result |
 | --- | --- | --- |
-| `hello` | `afterSeq?`, `accepts?` | `{ hostId, clientId, shell, capabilities: { mayAnswer }, sottoVersion, features, events, latestSeq, hasMore }`. `accepts` lists the host features this client takes, from those the host advertised; `["detail-delta"]` asks for detail deltas. |
+| `hello` | `afterSeq?`, `accepts?` | `{ hostId, clientId, shell, capabilities: { mayAnswer }, sottoVersion, features, events, latestSeq, hasMore }`. Omitting `afterSeq` asks for snapshots only, with no retained events; an explicit cursor pages history. `accepts` lists the host features this client takes, from those the host advertised; `["detail-delta"]` asks for detail deltas. |
 | `shell` | none | The shell: the published state without any thread's history, with this client's own selection. |
 | `detail` | `threadId` | One thread's whole detail `{ threadId, revision, messages, activities?, earlierAvailable? }`, or `null`. |
 | `events` | `afterSeq`, `threadId?` | `{ events, latestSeq, hasMore }`, at most 256 events after that sequence number. |
@@ -86,7 +86,7 @@ A push has `event` in place of `id`. The host coalesces them the way the desktop
 
 | `event` | Fields | Sent |
 | --- | --- | --- |
-| `shell` | `state`, `eventPage?` | When the shell changes. `eventPage` is `{ events, latestSeq, hasMore }` after this client's place in the event stream; `hasMore` means read the rest with `events`. |
+| `shell` | `state`, `eventPage?` | When the shell changes, after a successful hello reply has been delivered. A v1 client that never sends hello receives no shell pushes. `eventPage` is `{ events, latestSeq, hasMore }` after this client's place in the event stream; `hasMore` means read the rest with `events`. |
 | `detail` | `threadId`, `detail` | An observed thread's whole detail: on observing it, on selecting it, when the host cannot describe a change as a delta, and on every change to a client that did not accept `detail-delta`. |
 | `detail-delta` | `threadId`, `delta` | What changed in an observed thread, to a client that accepted `detail-delta`. |
 | `error` | `threadId?`, `error` | In place of a push that would not fit in one frame (`too_large`). `threadId` names the thread whose detail or delta it replaced. |
