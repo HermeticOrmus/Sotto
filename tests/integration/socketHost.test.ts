@@ -1073,85 +1073,83 @@ describe('request budgets', () => {
       await expect(client.readShell()).resolves.toBeDefined()
     } finally { vi.useRealTimers(); await client.close(); await server.close() }
   })
-})
 
+  it.each([undefined, 0])('advances hello and event pages before later shell pushes (start: %s)', async afterSeq => {
+    const rows = Array.from({ length: 2 }, (_, index) => ({ seq: index + 1, threadId: 'synthetic',
+      event: { kind: 'messages-reset' as const, at: new Date().toISOString() } }))
+    let publish = () => {}
+    const service: HostService = {
+      shell: () => host.service.shell(), state: () => host.service.state(), threadDetail: id => host.service.threadDetail(id),
+      command: (command, identity) => host.service.command(command, identity),
+      events: (cursor, threadId, limit) => rows.filter(row => row.seq > cursor && (!threadId || row.threadId === threadId)).slice(0, limit),
+      subscribe: listener => { publish = () => listener(service.shell()); return () => {} },
+    }
+    const server = await startSocketServer({ service, pairing: host.pairing })
+    const paired = await host.pairing.redeem(host.pairing.issuePairingCode().code, 'Cursor test')
+    const peer = await rawPeer(server.descriptor.port, host.pairing.signSession(paired.clientId))
+    try {
+      const hello = await peer.call('hello', { op: 'hello', ...(afterSeq === undefined ? {} : { afterSeq }) })
+      expect(hello).toMatchObject({ ok: true, result: { events: afterSeq === undefined ? [] : rows } })
+      publish()
+      await expect.poll(() => peer.messages.find(item => item.event === 'shell')).toMatchObject({ eventPage: { events: [] } })
+      peer.messages.length = 0
+      rows.push({ seq: 3, threadId: 'synthetic', event: { kind: 'messages-reset', at: new Date().toISOString() } })
+      expect(await peer.call('events', { op: 'events', afterSeq: 2 })).toMatchObject({ ok: true, result: { events: [rows[2]], latestSeq: 3 } })
+      publish()
+      await expect.poll(() => peer.messages.find(item => item.event === 'shell')).toMatchObject({ eventPage: { events: [], latestSeq: 3 } })
+      peer.messages.length = 0
+      rows.push({ seq: 4, threadId: 'synthetic', event: { kind: 'messages-reset', at: new Date().toISOString() } })
+      publish()
+      await expect.poll(() => peer.messages.find(item => item.event === 'shell')).toMatchObject({ eventPage: { events: [rows[3]], latestSeq: 4 } })
+    } finally { peer.frames.close(); await server.close() }
+  })
 
-it.each([undefined, 0])('advances hello and event pages before later shell pushes (start: %s)', async afterSeq => {
-  const rows = Array.from({ length: 2 }, (_, index) => ({ seq: index + 1, threadId: 'synthetic',
-    event: { kind: 'messages-reset' as const, at: new Date().toISOString() } }))
-  let publish = () => {}
-  const service: HostService = {
-    shell: () => host.service.shell(), state: () => host.service.state(), threadDetail: id => host.service.threadDetail(id),
-    command: (command, identity) => host.service.command(command, identity),
-    events: (cursor, threadId, limit) => rows.filter(row => row.seq > cursor && (!threadId || row.threadId === threadId)).slice(0, limit),
-    subscribe: listener => { publish = () => listener(service.shell()); return () => {} },
-  }
-  const server = await startSocketServer({ service, pairing: host.pairing })
-  const paired = await host.pairing.redeem(host.pairing.issuePairingCode().code, 'Cursor test')
-  const peer = await rawPeer(server.descriptor.port, host.pairing.signSession(paired.clientId))
-  try {
-    const hello = await peer.call('hello', { op: 'hello', ...(afterSeq === undefined ? {} : { afterSeq }) })
-    expect(hello).toMatchObject({ ok: true, result: { events: afterSeq === undefined ? [] : rows } })
-    publish()
-    await expect.poll(() => peer.messages.find(item => item.event === 'shell')).toMatchObject({ eventPage: { events: [] } })
-    peer.messages.length = 0
-    rows.push({ seq: 3, threadId: 'synthetic', event: { kind: 'messages-reset', at: new Date().toISOString() } })
-    expect(await peer.call('events', { op: 'events', afterSeq: 2 })).toMatchObject({ ok: true, result: { events: [rows[2]], latestSeq: 3 } })
-    publish()
-    await expect.poll(() => peer.messages.find(item => item.event === 'shell')).toMatchObject({ eventPage: { events: [], latestSeq: 3 } })
-    peer.messages.length = 0
-    rows.push({ seq: 4, threadId: 'synthetic', event: { kind: 'messages-reset', at: new Date().toISOString() } })
-    publish()
-    await expect.poll(() => peer.messages.find(item => item.event === 'shell')).toMatchObject({ eventPage: { events: [rows[3]], latestSeq: 4 } })
-  } finally { peer.frames.close(); await server.close() }
-})
+  it('preserves the shell cursor while reading older and thread-filtered history', async () => {
+    const rows = Array.from({ length: 5 }, (_, index) => ({ seq: index + 1, threadId: index === 4 ? 'other' : 'synthetic',
+      event: { kind: 'messages-reset' as const, at: new Date().toISOString() } }))
+    let publish = () => {}
+    const service: HostService = {
+      shell: () => host.service.shell(), state: () => host.service.state(), threadDetail: id => host.service.threadDetail(id),
+      command: (command, identity) => host.service.command(command, identity),
+      events: (cursor, threadId, limit) => rows.filter(row => row.seq > cursor && (!threadId || row.threadId === threadId)).slice(0, Math.min(limit ?? 1, 1)),
+      subscribe: listener => { publish = () => listener(service.shell()); return () => {} },
+    }
+    const server = await startSocketServer({ service, pairing: host.pairing })
+    const paired = await host.pairing.redeem(host.pairing.issuePairingCode().code, 'History test')
+    const peer = await rawPeer(server.descriptor.port, host.pairing.signSession(paired.clientId))
+    try {
+      await peer.call('hello', { op: 'hello', afterSeq: 2 })
+      expect(await peer.call('older', { op: 'events', afterSeq: 0 })).toMatchObject({ result: { latestSeq: 1 } })
+      publish()
+      await expect.poll(() => peer.messages.find(item => item.event === 'shell')).toMatchObject({ eventPage: { events: [rows[3]], latestSeq: 4 } })
+      peer.messages.length = 0
+      expect(await peer.call('thread', { op: 'events', afterSeq: 4, threadId: 'other' })).toMatchObject({ result: { latestSeq: 5 } })
+      publish()
+      await expect.poll(() => peer.messages.find(item => item.event === 'shell')).toMatchObject({ eventPage: { events: [rows[4]], latestSeq: 5 } })
+    } finally { peer.frames.close(); await server.close() }
+  })
 
-
-it('preserves the shell cursor while reading older and thread-filtered history', async () => {
-  const rows = Array.from({ length: 5 }, (_, index) => ({ seq: index + 1, threadId: index === 4 ? 'other' : 'synthetic',
-    event: { kind: 'messages-reset' as const, at: new Date().toISOString() } }))
-  let publish = () => {}
-  const service: HostService = {
-    shell: () => host.service.shell(), state: () => host.service.state(), threadDetail: id => host.service.threadDetail(id),
-    command: (command, identity) => host.service.command(command, identity),
-    events: (cursor, threadId, limit) => rows.filter(row => row.seq > cursor && (!threadId || row.threadId === threadId)).slice(0, Math.min(limit ?? 1, 1)),
-    subscribe: listener => { publish = () => listener(service.shell()); return () => {} },
-  }
-  const server = await startSocketServer({ service, pairing: host.pairing })
-  const paired = await host.pairing.redeem(host.pairing.issuePairingCode().code, 'History test')
-  const peer = await rawPeer(server.descriptor.port, host.pairing.signSession(paired.clientId))
-  try {
-    await peer.call('hello', { op: 'hello', afterSeq: 2 })
-    expect(await peer.call('older', { op: 'events', afterSeq: 0 })).toMatchObject({ result: { latestSeq: 1 } })
-    publish()
-    await expect.poll(() => peer.messages.find(item => item.event === 'shell')).toMatchObject({ eventPage: { events: [rows[3]], latestSeq: 4 } })
-    peer.messages.length = 0
-    expect(await peer.call('thread', { op: 'events', afterSeq: 4, threadId: 'other' })).toMatchObject({ result: { latestSeq: 5 } })
-    publish()
-    await expect.poll(() => peer.messages.find(item => item.event === 'shell')).toMatchObject({ eventPage: { events: [rows[4]], latestSeq: 5 } })
-  } finally { peer.frames.close(); await server.close() }
-})
-
-it('waits for hello before reading events for a shell push', async () => {
-  let publish = () => {}
-  const reads = vi.fn(() => [])
-  const service: HostService = {
-    shell: () => host.service.shell(), state: () => host.service.state(), threadDetail: id => host.service.threadDetail(id),
-    command: (command, identity) => host.service.command(command, identity), events: reads,
-    subscribe: listener => { publish = () => listener(service.shell()); return () => {} },
-  }
-  const server = await startSocketServer({ service, pairing: host.pairing })
-  const paired = await host.pairing.redeem(host.pairing.issuePairingCode().code, 'Opening connection')
-  const peer = await rawPeer(server.descriptor.port, host.pairing.signSession(paired.clientId))
-  try {
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
-    publish()
-    await vi.advanceTimersByTimeAsync(50)
-    expect(reads).not.toHaveBeenCalled()
-    vi.useRealTimers()
-    await peer.call('hello', { op: 'hello', afterSeq: 0 })
-    expect(reads).toHaveBeenCalledWith(0, undefined, HOST_EVENT_PAGE_SIZE + 1)
-    publish()
-    await expect.poll(() => peer.messages.find(item => item.event === 'shell')).toMatchObject({ eventPage: { latestSeq: 0, events: [] } })
-  } finally { vi.useRealTimers(); peer.frames.close(); await server.close() }
+  it('waits for hello before reading events for a shell push', async () => {
+    let publish = () => {}
+    const reads = vi.fn(() => [])
+    const service: HostService = {
+      shell: () => host.service.shell(), state: () => host.service.state(), threadDetail: id => host.service.threadDetail(id),
+      command: (command, identity) => host.service.command(command, identity), events: reads,
+      subscribe: listener => { publish = () => listener(service.shell()); return () => {} },
+    }
+    const server = await startSocketServer({ service, pairing: host.pairing })
+    const paired = await host.pairing.redeem(host.pairing.issuePairingCode().code, 'Opening connection')
+    const peer = await rawPeer(server.descriptor.port, host.pairing.signSession(paired.clientId))
+    try {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      publish()
+      await vi.advanceTimersByTimeAsync(50)
+      expect(reads).not.toHaveBeenCalled()
+      vi.useRealTimers()
+      await peer.call('hello', { op: 'hello', afterSeq: 0 })
+      expect(reads).toHaveBeenCalledWith(0, undefined, HOST_EVENT_PAGE_SIZE + 1)
+      publish()
+      await expect.poll(() => peer.messages.find(item => item.event === 'shell')).toMatchObject({ eventPage: { latestSeq: 0, events: [] } })
+    } finally { vi.useRealTimers(); peer.frames.close(); await server.close() }
+  })
 })
