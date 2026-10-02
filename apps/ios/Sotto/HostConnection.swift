@@ -44,8 +44,9 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
         let fetched: (Data, URLResponse)
         do { fetched = try await network.data(for: request) } catch { throw ClientError.hostUnreachable(name) }
         let (data, response) = fetched
-        guard let response = response as? HTTPURLResponse, response.url == endpoint.route("/v1/health"),
-              (200..<300).contains(response.statusCode),
+        guard let response = response as? HTTPURLResponse, response.url == endpoint.route("/v1/health") else { throw ClientError.notASottoHost(name) }
+        if response.statusCode == 429 { throw ClientError.rateLimited }
+        guard (200..<300).contains(response.statusCode),
               let health = try? Wire.decode(data).decode(Health.self) else { throw ClientError.notASottoHost(name) }
         try health.validate()
         return health
@@ -151,11 +152,11 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
             let timeout = UInt64(LivenessProgress.requestTimeout(operation: operationName) * 1_000_000_000)
             deadlines[id] = Task { [weak self] in
                 do { try await Task.sleep(nanoseconds: timeout) } catch { return }
-                self?.finish(id: id, result: .failure(ClientError.uncertain))
+                self?.finish(id: id, result: .failure(Self.requestFailure(operation: operationName)))
             }
             Task { [weak self] in
                 do { try await socket.send(.string(String(decoding: data, as: UTF8.self))) }
-                catch { self?.finish(id: id, result: .failure(ClientError.uncertain)) }
+                catch { self?.finish(id: id, result: .failure(Self.requestFailure(operation: operationName))) }
             }
         }
     }
@@ -186,8 +187,12 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
 }
 extension HostConnection {
     /// What a refused request means. Only 401 and 403 say the pairing is gone; anything else from a
-    /// computer that answered (a 502 from Tailscale Serve while Sotto is closed there) means Sotto isn't running.
+    /// computer that answered means Sotto isn't running, apart from a rate limit's explicit wait.
+    nonisolated static func requestFailure(operation: String) -> ClientError {
+        operation == "hello" ? .connectionTimedOut : .uncertain
+    }
     nonisolated static func refusal(route: String, status: Int, name: String) -> ClientError {
+        if status == 429 { return .rateLimited }
         if route == "/v1/pair" && (400..<500).contains(status) {
             return .rejected("That code didn't work. Codes work once and last five minutes; get a new one on that computer.")
         }

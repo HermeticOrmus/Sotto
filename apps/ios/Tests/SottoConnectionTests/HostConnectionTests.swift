@@ -53,4 +53,22 @@ private final class HostResponses: URLProtocol {
         catch { XCTAssertEqual(error as? ClientError, .sottoNotRunning("forge")) }
         XCTAssertEqual(routes, ["/v1/health", "/v1/session"])
     }
+    func testConnectionFailureMessagesNameTheirCause() {
+        XCTAssertEqual(HostConnection.requestFailure(operation: "hello"), .connectionTimedOut)
+        XCTAssertEqual(HostConnection.requestFailure(operation: "command"), .uncertain)
+        for route in ["/v1/pair", "/v1/session", "/v1/revoke"] {
+            XCTAssertEqual(HostConnection.refusal(route: route, status: 429, name: "forge"), .rateLimited)
+        }
+        XCTAssertEqual(HostConnection.refusal(route: "/v1/pair", status: 401, name: "forge"), .rejected("That code didn't work. Codes work once and last five minutes; get a new one on that computer."))
+        XCTAssertEqual(HostConnection.refusal(route: "/v1/session", status: 503, name: "forge"), .sottoNotRunning("forge"))
+        XCTAssertEqual(ClientError.connectionTimedOut.errorDescription, "The computer didn't finish connecting. Work carries on there. Try connecting again.")
+        XCTAssertEqual(ClientError.rateLimited.errorDescription, "Too many connection attempts. Wait a minute and try again.")
+    }
+    func testHealthRateLimitIsReported() async throws {
+        HostResponses.handler = { _ in (429, "{}") }
+        let connection = connection(); defer { connection.close(); HostResponses.handler = nil }
+        do { _ = try await connection.health(endpoint: HostEndpoint("https://forge.example.ts.net")); XCTFail("Expected wait") }
+        catch { XCTAssertEqual(error as? ClientError, .rateLimited) }
+    }
+
 }

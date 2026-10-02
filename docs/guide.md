@@ -297,6 +297,8 @@ While Tailscale holds a connection it answers nothing, so SSH's own keepalive wo
 
 *In development. Builds reach iPhones through TestFlight; [the app's README](../apps/ios/README.md) says how to set that up and how to build it yourself.*
 
+The iPhone reports a connection that did not finish separately from an unconfirmed send. Too many connection attempts asks you to wait a minute and try again; it does not mean the pairing code is wrong or Sotto has stopped.
+
 The iPhone app reads and answers threads on your computers over Tailscale. It pairs with every computer running Sotto, and with any host without a screen, and shows their threads together; each computer shares only its own threads. Install Tailscale on the iPhone and on each computer. On a computer running Sotto, turn on phone access in **Settings › Phones** ([Phones](#phones)), which serves Sotto to your tailnet through Tailscale Serve on port 8443. For a host without a screen, point Tailscale Serve on its machine at the host's loopback port. Then add the computer:
 
 1. Type the computer's name on your tailnet, such as `forge`. The app finds its full private address through Tailscale's MagicDNS and checks that Sotto answers there, on port 8443 and then on 443. You can type the full address ending in `.ts.net` instead, with a port if you want only that one.
