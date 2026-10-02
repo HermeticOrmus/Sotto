@@ -95,16 +95,14 @@ export function ThreadsView({ onOpenAgents, now: fixedNow, updateControl, tools,
   const stateRef = useRef<AgentState | null>(null)
   const lastFocused = useRef<string | null>(null)
   const store = agents.threadDrafts
-  // Text typed into a draft thread's composer before its creation is refused: kept for the next new thread
-  // opened in the same project, since the refused thread's own pane and composer are gone from here.
-  const carriedDraftText = useRef(new Map<string, string>())
   // A thread created in this window is shown from its local record until main's state carries it, and every
   // command about it waits for that creation instead of being refused for naming a thread main does not know.
   const drafts = useDraftThreads()
   const published = agents.state
+  const publishedRef = useRef(published)
   const state = useMemo(() => overlayDraftThreads(published, drafts), [published, drafts])
   const command = useMemo(() => gateOnCreation(agents.command), [agents.command])
-  useEffect(() => { draftThreads.reconcile(published) }, [published])
+  useEffect(() => { publishedRef.current = published; draftThreads.reconcile(published) }, [published])
   // Derived facts are shared with the ones on screen: an update that did not touch a thread leaves its row,
   // its folder and its pane label at the same reference, so the memoised sidebar and panes below skip it.
   const rows = useShared(useMemo(() => state === null ? [] : describeThreads(state, now), [state, now]))
@@ -157,17 +155,20 @@ export function ThreadsView({ onOpenAgents, now: fixedNow, updateControl, tools,
   // The pane and its composer are on screen before the command is answered; main catches up under the same ID.
   // Shared by every instant-creation entry point: the pen, the empty page's button and the chooser.
   const handleCreationStart = useCallback((start: ThreadCreationStart): void => {
+    const projectTitle = publishedRef.current?.host.projects.find(project => project.id === start.thread.projectId)?.title
     draftThreads.open(start.thread, start.created)
     setPending({ threadId: start.thread.id })
-    const carried = carriedDraftText.current.get(start.thread.projectId)
-    if (carried !== undefined) { carriedDraftText.current.delete(start.thread.projectId); store.edit(start.thread.id, { text: carried }) }
+    store.restoreRefusedCreation(start.thread.id, start.thread.projectId)
     focusNewComposer()
     void start.created.then(creationError => {
       if (creationError === null) return
-      setNewThreadError(creationError)
-      // The refused thread's own pane is gone; its typed text moves to the project's next new thread instead.
-      const text = store.draft(start.thread.id).text
-      if (text.trim()) carriedDraftText.current.set(start.thread.projectId, text)
+      // A broadcast can confirm creation and release sends before the command's reply is lost.
+      if (publishedRef.current?.host.threads.some(thread => thread.id === start.thread.id)) return
+      // The pane is gone and gated sends never left the window; retain all its content, not just unsent text.
+      const kept = store.carryRefusedCreation(start.thread.id, start.thread.projectId)
+      setNewThreadError(kept
+        ? `${creationError} Your prompt and screenshots are kept. Open New thread in ${projectTitle ?? 'the same project'} to get them back.`
+        : creationError)
     })
   }, [store])
   // The pen and the empty page's button already know their project: the thread opens at once, on the defaults
@@ -176,12 +177,12 @@ export function ThreadsView({ onOpenAgents, now: fixedNow, updateControl, tools,
     if (state === null) return
     setNewThreadError(null)
     const unused = unusedNewThread(state, project)
-    if (unused) { openThread(unused.id); focusNewComposer(); return }
+    if (unused) { store.restoreRefusedCreation(unused.id, project.id); openThread(unused.id); focusNewComposer(); return }
     void beginNewThread(state, command, project).then(start => {
       if ('error' in start) { setNewThreadError(start.error); return }
       handleCreationStart(start)
     })
-  }, [state, command, handleCreationStart, openThread])
+  }, [state, command, handleCreationStart, openThread, store])
   const startNewThread = useCallback((projectId?: string): void => {
     setNewThreadError(null)
     const project = projectId !== undefined ? state?.host.projects.find(item => item.id === projectId) : undefined
