@@ -14,6 +14,14 @@ The phone reconnect and Remove validate ready host health against the saved comp
 
 The first Windows CI run exposed a shell arriving before hello: its snapshot-only cursor prevented a history-reading client from catching up. A cursor-only local trace reproduced that ordering. The listener now waits for a successful hello response before shell publication. A deterministic regression exercises the publisher before hello and fails before the fix, then checks hello and subsequent shell cursors. The shared adapter contract and its deadlines are unchanged. The final two-worker socket transport, socket contract and server-unit run passed all 100 tests.
 
+## Rework checks
+
+Typecheck, lint and notices verification passed again. The full two-worker run completed in 1,722 seconds: 7,108 passed, 154 skipped and two failures across 555 files. The recursive-submodule case reached its 15-second deadline; its entire file then passed all 68 tests alone. A renderer queue-feedback assertion received no toolbar error; its file passed all 12 tests alone, and the unchanged `origin/main` export at `46fa0806` passed that file eleven times. That assertion failure was not reproduced on main, so its cause remains unconfirmed.
+
+The final socket transport/server run passed all 64 tests. An earlier transport/contract/server run passed 99 of 100, with the Devin session-reaper case reaching its deadline. The contract file repeated that timeout alone, and the same case and full contract file failed on the `46fa0806` main export; the narrowed case also passed on this branch. No contract assertion or deadline changed. The Phones Playwright journey passed again after the build.
+
+Independent standards and spec reviews found no remaining findings after updating the protocol reference's snapshot-only hello and delivered-hello prerequisite. The latest Windows and macOS CI results are recorded in the PR; the local full run is not recorded as green.
+
 ## Native scope and remaining work
 
 Windows has no Swift or Xcode toolchain. The macOS job on revision `be4bfa57` passed the real connection tests, unsigned simulator build and all six Focus journeys on both small and large iPhones. CI retains the native screenshots; inspected the small-phone recovery view with larger text in light appearance. No physical-device connection or hands-on VoiceOver check was performed. A throwaway browser preview checked the connection messages; it is not native UI evidence. The rework also previews read-timeout copy in the existing folder picker at 375 pixels with larger text in both appearances and reduced motion. Its local source is retained on `prototype/bh-17-read-timeout` at `e0a1587c`. The supplied retry wording fits without changing the layout. A native folder-timeout journey now covers both appearances; its current CI result is recorded in the PR.
