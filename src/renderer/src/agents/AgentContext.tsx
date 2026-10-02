@@ -271,14 +271,16 @@ export function useAgentConnection(bridge: AgentBridge | undefined): AgentConnec
   }, [bridge, session, threadDrafts, receiveState, commitPendingShell, detail])
   // Keep the newest shell for the next start, at most once every couple of seconds. Nothing is kept
   // while Keep local history is off, and a stale shell is never written back over itself.
-  const cached = useRef(0)
+  const cached = useRef<number | null>(null)
   useEffect(() => {
     if (state === null || state.stale === true) return
     if (state.historyEnabled === false) { clearShellCache(); return }
     const now = performance.now()
-    if (cached.current !== 0 && now - cached.current < SHELL_CACHE_INTERVAL_MS) return
-    cached.current = now
-    writeShellCache(state)
+    const write = (): void => { cached.current = performance.now(); writeShellCache(state) }
+    const remaining = cached.current === null ? 0 : SHELL_CACHE_INTERVAL_MS - (now - cached.current)
+    if (remaining <= 0) { write(); return }
+    const timer = window.setTimeout(write, remaining)
+    return () => window.clearTimeout(timer)
   }, [state])
   // Both published and command-returned snapshots reach the store before paint,
   // including while the Threads page is absent.
