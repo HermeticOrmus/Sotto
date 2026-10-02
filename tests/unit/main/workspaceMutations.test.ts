@@ -37,7 +37,7 @@ it('holds a checkout throughout a Git action and refuses a sibling send and bran
     f.host.setGitActions({ runStackedAction: async () => { pause.enter(); await pause.held; throw new Error('Draft failed') } } as unknown as GitActions)
     action = f.host.runGitAction({ threadId: 'a', actionId: 'commit', action: 'commit' })
     await pause.entered
-    await expect(f.host.execute(send('b'))).rejects.toThrow(/Wait for/)
+    await expect(f.host.execute(send('b'))).rejects.toThrow('A Git action is running in this folder. Your message was not sent. Send it again when the action finishes.')
     await expect(f.host.restoreThreadBranch('b', true)).rejects.toThrow(/Wait for/)
     expect(f.adapters.codex.commands.some(command => command.type === 'send')).toBe(false)
     pause.release(); await action

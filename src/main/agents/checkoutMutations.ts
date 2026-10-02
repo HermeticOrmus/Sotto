@@ -20,6 +20,12 @@ export async function checkoutIdentity(folder: string): Promise<string> {
   return process.platform === 'win32' ? canonical.toLowerCase() : canonical
 }
 
+/** A definitive refusal before the provider receives a prompt. Queue delivery supplies its own recovery copy. */
+export class CheckoutSendRefusal extends Error {
+  constructor() { super('A Git action is running in this folder. Your message was not sent. Send it again when the action finishes.') }
+  queuedMessage(): string { return 'A Git action is running in this folder. Your follow-up was not sent. It is kept in the queue. Resume the queue when the action finishes.' }
+}
+
 /** Sends may share a checkout, but a mutation excludes sends and other mutations from its first check to completion. */
 export class CheckoutMutations {
   private readonly active = new Map<string, { sends: number; mutation: boolean }>()
@@ -32,6 +38,7 @@ export class CheckoutMutations {
   }
   acquireIdentity(key: string, kind: 'send' | 'mutation'): () => void {
     const state = this.active.get(key) ?? { sends: 0, mutation: false }
+    if (state.mutation && kind === 'send') throw new CheckoutSendRefusal()
     if (state.mutation || kind === 'mutation' && state.sends > 0) throw new GitActionRefusal('Wait for active or pending thread work before changing this checkout.')
     if (kind === 'mutation') state.mutation = true
     else state.sends++

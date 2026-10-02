@@ -1,3 +1,4 @@
+import { CheckoutSendRefusal } from './checkoutMutations'
 import type { AgentSkillReference } from '../../shared/agentSkills'
 import type { AgentFileReference } from '../../shared/agentFiles'
 import type { AgentActivity } from '../../shared/agentActivity'
@@ -1786,7 +1787,7 @@ export class AgentControl {
             expectedLastUserMessageId: lastUserMessageIdOf(this.thread(threadId)) }, turn, validate, item.draftId)
           await this.followupStore.settle(item.id, 'accepted')
         } catch (error) {
-          failure = error instanceof Error ? error.message : 'Could not dispatch this follow-up.'
+          failure = error instanceof CheckoutSendRefusal ? error.queuedMessage() : error instanceof Error ? error.message : 'Could not dispatch this follow-up.'
           if (claimed) {
             const item = this.followupStore.get().items.find(i => i.id === first.id)
             const accepted = item?.messageId && this.thread(threadId).messages.some(m => m.role === 'user' && m.id === item.messageId)

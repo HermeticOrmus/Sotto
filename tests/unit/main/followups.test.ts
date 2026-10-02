@@ -1,3 +1,4 @@
+import { CheckoutSendRefusal } from '../../../src/main/agents/checkoutMutations'
 // @vitest-environment node
 import { randomUUID } from 'node:crypto'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
@@ -540,4 +541,19 @@ it('keeps a view it handed out unchanged when the queue changes after it', async
   await store.edit(before.items[0]!.threadId, before.items[0]!.id, { text: 'edited', attachments: [] })
   expect(before.items.map(item => item.text)).toEqual(['first'])
   expect(store.peek().items.map(item => item.text)).toEqual(['edited', 'second'])
+})
+
+it('keeps a checkout-refused follow-up failed in the queue until the user resumes it', async () => {
+  const f = await fixture()
+  f.host.update('workshop', { status: 'running' })
+  await f.control.command(queued('Keep these words'))
+  const execute = vi.spyOn(f.host, 'execute').mockRejectedValue(new CheckoutSendRefusal())
+  complete(f.host)
+  await expect.poll(() => f.control.get().followups?.[0]?.status).toBe('failed')
+  expect(f.control.get().followups?.[0]).toMatchObject({ text: 'Keep these words', error: 'A Git action is running in this folder. Your follow-up was not sent. It is kept in the queue. Resume the queue when the action finishes.' })
+  expect(f.host.state.threads.find(t => t.id === 'workshop')?.messages.some(m => m.text === 'Keep these words')).toBe(false)
+  execute.mockRestore()
+  await f.control.command({ type: 'resume-followups', threadId: 'workshop' })
+  await expect.poll(() => f.control.get().followups?.length).toBe(0)
+  expect(f.host.state.threads.find(t => t.id === 'workshop')?.messages.filter(m => m.text === 'Keep these words')).toHaveLength(1)
 })
