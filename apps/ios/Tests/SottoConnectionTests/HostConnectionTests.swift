@@ -1,0 +1,56 @@
+import Foundation
+import XCTest
+import SottoCore
+
+private final class HostResponses: URLProtocol {
+    static var handler: ((URLRequest) throws -> (Int, String))?
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        do {
+            let (status, body) = try Self.handler!(request)
+            let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: Data(body.utf8))
+            client?.urlProtocolDidFinishLoading(self)
+        } catch { client?.urlProtocol(self, didFailWithError: error) }
+    }
+    override func stopLoading() {}
+}
+
+@MainActor final class HostConnectionTests: XCTestCase {
+    private let hostID = "11111111-1111-4111-8111-111111111111"
+    private func connection() -> HostConnection {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [HostResponses.self]
+        return HostConnection(configuration: configuration)
+    }
+    func testConnectValidatesHealthIdentity() async throws {
+        let endpoint = try HostEndpoint("https://forge.example.ts.net")
+        let pairing = try JSONDecoder().decode(Pairing.self, from: Data("{\"v\":1,\"hostId\":\"\(hostID)\",\"clientId\":\"phone\",\"token\":\"fixture\"}".utf8))
+        var routes: [String] = []
+        HostResponses.handler = { request in
+            routes.append(request.url!.path)
+            return (200, #"{"v":1,"status":"ready","hostId":"22222222-2222-4222-8222-222222222222","sottoVersion":"1"}"#)
+        }
+        let connection = connection(); defer { connection.close(); HostResponses.handler = nil }
+        do { _ = try await connection.connect(endpoint: endpoint, pairing: pairing); XCTFail("Expected refusal") }
+        catch { XCTAssertEqual(error as? ClientError, .invalidIdentity) }
+        XCTAssertEqual(routes, ["/v1/health"])
+    }
+    func testConnectReadsHealthBeforeSession() async throws {
+        let endpoint = try HostEndpoint("https://forge.example.ts.net")
+        let pairing = try JSONDecoder().decode(Pairing.self, from: Data("{\"v\":1,\"hostId\":\"\(hostID)\",\"clientId\":\"phone\",\"token\":\"fixture\"}".utf8))
+        var routes: [String] = []
+        let expected = hostID
+        HostResponses.handler = { request in
+            routes.append(request.url!.path)
+            if request.url!.path == "/v1/health" { return (200, "{\"v\":1,\"status\":\"ready\",\"hostId\":\"\(expected)\",\"sottoVersion\":\"1\"}") }
+            return (503, "{}")
+        }
+        let connection = connection(); defer { connection.close(); HostResponses.handler = nil }
+        do { _ = try await connection.connect(endpoint: endpoint, pairing: pairing); XCTFail("Expected unavailable session") }
+        catch { XCTAssertEqual(error as? ClientError, .sottoNotRunning("forge")) }
+        XCTAssertEqual(routes, ["/v1/health", "/v1/session"])
+    }
+}

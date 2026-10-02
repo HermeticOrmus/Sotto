@@ -15,10 +15,11 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
     private var liveness = LivenessProgress()
     private let redirects = NoRedirects()
     private var made: URLSession?
+    private let configuration: URLSessionConfiguration
+    init(configuration: URLSessionConfiguration = .ephemeral) { self.configuration = configuration }
     /// Made on first use. A session holds its delegate until it is invalidated, so `close()` ends it.
     private var network: URLSession {
         if let made { return made }
-        let configuration = URLSessionConfiguration.ephemeral
         configuration.httpCookieStorage = nil; configuration.urlCredentialStorage = nil
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
         configuration.timeoutIntervalForRequest = 30
@@ -63,6 +64,9 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
     func connect(endpoint: HostEndpoint, pairing: Pairing) async throws -> Received<Hello> {
         disconnect()
         let current = generation
+        let health = try await health(endpoint: endpoint)
+        guard current == generation else { throw CancellationError() }
+        guard health.hostId == pairing.hostId else { throw ClientError.invalidIdentity }
         let result = try await post(endpoint: endpoint, route: "/v1/session", token: pairing.token)
         guard current == generation else { throw CancellationError() }
         let access = try result.decode(HostSession.self); try access.validate(pairing: pairing)
