@@ -286,6 +286,7 @@ struct Live {
             let wasStorageReady = storageReady
             loadComputers()
             guard !active || (!wasStorageReady && storageReady) else { return }; active = true
+            guard storageReady else { return }
             Task { await reconnectAll() }
         } else if phase == .background {
             cancelDetailReload()
