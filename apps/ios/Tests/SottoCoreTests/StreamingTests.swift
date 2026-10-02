@@ -73,6 +73,15 @@ final class StreamingTests: XCTestCase {
 }
 
 final class LivenessProgressTests: XCTestCase {
+    func testUnrequestedLargePushWithOnlyByteProgressStaysConnected() {
+        var liveness = LivenessProgress()
+        XCTAssertFalse(liveness.shouldDisconnect(now: 35, messagesAdvanced: false, pong: false))
+        for now in [60.0, 85.0, 110.0, 135.0] {
+            XCTAssertFalse(liveness.shouldDisconnect(now: now, messagesAdvanced: false, pong: false, bytesAdvanced: true))
+        }
+        XCTAssertFalse(liveness.shouldDisconnect(now: 160, messagesAdvanced: false, pong: false))
+        XCTAssertTrue(liveness.shouldDisconnect(now: 185, messagesAdvanced: false, pong: false))
+    }
     func testSlowDetailWithoutCompleteMessagesForSixtySecondsStaysConnected() {
         for operation in ["observe", "detail"] {
             var liveness = LivenessProgress()

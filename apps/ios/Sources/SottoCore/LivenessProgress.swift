@@ -1,4 +1,4 @@
-/// Complete messages and pongs confirm liveness; pending reads protect slow transfers.
+/// Received bytes, complete messages and pongs confirm liveness; pending reads protect slow transfers.
 public struct LivenessProgress: Sendable {
     private var silentRounds = 0
     private var requestDeadlines: [String: Double] = [:]
@@ -11,9 +11,9 @@ public struct LivenessProgress: Sendable {
     }
     public mutating func finishRequest(id: String) { requestDeadlines.removeValue(forKey: id) }
     /// Returns true only after two consecutive silent rounds outside all request deadlines.
-    public mutating func shouldDisconnect(now: Double, messagesAdvanced: Bool, pong: Bool) -> Bool {
+    public mutating func shouldDisconnect(now: Double, messagesAdvanced: Bool, pong: Bool, bytesAdvanced: Bool = false) -> Bool {
         requestDeadlines = requestDeadlines.filter { $0.value > now }
-        if messagesAdvanced || pong || !requestDeadlines.isEmpty { silentRounds = 0; return false }
+        if bytesAdvanced || messagesAdvanced || pong || !requestDeadlines.isEmpty { silentRounds = 0; return false }
         silentRounds += 1
         return silentRounds >= 2
     }

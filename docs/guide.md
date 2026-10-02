@@ -320,6 +320,8 @@ If **Run the local host** cannot be saved, the control says so beside it. The pr
 
 While Sotto is open on the iPhone, a dropped connection retries with increasing waits, from about one second up to thirty seconds, with a small random variation. A successful liveness check resets the wait; merely connecting does not. Pending reads keep slow thread downloads connected for up to two minutes. A fresh connection refreshes threads and checks unconfirmed actions; it never resends them. Backgrounding stops connection attempts, and returning to Sotto connects again. A changed computer identity or lost pairing still asks you to add the computer again.
 
+Older phones and desktop connections allow two missed keep-alive rounds before closing. Frames sent since the previous check and bytes received before a whole frame arrives keep a round from counting as silent. A delayed reply can therefore arrive after one missed round without losing the connection.
+
 **Settings > Phones** lets Sotto on your iPhone reach the threads this computer runs, over your own tailnet. It needs Tailscale installed and signed in on both, and the local host running (**Settings > Hosts**); with the local host off, the page says so and offers **Go to Hosts**. Each computer shares only its own threads: a phone paired with this computer sees what this window's local host runs, and not your remote hosts.
 
 Turn on **Let phones connect**. Sotto saves its phone access record before setup; if it cannot, phone access stays stopped and the page asks you to check access to its data folder and try again. Sotto then works down a checklist, and each row says whether its step worked, failed, or is still to come:

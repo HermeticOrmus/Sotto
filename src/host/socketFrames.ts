@@ -11,7 +11,9 @@ export class SocketFrames {
   private ended = false
   private heartbeat: ReturnType<typeof setInterval> | undefined
   private awaitingPong: Buffer | undefined
-  private lastReceived = Date.now()
+  private silentRounds = 0
+  private wroteSincePing = false
+  private lastProgress = Date.now()
   private clientLiveness = false
   get isClosed(): boolean { return this.ended }
   private readonly closedListeners = new Set<() => void>()
@@ -22,16 +24,21 @@ export class SocketFrames {
     stream.on('end', () => this.close())
   }
   /** Only peers opting in through hello take responsibility for their own pings. */
-  setClientLiveness(enabled: boolean): void { this.clientLiveness = enabled; this.awaitingPong = undefined }
+  setClientLiveness(enabled: boolean): void { this.clientLiveness = enabled; this.awaitingPong = undefined; this.silentRounds = 0 }
   startHeartbeat(): void {
     if (this.heartbeat || this.ended) return
     this.heartbeat = setInterval(() => {
-      if (this.stream.writableLength > 0) return
+      if (this.stream.writableLength > 0) { this.silentRounds = 0; return }
       if (!this.client && this.clientLiveness) {
-        if (Date.now() - this.lastReceived >= 75_000) this.close()
+        if (Date.now() - this.lastProgress >= 75_000) this.close()
         return
       }
-      if (this.awaitingPong) { this.close(); return }
+      // A tunnel can drain Node's buffer while still delivering our frames to the peer.
+      // Our own keep-alive pings must not count as progress for a dead connection.
+      if (this.awaitingPong && !this.wroteSincePing) this.silentRounds++
+      else this.silentRounds = 0
+      if (this.silentRounds >= 2) { this.close(); return }
+      this.wroteSincePing = false
       this.awaitingPong = randomBytes(8)
       this.write(9, this.awaitingPong)
     }, 25_000)
@@ -73,11 +80,12 @@ export class SocketFrames {
       for (let index = 0; index < data.length; index++) data[index] = data[index]! ^ mask[index % 4]!
     }
     this.stream.write(Buffer.concat([header, data]))
+    if (opcode !== 9) { this.wroteSincePing = true; this.lastProgress = Date.now() }
     return true
   }
   private receive(data: Buffer): void {
     if (this.ended) return
-    if (data.length) { this.lastReceived = Date.now(); this.awaitingPong = undefined; this.chunks.push(data); this.bufferedBytes += data.length }
+    if (data.length) { this.lastProgress = Date.now(); this.awaitingPong = undefined; this.silentRounds = 0; this.chunks.push(data); this.bufferedBytes += data.length }
     while (this.bufferedBytes >= 2 && !this.ended) {
       const header = this.header()
       const first = header[0]!, second = header[1]!, opcode = first & 15

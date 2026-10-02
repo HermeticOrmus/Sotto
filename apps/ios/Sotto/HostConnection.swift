@@ -88,6 +88,7 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
         }
         heartbeat = Task { [weak self] in
             var interval: UInt64 = 25_000_000_000
+            var receivedBytes = task.countOfBytesReceived
             while !Task.isCancelled {
                 do { try await Task.sleep(nanoseconds: interval) } catch { return }
                 guard let self, self.generation == current else { return }
@@ -101,8 +102,13 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
                 }
                 do { try await Task.sleep(nanoseconds: 10_000_000_000) } catch { return }
                 guard self.generation == current else { return }
-                let alive = self.received > messages || self.answeredPing == ping
-                if self.liveness.shouldDisconnect(now: ProcessInfo.processInfo.systemUptime, messagesAdvanced: self.received > messages, pong: self.answeredPing == ping) {
+                // Use byte growth when URLSession exposes it, including between rounds. Keep
+                // pending-read protection because partial-frame counters are not guaranteed.
+                let bytes = task.countOfBytesReceived
+                let bytesAdvanced = bytes > receivedBytes
+                receivedBytes = bytes
+                let alive = self.received > messages || self.answeredPing == ping || bytesAdvanced
+                if self.liveness.shouldDisconnect(now: ProcessInfo.processInfo.systemUptime, messagesAdvanced: self.received > messages, pong: self.answeredPing == ping, bytesAdvanced: bytesAdvanced) {
                     self.disconnect(); self.onDisconnect?(); return
                 }
                 if alive { self.onLiveness?() }
