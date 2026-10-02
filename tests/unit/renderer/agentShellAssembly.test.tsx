@@ -235,9 +235,9 @@ describe('the startup shell cache', () => {
   it('discloses the plaintext excerpts and permission details in both privacy guides', () => {
     for (const path of ['README.md', 'docs/guide.md']) {
       const text = readFileSync(path, 'utf8')
-      const disclosure = text.split('\n').find(line => line.includes('startup shell') && line.includes('localStorage'))
+      const disclosure = text.split('\n').find(line => line.includes('startup copy of your threads'))
       expect(disclosure).toBeDefined()
-      for (const term of ['Keep local history', 'plaintext', 'lastUser', 'lastAssistant', '2,000', 'permission text and command details', 'Turning history off clears']) {
+      for (const term of ['Keep local history', 'not encrypted', 'your last message and the last reply', '2,000', 'permission request', 'Turning history off deletes']) {
         expect(disclosure).toContain(term)
       }
     }
