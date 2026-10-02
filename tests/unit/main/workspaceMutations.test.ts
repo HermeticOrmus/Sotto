@@ -1,3 +1,4 @@
+import * as worktrees from '../../../src/main/agents/threadWorktrees'
 // @vitest-environment node
 import { mkdir, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -216,4 +217,27 @@ it.each([false, true])('removes an owned folder with failed history and a retain
     await expect(stat(copy.path!)).rejects.toMatchObject({ code: 'ENOENT' })
     expect((await git(f.project.path, ['rev-parse', `refs/heads/${copy.branch}`])).trim()).not.toBe('')
   } finally { await f.stop(); await f.remove() }
+})
+
+it('allows a sibling send while auto-settle reads the merged branch tip', async () => {
+  const f = await fixture(), pause = barrier()
+  let settling: Promise<unknown> | undefined
+  try {
+    await git(f.project.path, ['switch', '-c', 'feature'])
+    await f.host.execute(send('a')); await f.host.execute(send('b'))
+    for (const thread of f.adapters.codex.state.threads) thread.status = 'idle'
+    f.adapters.codex.emit()
+    await vi.waitFor(() => expect(f.host.workspaceSnapshot().threads.filter(t => ['a', 'b'].includes(t.id)).every(t => t.status === 'idle')).toBe(true))
+    const tip = (await git(f.project.path, ['rev-parse', 'HEAD'])).trim()
+    const original = worktrees.runWorktreeGit
+    vi.spyOn(worktrees, 'runWorktreeGit').mockImplementation(async (cwd, args) => {
+      if (args.includes('refs/heads/feature^{commit}')) { pause.enter(); await pause.held }
+      return original(cwd, args)
+    })
+    settling = f.host.setWorkspaceSettled('thread', 'a', true, { expectedMergedTip: tip, expectedMergedBranch: 'feature' })
+    await pause.entered
+    await expect(f.host.execute({ ...send('b'), commandId: 'send-b-again', messageId: 'message-b-again' })).resolves.toMatchObject({ accepted: true })
+    pause.release(); await settling
+    expect(f.host.workspaceSnapshot().threads.find(t => t.id === 'a')?.workspaceSettledAt).toBeTruthy()
+  } finally { pause.release(); await settling; vi.restoreAllMocks(); await f.stop(); await f.remove() }
 })

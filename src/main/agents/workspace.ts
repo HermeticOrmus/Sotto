@@ -1759,14 +1759,20 @@ export class WorkspaceHost implements AgentHost {
     return purpose?.historyFromEvents ? { ...purpose, historyFromEvents: false } : purpose
   }
   async setWorkspaceSettled(kind: 'project' | 'thread', id: string, settled: boolean, options?: { expectedMergedTip: string; expectedMergedBranch: string }): Promise<AgentHostSnapshot> {
-    if (kind === 'thread' && settled && options) return this.onGitLane(id, async () => {
-      const worktree = this.thread(id).worktree
-      const branch = worktree?.mode === 'independent' ? worktree.sentBranch ?? worktree.branch : worktree?.sentBranch
-      if (!worktree?.repositoryRoot || branch !== options.expectedMergedBranch
-        || (await runWorktreeGit(worktree.repositoryRoot, ['rev-parse', '--verify', '--end-of-options', `refs/heads/${branch}^{commit}`])).trim() !== options.expectedMergedTip) {
-        throw new Error('This branch changed after its merged pull request was checked. Its thread stays unsettled.')
-      }
-      return this.setWorkspaceSettled(kind, id, settled)
+    if (kind === 'thread' && settled && options) return this.onLane(id, async () => {
+      const thread = this.thread(id)
+      if (thread.status === 'running' || thread.requests.length || thread.historyStatus === 'loading' || thread.historyStatus === 'error'
+        || this.preparations.has(id) || this.pendingThreadWork(id)) throw checkoutMutationRefusal(this.checkoutThreadHolder(id, thread.status === 'running' ? 'turn' : 'pending-work'))
+      const release = await this.checkoutMutations.acquire(this.threadCheckoutFolder(id), 'send', { kind: 'settle' })
+      try {
+        const worktree = this.thread(id).worktree
+        const branch = worktree?.mode === 'independent' ? worktree.sentBranch ?? worktree.branch : worktree?.sentBranch
+        if (!worktree?.repositoryRoot || branch !== options.expectedMergedBranch
+          || (await runWorktreeGit(worktree.repositoryRoot, ['rev-parse', '--verify', '--end-of-options', `refs/heads/${branch}^{commit}`])).trim() !== options.expectedMergedTip) {
+          throw new Error('This branch changed after its merged pull request was checked. Its thread stays unsettled.')
+        }
+        return await this.setWorkspaceSettled(kind, id, settled)
+      } finally { release() }
     })
     await this.initialize()
     const projectId = kind === 'project' ? id : this.state.snapshot.threads.find(thread => thread.id === id)?.projectId

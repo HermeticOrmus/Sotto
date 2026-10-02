@@ -71,4 +71,4 @@ The preview is only the requesting command’s result. It is neither saved nor b
 
 The merged rule and Auto-settle merged threads require a merged pull request whose head commit equals the current local branch tip. A branch name alone is insufficient: forks and later work can reuse it. The tip is read again after GitHub answers; a moved or missing branch is left alone. A matching fork pull request counts because it merged the same commit.
 
-The validated tip travels into the thread lane. Reclaim checks it after acquiring the checkout guard and before removing the folder; Auto-settle checks the branch and tip under the same guard before settling. A Git action queued ahead of either decision can advance the branch, in which case current work stays in place.
+The validated tip travels into the thread lane. Reclaim checks it after acquiring the checkout guard and before removing the folder; Auto-settle checks the branch and tip under a read reservation before settling. Sibling sends can proceed; file mutations remain excluded while that read completes. A Git action queued ahead of either decision can advance the branch, in which case current work stays in place.
