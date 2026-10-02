@@ -763,6 +763,7 @@ struct Live {
     func folders(_ hostID: String, path: JSONValue? = nil) async throws -> FolderResult {
         #if DEBUG && os(iOS)
         if isUIFixture {
+            if ProcessInfo.processInfo.arguments.contains("--ui-folder-timeout") { throw ClientError.readTimedOut }
             let target = path?.string ?? "D:\\Engineering"
             let top = path == .null
             let children: [[String: Any]] = top ? [["name": "D:", "path": "D:\\", "git": false]]

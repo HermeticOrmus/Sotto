@@ -90,6 +90,10 @@ private final class HostResponses: URLProtocol {
     func testConnectionFailureMessagesNameTheirCause() {
         XCTAssertEqual(HostConnection.requestFailure(operation: "hello"), .connectionTimedOut)
         XCTAssertEqual(HostConnection.requestFailure(operation: "command"), .uncertain)
+        for operation in ["observe", "detail", "shell", "receipt", "host-folders", "events"] {
+            XCTAssertEqual(HostConnection.requestFailure(operation: operation), .readTimedOut)
+        }
+        XCTAssertEqual(ClientError.readTimedOut.errorDescription, "Sotto did not answer in time. Try again.")
         for route in ["/v1/pair", "/v1/session", "/v1/revoke"] {
             XCTAssertEqual(HostConnection.refusal(route: route, status: 429, name: "forge"), .rateLimited)
         }

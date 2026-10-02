@@ -201,7 +201,11 @@ extension HostConnection {
     /// What a refused request means. Only 401 and 403 say the pairing is gone; anything else from a
     /// computer that answered means Sotto isn't running, apart from a rate limit's explicit wait.
     nonisolated static func requestFailure(operation: String) -> ClientError {
-        operation == "hello" ? .connectionTimedOut : .uncertain
+        switch operation {
+        case "hello": return .connectionTimedOut
+        case "command": return .uncertain
+        default: return .readTimedOut
+        }
     }
     nonisolated static func refusal(route: String, status: Int, name: String) -> ClientError {
         if status == 429 { return .rateLimited }
