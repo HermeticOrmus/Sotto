@@ -215,7 +215,10 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(TestKeychain.items[ComputerStore.indexAccount], bytes)
         XCTAssertEqual(try TestKeychain.store.read([String].self, account: ComputerStore.recoveredIndexAccount), [ref.hostID])
         XCTAssertEqual(model.feedback, "Recovered the saved computer list.")
-        XCTAssertEqual(AppModel(keychain: TestKeychain.store).computers, model.computers)
+        let relaunched = AppModel(keychain: TestKeychain.store)
+        XCTAssertEqual(relaunched.computers, model.computers)
+        XCTAssertNil(relaunched.feedback)
+        XCTAssertNil(relaunched.pairFeedback)
     }
     @MainActor func testRecoveryPreservesADamagedRecoveredIndexToo() throws {
         let (_, ref) = try fixture()
@@ -237,12 +240,15 @@ final class AppModelTests: XCTestCase {
         let model = AppModel(keychain: TestKeychain.store)
         XCTAssertTrue(model.storageReady)
         XCTAssertEqual(model.computers.map(\.hostID), [ref.hostID])
-        XCTAssertTrue(model.feedback?.contains("Pair computer \(damagedID) again.") == true)
+        XCTAssertTrue(model.feedback?.contains("1 saved computer needs pairing again.") == true)
         XCTAssertEqual(TestKeychain.items[ComputerStore.account(damagedID)], bytes)
+        let relaunched = AppModel(keychain: TestKeychain.store)
+        XCTAssertNil(relaunched.feedback)
+        XCTAssertNil(relaunched.pairFeedback)
     }
     @MainActor func testDamagedMarkersAndLegacyPairingExplainWhatCouldNotBeRead() throws {
         for (account, expected) in [(ComputerStore.pendingAccount, "Saved unconfirmed actions could not be read."),
-                                    (ComputerStore.legacyAccount, "The computer saved by an earlier version needs pairing again.")] {
+                                    (ComputerStore.legacyAccount, "1 saved computer needs pairing again.")] {
             let (_, ref) = try fixture()
             let bytes = Data("incompatible item".utf8)
             TestKeychain.items[account] = bytes
@@ -252,15 +258,43 @@ final class AppModelTests: XCTestCase {
             XCTAssertTrue(model.feedback?.contains(expected) == true)
             XCTAssertEqual(model.feedback, model.pairFeedback)
             XCTAssertEqual(TestKeychain.items[account], bytes)
+            XCTAssertNil(AppModel(keychain: TestKeychain.store).feedback)
         }
     }
+    @MainActor func testUnreadableComputersAreCountedWithoutHostIDs() throws {
+        let (_, ref) = try fixture()
+        let other = "00000000-0000-4000-8000-000000000002"
+        try TestKeychain.store.write([ref.hostID, other], account: ComputerStore.indexAccount)
+        for id in [ref.hostID, other] { TestKeychain.items[ComputerStore.account(id)] = Data("damaged".utf8) }
+        let model = AppModel(keychain: TestKeychain.store)
+        XCTAssertEqual(model.feedback, "2 saved computers need pairing again.")
+        let relaunched = AppModel(keychain: TestKeychain.store)
+        XCTAssertNil(relaunched.feedback)
+        XCTAssertNil(relaunched.pairFeedback)
+    }
+
+    @MainActor func testDisappearedThreadSettlesAnswerNeutrally() async throws {
+        let (_, ref) = try fixture()
+        let marker = PendingOperation(hostID: ref.hostID, clientID: "phone", threadID: ref.threadID, requestID: "request", kind: "answer")
+        _ = try changeShell(requests: [["id": "request", "kind": "permission", "text": "Read files?", "options": []]])
+        let model = try modelWithMarker(marker)
+        model.phase(.active); await model.waitForActivation()
+        XCTAssertEqual(model.pending, [marker])
+        let empty = try JSONDecoder().decode(Shell.self, from: Data(#"{"hostId":"\#(ref.hostID)","host":{"hostId":"\#(ref.hostID)","name":"Laptop","threads":[],"projects":[]}}"#.utf8))
+        try XCTUnwrap(HostConnection.instances.last).push(.shell(empty))
+        XCTAssertTrue(model.pending.isEmpty)
+        XCTAssertFalse(model.answering(ref.hostID))
+        XCTAssertEqual(model.feedback, "That request is no longer waiting.")
+        model.phase(.background)
+    }
+
     @MainActor func testDamagedComputerInReadableIndexExplainsPairingAgain() throws {
         let (_, ref) = try fixture()
         TestKeychain.items[ComputerStore.account(ref.hostID)] = Data("incompatible computer".utf8)
         let model = AppModel(keychain: TestKeychain.store)
         XCTAssertTrue(model.storageReady)
         XCTAssertTrue(model.computers.isEmpty)
-        XCTAssertTrue(model.feedback?.contains("Pair computer \(ref.hostID) again.") == true)
+        XCTAssertTrue(model.feedback?.contains("1 saved computer needs pairing again.") == true)
     }
     @MainActor func testRecoveryRefusesInaccessibleItemsWithoutWritingAnIndex() throws {
         let (_, ref) = try fixture()
@@ -295,7 +329,7 @@ final class AppModelTests: XCTestCase {
         _ = try changeShell(requests: [["id": "request", "kind": "permission", "text": "Read files?", "options": []]])
         HostConnection.receipt = .object(["status": .string("completed"), "answerDelivered": .bool(true)])
         let model = try modelWithMarker(marker)
-        model.phase(.active); await model.reconnectAll()
+        model.phase(.active); await model.waitForActivation()
         XCTAssertTrue(model.pending.isEmpty)
         XCTAssertEqual(model.feedback, "Answer sent.")
     }
@@ -305,7 +339,7 @@ final class AppModelTests: XCTestCase {
         _ = try changeShell(requests: [["id": "next", "kind": "permission", "text": "Read files?", "options": []]], error: "Another thread failed")
         HostConnection.mayAnswer = true
         let model = try modelWithMarker(marker)
-        model.phase(.active); await model.reconnectAll()
+        model.phase(.active); await model.waitForActivation()
         XCTAssertTrue(model.pending.isEmpty)
         XCTAssertEqual(model.feedback, "That request is no longer waiting.")
         XCTAssertTrue(model.canAnswer(try XCTUnwrap(model.thread(ref)?.requests.first), in: ref))
@@ -316,18 +350,18 @@ final class AppModelTests: XCTestCase {
         _ = try changeShell(requests: [["id": "request", "kind": "permission", "text": "Read files?", "options": [], "delivery": "uncertain"]])
         HostConnection.receipt = .object(["status": .string("unknown")])
         let model = try modelWithMarker(marker)
-        model.phase(.active); await model.reconnectAll()
+        model.phase(.active); await model.waitForActivation()
         XCTAssertEqual(model.pending, [marker])
         let missing = PendingOperation(hostID: ref.hostID, clientID: "phone", threadID: "missing", requestID: "request", kind: "answer")
         let missingModel = try modelWithMarker(missing)
-        missingModel.phase(.active); await missingModel.reconnectAll()
+        missingModel.phase(.active); await missingModel.waitForActivation()
         XCTAssertEqual(missingModel.pending, [missing])
     }
     @MainActor func testOwnCompletedReceiptConfirmsAnswerAfterPushBeforeCommandReply() async throws {
         let (model, ref) = try fixture()
         HostConnection.mayAnswer = true
         _ = try changeShell(requests: [["id": "request", "kind": "permission", "text": "Read files?", "options": []]])
-        model.phase(.active); await model.reconnectAll()
+        model.phase(.active); await model.waitForActivation()
         let request = try XCTUnwrap(model.thread(ref)?.requests.first)
         let connection = try XCTUnwrap(HostConnection.instances.last)
         HostConnection.receipt = .object(["status": .string("completed"), "answerDelivered": .bool(true)])
@@ -354,7 +388,7 @@ final class AppModelTests: XCTestCase {
         let settled = expectation(description: "The reconnected answer marker settles")
         let observation = model.$pending.filter { $0.isEmpty }.prefix(1).sink { _ in settled.fulfill() }
         defer { observation.cancel(); model.phase(.background) }
-        model.phase(.active); await model.reconnectAll()
+        model.phase(.active); await model.waitForActivation()
         await fulfillment(of: [settled], timeout: 10)
         XCTAssertTrue(model.pending.isEmpty)
         XCTAssertEqual(model.feedback, "Answer sent.")
@@ -369,7 +403,7 @@ final class AppModelTests: XCTestCase {
         HostConnection.receipt = .object(["status": .string("completed"), "answerDelivered": .bool(true)])
         HostConnection.afterGreeting = { connection in connection.push(.shell(try! self.changeShell())) }
         let model = try modelWithMarker(marker)
-        model.phase(.active); await model.reconnectAll()
+        model.phase(.active); await model.waitForActivation()
         XCTAssertTrue(model.pending.isEmpty)
         XCTAssertEqual(model.feedback, "Answer sent.")
         let connection = try XCTUnwrap(HostConnection.instances.last)
@@ -382,7 +416,7 @@ final class AppModelTests: XCTestCase {
         _ = try changeShell(requests: [["id": "request", "kind": "permission", "text": "Read files?", "options": []]])
         HostConnection.receipt = .object(["status": .string("completed")])
         let model = try modelWithMarker(marker)
-        model.phase(.active); await model.reconnectAll()
+        model.phase(.active); await model.waitForActivation()
         XCTAssertEqual(model.pending, [marker])
         XCTAssertNotEqual(model.feedback, "Answer sent.")
         try XCTUnwrap(HostConnection.instances.last).push(.shell(try changeShell()))
@@ -395,7 +429,7 @@ final class AppModelTests: XCTestCase {
         _ = try changeShell(requests: [["id": "request", "kind": "permission", "text": "Read files?", "options": []]])
         HostConnection.receipt = .object(["status": .string("completed"), "answerDelivered": .bool(false), "error": .object(["code": .string("unavailable"), "message": .string("Answer refused")])])
         let model = try modelWithMarker(marker)
-        model.phase(.active); await model.reconnectAll()
+        model.phase(.active); await model.waitForActivation()
         XCTAssertEqual(model.pending, [marker])
         try XCTUnwrap(HostConnection.instances.last).push(.shell(try changeShell()))
         XCTAssertTrue(model.pending.isEmpty)
@@ -428,13 +462,13 @@ final class AppModelTests: XCTestCase {
         _ = try changeShell(requests: [["id": "request", "kind": "permission", "text": "Read files?", "options": []]])
         HostConnection.receipt = .object(["status": .string("completed"), "error": .object(["code": .string("unavailable"), "message": .string("Answer refused")])])
         let model = try modelWithMarker(marker)
-        model.phase(.active); await model.reconnectAll()
+        model.phase(.active); await model.waitForActivation()
         XCTAssertEqual(model.pending, [marker])
         XCTAssertNotEqual(model.feedback, "Answer sent.")
     }
     @MainActor func testLiveReplySettlementPreservesUnrelatedFeedback() async throws {
         let (model, ref) = try fixture()
-        model.phase(.active); await model.reconnectAll()
+        model.phase(.active); await model.waitForActivation()
         let connection = try XCTUnwrap(HostConnection.instances.last)
         HostConnection.loseAcknowledgement = true
         model.drafts[ref.id] = "Continue"
@@ -450,7 +484,7 @@ final class AppModelTests: XCTestCase {
         let marker = PendingOperation(hostID: ref.hostID, clientID: "phone", threadID: ref.threadID, requestID: "request", kind: "answer")
         _ = try changeShell(requests: [["id": "request", "kind": "permission", "text": "Read files?", "options": []]])
         let model = try modelWithMarker(marker)
-        model.phase(.active); await model.reconnectAll()
+        model.phase(.active); await model.waitForActivation()
         model.feedback = "Removed Studio Mac."
         XCTAssertEqual(model.pending, [marker])
         try XCTUnwrap(HostConnection.instances.last).push(.shell(try changeShell()))
@@ -460,7 +494,7 @@ final class AppModelTests: XCTestCase {
     }
     @MainActor func testStopRemainsAvailableAfterAReplyAcknowledgementIsLost() async throws {
         let (model, ref) = try fixture()
-        model.phase(.active); await model.reconnectAll()
+        model.phase(.active); await model.waitForActivation()
         let connection = try XCTUnwrap(HostConnection.instances.last)
         HostConnection.loseAcknowledgement = true
         model.drafts[ref.id] = "Continue"
@@ -474,7 +508,7 @@ final class AppModelTests: XCTestCase {
     }
     @MainActor func testLiveShellSettlesALostReplyWithoutCheckingAgainOrResending() async throws {
         let (model, ref) = try fixture()
-        model.phase(.active); await model.reconnectAll()
+        model.phase(.active); await model.waitForActivation()
         let connection = try XCTUnwrap(HostConnection.instances.last)
         HostConnection.loseAcknowledgement = true
         model.drafts[ref.id] = "Continue"
@@ -496,7 +530,7 @@ final class AppModelTests: XCTestCase {
         let answer = PendingOperation(hostID: ref.hostID, clientID: "phone", threadID: ref.threadID, requestID: "request", kind: "answer")
         _ = try changeShell(requests: [["id": "request", "kind": "permission", "text": "Read files?", "options": []]])
         let model = try modelWithMarker(answer)
-        model.phase(.active); await model.reconnectAll()
+        model.phase(.active); await model.waitForActivation()
         let connection = try XCTUnwrap(HostConnection.instances.last)
         connection.push(.shell(try changeShell()))
         XCTAssertTrue(model.pending.isEmpty)
@@ -516,7 +550,7 @@ final class AppModelTests: XCTestCase {
         let (_, ref) = try fixture()
         let marker = PendingOperation(hostID: ref.hostID, clientID: "phone", threadID: ref.threadID, draftID: "draft", kind: "reply")
         let model = try modelWithMarker(marker)
-        model.phase(.active); await model.reconnectAll()
+        model.phase(.active); await model.waitForActivation()
         let connection = try XCTUnwrap(HostConnection.instances.last)
         TestKeychain.locked = true
         connection.push(.shell(try changeShell(deliveries: [["threadId": ref.threadID, "draftId": "draft", "status": "accepted"]])))
@@ -532,7 +566,7 @@ final class AppModelTests: XCTestCase {
     }
     @MainActor func testLiveShellRefreshesAnswerAuthorityAndIgnoresStaleUpdates() async throws {
         let (model, ref) = try fixture()
-        model.phase(.active); await model.reconnectAll()
+        model.phase(.active); await model.waitForActivation()
         let connection = try XCTUnwrap(HostConnection.instances.last)
         XCTAssertFalse(model.mayAnswer(ref.hostID))
         connection.push(.shell(try shellWithAnswerAuthority(true)))
@@ -550,7 +584,7 @@ final class AppModelTests: XCTestCase {
         HostConnection.afterGreeting = { connection in
             connection.push(.shell(try! self.shellWithAnswerAuthority(true)))
         }
-        model.phase(.active); await model.reconnectAll()
+        model.phase(.active); await model.waitForActivation()
         XCTAssertTrue(model.mayAnswer(ref.hostID))
     }
     @MainActor func testOlderHostHelloSuppliesAuthorityAfterANewerShellPush() async throws {
@@ -559,7 +593,7 @@ final class AppModelTests: XCTestCase {
         HostConnection.afterGreeting = { connection in
             connection.push(.shell(try! HostConnection.shell.decode(Shell.self)))
         }
-        model.phase(.active); await model.reconnectAll()
+        model.phase(.active); await model.waitForActivation()
         XCTAssertTrue(model.mayAnswer(ref.hostID))
     }
     @MainActor func testAThreadReadFailureDoesNotDisconnectItsOnlineComputer() async throws {
@@ -584,7 +618,7 @@ final class AppModelTests: XCTestCase {
     }
     @MainActor func testSeveralMissingDeltaBasesShareOneReadAndCannotRestoreAClosedThread() async throws {
         let (model, ref) = try fixture()
-        model.phase(.active); await model.reconnectAll(); await model.select(ref)
+        model.phase(.active); await model.waitForActivation(); await model.select(ref)
         let connection = try XCTUnwrap(HostConnection.instances.last)
         let started = expectation(description: "Full detail read after a revision gap")
         connection.detailStarted = { started.fulfill() }; HostConnection.holdDetail = true
@@ -601,7 +635,7 @@ final class AppModelTests: XCTestCase {
     }
     @MainActor func testFinalDeltaDuringRepairTriggersAnotherRead() async throws {
         let (model, ref) = try fixture()
-        model.phase(.active); await model.reconnectAll(); await model.select(ref)
+        model.phase(.active); await model.waitForActivation(); await model.select(ref)
         let connection = try XCTUnwrap(HostConnection.instances.last)
         HostConnection.holdDetail = true
         let first = expectation(description: "First repair")
@@ -634,12 +668,12 @@ final class AppModelTests: XCTestCase {
     @MainActor func testHelloCannotReplaceAShellReceivedAfterIt() async throws {
         let (model, ref) = try fixture()
         HostConnection.afterGreeting = { connection in connection.push(.shell(try! self.newerShell())) }
-        model.phase(.active); await model.reconnectAll()
+        model.phase(.active); await model.waitForActivation()
         XCTAssertEqual(model.thread(ref)?.title, "New title")
     }
     @MainActor func testCommandReplyCannotReplaceANewerShellPush() async throws {
         let (model, ref) = try fixture()
-        model.phase(.active); await model.reconnectAll()
+        model.phase(.active); await model.waitForActivation()
         let connection = try XCTUnwrap(HostConnection.instances.last)
         connection.afterReply = { op in if op == "command" { connection.push(.shell(try! self.newerShell())) } }
         model.drafts[ref.id] = "Continue"
@@ -649,12 +683,12 @@ final class AppModelTests: XCTestCase {
     @MainActor func testDisconnectDuringHelloCannotMarkComputerOnlineAgain() async throws {
         let (model, ref) = try fixture()
         HostConnection.afterGreeting = { connection in connection.onDisconnect?() }
-        model.phase(.active); await model.reconnectAll()
+        model.phase(.active); await model.waitForActivation()
         XCTAssertEqual(model.status(ref.hostID), .unreachable)
     }
     @MainActor func testLiveShellTracksForegroundBackgroundAndCompletedWork() async throws {
         let (model, ref) = try fixture()
-        model.phase(.active); await model.reconnectAll()
+        model.phase(.active); await model.waitForActivation()
         let connection = try XCTUnwrap(HostConnection.instances.last)
         let original = String(decoding: try JSONEncoder().encode(HostConnection.shell), as: UTF8.self)
         func push(status: String, extra: String = "") async throws {

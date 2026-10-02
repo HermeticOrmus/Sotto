@@ -24,8 +24,8 @@ struct Live {
 @MainActor final class AppModel: ObservableObject {
     private static let requestNoLongerWaiting = "That request is no longer waiting."
     private static let markersUnreadable = "Saved unconfirmed actions could not be read. Check your threads before sending again. Nothing was resent."
-    private static func pairingWarning(_ hostID: String) -> String {
-        "Pair computer \(hostID) again. Its saved connection details could not be read."
+    private static func pairingWarning(_ count: Int) -> String {
+        count == 1 ? "1 saved computer needs pairing again." : "\(count) saved computers need pairing again."
     }
     /// In the order they were added. Credentials live in the Keychain, one item per host ID.
     @Published private(set) var computers: [SavedComputer] = []
@@ -69,6 +69,7 @@ struct Live {
     /// Requests to connect a computer that was already connecting, each waiting for that attempt to end.
     private var connectWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
     private var active = false
+    private var activationConnection: Task<Void, Never>?
     private var retries: [String: Task<Void, Never>] = [:]
     private var retryAttempts: [String: Int] = [:]
     private let retryJitter: @Sendable () -> Double
@@ -145,7 +146,7 @@ struct Live {
         let arguments = ProcessInfo.processInfo.arguments
         if arguments.contains("--ui-feedback-request-gone") { feedback = Self.requestNoLongerWaiting }
         if arguments.contains("--ui-feedback-markers-unreadable") { feedback = Self.markersUnreadable }
-        if arguments.contains("--ui-feedback-computer-unreadable") { feedback = "Recovered the saved computer list. " + Self.pairingWarning(studio) }
+        if arguments.contains("--ui-feedback-computer-unreadable") { feedback = "Recovered the saved computer list. " + Self.pairingWarning(1) }
     }
     #endif
 
@@ -219,6 +220,14 @@ struct Live {
         let storageProblem = "Secure connection details could not be read. Unlock this iPhone and return to Sotto."
         do {
             var warnings: [String] = []
+            let noticesAccount = "recovery-notices"
+            let previousNotices = try keychain.read([String].self, account: noticesAccount) ?? []
+            var notices = Set(previousNotices)
+            var unreadableComputers = 0
+            func unreadableComputer(_ account: String) {
+                if notices.insert(account).inserted { unreadableComputers += 1 }
+            }
+            var announceRecovery = false
             var index: [String]?
             var indexAccount: String? = ComputerStore.indexAccount
             var recoveredIndex = false
@@ -227,6 +236,7 @@ struct Live {
                 // Preserve the original bytes. A separate index keeps the recovered order on later
                 // launches and is the one pairing and removal may update from now on.
                 recoveredIndex = true; indexAccount = ComputerStore.recoveredIndexAccount
+                announceRecovery = !(try keychain.accounts()).contains(ComputerStore.recoveredIndexAccount)
                 do { index = try keychain.read([String].self, account: ComputerStore.recoveredIndexAccount) }
                 catch is KeychainStore.UndecodableItem { index = nil; indexAccount = nil }
                 let accounts = try keychain.accounts()
@@ -235,7 +245,7 @@ struct Live {
             }
             var legacy: SavedComputer?
             do { legacy = try readComputer(ComputerStore.legacyAccount) }
-            catch is KeychainStore.UndecodableItem { warnings.append("The computer saved by an earlier version needs pairing again.") }
+            catch is KeychainStore.UndecodableItem { unreadableComputer(ComputerStore.legacyAccount) }
             let plan = ComputerStore.plan(index: index, legacy: legacy)
             var kept: [SavedComputer] = []
             for hostID in plan.index {
@@ -243,25 +253,27 @@ struct Live {
                     let computer = try plan.adopt.flatMap { $0.hostID == hostID ? $0 : nil }
                         ?? readComputer(ComputerStore.account(hostID))
                     if let computer, computer.hostID == hostID { kept.append(computer) }
-                    else { warnings.append(Self.pairingWarning(hostID)) }
+                    else { unreadableComputer(ComputerStore.account(hostID)) }
                 } catch is KeychainStore.UndecodableItem {
-                    warnings.append(Self.pairingWarning(hostID))
+                    unreadableComputer(ComputerStore.account(hostID))
                 }
             }
             var markers: [PendingOperation] = []
             do { markers = try keychain.read([PendingOperation].self, account: ComputerStore.pendingAccount) ?? [] }
             catch is KeychainStore.UndecodableItem {
-                warnings.append(Self.markersUnreadable)
+                if notices.insert(ComputerStore.pendingAccount).inserted { warnings.append(Self.markersUnreadable) }
             }
             // All reads must succeed before migration writes: a locked item never looks missing.
             if let adopt = plan.adopt { try keychain.write(adopt, account: ComputerStore.account(adopt.hostID)) }
             if let indexAccount, recoveredIndex || plan.index != index { try keychain.write(plan.index, account: indexAccount) }
             if plan.removeLegacy { try keychain.remove(account: ComputerStore.legacyAccount) }
+            if notices != Set(previousNotices) { try keychain.write(notices.sorted(), account: noticesAccount) }
             pending = markers.filter { marker in kept.contains { marker.matches(hostID: $0.hostID, clientID: $0.pairing.clientId) } }
             computers = kept; computerIndexAccount = indexAccount
             for computer in kept { live[computer.hostID] = Live() }
             storageReady = true
-            if recoveredIndex { warnings.insert(kept.isEmpty ? "The saved computer list could not be recovered." : "Recovered the saved computer list.", at: 0) }
+            if unreadableComputers > 0 { warnings.append(Self.pairingWarning(unreadableComputers)) }
+            if announceRecovery { warnings.insert(kept.isEmpty ? "The saved computer list could not be recovered." : "Recovered the saved computer list.", at: 0) }
             if !warnings.isEmpty { feedback = warnings.joined(separator: " "); pairFeedback = feedback }
             else {
                 if feedback == storageProblem { feedback = nil }
@@ -287,7 +299,7 @@ struct Live {
             loadComputers()
             guard !active || (!wasStorageReady && storageReady) else { return }; active = true
             guard storageReady else { return }
-            Task { await reconnectAll() }
+            activationConnection = Task { await reconnectAll() }
         } else if phase == .background {
             cancelDetailReload()
             retries.values.forEach { $0.cancel() }; retries.removeAll(); retryAttempts.removeAll()
@@ -297,6 +309,8 @@ struct Live {
             live = live.mapValues { (state: Live) -> Live in var next = state; next.status = .connecting; next.mayAnswer = false; return next }
         }
     }
+    /// Wait for the connection work scheduled by activation, including delivery checks.
+    func waitForActivation() async { await activationConnection?.value }
     func reconnectAll() async {
         let ids = computers.map(\.hostID)
         await withTaskGroup(of: Void.self) { group in
@@ -711,8 +725,8 @@ struct Live {
         let thread = shell?.host.threads.first { $0.id == item.threadID }
         // Only this command's own receipt confirms the phone's answer. A request can also leave
         // after a desktop answer, a stopped turn or provider cancellation.
-        let noLongerWaiting = item.kind == "answer" && item.requestID != nil && thread != nil
-            && thread?.requests.contains(where: { $0.id == item.requestID }) == false
+        let noLongerWaiting = item.kind == "answer" && item.requestID != nil && shell != nil
+            && (thread == nil || thread?.requests.contains(where: { $0.id == item.requestID }) == false)
         if item.kind == "answer" {
             let confirmed = receipt?.confirmsAnswer == true
             guard confirmed || noLongerWaiting else { return }

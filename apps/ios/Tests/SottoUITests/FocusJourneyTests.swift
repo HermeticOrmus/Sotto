@@ -243,7 +243,7 @@ import XCTest
         let scenarios = [
             ("request-gone", "That request is no longer waiting."),
             ("markers-unreadable", "Saved unconfirmed actions could not be read. Check your threads before sending again. Nothing was resent."),
-            ("computer-unreadable", "Recovered the saved computer list. Pair computer 22222222-2222-4222-8222-222222222222 again. Its saved connection details could not be read.")
+            ("computer-unreadable", "Recovered the saved computer list. 1 saved computer needs pairing again.")
         ]
         for (scenario, words) in scenarios {
             app.terminate()
