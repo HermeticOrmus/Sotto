@@ -474,11 +474,13 @@ struct Live {
                 if let computerIndexAccount { try keychain.write(computers.map(\.hostID).filter { $0 != computer.hostID } + [computer.hostID], account: computerIndexAccount) }
                 try keychain.write(markers, account: ComputerStore.pendingAccount)
             } catch {
-                try? await finder.revoke(endpoint: found.endpoint, pairing: pairing)
+                // Roll back before the network wait: Cancel can open another Add flow while
+                // revocation waits, and that flow may save a newer pairing for this computer.
                 if savedCredential {
                     try? keychain.remove(account: ComputerStore.account(computer.hostID))
                     if let computerIndexAccount { try? keychain.write(computers.map(\.hostID), account: computerIndexAccount) }
                 }
+                try? await finder.revoke(endpoint: found.endpoint, pairing: pairing)
                 throw error
             }
             pending = markers

@@ -6,7 +6,7 @@ final class AppModelTests: XCTestCase {
     @MainActor private func fixture() throws -> (AppModel, ThreadRef) {
         HostConnection.instances = []; HostConnection.failDetail = false; HostConnection.failConnect = false; HostConnection.holdDetail = false; TestKeychain.items = [:]
         HostConnection.afterGreeting = nil
-        HostConnection.revokeFailure = nil
+        HostConnection.revokeFailure = nil; HostConnection.revokeHandler = nil
         HostConnection.foundHealth = nil; HostConnection.freshPairing = nil; HostConnection.pairCalls = 0; HostConnection.revoked = []
         TestKeychain.unwritableAccount = nil
         TestKeychain.locked = false; TestKeychain.unreadableAccount = nil
@@ -52,6 +52,41 @@ final class AppModelTests: XCTestCase {
         }
         XCTAssertEqual(HostConnection.pairCalls, 3)
         XCTAssertEqual(HostConnection.revoked, Array(repeating: saved.pairing.clientId, count: 3))
+    }
+    @MainActor func testFailedPairingRollbackCannotDeleteANewerPairingWhileRevocationWaits() async throws {
+        let (_, ref) = try fixture()
+        let saved = try XCTUnwrap(TestKeychain.store.read(SavedComputer.self, account: ComputerStore.account(ref.hostID)))
+        TestKeychain.items = [:]
+        HostConnection.foundHealth = try JSONDecoder().decode(Health.self, from: Data(#"{"v":1,"hostId":"\#(ref.hostID)","status":"ready"}"#.utf8))
+        HostConnection.freshPairing = saved.pairing
+        let model = AppModel(keychain: TestKeychain.store)
+        await model.find("laptop.example.ts.net")
+        TestKeychain.unwritableAccount = ComputerStore.indexAccount
+        let revoking = expectation(description: "The failed pairing waits for revocation")
+        var release: CheckedContinuation<Void, Never>?
+        HostConnection.revokeHandler = { _ in
+            await withCheckedContinuation { continuation in
+                release = continuation; revoking.fulfill()
+            }
+        }
+        defer { release?.resume(); HostConnection.revokeHandler = nil; TestKeychain.unwritableAccount = nil }
+        let first = Task { await model.pair(code: "ABCDEFGH") }
+        await fulfillment(of: [revoking], timeout: 10)
+        model.closeAdding()
+        TestKeychain.unwritableAccount = nil
+        let newer = try JSONDecoder().decode(Pairing.self, from: Data(#"{"v":1,"hostId":"\#(ref.hostID)","clientId":"new-phone","token":"new-fixture"}"#.utf8))
+        HostConnection.freshPairing = newer
+        model.startAdding()
+        await model.find("laptop.example.ts.net")
+        await model.pair(code: "ABCDEFGH")
+        XCTAssertEqual(model.computers.first?.pairing, newer)
+        release?.resume(); release = nil
+        await first.value
+        XCTAssertEqual(try TestKeychain.store.read(SavedComputer.self, account: ComputerStore.account(ref.hostID))?.pairing, newer)
+        let relaunched = AppModel(keychain: TestKeychain.store)
+        XCTAssertEqual(relaunched.computers.first?.pairing, newer)
+        XCTAssertNil(relaunched.feedback)
+        XCTAssertEqual(HostConnection.revoked, [saved.pairing.clientId])
     }
     @MainActor func testRemoveReportsAnOfflineComputerAsUnreachable() async throws {
         let (model, ref) = try fixture()

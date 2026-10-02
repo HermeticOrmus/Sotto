@@ -34,6 +34,7 @@ struct HostRefusal: Error, LocalizedError {
     static var failDetail = false
     static var failConnect = false
     static var revokeFailure: ClientError?
+    static var revokeHandler: ((Pairing) async throws -> Void)?
     static var foundHealth: Health?
     static var freshPairing: Pairing?
     static var pairCalls = 0
@@ -116,5 +117,6 @@ struct HostRefusal: Error, LocalizedError {
     func revoke(endpoint: HostEndpoint, pairing: Pairing) async throws {
         Self.revoked.append(pairing.clientId)
         if let failure = Self.revokeFailure { throw failure }
+        try await Self.revokeHandler?(pairing)
     }
 }
