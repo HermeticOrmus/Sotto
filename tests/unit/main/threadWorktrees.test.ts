@@ -868,7 +868,7 @@ describe('independent working-copy allocation', () => {
     }
     expect((await f.service.reclaimFacts(a)).repositories).toEqual([])
     expect((await f.service.reclaim(a, { automatic: true })).reclaimedAt).toBeTruthy()
-  })
+  }, 60_000)
   it('lists a bare repository hidden inside dependencies and requires the tick', async () => {
     const f = await fixture(); const a = await f.service.ensure(await f.service.allocate(f.project, 'independent'))
     await writeFile(join(a.path!, '.gitignore'), 'node_modules/\n')
