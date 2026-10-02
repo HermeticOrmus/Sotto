@@ -89,7 +89,7 @@ describe('completed native turn checkpoints', () => {
     const entered = new Promise<void>(resolve => { enter = resolve })
     vi.spyOn(internals, 'checkFiles').mockImplementation(async (...args) => { enter(); await paused; await original(...args) })
     const revert = f.service.revertCheckpoint({ ...target, confirmed: true })
-    try { await entered; await expect(mutations.acquire(f.repo, 'send')).rejects.toThrow('Wait for') }
+    try { await entered; await expect(mutations.acquire(f.repo, 'send')).rejects.toThrow('Your message was not sent') }
     finally { release() }
     expect(unwrap(await revert).status).toBe('reverted')
   })
@@ -104,7 +104,7 @@ describe('completed native turn checkpoints', () => {
     const entered = new Promise<void>(resolve => { enter = resolve })
     f.dependencies.refresh = async () => { enter(); await paused }
     const recovery = f.service.recoverCheckpoint(target)
-    try { await entered; await expect(mutations.acquire(f.repo, 'send')).rejects.toThrow('Wait for') }
+    try { await entered; await expect(mutations.acquire(f.repo, 'send')).rejects.toThrow('Your message was not sent') }
     finally { release() }
     expect(unwrap(await recovery).status).toBe('reverted')
     expect(await mutations.isMutating(f.repo)).toBe(false)
@@ -120,7 +120,7 @@ describe('completed native turn checkpoints', () => {
     const revert = f.service.revertCheckpoint({ ...target, confirmed: true })
     try {
       await entered
-      await expect(mutations.acquire(f.repo, 'send')).rejects.toThrow('Wait for')
+      await expect(mutations.acquire(f.repo, 'send')).rejects.toThrow('Your message was not sent')
       await expect(mutations.acquire(f.repo, 'mutation')).rejects.toThrow('Wait for')
     } finally { release() }
     expect(unwrap(await revert).status).toBe('reverted')
