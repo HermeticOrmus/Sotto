@@ -9,7 +9,7 @@ import { agentShell, defaultAgentConfiguration, EMPTY_AGENT_HOST, summarizeThrea
   type AgentBridge, type AgentMessage, type AgentModel, type AgentState, type AgentThread, type AgentThreadDetail,
   type AgentThreadDetailUpdate } from '../../../src/shared/agents'
 
-afterEach(() => { cleanup(); localStorage.clear(); vi.restoreAllMocks() })
+afterEach(() => { cleanup(); localStorage.clear(); vi.restoreAllMocks(); vi.useRealTimers() })
 
 const message = (id: string, role: AgentMessage['role'], text: string): AgentMessage =>
   ({ id, role, text, createdAt: `2026-01-0${id.length}T00:0${id.length}:00.000Z` })
@@ -231,6 +231,42 @@ describe('which history the window gives up', () => {
 })
 
 describe('the startup shell cache', () => {
+  it('writes the last change at the end of the throttle window', async () => {
+    vi.useFakeTimers()
+    const state = fullState([thread('first', [])])
+    const wire = shellBridge(state, { detail: false })
+    const { result } = renderHook(() => useAgentConnection(wire.bridge))
+    await act(async () => {})
+    expect(result.current.state).not.toBeNull()
+    act(() => wire.publish(fullState([thread('second', [])])))
+    act(() => wire.publish(fullState([thread('last', [])])))
+    await act(async () => { await vi.advanceTimersByTimeAsync(16) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000) })
+    expect(readShellCache()?.host.threads[0]?.id).toBe('last')
+  })
+
+  it('never writes a pending shell after history is turned off or the connection unmounts', async () => {
+    vi.useFakeTimers()
+    const state = fullState([thread('first', [])])
+    const wire = shellBridge(state, { detail: false })
+    const view = renderHook(() => useAgentConnection(wire.bridge))
+    await act(async () => {})
+    expect(view.result.current.state).not.toBeNull()
+    act(() => wire.publish(fullState([thread('pending', [])])))
+    act(() => wire.publish({ ...state, historyEnabled: false }))
+    await act(async () => { await vi.advanceTimersByTimeAsync(16) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000) })
+    expect(readShellCache()).toBeNull()
+    act(() => wire.publish(state))
+    await act(async () => { await vi.advanceTimersByTimeAsync(16) })
+    act(() => wire.publish(fullState([thread('unmounted', [])])))
+    await act(async () => { await vi.advanceTimersByTimeAsync(16) })
+    const before = localStorage.getItem(SHELL_CACHE_KEY)
+    view.unmount()
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000) })
+    expect(localStorage.getItem(SHELL_CACHE_KEY)).toBe(before)
+  })
+
   it('paints what the window saw last, marked stale and disconnected, then replaces it', async () => {
     const live = fullState([thread('workshop', [message('a', 'assistant', 'Indigo it is.')])], 'workshop')
     writeShellCache(live)
