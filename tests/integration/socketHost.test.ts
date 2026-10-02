@@ -499,14 +499,14 @@ it('negotiates message aliases without breaking legacy event pages or cursors', 
   const session = host.pairing.signSession(paired.clientId)
   const legacy = await rawPeer(server.descriptor.port, session), modern = await rawPeer(server.descriptor.port, session)
   try {
-    expect(await legacy.call('hello', { op: 'hello' })).toMatchObject({ ok: true, result: { events: [], latestSeq: 1, hasMore: false } })
-    expect(await modern.call('hello', { op: 'hello', accepts: ['message-aliases'] })).toMatchObject({ ok: true, result: { events: rows, latestSeq: 1 } })
+    expect(await legacy.call('hello', { op: 'hello', afterSeq: 0 })).toMatchObject({ ok: true, result: { events: [], latestSeq: 1, hasMore: false } })
+    expect(await modern.call('hello', { op: 'hello', afterSeq: 0, accepts: ['message-aliases'] })).toMatchObject({ ok: true, result: { events: rows, latestSeq: 1 } })
     expect(await legacy.call('events', { op: 'events', afterSeq: 0 })).toMatchObject({ ok: true, result: { events: [], latestSeq: 1 } })
     expect(await modern.call('events', { op: 'events', afterSeq: 0 })).toMatchObject({ ok: true, result: { events: rows, latestSeq: 1 } })
     rows.push({ ...rows[0]!, seq: 2 })
     publish()
     await expect.poll(() => legacy.messages.find(item => item.event === 'shell')).toMatchObject({ eventPage: { events: [], latestSeq: 2 } })
-    await expect.poll(() => modern.messages.find(item => item.event === 'shell')).toMatchObject({ eventPage: { events: rows, latestSeq: 2 } })
+    await expect.poll(() => modern.messages.find(item => item.event === 'shell')).toMatchObject({ eventPage: { events: [rows[1]], latestSeq: 2 } })
   } finally { legacy.frames.close(); modern.frames.close(); await server.close() }
 })
 
@@ -731,7 +731,7 @@ describe('thread detail over the socket', () => {
       // A client from before the freeze says nothing about deltas in its hello, and keeps getting whole threads.
       const legacy = await rawPeer(server.descriptor.port, session())
       try {
-        expect(await legacy.call('hello', { op: 'hello' })).toMatchObject({ ok: true, result: { sottoVersion: packageVersion, features: ['client-liveness', 'message-aliases', 'detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders'] } })
+        expect(await legacy.call('hello', { op: 'hello', afterSeq: 0 })).toMatchObject({ ok: true, result: { sottoVersion: packageVersion, features: ['client-liveness', 'message-aliases', 'detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders'] } })
         await legacy.call('observe', { op: 'observe', threadIds: ['streaming'] })
         stream.current = { threadId: 'streaming', revision: 3, messages: [message('Hello, world!')] }
         stream.emit(delta(2, 3, '!'))
@@ -1073,4 +1073,35 @@ describe('request budgets', () => {
       await expect(client.readShell()).resolves.toBeDefined()
     } finally { vi.useRealTimers(); await client.close(); await server.close() }
   })
+})
+
+
+it.each([undefined, 0])('advances hello and event pages before later shell pushes (start: %s)', async afterSeq => {
+  const rows = Array.from({ length: 2 }, (_, index) => ({ seq: index + 1, threadId: 'synthetic',
+    event: { kind: 'messages-reset' as const, at: new Date().toISOString() } }))
+  let publish = () => {}
+  const service: HostService = {
+    shell: () => host.service.shell(), state: () => host.service.state(), threadDetail: id => host.service.threadDetail(id),
+    command: (command, identity) => host.service.command(command, identity),
+    events: (cursor, threadId, limit) => rows.filter(row => row.seq > cursor && (!threadId || row.threadId === threadId)).slice(0, limit),
+    subscribe: listener => { publish = () => listener(service.shell()); return () => {} },
+  }
+  const server = await startSocketServer({ service, pairing: host.pairing })
+  const paired = await host.pairing.redeem(host.pairing.issuePairingCode().code, 'Cursor test')
+  const peer = await rawPeer(server.descriptor.port, host.pairing.signSession(paired.clientId))
+  try {
+    const hello = await peer.call('hello', { op: 'hello', ...(afterSeq === undefined ? {} : { afterSeq }) })
+    expect(hello).toMatchObject({ ok: true, result: { events: afterSeq === undefined ? [] : rows } })
+    publish()
+    await expect.poll(() => peer.messages.find(item => item.event === 'shell')).toMatchObject({ eventPage: { events: [] } })
+    peer.messages.length = 0
+    rows.push({ seq: 3, threadId: 'synthetic', event: { kind: 'messages-reset', at: new Date().toISOString() } })
+    expect(await peer.call('events', { op: 'events', afterSeq: 2 })).toMatchObject({ ok: true, result: { events: [rows[2]], latestSeq: 3 } })
+    publish()
+    await expect.poll(() => peer.messages.find(item => item.event === 'shell')).toMatchObject({ eventPage: { events: [], latestSeq: 3 } })
+    peer.messages.length = 0
+    rows.push({ seq: 4, threadId: 'synthetic', event: { kind: 'messages-reset', at: new Date().toISOString() } })
+    publish()
+    await expect.poll(() => peer.messages.find(item => item.event === 'shell')).toMatchObject({ eventPage: { events: [rows[3]], latestSeq: 4 } })
+  } finally { peer.frames.close(); await server.close() }
 })

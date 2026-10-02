@@ -178,3 +178,7 @@ A socket `send` of a question-bound draft executes an answer inside the coordina
 Both host pings for older clients and Node desktop-client pings require two consecutive silent rounds. Any received bytes reset silence. Frames written since the previous ping or output still buffered prevent a round from being silent, because loopback tunnels can drain Node's buffer before the peer receives the frames. The heartbeat's own ping never renews progress. A completely silent peer closes at 75 seconds; after final incoming traffic or a drained application write, it closes within 75 seconds. Opted-in listener peers count outgoing frames too and close within 100 seconds of the last progress once output drains. Continuing traffic and buffered output defer those bounds.
 
 The phone also accepts growth in URLSession's received-byte counter as progress, sampled across rounds. This supplements rather than replaces pending-read protection: partial-frame counter updates are not guaranteed. An unrequested slow push without counter updates remains a real-device verification limitation. This amends the October 1 silence rules without changing protocol fields, permission authority or reconnect replay behavior.
+
+## October 2 clarification: retained-event cursors
+
+A hello without `afterSeq` asks for no retained events, like the desktop and phone snapshot-only hello. An explicit cursor still pages history. After a hello or event page is delivered, the listener uses that page's last sequence for subsequent shell pushes, so a page already sent is not repeated.
