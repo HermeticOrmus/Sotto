@@ -775,6 +775,7 @@ export class DesktopHosts {
     host.hostId = hello.hostId; host.clientId = hello.clientId
     if (this.saved.includes(host)) await this.save()
     if (this.live.get(host.id) !== active) { await socket.close(); return }
+    if (!connected) throw new Error('The host disconnected while connecting. Try connecting again.')
     const connection: DesktopHostConnection = { hostId: hello.hostId, name: host.name, kind: 'remote', service: socket,
       detail: id => socket.readThreadDetail(id), preview: request => socket.attachmentPreview(request), observe: ids => socket.observe(ids),
       stage: image => socket.stageAttachment(image), content: digest => socket.attachmentContent(digest),

@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, vi } from 'vitest'
 import { it } from 'vitest'
 import { startHeadlessHost } from '../../src/host'
 import { HostCredentialEncryption } from '../../src/host/credentials'
+import { AtomicJsonStore } from '../../src/main/storage/atomicJsonStore'
 import { AgentCredentials } from '../../src/main/agents/credentials'
 import { desktopWindowClient } from '../../src/main/agents/hostService'
 import { DesktopHosts, reconnectDelayMs } from '../../src/main/hosts/desktopHosts'
@@ -114,6 +115,35 @@ async function add(target = 'forge'): Promise<Connection> {
   return remote
 }
 describe('desktop remote host management over a real socket', () => {
+  it('retries a socket that drops while the connected host identity is saved', async () => {
+    const remote = await add()
+    await manager.command({ type: 'set-enabled', id: remote.id, enabled: false })
+    retryDelay = () => 60_000
+    let socket: SocketHostService | undefined
+    const connect = SocketHostService.prototype.connect
+    const opening = vi.spyOn(SocketHostService.prototype, 'connect').mockImplementation(function (this: SocketHostService) {
+      socket = this
+      return connect.call(this)
+    })
+    const write = AtomicJsonStore.prototype.write
+    let dropped = false
+    const saving = vi.spyOn(AtomicJsonStore.prototype, 'write').mockImplementation(async function (this: AtomicJsonStore<unknown>, value) {
+      if (!dropped && socket && Array.isArray(value) && value.some(item => item.id === remote.id)) {
+        dropped = true
+        await socket.close()
+      }
+      return write.call(this, value)
+    })
+    try {
+      await manager.command({ type: 'set-enabled', id: remote.id, enabled: true })
+      await vi.waitFor(() => expect(scheduled).toEqual([0]))
+    } finally { opening.mockRestore(); saving.mockRestore() }
+    expect(dropped).toBe(true)
+    expect(manager.get().hosts[0]).toMatchObject({ phase: 'connecting', reconnecting: true })
+    expect(scheduled).toEqual([0])
+    expect(router.shell().connections).not.toContainEqual(expect.objectContaining({ hostId: reportedHostId, connected: true }))
+  })
+
   it('refuses pairing before spending a code when secure storage is unavailable', async () => {
     const available = vi.spyOn(credentials, 'available').mockReturnValue(false)
     try { await add() } finally { available.mockRestore() }
