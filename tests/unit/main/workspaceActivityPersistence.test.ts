@@ -247,6 +247,29 @@ it('suppresses legacy activity when first opened with history off, including res
   expect(reopened.workspaceSnapshot().threads[0]!.activities ?? []).toEqual([])
 })
 
+it('keeps Threads usable after a failed durable reopen and recovers on restart', async () => {
+  let history = false
+  const f = await fixture(() => history)
+  const host = await f.open()
+  await host.connect()
+  const thread = f.provider.state.threads[0]!
+  vi.spyOn(ThreadStore.prototype, 'open').mockImplementationOnce(() => { throw new Error('Synthetic locked file') })
+  history = true
+  await expect(host.privacyChanged()).rejects.toThrow('Thread messages could not be opened')
+  await expect(host.snapshot()).resolves.toMatchObject({ connected: true })
+  await expect(host.refreshThread(thread.id)).resolves.toMatchObject({ connected: true })
+  expect(await readFile(join(f.directory, 'workspace.json'), 'utf8')).not.toContain('Retained tool output')
+  await f.close(host)
+  const recovered = await f.open()
+  await recovered.connect()
+  thread.activities!.push(activity('after-restart', 'Retained after restart'))
+  await recovered.snapshot()
+  const disk = new ThreadStore(join(f.directory, 'threads.sqlite'))
+  disk.open()
+  try { expect(disk.readActivities(thread.id).map(record => record.output)).toContain('Retained after restart') }
+  finally { disk.close() }
+})
+
 it('never falls back to JSON containing private activity when enabling history fails', async () => {
   let history = false
   const f = await fixture(() => history)

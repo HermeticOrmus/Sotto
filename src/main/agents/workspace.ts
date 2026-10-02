@@ -1783,6 +1783,8 @@ export class WorkspaceHost implements AgentHost {
             this.threadStore.becomeDurable()
           }
         } catch {
+          // A failed reopen can leave no connection. Keep the workspace usable until restart.
+          if (!redacting) this.storeUnavailable = true
           this.saveError = redacting ? 'Thread messages could not be removed. Restore access to local storage and try again.' : HISTORY_OPEN_ERROR
           // Keep the transition retryable by the coordinator's privacy maintenance.
           throw new Error(this.saveError)
