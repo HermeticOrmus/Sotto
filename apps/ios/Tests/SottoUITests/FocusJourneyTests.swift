@@ -103,7 +103,14 @@ import XCTest
         XCTAssertEqual(result, .completed,
                        "The rendered screenshot must finish rotating with the window")
     }
-    private func back() { app.navigationBars.buttons.element(boundBy: 0).tap() }
+    private func back() {
+        let button = app.navigationBars.buttons.element(boundBy: 0)
+        XCTAssertTrue(button.waitForExistence(timeout: 5))
+        let ready = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in button.isHittable }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 5), .completed,
+                       "Back must be hittable after a request sheet closes")
+        button.tap()
+    }
 
     func testCreateThreadInAKnownProject() {
         app.buttons["new-thread"].tap()
@@ -234,7 +241,9 @@ import XCTest
         reveal(app.buttons["Not now"])
         app.buttons["Not now"].tap()
         back()
-        app.tabBars.buttons["Computers"].tap()
+        let computers = app.tabBars.buttons["Computers"]
+        XCTAssertTrue(computers.waitForExistence(timeout: 5), "Back restores the main tabs")
+        computers.tap()
         XCTAssertTrue(app.staticTexts["Studio Mac"].waitForExistence(timeout: 5))
         capture("computers")
     }
