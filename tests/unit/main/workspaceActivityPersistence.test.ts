@@ -99,7 +99,11 @@ it.each(['retry while off', 'resume before retry', 'successful transition'])('ke
     expect(disk.readActivities(thread.id).map(record => record.output)).not.toContain('PRIVATE_ACTIVITY_DURING_RETRY')
     expect(disk.readMessages(thread.id).messages.map(message => message.text)).not.toContain('PRIVATE_MESSAGE_DURING_RETRY')
   } finally { disk.close() }
-  if (mode === 'resume before retry') history = true
+  if (mode === 'resume before retry') {
+    history = true
+    thread.messages.push({ id: 'resumed-message', role: 'assistant', text: 'Message after history resumed', createdAt: new Date().toISOString() })
+    expect((await host.snapshot()).threads[0]!.messages.map(message => message.text)).toContain('Message after history resumed')
+  }
   await host.privacyChanged()
   expect(transition).toHaveBeenCalledTimes(mode === 'successful transition' ? 1 : 2)
   history = true
@@ -111,7 +115,9 @@ it.each(['retry while off', 'resume before retry', 'successful transition'])('ke
   disk.open()
   try {
     expect(disk.readActivities(thread.id).map(record => record.output)).toEqual(['Fresh retained output'])
-    expect(disk.readMessages(thread.id).messages.map(message => message.text)).toEqual(['Fresh retained message'])
+    expect(disk.readMessages(thread.id).messages.map(message => message.text)).toEqual([
+      ...(mode === 'resume before retry' ? ['Message after history resumed'] : []), 'Fresh retained message',
+    ])
   } finally { disk.close() }
   await f.close(host)
   const bytes = (await Promise.all((await readdir(f.directory)).map(name => readFile(join(f.directory, name), 'latin1')))).join('')

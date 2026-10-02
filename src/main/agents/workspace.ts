@@ -1228,7 +1228,7 @@ export class WorkspaceHost implements AgentHost {
       this.privateLegacyMessages.delete(thread.id)
       privateMessages = undefined
     }
-    if (!this.historyEnabled() || this.historyRedactionPending) {
+    if (!this.historyEnabled()) {
       if (!privateMessages) {
         privateMessages = { epoch: thread.historyEpoch, ids: new Set() }
         this.privateLegacyMessages.set(thread.id, privateMessages)
