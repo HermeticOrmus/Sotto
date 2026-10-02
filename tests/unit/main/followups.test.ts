@@ -557,3 +557,15 @@ it('keeps a checkout-refused follow-up failed in the queue until the user resume
   await expect.poll(() => f.control.get().followups?.length).toBe(0)
   expect(f.host.state.threads.find(t => t.id === 'workshop')?.messages.filter(m => m.text === 'Keep these words')).toHaveLength(1)
 })
+
+it('says a checkout-refused manual prompt is kept and retains its durable draft', async () => {
+  const f = await fixture()
+  f.host.update('workshop', { status: 'idle', requests: [] })
+  vi.spyOn(f.host, 'execute').mockRejectedValue(new CheckoutSendRefusal())
+  const command = { ...queued('Keep this manual prompt'), type: 'manual-send' as const }
+  const result = await f.control.command(command)
+  expect(result.error).toBe('A Git action is running in this folder. Your message was not sent. Your text is kept. Send it again when the action finishes.')
+  expect(result.threadDrafts).toContainEqual(expect.objectContaining({ draftId: command.draftId, text: command.text }))
+  expect(result.deliveries).toContainEqual(expect.objectContaining({ draftId: command.draftId, status: 'failed' }))
+  expect(f.host.state.threads.find(t => t.id === 'workshop')?.messages.some(m => m.text === command.text)).toBe(false)
+})

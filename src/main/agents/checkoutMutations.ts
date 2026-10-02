@@ -26,6 +26,7 @@ export class CheckoutSendRefusal extends Error {
   constructor(private readonly holder: CheckoutHolder = { kind: 'git-action' }) {
     super(`${holdingMessage(holder)} Your message was not sent. Send it again when the action finishes.`)
   }
+  draftMessage(): string { return `${holdingMessage(this.holder)} Your message was not sent. Your text is kept. Send it again when the action finishes.` }
   queuedMessage(): string { return `${holdingMessage(this.holder)} Your follow-up was not sent. It is kept in the queue. Resume the queue when the action finishes.` }
 }
 

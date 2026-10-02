@@ -155,7 +155,7 @@ Select an element or region, add a comment, and attach it to the thread's editab
 
 The merged-pull-request cleanup rule and Auto-settle merged threads require the merged pull request to match the branch's current commit. A reused branch name or another branch in a fork does not count by name alone.
 
-A Git action, branch restore or checkpoint revert refuses sends from other threads in the same checkout until it finishes. For a Git action, the notice says: **A Git action is running in this folder. Your message was not sent. Send it again when the action finishes.** Your text is kept: it returns to the composer if you have not typed newer text, otherwise the refused prompt stays available to restore or retry. A refused follow-up stays in the queue as failed; use **Resume queue** after the action finishes.
+A Git action, branch restore or checkpoint revert refuses sends from other threads in the same checkout until it finishes. For a Git action, the notice says: **A Git action is running in this folder. Your message was not sent. Your text is kept. Send it again when the action finishes.** Your text is kept: it returns to the composer if you have not typed newer text, otherwise the refused prompt stays available to restore or retry. A refused follow-up stays in the queue as failed; use **Resume queue** after the action finishes.
 
 Git actions are refused while a thread in the folder is working or has work waiting. The notice names the thread or action holding the folder. During Automatically pull it says: **Sotto is pulling this folder. Try again in a moment.** Separate worktrees remain independent.
 

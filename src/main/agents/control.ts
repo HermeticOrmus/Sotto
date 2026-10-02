@@ -1627,6 +1627,7 @@ export class AgentControl {
       } catch (error) {
         if (error instanceof AnswerDeliveryUnconfirmed) unconfirmedAnswer = error
         failure = error instanceof AnswerDeliveryUnconfirmed && error.delivered ? undefined
+          : error instanceof CheckoutSendRefusal && (command.type === 'manual-send' || command.type === 'steer' || command.type === 'send') ? error.draftMessage()
           : error instanceof Error ? error.message : 'Sotto could not complete this action.'
         if (!(error instanceof AnswerDeliveryUnconfirmed)) this.setCommandError(error, failure!)
         if (failure !== undefined && !(error instanceof AnswerDeliveryUnconfirmed && client.transport === 'socket')) this.say(failure)
