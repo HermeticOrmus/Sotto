@@ -835,6 +835,7 @@ describe('independent working-copy allocation', () => {
     }
     await expect(lstat(childDirectory)).rejects.toMatchObject({ code: 'ENOENT' })
   }, 60_000)
+  // Recursive setup launches real Git children before reclaim is checked; the deadline is not a speed assertion.
   it.each(['clean', 'recursive', 'dirty-hidden'])('reclaims initialized submodules safely (%s)', async mode => {
     const recursive = mode === 'recursive'
     const f = await fixture()
@@ -868,7 +869,7 @@ describe('independent working-copy allocation', () => {
     }
     expect((await f.service.reclaimFacts(a)).repositories).toEqual([])
     expect((await f.service.reclaim(a, { automatic: true })).reclaimedAt).toBeTruthy()
-  })
+  }, 60_000)
   it('lists a bare repository hidden inside dependencies and requires the tick', async () => {
     const f = await fixture(); const a = await f.service.ensure(await f.service.allocate(f.project, 'independent'))
     await writeFile(join(a.path!, '.gitignore'), 'node_modules/\n')
