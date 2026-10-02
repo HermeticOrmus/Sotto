@@ -119,15 +119,16 @@ describe('desktop remote host management over a real socket', () => {
     const remote = await add()
     await manager.command({ type: 'set-enabled', id: remote.id, enabled: false })
     retryDelay = () => 60_000
-    let socket: SocketHostService | undefined
+    const sockets: SocketHostService[] = []
     const connect = SocketHostService.prototype.connect
     const opening = vi.spyOn(SocketHostService.prototype, 'connect').mockImplementation(function (this: SocketHostService) {
-      socket = this
+      sockets.push(this)
       return connect.call(this)
     })
     const write = AtomicJsonStore.prototype.write
     let dropped = false
     const saving = vi.spyOn(AtomicJsonStore.prototype, 'write').mockImplementation(async function (this: AtomicJsonStore<unknown>, value) {
+      const socket = sockets.at(-1)
       if (!dropped && socket && Array.isArray(value) && value.some(item => item.id === remote.id)) {
         dropped = true
         await socket.close()

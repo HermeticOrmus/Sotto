@@ -458,15 +458,22 @@ struct Live {
             // and the computer holds this client.
             let pairing = try await finder.pair(endpoint: found.endpoint, expectedHostID: found.health.hostId, code: code)
             let computer = SavedComputer(address: found.endpoint.url.absoluteString, pairing: pairing, reportedName: found.health.computerName)
-            do { try keychain.write(computer, account: ComputerStore.account(computer.hostID)) }
-            catch {
-                try? await finder.revoke(endpoint: found.endpoint, pairing: pairing)
-                throw error
-            }
-            if let computerIndexAccount { try keychain.write(computers.map(\.hostID).filter { $0 != computer.hostID } + [computer.hostID], account: computerIndexAccount) }
             // Markers from an earlier pairing with this computer must never attach to the new client.
             let markers = pending.filter { $0.hostID != computer.hostID }
-            try keychain.write(markers, account: ComputerStore.pendingAccount)
+            var savedCredential = false
+            do {
+                try keychain.write(computer, account: ComputerStore.account(computer.hostID))
+                savedCredential = true
+                if let computerIndexAccount { try keychain.write(computers.map(\.hostID).filter { $0 != computer.hostID } + [computer.hostID], account: computerIndexAccount) }
+                try keychain.write(markers, account: ComputerStore.pendingAccount)
+            } catch {
+                try? await finder.revoke(endpoint: found.endpoint, pairing: pairing)
+                if savedCredential {
+                    try? keychain.remove(account: ComputerStore.account(computer.hostID))
+                    if let computerIndexAccount { try? keychain.write(computers.map(\.hostID), account: computerIndexAccount) }
+                }
+                throw error
+            }
             pending = markers
             computers = computers.filter { $0.hostID != computer.hostID } + [computer]
             live[computer.hostID] = Live()
