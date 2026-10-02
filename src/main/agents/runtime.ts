@@ -109,7 +109,7 @@ export async function createAgentRuntime(options: AgentRuntimeOptions) {
   // side call to the thread's own provider client. A design fixture host offers none, so its titles stay the stand-in.
   const shortTextWriter = new ShortTextWriter({
     write: (threadId, prompt, signal) => agentHost.writeShortText(threadId, prompt, signal),
-    onFailure: failure => options.logFailure?.('short-writing-failed', failure.purpose + ' ' + failure.reason),
+    onFailure: failure => options.logFailure?.('short-writing-failed', `${failure.purpose} ${failure.reason}`),
   })
   agentHost.setBranchNameWriter(threadBranchWriter(shortTextWriter, options.writingSettings))
   // T3's Git actions (ADR-0027): the commit message and pull request text are the same side calls the forms use.

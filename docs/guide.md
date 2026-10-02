@@ -379,6 +379,8 @@ A remote host keeps its own OpenRouter key, in its encrypted credential file, an
 
 Press the global shortcut once to start and again to stop and transcribe. The default is `Ctrl+Shift+Space` on Windows and `⌃⇧Space` (the literal Control key) on macOS. `Escape` cancels an active session. The floating widget also starts dictation with a click and can be dragged anywhere.
 
+**Show floating widget when idle** keeps the small dictation sliver on screen between sessions. Turning it off hides the idle sliver. While the coordinator is on, thread activity still brings the widget back.
+
 Settings:
 
 - Dictation: microphone, global shortcut, recording limit, local sound cues, and streaming transcription so long dictations finish almost immediately after you stop. The global shortcut saves only when its value changes; tabbing through it unchanged is quiet.
@@ -392,7 +394,7 @@ Settings:
 - Application and privacy: launch at login, start minimized, local history, retention, clear history, and reset settings; for threads, the working-copy default and the worktree cleanup rules
 - Git: every Git setting, grouped under when it acts: the Commit and pull request style with its example; Follow pull request templates, Default merge method and Auto-settle merged threads; the diff defaults for Changes and Proactive panels; the Git fetch interval and Automatically pull
 
-Turning **Keep local history** off stops saving new dictation transcripts. Older dictation transcripts stay on disk until you delete them or clear history. **Delete** removes a retained transcript from this computer even while history is off; turning history back on does not restore it.
+Turning **Keep local history** off stops saving new dictation transcripts. Older dictation transcripts stay on disk until you delete them or clear history. **Delete** removes a retained transcript from this computer even while history is off; turning history back on does not restore it. Thread and personal-chat cleanup run independently. If thread cleanup fails, Sotto retries while open; another Settings save retries both cleanups.
 
 **Clear history** also removes dictation history backups and temporary files left by an interrupted save. Sotto removes those temporary files when it starts, without changing saved history.
 

@@ -1,4 +1,5 @@
 import { CheckoutSendRefusal, type CheckoutPendingWork } from './checkoutMutations'
+import type { ShortTextPurpose, ShortTextFailureReason } from '../llm/shortTextWriter'
 import type { AgentSkillReference } from '../../shared/agentSkills'
 import type { AgentFileReference } from '../../shared/agentFiles'
 import type { AgentActivity } from '../../shared/agentActivity'
@@ -290,7 +291,7 @@ export class AgentControl {
      */
     writeThreadTitle?: (threadId: string, exchange: ThreadTitleExchange) => Promise<string | null>
     /** Local record of a silent failure; never a banner, never shown to the user. */
-    logFailure?: (code: string, detail: string) => void
+    logFailure?: (code: 'client-update-handoff-failed' | 'thread-title-failed' | 'thread-answer-attribution-failed' | 'short-writing-failed', detail: ProviderId | 'failed' | `${ShortTextPurpose} ${ShortTextFailureReason}`) => void
     /** Defers a coalesced broadcast; injectable so tests own the clock. */
     schedule?: PublishScheduler
     /** What each installed client publishes, and the press that installs it. */
@@ -373,6 +374,8 @@ export class AgentControl {
     if (this.dependencies.host.workspaceSnapshot) this.state.host = this.withSottoRequests(this.dependencies.host.workspaceSnapshot())
     const cutoff = Date.now() - 7 * 86_400_000
     const historyDisabled = this.dependencies.historyEnabled?.() === false
+    // Startup can defer a failed history-store open until this coordinator can run maintenance.
+    this.privacyCleanupPending ||= historyDisabled
     for (const assignment of this.state.assignments) {
       assignment.seenMessageIds = assignment.seenMessageIds.slice(-MAX_SEEN_MESSAGE_IDS)
       if (assignment.contextUpdatedAt < cutoff || historyDisabled) {
@@ -1445,9 +1448,9 @@ export class AgentControl {
       if (!thread || thread.titleSource === 'user' || isThreadArchived(thread) || thread.title === title) return
       this.acceptSnapshot(await this.dependencies.host.renameThread!(threadId, title, 'generated'))
       await this.persist()
-    } catch (error) {
+    } catch {
       // A name Sotto offered to write is never worth an error banner: the thread keeps the name it has.
-      this.dependencies.logFailure?.('thread-title-failed', error instanceof Error ? error.message : 'unknown')
+      this.dependencies.logFailure?.('thread-title-failed', 'failed')
     }
   }
   /** Ask again for a thread's name, replacing a generated or stand-in one on explicit request. */
@@ -2467,7 +2470,7 @@ export class AgentControl {
       })
     } catch {
       // Never the user's problem and never a lost answer; the log says so by a stable name alone.
-      this.dependencies.logFailure?.('thread-answer-attribution-failed', command.threadId)
+      this.dependencies.logFailure?.('thread-answer-attribution-failed', 'failed')
     }
   }
   private guardAuthority(command: DispatchCommand, turn?: ActiveTurn): void {

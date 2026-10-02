@@ -6,6 +6,9 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { WorkspaceHost } from '../../src/main/agents/workspace'
 import { ThreadStore } from '../../src/main/agents/threadStore'
 import { SubagentStore } from '../../src/main/agents/subagentStore'
+import { AgentControl } from '../../src/main/agents/control'
+import { AgentCredentials } from '../../src/main/agents/credentials'
+import { e2eAgentReasoner } from '../../src/main/e2e/agentEffects'
 import type { ThreadHostEvent } from '../../src/main/agents/host'
 import { threadEventSchema, type ThreadEvent } from '../../src/shared/threadEvents'
 import { FakeProviderHost } from '../fixtures/fakeProviderHost'
@@ -32,15 +35,17 @@ afterEach(async () => {
   vi.useRealTimers()
   for (const close of cleanup.splice(0).reverse()) await close()
 })
-async function fixture(history: () => boolean = () => true) {
+async function fixture(history: () => boolean = () => true, initialize = true) {
   const directory = await mkdtemp(join(tmpdir(), 'sotto-history-retry-'))
   cleanup.push(() => rm(directory, { recursive: true, force: true }))
   const adapter = new EventProvider()
   const host = new WorkspaceHost(adapter, directory, history)
   cleanup.push(async () => { await host.close().catch(() => undefined) })
-  await host.initialize()
-  await host.connect()
-  host.observeThreads(['session-workshop'])
+  if (initialize) {
+    await host.initialize()
+    await host.connect()
+    host.observeThreads(['session-workshop'])
+  }
   return { directory, adapter, host }
 }
 function failWrites() {
@@ -171,6 +176,97 @@ it('keeps a failed thread warning while another thread commits, then restores re
   expect(host.workspaceSnapshot().error).toBeUndefined()
   expect(host.threadMessages('session-workshop')).toMatchObject([{ id: 'replacement', text: 'After reset' }])
   expect(host.eventsAfter(0, 'session-workshop').map(row => row.event.kind)).toEqual(['message-added', 'messages-reset', 'message-added'])
+})
+
+it('retries a failed thread-store privacy switch and removes the retained words without restarting', async () => {
+  let history = true
+  const { directory, adapter, host } = await fixture(() => history)
+  adapter.publish(added('reply', 'PRIVATE FAILED REDACTION'))
+  host.workspaceSnapshot()
+  const credentials = new AgentCredentials(directory, { isEncryptionAvailable: () => false, encryptString: text => Buffer.from(text), decryptString: bytes => bytes.toString() })
+  await credentials.load()
+  const control = new AgentControl({ directory, host, credentials, reasoner: e2eAgentReasoner, historyEnabled: () => history })
+  vi.useFakeTimers()
+  await control.start()
+  cleanup.push(async () => { control.dispose(); await control.closed() })
+  const transition = vi.spyOn(ThreadStore.prototype, 'becomeEphemeral').mockImplementationOnce(() => { throw new Error('Synthetic failed redaction') })
+  history = false
+  await expect(control.privacyChanged()).rejects.toThrow('Thread messages could not be removed')
+  const disk = new ThreadStore(join(directory, 'threads.sqlite'))
+  disk.open()
+  try { expect(disk.readMessages('session-workshop').messages).toMatchObject([{ text: 'PRIVATE FAILED REDACTION' }]) }
+  finally { disk.close() }
+  await vi.advanceTimersByTimeAsync(30_000)
+  expect(transition).toHaveBeenCalledTimes(2)
+  disk.open()
+  try { expect(disk.readMessages('session-workshop').messages).toEqual([]) }
+  finally { disk.close() }
+})
+
+it('starts with history off and unavailable storage, then retries cleanup when storage returns', async () => {
+  let history = false
+  const { directory, adapter, host } = await fixture(() => history, false)
+  const retained = new ThreadStore(join(directory, 'threads.sqlite'))
+  retained.open()
+  retained.replaceThreadMessages('session-workshop', [{ id: 'old-startup', role: 'user', text: 'OLD_STARTUP_MESSAGE', createdAt: at }])
+  retained.close()
+  const open = vi.spyOn(ThreadStore.prototype, 'open').mockImplementation(() => { throw new Error('Synthetic unavailable startup storage') })
+  const credentials = new AgentCredentials(directory, { isEncryptionAvailable: () => false, encryptString: text => Buffer.from(text), decryptString: bytes => bytes.toString() })
+  await credentials.load()
+  const control = new AgentControl({ directory, host, credentials, reasoner: e2eAgentReasoner, historyEnabled: () => history })
+  cleanup.push(async () => { control.dispose(); await control.closed() })
+  vi.useFakeTimers()
+  await expect(control.start()).resolves.toBeUndefined()
+  expect(control.get().host.error).toContain('Thread messages could not be opened')
+  await expect(host.connect()).resolves.toMatchObject({ connected: true })
+  adapter.state.threads[0]!.activities = [{ id: 'private-startup', turnId: 'turn', sequence: 0, kind: 'tool', status: 'completed', title: 'Tool', output: 'PRIVATE_STARTUP_ACTIVITY' }]
+  adapter.publish(added('private-startup', 'PRIVATE_STARTUP_MESSAGE'))
+  await host.snapshot()
+  await vi.advanceTimersByTimeAsync(30_000)
+  await vi.waitFor(() => expect(control.get().error).toContain('Could not finish applying history privacy'))
+  open.mockRestore()
+  await vi.advanceTimersByTimeAsync(30_000)
+  await vi.waitFor(() => expect(control.get().error).toBeNull())
+  history = true
+  await control.privacyChanged()
+  adapter.state.threads[0]!.activities!.push({ id: 'fresh-startup', turnId: 'turn', sequence: 1, kind: 'tool', status: 'completed', title: 'Tool', output: 'Fresh startup activity' })
+  adapter.publish(added('fresh-startup', 'Fresh startup message'))
+  await host.snapshot()
+  const disk = new ThreadStore(join(directory, 'threads.sqlite'))
+  disk.open()
+  try {
+    expect(disk.readMessages('session-workshop').messages.map(message => message.text)).toEqual(['Fresh startup message'])
+    expect(disk.readActivities('session-workshop').map(record => record.output)).toEqual(['Fresh startup activity'])
+  } finally { disk.close() }
+})
+
+it('keeps the restart warning and coordinator retry pending while durable history is unavailable', async () => {
+  let history = true
+  const { directory, adapter, host } = await fixture(() => history)
+  const credentials = new AgentCredentials(directory, { isEncryptionAvailable: () => false, encryptString: text => Buffer.from(text), decryptString: bytes => bytes.toString() })
+  await credentials.load()
+  const control = new AgentControl({ directory, host, credentials, reasoner: e2eAgentReasoner, historyEnabled: () => history })
+  cleanup.push(async () => { control.dispose(); await control.closed() })
+  vi.useFakeTimers()
+  await control.start()
+  history = false
+  await control.privacyChanged()
+  vi.spyOn(ThreadStore.prototype, 'open').mockImplementationOnce(() => { throw new Error('Synthetic failed durable open') })
+  history = true
+  await expect(control.privacyChanged()).rejects.toThrow('Thread messages could not be opened')
+  const sync = vi.spyOn(ThreadStore.prototype, 'syncActivities')
+  adapter.state.threads[0]!.activities = [{ id: 'unsaved', turnId: 'turn', sequence: 0, kind: 'tool', status: 'completed', title: 'Tool', output: 'UNSAVED_DURABLE_ACTIVITY' }]
+  await expect(host.snapshot()).resolves.toMatchObject({ error: expect.stringContaining('restart Sotto') })
+  await expect(host.refreshThread('session-workshop')).resolves.toMatchObject({ error: expect.stringContaining('restart Sotto') })
+  expect(sync).not.toHaveBeenCalled()
+  const privacy = vi.spyOn(host, 'privacyChanged')
+  for (let tick = 1; tick <= 2; tick++) {
+    await vi.advanceTimersByTimeAsync(30_000)
+    await vi.waitFor(() => expect(privacy).toHaveBeenCalledTimes(tick))
+    expect(control.get().error).toContain('Could not finish applying history privacy')
+    expect((await host.snapshot()).error).toContain('restart Sotto')
+    expect(sync).not.toHaveBeenCalled()
+  }
 })
 
 it('does not retry into the durable connection if another privacy store fails before it switches', async () => {
