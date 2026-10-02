@@ -432,6 +432,8 @@ Optional AI cleanup is off by default. When you enable it, the finished transcri
 
 Sotto has no analytics or crash upload. Dictation audio is never persisted. Transcript history is local, optional, bounded, searchable, and clearable. Two small diagnostic files in Sotto's data folder help explain a lost dictation: `polish-diagnostics.jsonl` records word counts around AI cleanup, and `transcription-diagnostics.jsonl` records why a transcription request failed (reason, HTTP status, attempts, clip length and time taken). They hold no words, audio or keys, each starts over past 256 KB with one older copy kept, and neither leaves this computer.
 
+While **Keep local history** is on, the desktop writes its startup shell to plaintext renderer localStorage, under `sotto:agent-shell:v1`. It keeps thread summaries, including `lastUser` and `lastAssistant` text (up to 2,000 characters each), and pending requests, including permission text and command details. Full message lists and attachment bytes are not in this cache. The shell paints Threads before providers reconnect; it is marked stale and disconnected until fresh state arrives. It grants no permission. Turning history off clears the cache and stops cache writes.
+
 Spellcheck stays enabled, but Sotto blocks dictionary downloads in its windows and browser. The OS spellchecker remains available on Windows and macOS. A language that needs a downloaded dictionary may have no spelling suggestions.
 
 ### Thread titles, branch names and Git

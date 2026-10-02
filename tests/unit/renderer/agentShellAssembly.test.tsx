@@ -1,4 +1,5 @@
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react'
+import { readFileSync } from 'node:fs'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { handleOf } from '../../fixtures/stagedImages'
 
@@ -231,6 +232,32 @@ describe('which history the window gives up', () => {
 })
 
 describe('the startup shell cache', () => {
+  it('discloses the plaintext excerpts and permission details in both privacy guides', () => {
+    for (const path of ['README.md', 'docs/guide.md']) {
+      const text = readFileSync(path, 'utf8')
+      const disclosure = text.split('\n').find(line => line.includes('startup shell') && line.includes('localStorage'))
+      expect(disclosure).toBeDefined()
+      for (const term of ['Keep local history', 'plaintext', 'lastUser', 'lastAssistant', '2,000', 'permission text and command details', 'Turning history off clears']) {
+        expect(disclosure).toContain(term)
+      }
+    }
+  })
+
+  it('keeps plaintext excerpts and permission details only while history is on', () => {
+    const liveThread = thread('workshop', [message('a', 'user', 'u'.repeat(2100)), message('bb', 'assistant', 'a'.repeat(2100))])
+    liveThread.requests = [{ id: 'permission', kind: 'permission', text: 'Run the command?', context: { command: 'npm test' }, options: [] }]
+    const state = fullState([liveThread])
+    writeShellCache(state)
+    const kept = readShellCache()!.host.threads[0]!
+    expect(kept.messages).toEqual([])
+    expect(kept.summary?.lastUser?.text).toBe('u'.repeat(2000))
+    expect(kept.summary?.lastAssistant?.text).toBe('a'.repeat(2000))
+    expect(kept.requests).toEqual(liveThread.requests)
+    expect(localStorage.getItem(SHELL_CACHE_KEY)).toContain('npm test')
+    writeShellCache({ ...state, historyEnabled: false })
+    expect(localStorage.getItem(SHELL_CACHE_KEY)).toBeNull()
+  })
+
   it('writes the last change at the end of the throttle window', async () => {
     vi.useFakeTimers()
     const state = fullState([thread('first', [])])

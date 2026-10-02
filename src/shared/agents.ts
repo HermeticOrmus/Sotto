@@ -805,7 +805,7 @@ export function threadSummaryOf(thread: Pick<AgentThread, 'messages' | 'activiti
 export function lastUserMessageIdOf(thread: Pick<AgentThread, 'messages' | 'lastUserMessageId'>): string | null {
   return thread.lastUserMessageId ?? thread.messages.findLast(message => message.role === 'user')?.id ?? null
 }
-/** One thread as the shell stream carries it: the sidebar's facts, none of its history. */
+/** One thread on the shell stream: summaries with message excerpts and pending requests, without full message lists. */
 function threadShell(thread: AgentThread): AgentThread {
   return { ...thread, messages: [], ...(thread.activities === undefined ? {} : { activities: [] }), summary: threadSummaryOf(thread) }
 }
