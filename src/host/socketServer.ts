@@ -1,6 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { Duplex } from 'node:stream'
+import { isIP } from 'node:net'
 import { z } from 'zod'
 import type { HostService, ClientIdentity } from '../main/agents/hostService'
 import { PairedClients, originAllowed, SESSION_LIFETIME_MS } from '../main/agents/pairing'
@@ -42,7 +43,7 @@ class Refusal extends Error { constructor(readonly code: HostErrorCode, message 
  * `deltas` is set by the client's hello: only a client that accepts `detail-delta` is sent one. `clientUpdates` likewise:
  * only a client that accepts `client-updates` is sent the mise channel and the waiting state in its shell's client updates.
  */
-interface Peer { frames: SocketFrames; client: ClientIdentity; session: string; observed: Set<string>; inFlight: number; window: number; count: number; pageWindow: number; pages: number; preview: boolean; afterSeq: number; selectedThreadId: string | null; selectedProjectId: string | null; deltas: boolean; messageAliases: boolean; clientUpdates: boolean }
+interface Peer { frames: SocketFrames; client: ClientIdentity; session: string; observed: Set<string>; inFlight: number; window: number; count: number; pageWindow: number; pages: number; preview: boolean; afterSeq: number; selectedThreadId: string | null; selectedProjectId: string | null; editingThreadId: string | null; deltas: boolean; messageAliases: boolean; clientUpdates: boolean }
 export interface SocketServerOptions {
   service: HostService; pairing: PairedClients; port?: number; origins?: readonly string[]
   mayAnswer?: (client: ClientIdentity) => boolean
@@ -89,7 +90,7 @@ const EVENT_PAGES_PER_SECOND = 100
 /**
  * HTTP requests a minute, per endpoint class, so no caller can spend another's budget. Health is not
  * counted: refusing it costs as much as answering it, and the launch script polls it while a host starts.
- * Pairing has a small bucket of its own. The administrative path, and sessions and revocations per paired
+ * Failed pairing redemptions have a small bucket per caller, checked before redemption. The administrative path, and sessions and revocations per paired
  * client, are counted only after their token is checked, so a loop on a bad token spends nobody's budget.
  */
 const HTTP_BUDGETS = { pair: 10, admin: 120, client: 120 } as const
@@ -126,17 +127,27 @@ export async function startSocketServer(options: SocketServerOptions) {
   let closing = false
   const httpBudgets = new Map<string, { window: number; count: number }>()
   /** Counts one request against a bucket, dropping buckets whose minute has passed, and refuses past its limit. */
-  const spend = (bucket: string, limit: number): void => {
+  const spend = (bucket: string, limit: number): (() => void) => {
     const now = Date.now()
     for (const [key, entry] of httpBudgets) if (now - entry.window >= HTTP_WINDOW_MS) httpBudgets.delete(key)
     const entry = httpBudgets.get(bucket) ?? { window: now, count: 0 }
+    if (!httpBudgets.has(bucket) && httpBudgets.size >= 1024) httpBudgets.delete(httpBudgets.keys().next().value!)
     httpBudgets.set(bucket, entry)
-    if (++entry.count > limit) throw new Refusal('busy')
+    if (entry.count >= limit) throw new Refusal('busy')
+    entry.count++
+    return () => { entry.count-- }
   }
   const identity = (clientId: string): ClientIdentity => ({ clientId, user: pairing.list().find(client => client.clientId === clientId)?.name ?? 'Paired client', transport: 'socket' })
   const shell = (peer: Peer) => {
     const state = service.shell()
+    const draft = peer.editingThreadId === peer.selectedThreadId
+      ? state.threadDrafts?.find(item => item.threadId === peer.selectedThreadId) : undefined
+    const composer = draft ? { composing: true, draft: draft.text, draftAttachments: draft.attachments,
+      draftThreadId: draft.threadId, draftRequestId: draft.requestId }
+      : state.draftThreadId === peer.selectedThreadId ? {}
+        : { composing: false, draft: '', draftAttachments: [], draftThreadId: null, draftRequestId: null }
     const own = shellForProtocolV1({ ...state, activeThreadId: peer.selectedThreadId, activeProjectId: peer.selectedProjectId,
+      ...composer,
       clientCapabilities: { mayAnswer: options.mayAnswer?.(peer.client) ?? false } })
     // A client from before #480 reads the client updates' channel and state against the values it knows, and one it
     // does not know would make it refuse the whole shell: it is sent them as it knew them.
@@ -219,11 +230,12 @@ export async function startSocketServer(options: SocketServerOptions) {
     }
     const input = request.command
     const state = service.shell()
-    const savedDraft = !state.composing && !state.draft.trim() && !state.draftAttachments?.length
-      ? state.threadDrafts?.find(draft => draft.threadId === state.activeThreadId) : undefined
-    const draftRequestId = state.composing || input.type === 'send' ? state.draftRequestId
+    const targetThreadId = peer.selectedThreadId
+    const savedDraft = state.draftThreadId !== targetThreadId || !state.composing && !state.draft.trim() && !state.draftAttachments?.length
+      ? state.threadDrafts?.find(draft => draft.threadId === targetThreadId) : undefined
+    const draftRequestId = state.composing && state.draftThreadId === targetThreadId ? state.draftRequestId
       : savedDraft ? savedDraft.requestId
-        : state.queue.find(item => item.threadId === state.activeThreadId && item.kind === 'question' && item.requestId)?.requestId
+        : state.queue.find(item => item.threadId === targetThreadId && item.kind === 'question' && item.requestId)?.requestId
     const refusal = remoteCommandRefusal(input, { mayAnswer: options.mayAnswer?.(peer.client) ?? false, askingProviderModes: askingProviderModes(input),
       draftRequestId: input.type === 'send' || input.type === 'compose' ? draftRequestId : undefined,
       clientUpdates: options.clientUpdates === true })
@@ -239,20 +251,25 @@ export async function startSocketServer(options: SocketServerOptions) {
       if (!thread?.requests.some(item => item.id === input.requestId && !item.delivery)) throw new Refusal('stale_request')
     }
     const receipt: HostReceipt = { status: 'pending' }
+    let privateError: string | null | undefined
     const task = (async () => {
       try {
         if (input.type === 'select-thread') {
           const thread = service.shell().host.threads.find(thread => thread.id === input.threadId)
           if (!thread) throw new Refusal('invalid_request')
           peer.selectedThreadId = thread.id; peer.selectedProjectId = thread.projectId
-          detail(peer, thread.id)
         } else if (input.type === 'select-project') {
           peer.selectedProjectId = input.projectId; peer.selectedThreadId = null
         } else if (input.type === 'observe-threads') {
           peer.observed = new Set(input.threadIds); await observe()
         } else {
-          const result = await service.command(input, peer.client)
-          if (input.type === 'answer') {
+          const previousEditor = peer.editingThreadId
+          if (input.type === 'compose') peer.editingThreadId = peer.selectedThreadId
+          const result = await service.command(input, { ...peer.client, selectedThreadId: peer.selectedThreadId })
+          if (input.type === 'compose' && result.error) peer.editingThreadId = previousEditor
+          if (['pause-draft', 'cancel-draft', 'send'].includes(input.type) && !result.error) peer.editingThreadId = null
+          if (input.type === 'answer' || input.type === 'send') privateError = result.error
+          if (input.type === 'answer' || input.type === 'send' && draftRequestId) {
             receipt.answerDelivered = result.error == null
             if (!receipt.answerDelivered) receipt.error = { code: 'unavailable', message: errors.unavailable }
           }
@@ -267,13 +284,14 @@ export async function startSocketServer(options: SocketServerOptions) {
       void task.then(settle, settle)
     }
     await task
-    return shell(peer)
+    return privateError === undefined ? shell(peer) : { ...shell(peer), error: privateError }
   }
   const dispatch = async (peer: Peer, request: HostRequest): Promise<unknown> => {
     if (closing) throw new Refusal('unavailable')
     if (request.session !== peer.session || !authenticated(peer)) throw new Refusal('unauthenticated')
     switch (request.op) {
       case 'hello':
+        peer.frames.setClientLiveness(request.accepts?.includes('client-liveness') ?? false)
         peer.messageAliases = request.accepts?.includes('message-aliases') ?? false
         peer.afterSeq = request.afterSeq ?? 0; peer.deltas = request.accepts?.includes('detail-delta') ?? false
         peer.clientUpdates = request.accepts?.includes('client-updates') ?? false
@@ -282,7 +300,11 @@ export async function startSocketServer(options: SocketServerOptions) {
       case 'detail': return service.threadDetail(request.threadId)
       case 'events': return events(peer, request.afterSeq, request.threadId)
       case 'receipt': return receipts.get(peer.client.clientId + ':' + request.commandId)?.receipt ?? { status: 'unknown' }
-      case 'observe': peer.observed = new Set(request.threadIds); await observe(); for (const id of peer.observed) detail(peer, id); return null
+      case 'observe':
+        peer.observed = new Set(request.threadIds); await observe()
+        for (const id of peer.observed) { await peer.frames.drained(); if (peer.frames.isClosed) break; detail(peer, id) }
+        await peer.frames.drained()
+        return null
       case 'command': return command(peer, request)
       case 'git-refs':
         if (!service.gitRefs) throw new Refusal('invalid_request')
@@ -399,10 +421,15 @@ export async function startSocketServer(options: SocketServerOptions) {
           respond(response, 200, { v: 1, hostId, ok: true }); return
         }
         if (request.url === '/v1/pair') {
-          spend('pair', HTTP_BUDGETS.pair)
           const input = z.object({ v: z.literal(1), code: z.string().min(1).max(32), name: z.string().min(1).max(256) }).strict().parse(await body(request))
+          // This listener binds only loopback. Serve replaces this header with the device address;
+          // direct connections use loopback's budget. Neither address grants client authority.
+          const forwarded = request.headers['x-forwarded-for']
+          const address = typeof forwarded === 'string' && isIP(forwarded) ? forwarded : request.socket.remoteAddress ?? 'loopback'
+          const refund = spend('pair:' + address, HTTP_BUDGETS.pair)
           let paired: Awaited<ReturnType<PairedClients['redeem']>>
           try { paired = await pairing.redeem(input.code, input.name) } catch { throw new Refusal('unauthenticated') }
+          refund()
           respond(response, 200, { v: 1, hostId, ...paired }); options.onPaired?.(paired.clientId); return
         }
         if (request.url === '/v1/revoke') {
@@ -429,20 +456,24 @@ export async function startSocketServer(options: SocketServerOptions) {
   })
   server.headersTimeout = 5000; server.requestTimeout = 10000; server.keepAliveTimeout = 1000
   server.on('upgrade', (request, stream: Duplex, head) => {
-    const reject = (): void => { stream.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n') }
+    stream.on('error', () => stream.destroy())
+    const reject = (status = '401 Unauthorized'): void => { stream.end('HTTP/1.1 ' + status + '\r\nConnection: close\r\n\r\n') }
     const session = bearer(request), clientId = pairing.verifySession(session)
     const key = request.headers['sec-websocket-key']
-    if (closing || peers.size >= 32 || request.url !== '/v1/socket' || !clientId || request.headers['sec-websocket-version'] !== '13' || typeof key !== 'string' || !/^[A-Za-z0-9+/]{22}==$/.test(key) || (request.headers.origin && !originAllowed(request.headers.origin, options.origins))) { reject(); return }
+    if (request.url !== '/v1/socket' || !clientId || request.headers['sec-websocket-version'] !== '13' || typeof key !== 'string' || !/^[A-Za-z0-9+/]{22}==$/.test(key) || (request.headers.origin && !originAllowed(request.headers.origin, options.origins))) { reject(); return }
+    if (closing || peers.size >= 32) { reject('503 Service Unavailable'); return }
     const accept = createHash('sha1').update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64')
     stream.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' + accept + '\r\n\r\n')
     const frames = new SocketFrames(stream, false, text => onMessage(peer, text))
-    const peer: Peer = { frames, client: identity(clientId), session, observed: new Set(), inFlight: 0, window: Date.now(), count: 0, pageWindow: 0, pages: 0, preview: false, afterSeq: 0, selectedThreadId: null, selectedProjectId: null, messageAliases: false, deltas: false, clientUpdates: false }
+    const peer: Peer = { frames, client: identity(clientId), session, observed: new Set(), inFlight: 0, window: Date.now(), count: 0, pageWindow: 0, pages: 0, preview: false, afterSeq: 0, selectedThreadId: null, selectedProjectId: null, editingThreadId: null, messageAliases: false, deltas: false, clientUpdates: false }
     peers.add(peer)
+    frames.startHeartbeat()
     frames.onClose(() => { peers.delete(peer); if (!closing) { track(observe().catch(() => undefined)); options.onPeersChanged?.() } })
     frames.feed(head)
     options.onPeersChanged?.()
   })
   await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(options.port ?? 0, '127.0.0.1', () => { server.removeListener('error', reject); resolve() }) })
+  server.on('error', () => { console.error('host_listener_error') })
   const address = server.address()
   if (!address || typeof address === 'string') throw new Error('The host listener did not receive a loopback port.')
   // The descriptor is also the body of /v1/health: a client reads the host's Sotto version and features

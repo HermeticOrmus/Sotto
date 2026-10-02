@@ -1,4 +1,5 @@
 import { join } from 'node:path'
+import { parseHostEntityKey } from '../../shared/clientIdentity'
 import { z } from 'zod'
 import { remoteHostSchema, type HostSetupChoice, type HostSetupState, type HostSetupStep, type HostsCommand, type HostsState, type HostStatus, type RemoteHost } from '../../shared/hosts'
 import { AtomicJsonStore } from '../storage/atomicJsonStore'
@@ -749,7 +750,11 @@ export class DesktopHosts {
     let connected = false, pushError: string | undefined
     // A push error stays on the row only until what it was about arrives, so a thread that was once too large
     // does not keep saying so after it fits again.
-    const socket = new SocketHostService({ onConnectionChange: value => { connected = value; if (!value && this.live.get(host.id) === active) this.dropped(host, active) },
+    const socket = new SocketHostService({ getSelectedThreadId: () => {
+      const selected = this.options.router.shell().activeThreadId
+      const picked = selected ? parseHostEntityKey(selected) : null
+      return picked?.hostId === active.tunnel!.hostId ? picked.id : null
+    }, onConnectionChange: value => { connected = value; if (!value && this.live.get(host.id) === active) this.dropped(host, active) },
       onPushError: message => { if (this.live.get(host.id) === active) { pushError = message; this.update(host.id, { error: message }) } },
       onPushErrorCleared: () => { if (this.live.get(host.id) === active && pushError !== undefined && this.status.get(host.id)?.error === pushError) this.update(host.id, { error: undefined }); pushError = undefined }, url: active.tunnel!.url, token: this.options.credentials.get(`remote-host:${host.id}`), expectedHostId: active.tunnel!.hostId, owned: active.tunnel!.owned,
       // Nothing on the desktop reads a host's event log, so a connect asks for none of it.

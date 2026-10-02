@@ -146,7 +146,7 @@ describe('authenticated host socket', () => {
     await expect(client.command({ type: 'reclaim-thread-worktree', threadId: 'missing', withUncommittedChanges: false })).resolves.toBeDefined()
   })
   it('accepts an explicitly authorized answer and refuses the same device after policy revocation', async () => {
-    const { client, result } = await pair()
+    const { client, result } = await pair('  Studio\n\u202e laptop\u0000  ')
     await client.command({ type: 'configure', patch: { provider: 'codex', enabledProviders: ['codex'] } })
     await client.command({ type: 'connect', provider: 'codex' })
     const threadId = client.shell().host.threads.find(thread => thread.title === 'Workshop')!.id
@@ -162,7 +162,7 @@ describe('authenticated host socket', () => {
     const answerId = randomUUID()
     expect((await client.command({ type: 'answer', threadId, requestId: 'permission-one', answer: '', approved: true }, undefined, answerId)).error).toBeNull()
     expect(await client.receipt(answerId)).toEqual({ status: 'completed', answerDelivered: true })
-    expect(host.service.events(0, threadId)).toContainEqual(expect.objectContaining({ event: expect.objectContaining({ kind: 'answer-given', attribution: expect.objectContaining({ clientId: result.clientId, transport: 'socket' }) }) }))
+    expect(host.service.events(0, threadId)).toContainEqual(expect.objectContaining({ event: expect.objectContaining({ kind: 'answer-given', attribution: expect.objectContaining({ clientId: result.clientId, user: 'Studio laptop', transport: 'socket' }) }) }))
     await policy('deny-answers')
     native.event({ type: 'permission', threadId: 'workshop', requestId: 'permission-two', text: 'Again?' })
     await expect.poll(() => client.shell().host.threads.find(thread => thread.id === threadId)?.requests.some(request => request.id === 'permission-two')).toBe(true)
@@ -197,6 +197,48 @@ describe('authenticated host socket', () => {
       expect(await client.receipt(commandId)).toMatchObject({ status: 'completed', answerDelivered: false, error: { code: 'unavailable' } })
       expect(host.service.shell().host.threads.find(thread => thread.id === threadId)?.requests).toHaveLength(requestLeaves ? 0 : 1)
     } finally { spy.mockRestore() }
+  })
+  it.each([false, true])('keeps an uncertain question draft send private when accepted is %s', async accepted => {
+    const { client, result } = await pair()
+    await client.command({ type: 'configure', patch: { provider: 'codex', enabledProviders: ['codex'] } })
+    await client.command({ type: 'connect', provider: 'codex' })
+    const threadId = client.shell().host.threads.find(thread => thread.title === 'Workshop')!.id
+    await host.service.command({ type: 'assign', threadId, instruction: 'Fix the tests' }, desktopWindowClient())
+    const descriptor = JSON.parse(await readFile(join(root, 'host-listener.json'), 'utf8')) as { adminToken: string }
+    expect((await fetch(url + '/v1/admin/allow-answers', { method: 'POST', headers: { Authorization: 'Bearer ' + descriptor.adminToken, 'Content-Type': 'application/json' }, body: JSON.stringify({ clientId: result.clientId }) })).status).toBe(200)
+    native.event({ type: 'question', threadId: 'workshop', requestId: 'question-draft-receipt', text: 'Which color?' })
+    await expect.poll(() => client.shell().queue.some(item => item.requestId === 'question-draft-receipt')).toBe(true)
+    await client.command({ type: 'select-thread', threadId })
+    expect(await client.command({ type: 'compose', text: 'Blue' })).toMatchObject({ composing: true, draft: 'Blue', draftRequestId: 'question-draft-receipt' })
+    const execute = native.execute.bind(native)
+    const adapter = vi.spyOn(native, 'execute').mockImplementation(command => command.type === 'answer'
+      ? Promise.resolve({ accepted, uncertain: true }) : execute(command))
+    const dispatch = host.service.command.bind(host.service)
+    let coordinatorError: string | null | undefined
+    const coordinator = vi.spyOn(host.service, 'command').mockImplementation(async (command, identity) => {
+      const state = await dispatch(command, identity)
+      if (command.type === 'send') coordinatorError = state.error
+      return state
+    })
+    const readEvents = client.readEvents.bind(client)
+    let refreshed = false
+    const refresh = vi.spyOn(client, 'readEvents').mockImplementation(async (...args) => {
+      const page = await readEvents(...args)
+      expect((await client.readShell()).error).toBeNull()
+      refreshed = true
+      return page
+    })
+    try {
+      const commandId = randomUUID()
+      const sent = await client.command({ type: 'send' }, undefined, commandId)
+      expect(refreshed).toBe(true)
+      expect(coordinatorError).toBeTruthy()
+      expect(sent).toMatchObject({ error: coordinatorError, composing: true, draft: 'Blue', draftRequestId: 'question-draft-receipt' })
+      expect(await client.receipt(commandId)).toMatchObject({ status: 'completed', answerDelivered: false, error: { code: 'unavailable' } })
+      expect(host.service.shell().error).toBeNull()
+      await expect(client.command({ type: 'send' }, undefined, commandId)).rejects.toMatchObject({ code: 'unavailable' })
+      expect(adapter.mock.calls.filter(([command]) => command.type === 'answer')).toHaveLength(1)
+    } finally { refresh.mockRestore(); coordinator.mockRestore(); adapter.mockRestore() }
   })
   it('confirms a socket answer whose delayed delivery finishes before the wrapped result arrives', async () => {
     const { client, result } = await pair()
@@ -287,67 +329,47 @@ describe('authenticated host socket', () => {
       expect(await client.receipt(commandId)).toEqual({ status: 'completed', answerDelivered: true })
     } finally { release(); await answer; spy.mockRestore() }
   })
-  it.each(['shell', 'question', 'saved', 'queue'] as const)('preserves command admission context for composition: %s', async source => {
+  it('composes and sends to the peer selection while preserving another thread draft', async () => {
     const { client } = await pair()
-    await client.command({ type: 'configure', patch: { provider: 'codex', enabledProviders: ['codex'] } })
     await client.command({ type: 'connect', provider: 'codex' })
-    const threadId = client.shell().host.threads.find(thread => thread.title === 'Workshop')!.id
-    await client.command({ type: 'select-thread', threadId })
-    await host.service.command({ type: 'assign', threadId, instruction: 'Keep watching' }, desktopWindowClient())
-    native.event({ type: 'question', threadId: 'workshop', requestId: 'question-one', text: 'Choose a name' })
-    await expect.poll(() => host.service.shell().queue.some(item => item.requestId === 'question-one')).toBe(true)
-    if (source !== 'question' && source !== 'queue') {
-      await host.service.command({ type: 'compose', text: 'Original draft' }, desktopWindowClient())
-      if (source === 'saved') {
-        await host.service.command({ type: 'pause-draft' }, desktopWindowClient())
-        await host.service.command({ type: 'select-thread', threadId }, desktopWindowClient())
-      }
-    }
-    const originalShell = host.service.shell.bind(host.service)
-    const shell = source === 'queue' ? vi.spyOn(host.service, 'shell').mockImplementation(() => {
-      const state = originalShell()
-      return { ...state, queue: [{ ...state.queue[0]!, id: 'queue-note', requestId: undefined }, ...state.queue] }
-    }) : undefined
-    try {
-      const before = host.service.shell()
-      await expect(client.command({ type: 'compose', text: 'Changed draft' })).rejects.toMatchObject({ code: 'forbidden' })
-      expect(host.service.shell().threadDrafts).toEqual(before.threadDrafts)
-      expect(host.service.shell().draft).toBe(before.draft)
-    } finally { shell?.mockRestore() }
+    const threads = client.shell().host.threads
+    const localId = threads[0]!.id
+    const created = await client.command({ type: 'create-project', provider: 'codex', title: 'Remote project', path: root, useExisting: true })
+    const projectId = created.host.projects.find(project => project.path === root)!.id
+    const opened = await client.command({ type: 'create-thread', projectId, title: 'Remote thread', modelId: created.host.models[0]!.id, managed: true })
+    const remoteId = opened.host.threads.find(thread => thread.title === 'Remote thread')!.id
+    await host.service.command({ type: 'pause-draft' }, desktopWindowClient())
+    await host.service.command({ type: 'select-thread', threadId: localId }, desktopWindowClient())
+    await host.service.command({ type: 'compose', text: 'Host draft' }, desktopWindowClient())
+    await client.command({ type: 'select-thread', threadId: remoteId })
+    const before = host.service.shell()
+    expect((await client.command({ type: 'compose', text: 'Remote draft' })).error).toBeNull()
+    expect(host.service.shell().threadDrafts).toEqual(expect.arrayContaining([expect.objectContaining({ threadId: remoteId, text: 'Remote draft' })]))
+    await client.observe([remoteId])
+    const detailReads = vi.spyOn(host.service, 'threadDetail')
+    await client.connect()
+    expect(detailReads.mock.calls.filter(([id]) => id === remoteId)).toHaveLength(1)
+    detailReads.mockRestore()
+    expect((await client.readShell()).activeThreadId).toBe(remoteId)
+    expect((await client.command({ type: 'send' })).error).toBeNull()
+    expect(host.service.threadDetail(remoteId)!.messages).toEqual(expect.arrayContaining([expect.objectContaining({ role: 'user', text: 'Remote draft' })]))
+    expect(host.service.shell().activeThreadId).toBe(before.activeThreadId)
+    expect(host.service.shell().draft).toBe(before.draft)
+    expect(host.service.shell().threadDrafts).toEqual(expect.arrayContaining(before.threadDrafts ?? []))
   })
-  it.each(['composing', 'saved'] as const)('keeps ordinary composition available with its existing binding: %s', async source => {
+  it.each(['cancel-draft', 'pause-draft', 'cancel-request'] as const)('targets the peer selection for %s and preserves another thread draft', async type => {
     const { client } = await pair()
-    await client.command({ type: 'configure', patch: { provider: 'codex', enabledProviders: ['codex'] } })
     await client.command({ type: 'connect', provider: 'codex' })
-    const threadId = client.shell().host.threads.find(thread => thread.title === 'Workshop')!.id
-    await host.service.command({ type: 'assign', threadId, instruction: 'Keep watching' }, desktopWindowClient())
-    await host.service.command({ type: 'compose', text: 'Ordinary draft' }, desktopWindowClient())
-    if (source === 'saved') {
-      await host.service.command({ type: 'pause-draft' }, desktopWindowClient())
-      await host.service.command({ type: 'select-thread', threadId }, desktopWindowClient())
-    }
-    native.event({ type: 'question', threadId: 'workshop', requestId: 'question-one', text: 'Choose a name' })
-    await expect.poll(() => host.service.shell().queue.some(item => item.requestId === 'question-one')).toBe(true)
-    expect(host.service.shell().draftRequestId).toBeNull()
-    await client.command({ type: 'compose', text: 'Revised ordinary draft' })
-    expect(host.service.shell().error).toBeNull()
-    expect(host.service.shell().draftRequestId).toBeNull()
-    expect(host.service.shell().threadDrafts?.find(draft => draft.threadId === threadId)).toMatchObject({ text: 'Revised ordinary draft', requestId: null })
-  })
-  it('preserves command admission context for a submitted draft', async () => {
-    const { client } = await pair()
-    await client.command({ type: 'configure', patch: { provider: 'codex', enabledProviders: ['codex'] } })
-    await client.command({ type: 'connect', provider: 'codex' })
-    const threadId = client.shell().host.threads.find(thread => thread.title === 'Workshop')!.id
-    await host.service.command({ type: 'select-thread', threadId }, desktopWindowClient())
-    await host.service.command({ type: 'assign', threadId, instruction: 'Keep watching' }, desktopWindowClient())
-    native.event({ type: 'question', threadId: 'workshop', requestId: 'question-one', text: 'Choose a name' })
-    await expect.poll(() => host.service.shell().queue.some(item => item.requestId === 'question-one')).toBe(true)
-    await host.service.command({ type: 'compose', text: 'Original draft' }, desktopWindowClient())
-    expect(host.service.shell().draftRequestId).toBe('question-one')
-    await expect(client.command({ type: 'send' })).rejects.toMatchObject({ code: 'forbidden' })
-    expect(host.service.shell().draftRequestId).toBe('question-one')
-    expect(host.service.shell().draft).toBe('Original draft')
+    const threads = client.shell().host.threads
+    await host.service.command({ type: 'select-thread', threadId: threads[0]!.id }, desktopWindowClient())
+    await host.service.command({ type: 'compose', text: 'Host draft' }, desktopWindowClient())
+    await client.command({ type: 'select-thread', threadId: threads[1]!.id })
+    await client.command({ type: 'compose', text: 'Remote draft' })
+    const before = host.service.shell()
+    expect((await client.command({ type })).error).toBeNull()
+    expect(host.service.shell().activeThreadId).toBe(before.activeThreadId)
+    expect(host.service.shell().draft).toBe(before.draft)
+    expect(host.service.shell().threadDrafts?.find(draft => draft.threadId === threads[1]!.id)?.text).toBe(type === 'cancel-draft' ? undefined : 'Remote draft')
   })
   it('refuses a second listener before it can open or overwrite the running host stores', async () => {
     await expect(startHeadlessHost({ dataDirectory: root, port: 0 })).rejects.toThrow(`Another host (process ${process.pid}) is using this data folder`)
@@ -669,6 +691,31 @@ describe('thread detail over the socket', () => {
     return { stream, server, client, updates, pushErrors, connected: () => connected, session: () => host.pairing.signSession(paired.clientId) }
   }
 
+  it('stops materialising observed details after the peer closes while waiting for drain', async () => {
+    const { client } = await pair()
+    await client.command({ type: 'connect', provider: 'codex' })
+    const ids = client.shell().host.threads.slice(0, 2).map(thread => thread.id)
+    const details = vi.spyOn(host.service, 'threadDetail')
+    const drain = vi.spyOn(SocketFrames.prototype, 'drained').mockImplementation(function (this: SocketFrames) {
+      this.close(); return Promise.resolve()
+    })
+    try {
+      await expect(client.observe(ids)).rejects.toMatchObject({ code: 'disconnected' })
+      expect(drain).toHaveBeenCalled()
+      expect(details).not.toHaveBeenCalled()
+    } finally { drain.mockRestore(); details.mockRestore() }
+  })
+  it('receives each observed detail once on reconnect', async () => {
+    const { stream, server, client } = await streamingHost()
+    try {
+      const reads = stream.reads
+      await client.close()
+      await client.connect()
+      expect(stream.reads).toBe(reads + 1)
+      expect(client.threadDetail('streaming')?.revision).toBe(1)
+    } finally { await client.close(); await server.close() }
+  })
+
   it('pushes what changed as a delta the client applies and passes on, and the whole thread to a client that never asked for deltas', async () => {
     const { stream, server, client, updates, session } = await streamingHost()
     try {
@@ -684,7 +731,7 @@ describe('thread detail over the socket', () => {
       // A client from before the freeze says nothing about deltas in its hello, and keeps getting whole threads.
       const legacy = await rawPeer(server.descriptor.port, session())
       try {
-        expect(await legacy.call('hello', { op: 'hello' })).toMatchObject({ ok: true, result: { sottoVersion: packageVersion, features: ['message-aliases', 'detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders'] } })
+        expect(await legacy.call('hello', { op: 'hello' })).toMatchObject({ ok: true, result: { sottoVersion: packageVersion, features: ['client-liveness', 'message-aliases', 'detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders'] } })
         await legacy.call('observe', { op: 'observe', threadIds: ['streaming'] })
         stream.current = { threadId: 'streaming', revision: 3, messages: [message('Hello, world!')] }
         stream.emit(delta(2, 3, '!'))
@@ -835,11 +882,11 @@ describe('staged images over the socket (ADR-0031)', () => {
 describe('host version and features', () => {
   it('advertises the Sotto version and features in health, the listener file and the hello reply', async () => {
     const health = await (await fetch(url + '/v1/health')).json() as Record<string, unknown>
-    expect(health).toMatchObject({ v: 1, status: 'ready', sottoVersion: packageVersion, features: ['message-aliases', 'detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders', 'provider-sign-in', 'client-updates'] })
+    expect(health).toMatchObject({ v: 1, status: 'ready', sottoVersion: packageVersion, features: ['client-liveness', 'message-aliases', 'detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders', 'provider-sign-in', 'client-updates'] })
     const listener = JSON.parse(await readFile(join(root, 'host-listener.json'), 'utf8')) as Record<string, unknown>
-    expect(listener).toMatchObject({ v: 1, sottoVersion: packageVersion, features: ['message-aliases', 'detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders', 'provider-sign-in', 'client-updates'] })
+    expect(listener).toMatchObject({ v: 1, sottoVersion: packageVersion, features: ['client-liveness', 'message-aliases', 'detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders', 'provider-sign-in', 'client-updates'] })
     const { client } = await pair()
-    expect(await client.connect()).toMatchObject({ sottoVersion: packageVersion, features: ['message-aliases', 'detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders', 'provider-sign-in', 'client-updates'], capabilities: { mayAnswer: false } })
+    expect(await client.connect()).toMatchObject({ sottoVersion: packageVersion, features: ['client-liveness', 'message-aliases', 'detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders', 'provider-sign-in', 'client-updates'], capabilities: { mayAnswer: false } })
   })
 
   it('runs client updates only where it offers them: the headless host does, the phone listener does not (#480)', async () => {
@@ -953,11 +1000,49 @@ describe('request budgets', () => {
     await expect(first.client.connect()).rejects.toMatchObject({ code: 'busy', message: HOST_BUSY, pairingRequired: false })
     await expect(second.client.connect()).resolves.toMatchObject({ clientId: second.result.clientId })
   })
-  it('gives pairing a small bucket of its own that sessions do not share', async () => {
+  it('keeps failed pairing budgets separate and checks them before redemption', async () => {
     const { client } = await pair()
-    for (let index = 1; index < 10; index++) await expect(SocketHostService.pair(url, 'WRONG' + index, 'Guess')).rejects.toMatchObject({ code: 'unauthenticated', message: expect.stringContaining('pairing code could not be used') })
-    await expect(SocketHostService.pair(url, host.pairing.issuePairingCode().code, 'Late')).rejects.toMatchObject({ code: 'busy', message: HOST_BUSY })
+    const redeem = (code: string, address: string) => fetch(url + '/v1/pair', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': address },
+      body: JSON.stringify({ v: 1, code, name: 'Phone' }),
+    })
+    const checked = vi.spyOn(host.pairing, 'redeem')
+    for (let index = 0; index < 10; index++) expect((await redeem('WRONG' + index, '100.64.0.1')).status).toBe(401)
+    const code = host.pairing.issuePairingCode().code
+    expect((await redeem(code, '100.64.0.1')).status).toBe(429)
+    expect(checked).toHaveBeenCalledTimes(10)
+    expect((await redeem(code, '100.64.0.2')).status).toBe(200)
+    expect(checked).toHaveBeenCalledTimes(11)
     await expect(client.connect()).resolves.toBeDefined()
+  })
+  it('evicts the oldest pairing budget and expires entries after a minute', async () => {
+    const redeem = (address: string) => fetch(url + '/v1/pair', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': address },
+      body: JSON.stringify({ v: 1, code: 'WRONG', name: 'Phone' }),
+    })
+    for (let index = 0; index < 10; index++) expect((await redeem('100.64.0.1')).status).toBe(401)
+    expect((await redeem('100.64.0.1')).status).toBe(429)
+    for (let index = 2; index <= 1025; index++) {
+      expect((await redeem('100.64.' + Math.floor(index / 256) + '.' + index % 256)).status).toBe(401)
+    }
+    expect((await redeem('100.64.0.1')).status).toBe(401)
+    for (let index = 0; index < 9; index++) await redeem('100.64.0.1')
+    expect((await redeem('100.64.0.1')).status).toBe(429)
+    const now = Date.now()
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now + 60_001)
+    try { expect((await redeem('100.64.0.1')).status).toBe(401) } finally { clock.mockRestore() }
+  })
+  it('uses the local pairing budget for a forwarded address that is not one IP', async () => {
+    const redeem = (address: string) => fetch(url + '/v1/pair', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': address },
+      body: JSON.stringify({ v: 1, code: 'WRONG', name: 'Phone' }),
+    })
+    for (let index = 0; index < 10; index++) expect((await redeem('100.64.0.1, 100.64.0.2')).status).toBe(401)
+    expect((await redeem('not-an-address')).status).toBe(429)
+    await expect(SocketHostService.pair(url, host.pairing.issuePairingCode().code, 'Phone')).rejects.toMatchObject({ code: 'busy' })
+  })
+  it('does not spend the failed pairing budget on successful redemptions', async () => {
+    for (let index = 0; index < 12; index++) await expect(SocketHostService.pair(url, host.pairing.issuePairingCode().code, 'Phone')).resolves.toBeDefined()
   })
   it('paces a client paging through a long log instead of closing it at the per-second cutoff', async () => {
     // The hello carries the first page and 101 event pages follow: one more than a peer may send of anything
