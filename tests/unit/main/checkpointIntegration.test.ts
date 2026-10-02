@@ -1,7 +1,7 @@
+// @vitest-environment node
 import * as worktrees from '../../../src/main/agents/threadWorktrees'
 import { join } from 'node:path'
 import { mkdir } from 'node:fs/promises'
-// @vitest-environment node
 import { expect, it, vi } from 'vitest'
 import { workspaceFixture } from '../../fixtures/workspaceFixture'
 import { connectCheckpoints } from '../../../src/main/tools/checkpointIntegration'

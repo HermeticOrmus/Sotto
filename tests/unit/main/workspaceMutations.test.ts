@@ -1,5 +1,5 @@
-import * as worktrees from '../../../src/main/agents/threadWorktrees'
 // @vitest-environment node
+import * as worktrees from '../../../src/main/agents/threadWorktrees'
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { expect, it, vi } from 'vitest'

@@ -1,5 +1,5 @@
-import { CheckoutSendRefusal } from '../../../src/main/agents/checkoutMutations'
 // @vitest-environment node
+import { CheckoutSendRefusal } from '../../../src/main/agents/checkoutMutations'
 import { randomUUID } from 'node:crypto'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
