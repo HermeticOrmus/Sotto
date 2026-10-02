@@ -1,3 +1,4 @@
+import { CheckoutSendRefusal, type CheckoutPendingWork } from './checkoutMutations'
 import type { AgentSkillReference } from '../../shared/agentSkills'
 import type { AgentFileReference } from '../../shared/agentFiles'
 import type { AgentActivity } from '../../shared/agentActivity'
@@ -467,10 +468,20 @@ export class AgentControl {
     return this.sottoRequests ? withSottoRequests(snapshot, this.sottoRequests.requests()) : snapshot
   }
   hasPendingThreadWork(threadId: string): boolean {
-    return this.outbox.some(item => item.threadId === threadId)
-      || this.followupStore.peek().items.some(item => item.threadId === threadId)
-      || this.state.assignments.some(item => item.threadId === threadId && item.mode === 'managed' && !item.paused)
-      || (this.state.deliveries ?? []).some(item => item.threadId === threadId && ['queued', 'submitting', 'uncertain'].includes(item.status))
+    return this.pendingThreadWorkReason(threadId) !== null
+  }
+  /** The existing pending-work guard's reason, so a refusal offers the recovery this work actually needs. */
+  pendingThreadWorkReason(threadId: string): CheckoutPendingWork | null {
+    const items = this.followupStore.peek().items.filter(item => item.threadId === threadId)
+    const deliveries = (this.state.deliveries ?? []).filter(item => item.threadId === threadId)
+    const assignment = this.state.assignments.find(item => item.threadId === threadId && item.mode === 'managed')
+    if (items.some(item => item.status === 'uncertain') || deliveries.some(item => item.status === 'uncertain')) return 'uncertain-send'
+    if (items.some(item => item.status === 'failed')) return 'failed-followups'
+    if (items.length && assignment?.paused) return 'paused-assignment'
+    if (items.some(item => item.status === 'paused')) return 'paused-followups'
+    if (assignment && !assignment.paused) return 'managed-assignment'
+    if (items.length || this.outbox.some(item => item.threadId === threadId) || deliveries.some(item => ['queued', 'submitting'].includes(item.status))) return 'pending-work'
+    return null
   }
   /**
    * Where one thread's files are, from the live state. Files, Git changes, the terminal and the browser
@@ -1626,6 +1637,7 @@ export class AgentControl {
       } catch (error) {
         if (error instanceof AnswerDeliveryUnconfirmed) unconfirmedAnswer = error
         failure = error instanceof AnswerDeliveryUnconfirmed && error.delivered ? undefined
+          : error instanceof CheckoutSendRefusal && (command.type === 'manual-send' || command.type === 'steer' || command.type === 'send') ? error.draftMessage()
           : error instanceof Error ? error.message : 'Sotto could not complete this action.'
         if (!(error instanceof AnswerDeliveryUnconfirmed)) this.setCommandError(error, failure!)
         if (failure !== undefined && !(error instanceof AnswerDeliveryUnconfirmed && client.transport === 'socket')) this.say(failure)
@@ -1786,7 +1798,7 @@ export class AgentControl {
             expectedLastUserMessageId: lastUserMessageIdOf(this.thread(threadId)) }, turn, validate, item.draftId)
           await this.followupStore.settle(item.id, 'accepted')
         } catch (error) {
-          failure = error instanceof Error ? error.message : 'Could not dispatch this follow-up.'
+          failure = error instanceof CheckoutSendRefusal ? error.queuedMessage() : error instanceof Error ? error.message : 'Could not dispatch this follow-up.'
           if (claimed) {
             const item = this.followupStore.get().items.find(i => i.id === first.id)
             const accepted = item?.messageId && this.thread(threadId).messages.some(m => m.role === 'user' && m.id === item.messageId)

@@ -88,6 +88,11 @@ export function ThreadPane({ row, state, command, store, focused, promptId, erro
   const [followSignal, setFollowSignal] = useState(0)
   const [handingOff, setHandingOff] = useState(false)
   const [renaming, setRenaming] = useState(false)
+  const renameReturn = useRef<HTMLElement | null>(null)
+  const restoreRenameFocus = useRef(false)
+  useLayoutEffect(() => {
+    if (!renaming && restoreRenameFocus.current) { restoreRenameFocus.current = false; renameReturn.current?.focus() }
+  }, [renaming])
   const [holdingWriteHere, setHoldingWriteHere] = useState(false)
   /** A Git refusal the branch toolbar shows under its row; the pane's own error line leaves it to the row. */
   const [toolbarExplained, setToolbarExplained] = useState<string | null>(null)
@@ -197,7 +202,7 @@ export function ThreadPane({ row, state, command, store, focused, promptId, erro
   }
   /* Renaming is Sotto's own record of the thread: it neither waits for a running turn nor tells the provider. */
   const naming: PaneMenuItem[] = [
-    ...(!isThreadArchived(thread) && !renaming ? [{ id: 'rename', label: 'Rename', icon: <Pencil size={15} aria-hidden="true" />, run: () => setRenaming(true) }] : []),
+    ...(!isThreadArchived(thread) && !renaming ? [{ id: 'rename', label: 'Rename', icon: <Pencil size={15} aria-hidden="true" />, run: () => { renameReturn.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; setRenaming(true) } }] : []),
     // The thread's own provider writes the name from its first exchange (ADR-0026); a name typed by hand is left
     // alone and offers no rewrite, and neither does a Devin thread, whose provider writes nothing.
     ...(!isThreadArchived(thread) && !renaming && thread.titleSource !== 'user' && providerWritesShortText(thread.providerId)
@@ -238,7 +243,7 @@ export function ThreadPane({ row, state, command, store, focused, promptId, erro
         <ProviderMark provider={row.providerId} name={row.provider} size={16} />
         {renaming
           ? <h2><ThreadNameField title={thread.title} label={`Rename ${thread.title}`} className="thread-workspace__rename tt-focusable"
-            onRename={next => void command({ type: 'rename-thread', threadId: thread.id, title: next })} onDone={() => setRenaming(false)} /></h2>
+            onRename={next => void command({ type: 'rename-thread', threadId: thread.id, title: next })} onDone={restore => { restoreRenameFocus.current = restore; setRenaming(false) }} /></h2>
           : <h2>{thread.title}</h2>}
         <span className="thread-workspace__crumb" data-has-working-copy={Boolean(workingCopy) || undefined}><span>{row.project?.title ?? row.provider}</span>{workingCopy}
           {row.settledBy === 'thread' || row.settledBy === 'project' ? <span className="thread-workspace__tag">Settled</span> : null}
