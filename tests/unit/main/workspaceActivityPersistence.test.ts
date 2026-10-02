@@ -285,6 +285,28 @@ it.each([false, true])('keeps Threads usable after a failed durable reopen and r
   finally { disk.close() }
 })
 
+it('keeps legacy messages private across a rewind after history resumes', async () => {
+  let history = true
+  const f = await fixture(() => history)
+  const host = await f.open()
+  await host.connect()
+  const thread = f.provider.state.threads[0]!
+  history = false
+  await host.privacyChanged()
+  thread.messages.push({ id: 'private-before-rewind', role: 'user', text: 'PRIVATE_REWOUND_MESSAGE', createdAt: new Date().toISOString() })
+  await host.snapshot()
+  history = true
+  await host.privacyChanged()
+  thread.historyEpoch = 'rewound-epoch'
+  thread.messages.push({ id: 'fresh-after-rewind', role: 'assistant', text: 'Fresh after rewind', createdAt: new Date().toISOString() })
+  const messages = (await host.snapshot()).threads[0]!.messages.map(message => message.text)
+  expect(messages).toEqual(['Fresh after rewind'])
+  const disk = new ThreadStore(join(f.directory, 'threads.sqlite'))
+  disk.open()
+  try { expect(disk.readMessages(thread.id).messages.map(message => message.text)).toEqual(['Fresh after rewind']) }
+  finally { disk.close() }
+})
+
 it('scrubs pending permission words from workspace JSON even when redaction fails', async () => {
   let history = true
   const f = await fixture(() => history)

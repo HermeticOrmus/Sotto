@@ -198,7 +198,7 @@ export class WorkspaceHost implements AgentHost {
   /** What the store already holds for a thread, so a publish appends the difference rather than the history. */
   private readonly known = new Map<string, { epoch: string | undefined; messages: MessageMark[] }>()
   /** Legacy snapshots may replay private messages after retention resumes. Keep their identities alone. */
-  private readonly privateLegacyMessages = new Map<string, { epoch: string | undefined; ids: Set<string> }>()
+  private readonly privateLegacyMessages = new Map<string, Set<string>>()
   /** The threads a window is looking at, each with how many turns of its history it has been given. */
   private readonly watched = new Map<string, number>()
   /** False until a window has said what it is looking at. Until then no thread's history is put away. */
@@ -1224,19 +1224,15 @@ export class WorkspaceHost implements AgentHost {
   }
   private legacyMessages(thread: AgentThread, messages: readonly AgentMessage[]): readonly AgentMessage[] {
     let privateMessages = this.privateLegacyMessages.get(thread.id)
-    if (privateMessages && privateMessages.epoch !== thread.historyEpoch) {
-      this.privateLegacyMessages.delete(thread.id)
-      privateMessages = undefined
-    }
     if (!this.historyEnabled()) {
       if (!privateMessages) {
-        privateMessages = { epoch: thread.historyEpoch, ids: new Set() }
+        privateMessages = new Set()
         this.privateLegacyMessages.set(thread.id, privateMessages)
       }
-      for (const message of messages) privateMessages.ids.add(message.id)
+      for (const message of messages) privateMessages.add(message.id)
       return messages
     }
-    return privateMessages ? messages.filter(message => !privateMessages.ids.has(message.id)) : messages
+    return privateMessages ? messages.filter(message => !privateMessages.has(message.id)) : messages
   }
   /** Puts this thread's current window into memory: what the pane draws, and how much sits before it. */
   private loadWindow(threadId: string): void {
@@ -1730,7 +1726,7 @@ export class WorkspaceHost implements AgentHost {
           this.legacyMessages(thread, thread.messages)
           const known = this.known.get(thread.id)
           const privateMessages = this.privateLegacyMessages.get(thread.id)!
-          if (known && known.epoch === thread.historyEpoch) for (const message of known.messages) privateMessages.ids.add(message.id)
+          if (known && known.epoch === thread.historyEpoch) for (const message of known.messages) privateMessages.add(message.id)
         }
       }
     } else if (this.pendingEventsPrivate) {
