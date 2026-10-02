@@ -52,6 +52,29 @@ final class StreamingTests: XCTestCase {
             do { _ = try await Wire.readFrame(Data(json.utf8)); XCTFail("Invalid frame accepted") } catch {}
         }
     }
+    @MainActor func testDetailReplyDecodesItsResultOnceFromOriginalBytes() async throws {
+        CountedDetail.reset()
+        // This revision loses precision if the reply passes through JSONValue's Double.
+        let data = Data(#"{"v":1,"id":"detail","ok":true,"result":{"threadId":"t","revision":9007199254740993,"messages":[{"id":"m","role":"assistant","text":"Hello"}]}}"#.utf8)
+        let frame = try await Wire.readFrame(data)
+        guard case .reply(let id, let bytes) = frame else { return XCTFail("Expected reply") }
+        XCTAssertEqual(id, "detail")
+        XCTAssertEqual(bytes, data)
+        XCTAssertEqual(CountedDetail.count, 0)
+        let result = try await Wire.readReply(bytes, as: CountedDetail.self)
+        XCTAssertEqual(result.detail.revision, 9_007_199_254_740_993)
+        XCTAssertEqual(result.detail.messages.first?.text, "Hello")
+        XCTAssertEqual(CountedDetail.count, 1)
+        XCTAssertFalse(CountedDetail.usedMainThread)
+    }
+    func testNullDetailReplyAndTypedHello() async throws {
+        let empty = try await Wire.readReply(Data(#"{"v":1,"id":"detail","ok":true,"result":null}"#.utf8), as: Optional<ThreadDetail>.self)
+        XCTAssertNil(empty)
+        let hello = try await Wire.readReply(Data(#"{"v":1,"id":"hello","ok":true,"result":{"hostId":"host","clientId":"phone","shell":{"hostId":"host","host":{"hostId":"host","name":"Laptop","threads":[],"projects":[],"capabilities":{"submit":true,"interrupt":true,"questions":true,"permissions":true}}}}}"#.utf8), as: Hello.self)
+        XCTAssertEqual(hello.hostId, "host")
+        XCTAssertEqual(hello.clientId, "phone")
+        XCTAssertTrue(hello.shell.host.threads.isEmpty)
+    }
     func testSettledGroupingMatchesDesktopAndKeepsWaitingRequests() throws {
         let cases: [(String, Bool)] = [
             ("", false), (#", "workspaceSettledAt":"2026-09-28""#, true),
@@ -70,6 +93,22 @@ final class StreamingTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(ThreadGroups.merged([computer]).first).settled)
         XCTAssertEqual(ThreadGroups.waiting([computer]).count, 1, "Settlement never hides a waiting question")
     }
+}
+
+private struct CountedDetail: Decodable, Sendable {
+    private static let lock = NSLock()
+    private static var decodes = 0
+    private static var mainThread = false
+    let detail: ThreadDetail
+    init(from decoder: Decoder) throws {
+        Self.lock.lock()
+        Self.decodes += 1; Self.mainThread = Self.mainThread || Thread.isMainThread
+        Self.lock.unlock()
+        detail = try ThreadDetail(from: decoder)
+    }
+    static func reset() { lock.lock(); defer { lock.unlock() }; decodes = 0; mainThread = false }
+    static var count: Int { lock.lock(); defer { lock.unlock() }; return decodes }
+    static var usedMainThread: Bool { lock.lock(); defer { lock.unlock() }; return mainThread }
 }
 
 final class LivenessProgressTests: XCTestCase {

@@ -30,7 +30,7 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
     private var socket: URLSessionWebSocketTask?
     private var reader: Task<Void, Never>?
     private var heartbeat: Task<Void, Never>?
-    private var pending: [String: CheckedContinuation<Received<JSONValue>, Error>] = [:]
+    private var pending: [String: CheckedContinuation<Received<Data>, Error>] = [:]
     private var received = 0
     private var deadlines: [String: Task<Void, Never>] = [:]
     private var session = ""
@@ -123,8 +123,8 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
                 interval = 15_000_000_000
             }
         }
-        let helloResult = try await callReceived(Wire.snapshotHello)
-        let hello = try await Wire.readValue(helloResult.value, as: Hello.self)
+        let helloResult = try await callReceived(Wire.snapshotHello, as: Hello.self)
+        let hello = helloResult.value
         guard hello.hostId == pairing.hostId, hello.clientId == pairing.clientId else { disconnect(); throw ClientError.invalidIdentity }
         try hello.shell.validate(hostID: pairing.hostId)
         return Received(hello, sequence: helloResult.sequence)
@@ -142,9 +142,17 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
         waiting.values.forEach { $0.resume(throwing: ClientError.disconnected) }
     }
     func call(_ operation: [String: JSONValue], id: String = UUID().uuidString) async throws -> JSONValue {
-        try await callReceived(operation, id: id).value
+        try await call(operation, as: JSONValue.self, id: id)
     }
-    func callReceived(_ operation: [String: JSONValue], id: String = UUID().uuidString) async throws -> Received<JSONValue> {
+    func call<T: Decodable & Sendable>(_ operation: [String: JSONValue], as type: T.Type, id: String = UUID().uuidString) async throws -> T {
+        try await callReceived(operation, as: type, id: id).value
+    }
+    func callReceived<T: Decodable & Sendable>(_ operation: [String: JSONValue], as type: T.Type, id: String = UUID().uuidString) async throws -> Received<T> {
+        let reply = try await request(operation, id: id)
+        let value = try await Wire.readReply(reply.value, as: type)
+        return Received(value, sequence: reply.sequence)
+    }
+    private func request(_ operation: [String: JSONValue], id: String) async throws -> Received<Data> {
         guard let socket, !session.isEmpty else { throw ClientError.disconnected }
         let data = try Wire.request(id: id, session: session, operation: operation)
         guard data.count <= Wire.maximumFrameBytes else { throw ClientError.invalidRequest }
@@ -166,12 +174,12 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
     private func receive(_ frame: IncomingFrame) {
         received += 1
         switch frame {
-        case .reply(let id, let result): finish(id: id, result: .success(Received(result, sequence: received)))
+        case .reply(let id, let data): finish(id: id, result: .success(Received(data, sequence: received)))
         case .refusal(let id, let failure): finish(id: id, result: .failure(HostRefusal(failure: failure)))
         default: onPush?(frame, received)
         }
     }
-    private func finish(id: String, result: Result<Received<JSONValue>, Error>) {
+    private func finish(id: String, result: Result<Received<Data>, Error>) {
         liveness.finishRequest(id: id)
         deadlines.removeValue(forKey: id)?.cancel(); pending.removeValue(forKey: id)?.resume(with: result)
     }

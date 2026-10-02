@@ -549,8 +549,7 @@ struct Live {
         // observe sends the initial detail before acknowledging. Do not download it twice.
         if openDetail?.threadId == ref.threadID { return }
         let version = detailVersion
-        let result = try await connection.call(["op": .string("detail"), "threadId": .string(ref.threadID)])
-        let next = try await Wire.readValue(result, as: Optional<ThreadDetail>.self)
+        let next = try await connection.call(["op": .string("detail"), "threadId": .string(ref.threadID)], as: Optional<ThreadDetail>.self)
         try applyDetail(next, ref: ref, epoch: current, versionAtRead: version)
     }
     private func cancelDetailReload() {
@@ -571,8 +570,7 @@ struct Live {
                 }
             }
             do {
-                let result = try await connection.call(["op": .string("detail"), "threadId": .string(ref.threadID)])
-                let next = try await Wire.readValue(result, as: Optional<ThreadDetail>.self)
+                let next = try await connection.call(["op": .string("detail"), "threadId": .string(ref.threadID)], as: Optional<ThreadDetail>.self)
                 guard !Task.isCancelled else { return }
                 try applyDetail(next, ref: ref, epoch: epoch, versionAtRead: version)
                 // A newer delta may have arrived during the read/decode. Do not lose the final
@@ -650,10 +648,9 @@ struct Live {
         defer { dispatchingAnswers.remove(operation.id) }
         guard let connection = connections[hostID] else { operationFeedback(ClientError.uncertain.localizedDescription, operations: [operation.id]); return nil }
         do {
-            let result = try await connection.callReceived(["op": .string("command"), "command": command], id: operation.id)
+            let result = try await connection.callReceived(["op": .string("command"), "command": command], as: Shell.self, id: operation.id)
             guard generations[hostID] == current else { return nil }
-            let next = try await Wire.readValue(result.value, as: Shell.self)
-            guard generations[hostID] == current else { return nil }
+            let next = result.value
             try applyShell(next, from: hostID, sequence: result.sequence, reconcileAnswers: false)
             await checkDelivery(hostID)
             guard generations[hostID] == current else { return nil }
@@ -681,13 +678,12 @@ struct Live {
         deliveryChecks[hostID, default: 0] += 1
         defer { deliveryChecks[hostID, default: 0] -= 1 }
         do {
-            let fresh = try await connection.callReceived(["op": .string("shell")])
+            let fresh = try await connection.callReceived(["op": .string("shell")], as: Shell.self)
             guard generations[hostID] == current else { return }
-            let next = try await Wire.readValue(fresh.value, as: Shell.self)
-            guard generations[hostID] == current else { return }
+            let next = fresh.value
             try applyShell(next, from: hostID, sequence: fresh.sequence, reconcileAnswers: false)
             for item in scoped(hostID) {
-                let receipt = try await connection.call(["op": .string("receipt"), "commandId": .string(item.id)]).decode(Receipt.self)
+                let receipt = try await connection.call(["op": .string("receipt"), "commandId": .string(item.id)], as: Receipt.self)
                 guard generations[hostID] == current else { return }
                 guard scoped(hostID).contains(where: { $0.id == item.id }) else { continue }
                 try settle(item, receipt: receipt, shell: live[hostID]?.shell)
@@ -780,9 +776,9 @@ struct Live {
         guard canBrowseFolders(hostID), let connection = connections[hostID], let epoch = generations[hostID] else {
             throw ClientError.rejected("Folder browsing is unavailable. Reconnect or update Sotto on this computer.")
         }
-        let result = try await connection.call(NewThreads.folderRequest(path: path))
+        let result = try await connection.call(NewThreads.folderRequest(path: path), as: FolderResult.self)
         guard generations[hostID] == epoch, online(hostID) else { throw ClientError.disconnected }
-        return try await Wire.readValue(result, as: FolderResult.self)
+        return result
     }
     /// Registration and creation are separate commands. Neither is replayed after a lost acknowledgement.
     func createThread(on hostID: String, projectID: String?, folder: FolderListing?, modelID: String,

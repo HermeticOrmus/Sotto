@@ -67,11 +67,14 @@ struct HostRefusal: Error, LocalizedError {
         return Received(hello, sequence: sequence)
     }
     func push(_ frame: IncomingFrame) { received += 1; onPush?(frame, received) }
-    func callReceived(_ operation: [String: JSONValue], id: String = UUID().uuidString) async throws -> Received<JSONValue> {
+    func callReceived<T: Decodable & Sendable>(_ operation: [String: JSONValue], as type: T.Type, id: String = UUID().uuidString) async throws -> Received<T> {
         let value = try await call(operation, id: id)
         received += 1; let sequence = received
         afterReply?(operation["op"]?.string ?? "")
-        return Received(value, sequence: sequence)
+        return Received(try value.decode(type), sequence: sequence)
+    }
+    func call<T: Decodable & Sendable>(_ operation: [String: JSONValue], as type: T.Type, id: String = UUID().uuidString) async throws -> T {
+        try await call(operation, id: id).decode(type)
     }
     func call(_ operation: [String: JSONValue], id: String = UUID().uuidString) async throws -> JSONValue {
         let op = operation["op"]?.string ?? ""
