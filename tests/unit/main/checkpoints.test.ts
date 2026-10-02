@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { FilesService } from '../../../src/main/files/service'
+import { CheckoutMutations } from '../../../src/main/agents/checkoutMutations'
 import { CheckpointService } from '../../../src/main/tools/checkpoints'
 import type { CheckpointDependencies, CheckpointThread } from '../../../src/main/tools/checkpointTypes'
 
@@ -47,6 +48,84 @@ async function fixture() {
 }
 
 describe('completed native turn checkpoints', () => {
+  it('does not let an inaccessible legacy recovery record block an unrelated checkout', async () => {
+    const f = await fixture(), target = await f.complete()
+    const internals = f.service as unknown as { records: Map<string, { cwd: string; status: string; threadId: string; checkout?: string }> }
+    const inaccessible = join(f.root, 'inaccessible')
+    const legacy = { ...internals.records.get(target.checkpointId)!, threadId: f.second.threadId, cwd: inaccessible, status: 'uncertain' }
+    delete legacy.checkout
+    internals.records.set('legacy', legacy)
+    const actual = fsPromises.realpath
+    const spy = vi.spyOn(fsPromises, 'realpath').mockImplementation((...args) => args[0] === inaccessible
+      ? Promise.reject(Object.assign(new Error('Unavailable folder'), { code: 'EACCES' })) : actual(...args))
+    try { expect(await f.service.isWorkspaceBlocked(f.state.threadId)).toBe(false) }
+    finally { spy.mockRestore() }
+  })
+  it('blocks a sibling subdirectory while checkout recovery remains uncertain', async () => {
+    const f = await fixture(), target = await f.complete()
+    const nested = join(f.repo, 'nested'); await mkdir(nested)
+    f.dependencies.files = new FilesService({ resolveBinding: threadId => ({ threadId, projectId: 'project', workingDirectory: threadId === f.second.threadId ? nested : f.repo }), copyPath: vi.fn(), reveal: vi.fn() })
+    f.dependencies.rollback = async () => ({ accepted: false, uncertain: true })
+    expect(unwrap(await f.service.revertCheckpoint({ ...target, confirmed: true })).status).toBe('uncertain')
+    expect(await f.service.isWorkspaceBlocked(f.second.threadId)).toBe(true)
+  })
+  it('checks recovery in a proposed destination before an unallocated draft has a file binding', async () => {
+    const f = await fixture(), target = await f.complete()
+    f.dependencies.rollback = async () => ({ accepted: false, uncertain: true })
+    expect(unwrap(await f.service.revertCheckpoint({ ...target, confirmed: true })).status).toBe('uncertain')
+    const unrelated = join(f.root, 'unrelated'); await mkdir(unrelated)
+    git(unrelated, 'init', '-q')
+    f.dependencies.files = new FilesService({ resolveBinding: () => null, copyPath: vi.fn(), reveal: vi.fn() })
+    expect(await f.service.isWorkspaceBlocked('draft', f.repo)).toBe(true)
+    expect(await f.service.isWorkspaceBlocked('draft', unrelated)).toBe(false)
+  })
+  it('reserves the checkout before checking revert files', async () => {
+    const f = await fixture(), target = await f.complete(), mutations = new CheckoutMutations()
+    f.dependencies.acquireMutation = () => mutations.acquire(f.repo, 'mutation')
+    const internals = f.service as unknown as { checkFiles(...args: unknown[]): Promise<void> }
+    const original = internals.checkFiles.bind(internals)
+    let release!: () => void, enter!: () => void
+    const paused = new Promise<void>(resolve => { release = resolve })
+    const entered = new Promise<void>(resolve => { enter = resolve })
+    vi.spyOn(internals, 'checkFiles').mockImplementation(async (...args) => { enter(); await paused; await original(...args) })
+    const revert = f.service.revertCheckpoint({ ...target, confirmed: true })
+    try { await entered; await expect(mutations.acquire(f.repo, 'send')).rejects.toThrow('Your message was not sent') }
+    finally { release() }
+    expect(unwrap(await revert).status).toBe('reverted')
+  })
+  it('holds the checkout across interrupted revert recovery', async () => {
+    const f = await fixture(), target = await f.complete(), mutations = new CheckoutMutations()
+    f.dependencies.rollback = async () => ({ accepted: false, uncertain: true })
+    expect(unwrap(await f.service.revertCheckpoint({ ...target, confirmed: true })).status).toBe('uncertain')
+    f.state.userMessageIds = []
+    f.dependencies.acquireMutation = () => mutations.acquire(f.repo, 'mutation')
+    let release!: () => void, enter!: () => void
+    const paused = new Promise<void>(resolve => { release = resolve })
+    const entered = new Promise<void>(resolve => { enter = resolve })
+    f.dependencies.refresh = async () => { enter(); await paused }
+    const recovery = f.service.recoverCheckpoint(target)
+    try { await entered; await expect(mutations.acquire(f.repo, 'send')).rejects.toThrow('Your message was not sent') }
+    finally { release() }
+    expect(unwrap(await recovery).status).toBe('reverted')
+    expect(await mutations.isMutating(f.repo)).toBe(false)
+  })
+  it('holds the checkout across rollback and releases it after reverting', async () => {
+    const f = await fixture(), target = await f.complete(), mutations = new CheckoutMutations()
+    f.dependencies.acquireMutation = () => mutations.acquire(f.repo, 'mutation')
+    const rollback = f.dependencies.rollback
+    let release!: () => void, enter!: () => void
+    const paused = new Promise<void>(resolve => { release = resolve })
+    const entered = new Promise<void>(resolve => { enter = resolve })
+    f.dependencies.rollback = async (...args) => { enter(); await paused; return rollback(...args) }
+    const revert = f.service.revertCheckpoint({ ...target, confirmed: true })
+    try {
+      await entered
+      await expect(mutations.acquire(f.repo, 'send')).rejects.toThrow('Your message was not sent')
+      await expect(mutations.acquire(f.repo, 'mutation')).rejects.toThrow('Wait for')
+    } finally { release() }
+    expect(unwrap(await revert).status).toBe('reverted')
+    expect(await mutations.isMutating(f.repo)).toBe(false)
+  })
   it('refuses a concurrent Git action on the thread lane and completes the revert', async () => {
     const f = await fixture(), request = await f.complete()
     await f.service.initialize()

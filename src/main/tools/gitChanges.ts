@@ -39,17 +39,11 @@ const BINARY = 'Binary file: no text diff.'
  * Branch changes (`base...HEAD`). Nothing here stages, commits or switches; the Git action does that (ADR-0027).
  */
 export class GitChangesService extends ToolOperations {
-  private readonly mutations = new Set<string>()
   private readonly watches = new Map<string, { target: ToolTarget; revision: string }>()
   private readonly children = new Set<ReturnType<typeof execFile>>()
   private timer: ReturnType<typeof setInterval> | null = null
   private polling = false
   constructor(private readonly dependencies: GitDependencies) { super() }
-  async isMutating(threadId: string): Promise<boolean> {
-    if (this.mutations.size === 0) return false
-    const owner = await workspace(this.dependencies.files, threadId)
-    return this.mutations.has(await realpath(owner.workingDirectory))
-  }
   checkpoints(payload: unknown) { return this.dependencies.checkpoints?.checkpoints(payload) ?? this.run(async () => fail('unavailable', 'Checkpoints are unavailable in this window.')) }
   inspectCheckpoint(payload: unknown) { return this.dependencies.checkpoints?.inspectCheckpoint(payload) ?? this.run(async () => fail('unavailable', 'Checkpoints are unavailable in this window.')) }
   revertCheckpoint(payload: unknown) { return this.dependencies.checkpoints?.revertCheckpoint(payload) ?? this.run(async () => fail('unavailable', 'Checkpoints are unavailable in this window.')) }

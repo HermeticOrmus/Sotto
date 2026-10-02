@@ -1,3 +1,5 @@
+import { threadsInCheckout } from './checkoutCandidates'
+import { CheckoutMutations, checkoutMutationRefusal, type CheckoutHolder, type CheckoutPendingWork } from './checkoutMutations'
 import { loadHostIdentity, migrateWorkspaceHost, stampHostSnapshot } from './hostIdentity'
 import type { BrowserAgentTools } from './browserAgentServer'
 import type { ScopedThreadTools } from './threadToolServer'
@@ -19,7 +21,7 @@ import { observedSubagentStatus, EMPTY_SUBAGENT_SUMMARY, type SubagentChange, ty
 import { validateThreadOptions } from './threadOptions'
 import { resolveModel } from '../../shared/modelCatalog'
 import { resolveThreadWorkingDirectory } from '../../shared/threadWorkingDirectory'
-import { existingWorkingDirectory, ThreadWorktrees } from './threadWorktrees'
+import { checkoutIdentity, existingWorkingDirectory, runWorktreeGit, ThreadWorktrees } from './threadWorktrees'
 import { gitStatusFingerprint, type GitStatus } from '../../shared/gitStatus'
 import type { GitStatusSource } from './gitStatus'
 import { GitActionRefusal, type GitActionEvent, type GitActions } from './gitActions'
@@ -174,8 +176,12 @@ export class WorkspaceHost implements AgentHost {
   private gitActions: GitActions | undefined
   /** Reads and acts on a thread's pull requests through gh (ADR-0027); without one, the surface says so. */
   private gitPullRequests: GitPullRequests | undefined
-  /** The desktop's own reason a folder may not change yet (a revert in flight); absent on a host, which has none. */
-  private mutationGuard: ((threadId: string) => Promise<boolean> | boolean) | undefined
+  /** Shared by desktop and headless hosts, with one reservation per checkout. */
+  private readonly checkoutMutations = new CheckoutMutations()
+  private pendingThreadWork: (threadId: string) => boolean = () => false
+  private pendingThreadWorkReason: (threadId: string) => CheckoutPendingWork | null = () => null
+  /** Additional desktop checkpoint recovery checks. */
+  private mutationGuard: ((threadId: string, destinationFolder?: string) => Promise<boolean> | boolean) | undefined
   /** A thread's own history: the log and the message projection every window reads (issue #119). */
   private readonly subagentStore: SubagentStore
   private subagentUnavailable = false
@@ -280,17 +286,75 @@ export class WorkspaceHost implements AgentHost {
     if (!this.gitActions) throw new Error('Git actions are unavailable on this host.')
     return this.gitActions
   }
-  setMutationGuard(guard: (threadId: string) => Promise<boolean> | boolean): void { this.mutationGuard = guard }
+  /** An independent worktree's recorded root is also its identity before a missing folder is restored. */
+  private threadCheckoutFolder(threadId: string): string {
+    const thread = this.thread(threadId)
+    return thread.worktree?.mode === 'independent' && thread.worktree.path
+      ? thread.worktree.path : this.threadRepositoryFolder(threadId, 'Git')
+  }
+  private checkoutThreadHolder(threadId: string, kind: Extract<CheckoutHolder, { threadId: string }>['kind']): CheckoutHolder {
+    const thread = this.thread(threadId)
+    return { kind, threadId, title: thread.title }
+  }
+  setPendingThreadWork(pending: (threadId: string) => boolean, reason: (threadId: string) => CheckoutPendingWork | null = () => null): void {
+    this.pendingThreadWork = pending
+    this.pendingThreadWorkReason = reason
+  }
+  private checkoutWorkHolder(thread: AgentThread, purpose: 'mutation' | 'settle' = 'mutation'): CheckoutHolder | null {
+    const kind = thread.requests.length ? 'waiting-answer'
+      : thread.status === 'running' ? 'turn'
+      : thread.historyStatus === 'loading' ? 'history-loading'
+      : thread.historyStatus === 'error' && purpose !== 'settle' ? 'history-error'
+      : this.preparations.has(thread.id) ? 'preparation'
+      : this.pendingThreadWork(thread.id) ? this.pendingThreadWorkReason(thread.id) ?? 'pending-work' : null
+    return kind ? this.checkoutThreadHolder(thread.id, kind) : null
+  }
+  async acquireCheckoutRead(threadId: string): Promise<() => void> {
+    return this.checkoutMutations.acquire(this.threadCheckoutFolder(threadId), 'send', { kind: 'checkpoint' })
+  }
+  async isCheckoutMutating(threadId: string): Promise<boolean> {
+    return this.checkoutMutations.isMutating(this.threadCheckoutFolder(threadId))
+  }
+  /** Check active and queued work after reserving the checkout, before any asynchronous mutation checks. */
+  async acquireCheckoutMutation(threadId: string, holder: CheckoutHolder = { kind: 'git-action' }): Promise<() => void> {
+    await this.initialize()
+    return this.acquireCheckoutMutationInFolder(threadId, this.threadCheckoutFolder(threadId), holder)
+  }
+  private async acquireCheckoutMutationInFolder(threadId: string, folder: string, holder: CheckoutHolder): Promise<() => void> {
+    const own = this.thread(threadId)
+    if (own.requests.length) throw checkoutMutationRefusal(this.checkoutThreadHolder(threadId, 'waiting-answer'))
+    if (own.status === 'running') throw checkoutMutationRefusal(this.checkoutThreadHolder(threadId, 'turn'))
+    const key = await checkoutIdentity(folder)
+    const release = this.checkoutMutations.acquireIdentity(key, 'mutation', holder)
+    try {
+      const candidates = await threadsInCheckout(this.state.snapshot, threadId, thread => thread.id === threadId ? folder : this.threadCheckoutFolder(thread.id), key)
+      // The requesting draft may have no folder yet, but its own queued work still holds the destination.
+      for (const candidate of [own, ...candidates.filter(candidate => candidate.id !== threadId)]) {
+        const thread = this.thread(candidate.id)
+        const work = this.checkoutWorkHolder(thread)
+        if (work) throw checkoutMutationRefusal(work)
+      }
+      return release
+    } catch (error) { release(); throw error }
+  }
+  private onGitLane<T>(threadId: string, operation: () => Promise<T>): Promise<T> {
+    return this.onLane(threadId, () => this.withCheckoutMutation(threadId, operation))
+  }
+  private async withCheckoutMutation<T>(threadId: string, operation: () => Promise<T>): Promise<T> {
+    const release = await this.acquireCheckoutMutation(threadId)
+    try { return await operation() } finally { release() }
+  }
+  setMutationGuard(guard: (threadId: string, destinationFolder?: string) => Promise<boolean> | boolean): void { this.mutationGuard = guard }
   /** The folder a Git command may act on now, or the reason it may not, in plain words. */
-  private async gitActionFolder(threadId: string): Promise<string> {
+  private async gitActionFolder(threadId: string, destinationFolder?: string): Promise<string> {
     await this.initialize()
     const thread = this.thread(threadId)
     if (thread.status === 'running') throw new GitActionRefusal('Wait for the thread to finish its turn before changing Git.')
     if (thread.requests.length > 0) throw new GitActionRefusal('Answer the thread\'s waiting request before changing Git.')
     if (this.preparations.has(threadId)) throw new GitActionRefusal('Wait for the working copy to be set up before changing Git.')
     if (thread.gitAction?.status === 'running') throw new GitActionRefusal('Git action in progress.')
-    if (this.mutationGuard && !await this.mutationGuard(threadId)) throw new GitActionRefusal('Wait for active or pending thread work before changing Git.')
-    return this.threadWorkingDirectory(threadId)
+    if (this.mutationGuard && !await (destinationFolder === undefined ? this.mutationGuard(threadId) : this.mutationGuard(threadId, destinationFolder))) throw new GitActionRefusal('Wait for active or pending thread work before changing Git.')
+    return destinationFolder ?? this.threadWorkingDirectory(threadId)
   }
   private setGitActionProgress(threadId: string, progress: GitActionProgress): void {
     const thread = this.state.snapshot.threads.find(item => item.id === threadId)
@@ -301,17 +365,17 @@ export class WorkspaceHost implements AgentHost {
   }
   /**
    * T3's stacked action, run on the thread's lane so nothing is sent to the thread while its folder
-   * changes. Progress lands on the thread record as it comes; the result or the refusal stays there
-   * for the notice, and the folder's status is read again with the remote once it is over.
+   * changes. Admission refusals preserve the previous result. Once admitted, progress and the
+   * result stay on the thread record, and the folder's status is read again with the remote afterward.
    */
   runGitAction(command: { threadId: string; actionId: string; action: GitStackedAction; commitMessage?: string | undefined; featureBranch?: boolean | undefined; filePaths?: readonly string[] | undefined; allowDefaultBranch?: boolean | undefined }): Promise<AgentHostSnapshot> {
     return this.onLane(command.threadId, async () => {
-      const actions = this.gitActionsOrRefuse()
-      const cwd = await this.gitActionFolder(command.threadId)
+      await this.initialize()
+      this.thread(command.threadId)
+      const release = await this.acquireCheckoutMutation(command.threadId)
       const startedAt = new Date().toISOString()
       let progress: GitActionProgress = { actionId: command.actionId, action: command.action, status: 'running', phases: [], phase: null, stage: null, hook: null, startedAt, finishedAt: null, result: null, error: null }
       const update = (change: Partial<GitActionProgress>): void => { progress = { ...progress, ...change }; this.setGitActionProgress(command.threadId, progress) }
-      update({})
       const onProgress = (event: GitActionEvent): void => {
         if (event.kind === 'action_started') update({ phases: [...event.phases], stage: event.stages[0] ?? null })
         else if (event.kind === 'phase_started') update({ phase: event.phase, stage: event.stage, hook: null })
@@ -319,19 +383,28 @@ export class WorkspaceHost implements AgentHost {
         else if (event.kind === 'hook_output') update({ hook: { name: event.hookName ?? progress.hook?.name ?? 'hook', output: event.text } })
         else if (event.kind === 'hook_finished') update({ hook: null })
       }
+      let started = false
       try {
-        const result = await actions.runStackedAction({ threadId: command.threadId, cwd, action: command.action, commitMessage: command.commitMessage, featureBranch: command.featureBranch, filePaths: command.filePaths, allowDefaultBranch: command.allowDefaultBranch, onProgress })
-        update({ status: 'done', phase: null, stage: null, hook: null, finishedAt: new Date().toISOString(), result })
-        // The pull request the action created, or the open one it found, is linked to the thread the way T3 links it.
-        if ((result.pr.status === 'created' || result.pr.status === 'opened_existing') && result.pr.url && result.pr.number) {
-          this.linkPullRequestRecord(command.threadId, { number: result.pr.number, url: result.pr.url, title: result.pr.title ?? `Pull request #${result.pr.number}`, state: 'open', draft: false }, 'created')
+        try {
+          const actions = this.gitActionsOrRefuse()
+          const cwd = await this.threadWorkingDirectory(command.threadId)
+          if (this.mutationGuard && !await this.mutationGuard(command.threadId)) throw new GitActionRefusal('Wait for active or pending thread work before changing Git.')
+          started = true
+          update({})
+          const result = await actions.runStackedAction({ threadId: command.threadId, cwd, action: command.action, commitMessage: command.commitMessage, featureBranch: command.featureBranch, filePaths: command.filePaths, allowDefaultBranch: command.allowDefaultBranch, onProgress })
+          update({ status: 'done', phase: null, stage: null, hook: null, finishedAt: new Date().toISOString(), result })
+          // The pull request the action created, or the open one it found, is linked to the thread the way T3 links it.
+          if ((result.pr.status === 'created' || result.pr.status === 'opened_existing') && result.pr.url && result.pr.number) {
+            this.linkPullRequestRecord(command.threadId, { number: result.pr.number, url: result.pr.url, title: result.pr.title ?? `Pull request #${result.pr.number}`, state: 'open', draft: false }, 'created')
+          }
+        } catch (error) {
+          if (!started) throw error
+          update({ status: 'failed', phase: null, stage: null, hook: null, finishedAt: new Date().toISOString(), error: error instanceof Error ? error.message : 'The Git action failed.' })
         }
-      } catch (error) {
-        update({ status: 'failed', phase: null, stage: null, hook: null, finishedAt: new Date().toISOString(), error: error instanceof Error ? error.message : 'The Git action failed.' })
-      }
-      try { await this.flush() } catch { this.saveError = GIT_ACTION_SAVE_ERROR }
-      await this.refreshAfterGitAction(command.threadId)
-      return this.workspaceSnapshot()
+        try { await this.flush() } catch { this.saveError = GIT_ACTION_SAVE_ERROR }
+        await this.refreshAfterGitAction(command.threadId)
+        return this.workspaceSnapshot()
+      } finally { release() }
     })
   }
   /** A commit, push, switch or pull moved the folder: the worktree record and the status follow at once. */
@@ -357,7 +430,7 @@ export class WorkspaceHost implements AgentHost {
     this.publish()
   }
   pullThreadBranch(threadId: string): Promise<{ snapshot: AgentHostSnapshot; result: GitPullResult }> {
-    return this.onLane(threadId, async () => {
+    return this.onGitLane(threadId, async () => {
       const result = await this.gitActionsOrRefuse().pull(await this.gitActionFolder(threadId))
       await this.refreshAfterGitAction(threadId)
       return { snapshot: this.workspaceSnapshot(), result }
@@ -365,14 +438,14 @@ export class WorkspaceHost implements AgentHost {
   }
   /** T3's switch: Git refuses when work would be lost, and the thread follows whatever branch the folder ends up on (ADR-0014). */
   switchThreadBranch(threadId: string, ref: string, create: boolean): Promise<AgentHostSnapshot> {
-    return this.onLane(threadId, async () => {
+    return this.onGitLane(threadId, async () => {
       await this.gitActionsOrRefuse().switchBranch(await this.gitActionFolder(threadId), ref, { create })
       await this.refreshAfterGitAction(threadId, { followSentBranch: true })
       return this.workspaceSnapshot()
     })
   }
   initThreadRepository(threadId: string): Promise<AgentHostSnapshot> {
-    return this.onLane(threadId, async () => {
+    return this.onGitLane(threadId, async () => {
       await this.gitActionsOrRefuse().init(await this.gitActionFolder(threadId))
       // A folder that just became a repository is discovered again so its record says so; the record itself stays,
       // with what the thread already chose on it, since a draft is not discovered afresh.
@@ -387,7 +460,7 @@ export class WorkspaceHost implements AgentHost {
     })
   }
   publishThreadRepository(threadId: string, options: { repository: string; visibility: 'private' | 'public' }): Promise<{ snapshot: AgentHostSnapshot; url: string }> {
-    return this.onLane(threadId, async () => {
+    return this.onGitLane(threadId, async () => {
       const { url } = await this.gitActionsOrRefuse().publish(await this.gitActionFolder(threadId), options)
       await this.refreshAfterGitAction(threadId)
       return { snapshot: this.workspaceSnapshot(), url }
@@ -521,22 +594,32 @@ export class WorkspaceHost implements AgentHost {
       if (mode === 'worktree' && !draft) throw new GitPullRequestRefusal('This thread already has a working folder. Use Local, or start a new thread to check the pull request out in a worktree of its own.')
       const view = await service.view(this.threadRepositoryFolder(threadId, 'pull requests'), reference)
       if (mode === 'local') {
-        if (draft && thread.worktree?.mode !== 'shared') {
-          // Local is the project's own checkout, so a draft that was set for a worktree works there instead, as in T3.
-          const previous = { worktree: thread.worktree, workingDirectory: thread.workingDirectory }
-          const shared = await this.selectedWorkingCopy(thread.projectId, { workingCopy: 'shared' })
-          const current = this.thread(threadId)
-          current.worktree = shared; current.workingDirectory = shared.path
-          this.dirty = true
-          try { await this.flush() } catch (error) { Object.assign(this.thread(threadId), previous); throw error }
-        }
-        await service.checkoutLocal(await this.gitActionFolder(threadId), view.url)
-        this.linkPullRequestRecord(threadId, view, 'checkout')
-        await this.refreshAfterGitAction(threadId, { followSentBranch: true })
-        await this.saveLinks()
-        const after = this.thread(threadId).worktree
-        const branch = after?.git?.branch ?? after?.branch
-        return { snapshot: this.workspaceSnapshot(), notice: `Checked out PR #${view.number}${branch ? ` on ${branch}` : ''}.` }
+        const shared = draft && thread.worktree?.mode !== 'shared'
+          ? await this.selectedWorkingCopy(thread.projectId, { workingCopy: 'shared' }) : undefined
+        const release = await this.acquireCheckoutMutationInFolder(threadId, shared?.path ?? this.threadCheckoutFolder(threadId), { kind: 'git-action' })
+        try {
+          // Check the destination without exposing a new draft binding to concurrent saves.
+          const cwd = await this.gitActionFolder(threadId, shared?.path)
+          if (shared) {
+            const current = this.thread(threadId)
+            const previous = { worktree: current.worktree, workingDirectory: current.workingDirectory }
+            current.worktree = shared; current.workingDirectory = shared.path
+            this.dirty = true
+            try { await this.flush() } catch (error) {
+              Object.assign(this.thread(threadId), previous)
+              this.dirty = true
+              try { await this.flush() } catch { this.saveError = BRANCH_SAVE_ERROR }
+              throw error
+            }
+          }
+          await service.checkoutLocal(cwd, view.url)
+          this.linkPullRequestRecord(threadId, view, 'checkout')
+          await this.refreshAfterGitAction(threadId, { followSentBranch: true })
+          await this.saveLinks()
+          const after = this.thread(threadId).worktree
+          const branch = after?.git?.branch ?? after?.branch
+          return { snapshot: this.workspaceSnapshot(), notice: `Checked out PR #${view.number}${branch ? ` on ${branch}` : ''}.` }
+        } finally { release() }
       }
       const prepared = await service.prepareWorktreeBranch(this.threadRepositoryFolder(threadId, 'pull requests'), view)
       const current = this.thread(threadId)
@@ -609,10 +692,13 @@ export class WorkspaceHost implements AgentHost {
     })
     if (busy || !this.gitActions || !this.gitStatus) return null
     try {
-      if (this.mutationGuard && !await this.mutationGuard(threadId)) return null
-      const result = await this.gitActions.pull(folder, { automatic: true })
-      if (result.status !== 'pulled') return null
-      return await this.gitStatus.read(folder, { remote: false })
+      const release = await this.acquireCheckoutMutation(threadId, { kind: 'automatic-pull' })
+      try {
+        if (this.mutationGuard && !await this.mutationGuard(threadId)) return null
+        const result = await this.gitActions.pull(folder, { automatic: true })
+        if (result.status !== 'pulled') return null
+        return await this.gitStatus.read(folder, { remote: false })
+      } finally { release() }
     } catch { return null }
   }
   /**
@@ -631,7 +717,7 @@ export class WorkspaceHost implements AgentHost {
       return { ...facts, ignored: [...facts.ignored], items: [...facts.items], repositories: [...facts.repositories], untracked: [...facts.untracked] }
     })
   }
-  async reclaimThreadWorktree(threadId: string, options: { withUncommittedChanges?: boolean; automatic?: boolean; confirmedIgnored?: readonly string[]; confirmedItems?: readonly { path: string; fileCount: number }[]; confirmedRepositories?: WorktreeReclaimPreview['repositories'] } = {}): Promise<AgentHostSnapshot> {
+  async reclaimThreadWorktree(threadId: string, options: { withUncommittedChanges?: boolean; automatic?: boolean; confirmedIgnored?: readonly string[]; confirmedItems?: readonly { path: string; fileCount: number }[]; confirmedRepositories?: WorktreeReclaimPreview['repositories']; expectedMergedTip?: string } = {}): Promise<AgentHostSnapshot> {
     return this.onLane(threadId, async () => {
       await this.initialize()
       const thread = this.thread(threadId)
@@ -641,12 +727,18 @@ export class WorkspaceHost implements AgentHost {
       if (thread.status === 'running' || thread.requests.length || this.preparations.has(threadId)) throw new Error('This thread is still working. Wait for it to finish and answer its requests before removing its folder.')
       if (!await this.ownsCheckoutAlone(threadId)) throw new Error('Another thread works in this folder too, so it stays.')
       if (this.worktreeInUse(threadId)) throw new Error('A terminal is open in this folder. Close it before removing the folder.')
-      const reclaimed = await this.worktrees.reclaim(worktree, options)
-      this.thread(threadId).worktree = reclaimed
-      this.dirty = true
-      try { await this.flush() } catch { this.saveError = BRANCH_SAVE_ERROR }
-      this.publish()
-      return this.workspaceSnapshot()
+      const release = await this.checkoutMutations.acquire(this.threadCheckoutFolder(threadId), 'mutation', { kind: 'remove-folder' })
+      try {
+        if (options.expectedMergedTip && (await runWorktreeGit(worktree.path!, ['rev-parse', '--verify', 'HEAD^{commit}'])).trim() !== options.expectedMergedTip) {
+          throw new Error('This branch changed after its merged pull request was checked. Its folder stays.')
+        }
+        const reclaimed = await this.worktrees.reclaim(worktree, options)
+        this.thread(threadId).worktree = reclaimed
+        this.dirty = true
+        try { await this.flush() } catch { this.saveError = BRANCH_SAVE_ERROR }
+        this.publish()
+        return this.workspaceSnapshot()
+      } finally { release() }
     })
   }
   async workingCopyOptions(projectId: string): Promise<AgentWorkingCopyOptions> {
@@ -1692,7 +1784,22 @@ export class WorkspaceHost implements AgentHost {
     if (this.eventSourced) return { ...purpose, historyFromEvents: true } as T
     return purpose?.historyFromEvents ? { ...purpose, historyFromEvents: false } : purpose
   }
-  async setWorkspaceSettled(kind: 'project' | 'thread', id: string, settled: boolean): Promise<AgentHostSnapshot> {
+  async setWorkspaceSettled(kind: 'project' | 'thread', id: string, settled: boolean, options?: { expectedMergedTip: string; expectedMergedBranch: string }): Promise<AgentHostSnapshot> {
+    if (kind === 'thread' && settled && options) return this.onLane(id, async () => {
+      const thread = this.thread(id)
+      const work = this.checkoutWorkHolder(thread, 'settle')
+      if (work) throw checkoutMutationRefusal(work)
+      const release = await this.checkoutMutations.acquire(this.threadCheckoutFolder(id), 'send', { kind: 'settle' })
+      try {
+        const worktree = this.thread(id).worktree
+        const branch = worktree?.mode === 'independent' ? worktree.sentBranch ?? worktree.branch : worktree?.sentBranch
+        if (!worktree?.repositoryRoot || branch !== options.expectedMergedBranch
+          || (await runWorktreeGit(worktree.repositoryRoot, ['rev-parse', '--verify', '--end-of-options', `refs/heads/${branch}^{commit}`])).trim() !== options.expectedMergedTip) {
+          throw new Error('This branch changed after its merged pull request was checked. Its thread stays unsettled.')
+        }
+        return await this.setWorkspaceSettled(kind, id, settled)
+      } finally { release() }
+    })
     await this.initialize()
     const projectId = kind === 'project' ? id : this.state.snapshot.threads.find(thread => thread.id === id)?.projectId
     if (!projectId) throw new Error('That thread is unavailable.')
@@ -1804,8 +1911,8 @@ export class WorkspaceHost implements AgentHost {
    * uncommitted work is left exactly as it is.
    */
   async restoreThreadBranch(threadId: string, withUncommittedChanges: boolean): Promise<AgentHostSnapshot> {
-    return this.onLane(threadId, async () => {
-      await this.initialize()
+    return this.onGitLane(threadId, async () => {
+      await this.gitActionFolder(threadId)
       const worktree = this.thread(threadId).worktree
       if (worktree?.mode !== 'shared' || worktree.status !== 'ready') throw new Error('This thread has no project checkout to switch.')
       const target = worktree.sentBranch
@@ -1872,9 +1979,17 @@ export class WorkspaceHost implements AgentHost {
     // settlement edits in the same project so failed writes cannot cross their rollbacks.
     return this.onLane(key, () => command.type === 'create-thread'
       ? this.onLane(command.projectId, () => this.executeOne(command), this.organizationLanes)
-      : this.executeOne(command))
+      : this.executeGuarded(command))
   }
-  private async executeOne(command: AgentHostCommand): Promise<AgentHostResult> {
+  private async executeGuarded(command: AgentHostCommand): Promise<AgentHostResult> {
+    if (command.type !== 'send' && command.type !== 'steer') return this.executeOne(command)
+    await this.initialize()
+    const thread = this.thread(command.threadId)
+    if (thread.worktree?.mode === 'independent' && (!thread.worktree.path && !thread.worktree.existingWorktreePath || thread.worktree.reclaimedAt)) return this.executeOne(command)
+    const release = await this.checkoutMutations.acquire(this.threadCheckoutFolder(thread.id), 'send', this.checkoutThreadHolder(thread.id, 'send'))
+    try { return await this.executeOne(command, true) } finally { release() }
+  }
+  private async executeOne(command: AgentHostCommand, checkoutHeld = false): Promise<AgentHostResult> {
     await this.initialize()
     let preparedSkills: AgentSkillReference[] | undefined
     let firstSend = false
@@ -2042,24 +2157,29 @@ export class WorkspaceHost implements AgentHost {
     // Native command uncertainty belongs to the existing outbox; do not add a failing
     // history read after dispatch that could turn unknown delivery into a rejection.
     // Never send into a deleted/failed working copy, even if the native client is still live.
+    let dispatchFolder: string | undefined
     if (command.type === 'send' || command.type === 'steer') {
-      await this.threadWorkingDirectory(thread.id)
+      dispatchFolder = await this.threadWorkingDirectory(thread.id)
       // The folder was just read, so this is the branch the prompt goes to; the pane compares against it afterwards.
       await this.recordSentBranch(thread.id)
     }
-    if (command.type === 'send') await this.checkpointHooks?.beforeTurn(thread.id)
-    const dispatched = command.type === 'send' && preparedSkills ? { ...command, skills: preparedSkills }
-      : command.type === 'configure-thread' ? this.hostRead(command) : command
-    const result = await this.inner.execute(dispatched)
-    if (command.type === 'send' && firstSend && result.accepted) this.nameBranch(thread.id, command.text)
-    if (command.type === 'configure-thread') {
-      const [confirmed, snapshot] = confirmedSettingsSnapshot(result)
-      if (!snapshot || this.deliveryStopped) return confirmed
-      // Taken in as a provider snapshot is, and handed back as the workspace's view of it.
-      this.accept(snapshot); this.writeSoon(); this.publishSoon()
-      return { ...confirmed, snapshot: this.workspaceSnapshot() }
-    }
-    return result
+    const releaseSend = !checkoutHeld && dispatchFolder
+      ? await this.checkoutMutations.acquire(dispatchFolder, 'send', this.checkoutThreadHolder(thread.id, 'send')) : undefined
+    try {
+      if (command.type === 'send') await this.checkpointHooks?.beforeTurn(thread.id)
+      const dispatched = command.type === 'send' && preparedSkills ? { ...command, skills: preparedSkills }
+        : command.type === 'configure-thread' ? this.hostRead(command) : command
+      const result = await this.inner.execute(dispatched)
+      if (command.type === 'send' && firstSend && result.accepted) this.nameBranch(thread.id, command.text)
+      if (command.type === 'configure-thread') {
+        const [confirmed, snapshot] = confirmedSettingsSnapshot(result)
+        if (!snapshot || this.deliveryStopped) return confirmed
+        // Taken in as a provider snapshot is, and handed back as the workspace's view of it.
+        this.accept(snapshot); this.writeSoon(); this.publishSoon()
+        return { ...confirmed, snapshot: this.workspaceSnapshot() }
+      }
+      return result
+    } finally { releaseSend?.() }
   }
   private requireCreation(provider?: ProviderId): void {
     const status = this.state.snapshot.providers?.find(item => item.id === provider)
