@@ -1,24 +1,5 @@
-import { realpath } from 'node:fs/promises'
-import { basename, dirname, join } from 'node:path'
-import { runWorktreeGit } from './threadWorktrees'
+import { checkoutIdentity } from './threadWorktrees'
 import { GitActionRefusal } from './gitActions'
-
-/** One checkout, even through a subdirectory or an alias; linked worktrees remain independent. */
-export async function checkoutIdentity(folder: string): Promise<string> {
-  const root = await runWorktreeGit(folder, ['rev-parse', '--show-toplevel']).then(value => value.trim(), () => folder)
-  // A missing owned worktree is restored on send. Resolve its existing parent rather than refusing before repair.
-  let candidate = root
-  const suffix: string[] = []
-  let canonical: string
-  for (;;) {
-    try { canonical = join(await realpath(candidate), ...suffix); break }
-    catch (error) {
-      if (!['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '') || dirname(candidate) === candidate) throw error
-      suffix.unshift(basename(candidate)); candidate = dirname(candidate)
-    }
-  }
-  return process.platform === 'win32' ? canonical.toLowerCase() : canonical
-}
 
 export type CheckoutHolder = { kind: 'git-action' | 'automatic-pull' | 'checkpoint-revert' | 'settle' | 'remove-folder' }
   | { kind: 'send' | 'turn' | 'pending-work'; threadId: string; title: string }

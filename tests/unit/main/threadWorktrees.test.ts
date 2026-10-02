@@ -894,3 +894,11 @@ describe('a working folder that is gone', () => {
     await expect(existingWorkingDirectory(missing)).rejects.toThrow(`The folder ${missing} is not there any more. Move it back, or add the project again from where it is now.`)
   })
 })
+
+it('groups subdirectories when checkout discovery is refused by Git ownership checks', async () => {
+  const f = await fixture()
+  const nested = join(f.project, 'nested'); await mkdir(nested)
+  const refused: RunGit = async () => { throw new Error('fatal: detected dubious ownership in repository') }
+  const service = new ThreadWorktrees(f.root, refused)
+  expect(await service.checkoutIdentity(nested)).toBe(await service.checkoutIdentity(f.project))
+})

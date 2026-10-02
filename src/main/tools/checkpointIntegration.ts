@@ -6,7 +6,7 @@ import type { WorkspaceHost } from '../agents/workspace'
 import type { ThreadRegistry } from '../agents/threads'
 import type { FilesService } from '../files/service'
 import { CheckpointService } from './checkpoints'
-import { checkoutIdentity } from '../agents/checkoutMutations'
+import { checkoutIdentity } from '../agents/threadWorktrees'
 
 export function connectCheckpoints(options: { files: FilesService; directory: string; host: WorkspaceHost; control: AgentControl; registry: ThreadRegistry | null; historyEnabled?: () => boolean; report: (message: string) => void }) {
   const { host, control } = options

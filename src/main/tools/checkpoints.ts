@@ -10,7 +10,7 @@ import { fileRelativePathSchema, type FileWorkspace } from '../../shared/files'
 import { toolListRequestSchema } from '../../shared/tools'
 import { AtomicJsonStore } from '../storage/atomicJsonStore'
 import { ToolOperations, fail, parse, workspace } from './common'
-import { checkoutIdentity } from '../agents/checkoutMutations'
+import { checkoutIdentity } from '../agents/threadWorktrees'
 import type { CheckpointDependencies, CheckpointThread } from './checkpointTypes'
 
 const fileSchema = z.object({ hash: z.string().regex(/^[a-f0-9]{64}$/), mode: z.number() }).strict()
