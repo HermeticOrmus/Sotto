@@ -71,4 +71,19 @@ private final class HostResponses: URLProtocol {
         catch { XCTAssertEqual(error as? ClientError, .rateLimited) }
     }
 
+    func testSavedReconnectPreservesStoppedComputerFeedback() async throws {
+        let endpoint = try HostEndpoint("https://forge.example.ts.net")
+        let pairing = try JSONDecoder().decode(Pairing.self, from: Data("{\"v\":1,\"hostId\":\"\(hostID)\",\"clientId\":\"phone\",\"token\":\"fixture\"}".utf8))
+        for status in [502, 503] {
+            var routes: [String] = []
+            HostResponses.handler = { request in routes.append(request.url!.path); return (status, "{}") }
+            let connection = connection(); defer { connection.close(); HostResponses.handler = nil }
+            do { _ = try await connection.connect(endpoint: endpoint, pairing: pairing); XCTFail("Expected stopped computer") }
+            catch { XCTAssertEqual(error as? ClientError, .sottoNotRunning("forge")) }
+            XCTAssertEqual(routes, ["/v1/health"])
+            do { _ = try await connection.health(endpoint: endpoint); XCTFail("Expected discovery miss") }
+            catch { XCTAssertEqual(error as? ClientError, .notASottoHost("forge")) }
+        }
+    }
+
 }

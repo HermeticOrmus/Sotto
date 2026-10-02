@@ -38,7 +38,7 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
 
     /// Confirms Sotto is listening at the address before a code is spent on it. Ten seconds, because
     /// finding a computer may try two ports and nothing answering on the first is the usual miss.
-    func health(endpoint: HostEndpoint) async throws -> Health {
+    func health(endpoint: HostEndpoint, reconnecting: Bool = false) async throws -> Health {
         let name = endpoint.machine
         var request = URLRequest(url: endpoint.route("/v1/health")); request.httpMethod = "GET"; request.timeoutInterval = 10
         let fetched: (Data, URLResponse)
@@ -46,6 +46,7 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
         let (data, response) = fetched
         guard let response = response as? HTTPURLResponse, response.url == endpoint.route("/v1/health") else { throw ClientError.notASottoHost(name) }
         if response.statusCode == 429 { throw ClientError.rateLimited }
+        if reconnecting && [502, 503].contains(response.statusCode) { throw ClientError.sottoNotRunning(name) }
         guard (200..<300).contains(response.statusCode),
               let health = try? Wire.decode(data).decode(Health.self) else { throw ClientError.notASottoHost(name) }
         try health.validate()
@@ -65,7 +66,7 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
     func connect(endpoint: HostEndpoint, pairing: Pairing) async throws -> Received<Hello> {
         disconnect()
         let current = generation
-        let health = try await health(endpoint: endpoint)
+        let health = try await health(endpoint: endpoint, reconnecting: true)
         guard current == generation else { throw CancellationError() }
         guard health.hostId == pairing.hostId else { throw ClientError.invalidIdentity }
         let result = try await post(endpoint: endpoint, route: "/v1/session", token: pairing.token)

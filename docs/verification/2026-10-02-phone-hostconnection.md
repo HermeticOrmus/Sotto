@@ -1,6 +1,6 @@
 # Phone connection checks
 
-The phone reconnect validates ready host health against the saved computer identity. The listener treats an omitted hello cursor as snapshot-only and advances delivered event pages without changing its cursor for thread-filtered or older history reads. Connection waits and rate limits have their own messages; thread-command uncertainty retains its existing wording.
+The phone reconnect validates ready host health against the saved computer identity. The listener treats an omitted hello cursor as snapshot-only and advances delivered event pages without changing its cursor for thread-filtered or older history reads. A stopped computer returning 502 or 503 keeps its existing saved-reconnect feedback while discovery retains port fallback. Connection waits and rate limits have their own messages; thread-command uncertainty retains its existing wording.
 
 ## Local Windows checks
 
