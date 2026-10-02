@@ -6,6 +6,7 @@ final class AppModelTests: XCTestCase {
     @MainActor private func fixture() throws -> (AppModel, ThreadRef) {
         HostConnection.instances = []; HostConnection.failDetail = false; HostConnection.failConnect = false; HostConnection.holdDetail = false; TestKeychain.items = [:]
         HostConnection.afterGreeting = nil
+        HostConnection.revokeFailure = nil
         TestKeychain.locked = false; TestKeychain.unreadableAccount = nil
         HostConnection.mayAnswer = false; HostConnection.receipt = .object(["status": .string("unknown")])
         HostConnection.loseAcknowledgement = false
@@ -20,6 +21,16 @@ final class AppModelTests: XCTestCase {
         HostConnection.shell = try JSONDecoder().decode(JSONValue.self, from: Data(#"{"hostId":"\#(host)","host":{"hostId":"\#(host)","name":"Laptop","threads":[{"id":"t","projectId":"p","title":"Thread","status":"idle","requests":[]}],"projects":[],"capabilities":{"submit":true,"interrupt":true,"questions":true,"permissions":true}}}"#.utf8))
         HostConnection.detail = try JSONDecoder().decode(JSONValue.self, from: Data(#"{"threadId":"t","revision":1,"messages":[{"id":"m","role":"assistant","text":"Ready"}]}"#.utf8))
         return (AppModel(keychain: TestKeychain.store), ThreadRef(hostID: host, threadID: "t"))
+    }
+    @MainActor func testRemoveKeepsLocalRemovalWhenRemoteRemovalIsUnconfirmed() async throws {
+        let (model, ref) = try fixture()
+        HostConnection.revokeFailure = .invalidIdentity
+        defer { HostConnection.revokeFailure = nil }
+        await model.remove(ref.hostID)
+        XCTAssertTrue(model.computers.isEmpty)
+        XCTAssertNil(TestKeychain.items[ComputerStore.account(ref.hostID)])
+        XCTAssertTrue(model.feedback?.contains("couldn’t confirm removal there") == true)
+        XCTAssertTrue(model.feedback?.contains("Settings › Phones") == true)
     }
     @MainActor func testDroppedConnectionRetriesWithoutResendingPendingCommands() async throws {
         let (_, ref) = try fixture()

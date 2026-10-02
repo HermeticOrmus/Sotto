@@ -32,6 +32,7 @@ struct HostRefusal: Error, LocalizedError {
     static var instances: [HostConnection] = []
     static var failDetail = false
     static var failConnect = false
+    static var revokeFailure: ClientError?
     static var holdDetail = false
     static var shell: JSONValue = .null
     static var detail: JSONValue = .null
@@ -107,5 +108,7 @@ struct HostRefusal: Error, LocalizedError {
     func close() { disconnect() }
     func health(endpoint: HostEndpoint) async throws -> Health { throw ClientError.disconnected }
     func pair(endpoint: HostEndpoint, expectedHostID: String, code: String) async throws -> Pairing { throw ClientError.disconnected }
-    func revoke(endpoint: HostEndpoint, pairing: Pairing) async throws {}
+    func revoke(endpoint: HostEndpoint, pairing: Pairing) async throws {
+        if let failure = Self.revokeFailure { throw failure }
+    }
 }
