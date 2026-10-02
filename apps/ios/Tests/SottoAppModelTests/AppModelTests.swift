@@ -44,6 +44,16 @@ final class AppModelTests: XCTestCase {
         XCTAssertTrue(model.computers.isEmpty)
         XCTAssertNil(TestKeychain.items[ComputerStore.account(ref.hostID)])
     }
+    @MainActor func testRemoveReportsAnOfflineComputerAsUnreachable() async throws {
+        let (model, ref) = try fixture()
+        HostConnection.revokeFailure = .hostUnreachable("Laptop")
+        await model.remove(ref.hostID)
+        XCTAssertTrue(model.computers.isEmpty)
+        XCTAssertNil(TestKeychain.items[ComputerStore.account(ref.hostID)])
+        XCTAssertTrue(model.feedback?.contains("It couldn’t be reached") == true)
+        XCTAssertFalse(model.feedback?.contains("couldn’t confirm removal there") == true)
+        XCTAssertEqual(model.pairFeedback, model.feedback)
+    }
     @MainActor func testRemoveKeepsLocalRemovalWhenRemoteRemovalIsUnconfirmed() async throws {
         let (model, ref) = try fixture()
         HostConnection.revokeFailure = .invalidIdentity

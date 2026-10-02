@@ -502,6 +502,7 @@ struct Live {
         if let endpoint = saved.endpoint {
             do { try await connection(hostID).revoke(endpoint: endpoint, pairing: saved.pairing) }
             catch is URLError { outcome = .unreachable }
+            catch ClientError.hostUnreachable(_) { outcome = .unreachable }
             catch { outcome = .unconfirmed }
         } else { outcome = .unconfirmed }
         // The item goes first: an index entry without its item is skipped at launch, and markers for a
