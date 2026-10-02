@@ -24,6 +24,7 @@ async function coordinator(options: {
   /** Names threads through the provider hosts' own side calls rather than a stand-in writer. */
   providerWriting?: AppSettings
   historyEnabled?: () => boolean
+  logFailure?: (code: string, detail: string) => void
 } = {}) {
   const workspace = await workspaceFixture(options.root)
   if (options.root === undefined) removals.push(workspace.remove)
@@ -35,6 +36,7 @@ async function coordinator(options: {
   const control = new AgentControl({
     schedule: immediatePublishScheduler, directory: workspace.root, host: workspace.host, credentials, reasoner: e2eAgentReasoner,
     writeThreadTitle: titles,
+    ...(options.logFailure ? { logFailure: options.logFailure } : {}),
     ...(options.historyEnabled ? { historyEnabled: options.historyEnabled } : {}),
   })
   opened.push({ control, stop: workspace.stop })
@@ -66,6 +68,17 @@ afterEach(async () => {
 })
 
 describe('naming a thread from its first exchange', () => {
+  it('logs only a stable failure code when a title request throws private text', async () => {
+    const logFailure = vi.fn()
+    const f = await coordinator({ logFailure, writeThreadTitle: async () => { throw new Error('PRIVATE PROMPT C:\\Users\\Zach\\project') } })
+    const threadId = workshop(f.control).id
+    reply(f.adapters.codex)
+    await vi.waitFor(() => expect(logFailure).toHaveBeenCalledOnce())
+    expect(logFailure).toHaveBeenCalledWith('thread-title-failed', 'failed')
+    expect(titled(f.control, threadId).title).toBe('Workshop')
+    expect(f.control.get().error).toBeNull()
+  })
+
   it('drains an automatic title request without applying its result after disposal', async () => {
     let finish!: (title: string) => void
     const f = await coordinator({ writeThreadTitle: () => new Promise(resolve => { finish = resolve }) })

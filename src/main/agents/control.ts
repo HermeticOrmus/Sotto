@@ -1445,9 +1445,9 @@ export class AgentControl {
       if (!thread || thread.titleSource === 'user' || isThreadArchived(thread) || thread.title === title) return
       this.acceptSnapshot(await this.dependencies.host.renameThread!(threadId, title, 'generated'))
       await this.persist()
-    } catch (error) {
+    } catch {
       // A name Sotto offered to write is never worth an error banner: the thread keeps the name it has.
-      this.dependencies.logFailure?.('thread-title-failed', error instanceof Error ? error.message : 'unknown')
+      this.dependencies.logFailure?.('thread-title-failed', 'failed')
     }
   }
   /** Ask again for a thread's name, replacing a generated or stand-in one on explicit request. */
