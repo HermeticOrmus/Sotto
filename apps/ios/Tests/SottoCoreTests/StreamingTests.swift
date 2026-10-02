@@ -70,9 +70,10 @@ final class StreamingTests: XCTestCase {
     func testNullDetailReplyAndTypedHello() async throws {
         let empty = try await Wire.readReply(Data(#"{"v":1,"id":"detail","ok":true,"result":null}"#.utf8), as: Optional<ThreadDetail>.self)
         XCTAssertNil(empty)
-        let hello = try await Wire.readReply(Data(#"{"v":1,"id":"hello","ok":true,"result":{"hostId":"host","clientId":"phone","shell":{"hostId":"host","host":{"hostId":"host","name":"Laptop","threads":[],"projects":[],"capabilities":{"submit":true,"interrupt":true,"questions":true,"permissions":true}}}}}"#.utf8), as: Hello.self)
+        let hello = try await Wire.readReply(Data(#"{"v":1,"id":"hello","ok":true,"result":{"hostId":"host","clientId":"phone","capabilities":{"mayAnswer":false},"shell":{"hostId":"host","host":{"hostId":"host","name":"Laptop","threads":[],"projects":[],"capabilities":{"submit":true,"interrupt":true,"questions":true,"permissions":true}}}}}"#.utf8), as: Hello.self)
         XCTAssertEqual(hello.hostId, "host")
         XCTAssertEqual(hello.clientId, "phone")
+        XCTAssertFalse(hello.capabilities.mayAnswer)
         XCTAssertTrue(hello.shell.host.threads.isEmpty)
     }
     func testSettledGroupingMatchesDesktopAndKeepsWaitingRequests() throws {
