@@ -7,6 +7,8 @@ final class AppModelTests: XCTestCase {
         HostConnection.instances = []; HostConnection.failDetail = false; HostConnection.failConnect = false; HostConnection.holdDetail = false; TestKeychain.items = [:]
         HostConnection.afterGreeting = nil
         HostConnection.revokeFailure = nil
+        HostConnection.foundHealth = nil; HostConnection.freshPairing = nil; HostConnection.pairCalls = 0; HostConnection.revoked = []
+        TestKeychain.unwritableAccount = nil
         TestKeychain.locked = false; TestKeychain.unreadableAccount = nil
         HostConnection.mayAnswer = false; HostConnection.receipt = .object(["status": .string("unknown")])
         HostConnection.loseAcknowledgement = false
@@ -21,6 +23,26 @@ final class AppModelTests: XCTestCase {
         HostConnection.shell = try JSONDecoder().decode(JSONValue.self, from: Data(#"{"hostId":"\#(host)","host":{"hostId":"\#(host)","name":"Laptop","threads":[{"id":"t","projectId":"p","title":"Thread","status":"idle","requests":[]}],"projects":[],"capabilities":{"submit":true,"interrupt":true,"questions":true,"permissions":true}}}"#.utf8))
         HostConnection.detail = try JSONDecoder().decode(JSONValue.self, from: Data(#"{"threadId":"t","revision":1,"messages":[{"id":"m","role":"assistant","text":"Ready"}]}"#.utf8))
         return (AppModel(keychain: TestKeychain.store), ThreadRef(hostID: host, threadID: "t"))
+    }
+    @MainActor func testPairChecksStorageAndRevokesWhenSavingFreshPairingFails() async throws {
+        let (_, ref) = try fixture()
+        let saved = try XCTUnwrap(TestKeychain.store.read(SavedComputer.self, account: ComputerStore.account(ref.hostID)))
+        TestKeychain.items = [:]
+        HostConnection.foundHealth = try JSONDecoder().decode(Health.self, from: Data(#"{"v":1,"hostId":"\#(ref.hostID)","status":"ready"}"#.utf8))
+        HostConnection.freshPairing = saved.pairing
+        let model = AppModel(keychain: TestKeychain.store)
+        await model.find("laptop.example.ts.net")
+        XCTAssertNotNil(model.found)
+        TestKeychain.locked = true
+        await model.pair(code: "ABCDEFGH")
+        XCTAssertEqual(HostConnection.pairCalls, 0)
+        TestKeychain.locked = false
+        TestKeychain.unwritableAccount = ComputerStore.account(ref.hostID)
+        await model.pair(code: "ABCDEFGH")
+        XCTAssertEqual(HostConnection.pairCalls, 1)
+        XCTAssertEqual(HostConnection.revoked, [saved.pairing.clientId])
+        XCTAssertTrue(model.computers.isEmpty)
+        XCTAssertNil(TestKeychain.items[ComputerStore.account(ref.hostID)])
     }
     @MainActor func testRemoveKeepsLocalRemovalWhenRemoteRemovalIsUnconfirmed() async throws {
         let (model, ref) = try fixture()

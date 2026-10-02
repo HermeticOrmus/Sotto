@@ -114,6 +114,21 @@ async function add(target = 'forge'): Promise<Connection> {
   return remote
 }
 describe('desktop remote host management over a real socket', () => {
+  it('refuses pairing before spending a code when secure storage is unavailable', async () => {
+    const available = vi.spyOn(credentials, 'available').mockReturnValue(false)
+    try { await add() } finally { available.mockRestore() }
+    expect(host.pairing.list()).toHaveLength(0)
+    expect(manager.get().adding).toMatchObject({ phase: 'error', error: expect.stringContaining('Secure credential storage is unavailable') })
+  })
+
+  it('revokes a fresh pairing when saving its credential fails', async () => {
+    const saving = vi.spyOn(credentials, 'set').mockRejectedValueOnce(new Error('Fixture storage failure'))
+    try { await add() } finally { saving.mockRestore() }
+    expect(host.pairing.list()).toHaveLength(0)
+    expect(await savedFile()).toEqual([])
+    expect(manager.get().adding).toMatchObject({ phase: 'error' })
+  })
+
   it('lets a new SSH desktop change permission modes immediately, leaves phone pairing unprivileged, and preserves revocation on reconnect', async () => {
     const remote = await add()
     const local = desktopWindowClient('desktop-test')

@@ -439,11 +439,16 @@ struct Live {
         let current = pairGeneration
         do {
             let code = try PairingCode.normalized(typed)
+            try keychain.checkWritable()
             // Kept even if the sheet closed or the app went to the background meanwhile: the code is spent
             // and the computer holds this client.
             let pairing = try await finder.pair(endpoint: found.endpoint, expectedHostID: found.health.hostId, code: code)
             let computer = SavedComputer(address: found.endpoint.url.absoluteString, pairing: pairing, reportedName: found.health.computerName)
-            try keychain.write(computer, account: ComputerStore.account(computer.hostID))
+            do { try keychain.write(computer, account: ComputerStore.account(computer.hostID)) }
+            catch {
+                try? await finder.revoke(endpoint: found.endpoint, pairing: pairing)
+                throw error
+            }
             if let computerIndexAccount { try keychain.write(computers.map(\.hostID).filter { $0 != computer.hostID } + [computer.hostID], account: computerIndexAccount) }
             // Markers from an earlier pairing with this computer must never attach to the new client.
             let markers = pending.filter { $0.hostID != computer.hostID }
