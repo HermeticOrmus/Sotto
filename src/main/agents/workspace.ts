@@ -315,7 +315,8 @@ export class WorkspaceHost implements AgentHost {
     const release = this.checkoutMutations.acquireIdentity(key, 'mutation', holder)
     try {
       const candidates = await threadsInCheckout(this.state.snapshot, threadId, thread => thread.id === threadId ? folder : this.threadCheckoutFolder(thread.id), key)
-      for (const candidate of candidates) {
+      // The requesting draft may have no folder yet, but its own queued work still holds the destination.
+      for (const candidate of [own, ...candidates.filter(candidate => candidate.id !== threadId)]) {
         const thread = this.thread(candidate.id)
         if (thread.status === 'running' || thread.requests.length || thread.historyStatus === 'loading' || thread.historyStatus === 'error'
           || this.preparations.has(thread.id) || this.pendingThreadWork(thread.id)) {

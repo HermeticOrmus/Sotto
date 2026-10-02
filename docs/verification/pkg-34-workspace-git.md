@@ -45,3 +45,6 @@ Separate final Standards and Spec reviews found no remaining actionable findings
 Known limitations: the status refresh within a held Git-action guard can defer automatic pull until the next poll. Merged cleanup still requires the exact PR head to match the local tip, so a GitHub-updated merged PR may retain its folder until the user pulls. Both remain conservative and are disclosed in the PR.
 
 The final build and all 13 Git-action, checkpoint, workspace and worktree Playwright journeys passed together with one Electron worker. Typecheck, lint and notices passed; notices cover 174 components. Generated overwrites of earlier captures were restored. Only the two refused-send images cited above are added.
+
+
+A later GitHub review found that the headless host's local PR preflight omitted the requesting unallocated draft from pending-work checks. The regression pauses PR lookup, queues the first real host send without desktop checkpoint wiring, and checks that checkout never reaches Git and the queued prompt starts in its independent folder. It reproduced the shared-folder checkout before the correction. The mutation reservation now always checks its requesting thread as well as discovered siblings. All 64 tests in workspace mutations, workspace behavior and checkpoint integration pass; both review axes found no remaining issue in this correction.

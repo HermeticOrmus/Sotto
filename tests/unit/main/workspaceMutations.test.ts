@@ -289,3 +289,30 @@ it('never saves a destination binding while local PR eligibility is still being 
     expect(checkoutLocal).not.toHaveBeenCalled()
   } finally { pause.release(); await checking?.catch(() => undefined); await f.stop(); await f.remove() }
 })
+
+
+it('refuses local PR checkout when an independent draft queues its first send on a headless host', async () => {
+  const f = await fixture(), pause = barrier()
+  let checkout: Promise<unknown> | undefined, sending: Promise<unknown> | undefined, pending = false
+  try {
+    const model = f.host.workspaceSnapshot().models.find(item => item.providerId === 'codex')!
+    await f.host.execute({ type: 'create-thread', commandId: 'draft', threadId: 'draft', projectId: f.project.id, modelId: model.id, title: 'Draft', workingCopy: 'independent', baseBranch: 'main' })
+    const checkoutLocal = vi.fn()
+    f.host.setGitPullRequests({ view: async () => { pause.enter(); await pause.held; return { url: 'https://github.com/o/r/pull/1', number: 1, title: 'Fixture PR', state: 'open', draft: false } }, checkoutLocal } as never)
+    // The headless coordinator supplies pending work without desktop checkpoint wiring.
+    f.host.setPendingThreadWork(id => id === 'draft' && pending)
+    checkout = f.host.checkoutThreadPullRequest('draft', '#1', 'local')
+    const outcome = checkout.then(() => null, error => error as Error)
+    await pause.entered
+    pending = true
+    sending = f.host.execute(send('draft')).finally(() => { pending = false })
+    expect(f.host.workspaceSnapshot().threads.find(t => t.id === 'draft')?.worktree).toMatchObject({ mode: 'independent', status: 'pending', baseBranch: 'main' })
+    pause.release(); const error = await outcome
+    expect(checkoutLocal).not.toHaveBeenCalled()
+    expect(error?.message).toContain('Thread "Draft" has work waiting in this folder.')
+    await sending
+    const after = f.host.workspaceSnapshot().threads.find(t => t.id === 'draft')!
+    expect(after.worktree).toMatchObject({ mode: 'independent', baseBranch: 'main', status: 'ready' })
+    expect(after.worktree?.path).not.toBe(f.project.path)
+  } finally { pause.release(); await checkout?.catch(() => undefined); await sending?.catch(() => undefined); await f.stop(); await f.remove() }
+})
