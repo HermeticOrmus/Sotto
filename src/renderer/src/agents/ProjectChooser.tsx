@@ -19,6 +19,7 @@ export type ProjectChoice = { readonly project: AgentProject; readonly folder?: 
 export function useProjectChooser(state: AgentState, onChoose: (choice: ProjectChoice) => void, options: {
   /** Lists only this host's projects, as New thread does once a host is chosen, and browses this host's folders. */
   readonly hostId?: string | undefined
+  readonly disabled?: boolean | undefined
 } = {}): {
   readonly search: ReactNode; readonly choices: ReactNode; readonly focusSearch: () => void
 } {
@@ -40,13 +41,15 @@ export function useProjectChooser(state: AgentState, onChoose: (choice: ProjectC
   const remote = browseHost?.kind === 'remote'
   const [browsing, setBrowsing] = useState(false)
   useEffect(() => { setHighlight(0); setError(null) }, [hostId])
-  const browse = (): void => { setError(null); setBrowsing(true) }
+  const browse = (): void => { if (options.disabled) return; setError(null); setBrowsing(true) }
   const chooseFolder = (path: string): void => {
+    if (options.disabled) return
     setBrowsing(false)
     const existing = projectAtFolder(latestState.current.host.projects, browseHostId, path)
     onChoose(existing ? { project: existing } : { folder: path })
   }
   const choose = (index: number): void => {
+    if (options.disabled) return
     if (index === 0) { browse(); return }
     const choice = projects[index - 1]
     if (choice) { setError(null); onChoose({ project: choice }) }
