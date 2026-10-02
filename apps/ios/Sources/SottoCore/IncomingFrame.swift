@@ -49,7 +49,7 @@ private struct ReplyValue<Value: Decodable>: Decodable {
     private enum Keys: String, CodingKey { case v, id, ok, result }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: Keys.self)
-        guard try c.decode(Int.self, forKey: .v) == 1, c.decode(Bool.self, forKey: .ok) else { throw ClientError.invalidProtocol }
+        guard try c.decode(Int.self, forKey: .v) == 1, try c.decode(Bool.self, forKey: .ok) else { throw ClientError.invalidProtocol }
         _ = try c.decode(String.self, forKey: .id)
         value = try c.decode(Value.self, forKey: .result)
     }
