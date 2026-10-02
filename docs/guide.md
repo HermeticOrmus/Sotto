@@ -379,7 +379,7 @@ A remote host keeps its own OpenRouter key, in its encrypted credential file, an
 
 Press the global shortcut once to start and again to stop and transcribe. The default is `Ctrl+Shift+Space` on Windows and `⌃⇧Space` (the literal Control key) on macOS. `Escape` cancels an active session. The floating widget also starts dictation with a click and can be dragged anywhere.
 
-**Show floating widget when idle** keeps the small dictation sliver on screen between sessions. Turning it off hides the idle sliver. Connected-agent activity still reveals the widget so you can see the threads it manages.
+**Show floating widget when idle** keeps the small dictation sliver on screen between sessions. Turning it off hides the idle sliver. While the coordinator is on, thread activity still brings the widget back.
 
 Settings:
 
