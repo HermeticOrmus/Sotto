@@ -20,7 +20,11 @@ export interface CheckpointDependencies {
   maxBytes?: number
   files: FilesService
   directory: string
-  resolveThread(threadId: string): Promise<CheckpointThread | null>
+  resolveThread(threadId: string, options?: { mutationHeld: boolean }): Promise<CheckpointThread | null>
+  /** Holds the checkout stable while reading a turn snapshot. */
+  acquireRead?(threadId: string): Promise<() => void>
+  /** Reserves the checkout across native rollback and file restoration, including recovery. */
+  acquireMutation?(threadId: string): Promise<() => void>
   /** Must guard exact expected history and preserve the Sotto/provider binding.
    * Throws only for definitive rejection before commitment; unknown delivery returns uncertain. */
   rollback(threadId: string, removedUserMessages: number, expectedUserMessageIds: readonly string[]): Promise<{ accepted: boolean; uncertain?: boolean }>

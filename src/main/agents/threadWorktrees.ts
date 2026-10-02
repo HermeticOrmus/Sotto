@@ -61,6 +61,39 @@ export async function existingWorkingDirectory(path: string): Promise<string> {
 }
 function pathKey(path: string): string { const key = resolve(path); return process.platform === 'win32' ? key.toLowerCase() : key }
 
+/** Resolve missing owned worktrees through their existing parent without mistaking the parent for their checkout. */
+async function canonicalCheckoutPath(folder: string): Promise<string> {
+  let candidate = folder
+  const suffix: string[] = []
+  for (;;) {
+    try { return pathKey(join(await realpath(candidate), ...suffix)) }
+    catch (error) {
+      if (!['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '') || dirname(candidate) === candidate) throw error
+      suffix.unshift(basename(candidate)); candidate = dirname(candidate)
+    }
+  }
+}
+/** One implementation for ownership, checkpoint records and reservations, including when Git refuses discovery. */
+export async function checkoutIdentity(folder: string, git: RunGit = runWorktreeGit): Promise<string> {
+  const canonical = await canonicalCheckoutPath(folder)
+  try { await stat(folder) }
+  catch (error) {
+    if (['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) return canonical
+    throw error
+  }
+  try { return await canonicalCheckoutPath((await git(folder, ['rev-parse', '--show-toplevel'])).trim()) }
+  catch {
+    // Git can refuse safe.directory ownership checks. Its on-disk marker still groups root and subfolders.
+    for (let candidate = canonical;; candidate = dirname(candidate)) {
+      try { await lstat(join(candidate, '.git')); return candidate }
+      catch (error) {
+        if (!['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error
+      }
+      if (dirname(candidate) === candidate) return canonical
+    }
+  }
+}
+
 // A host has separate thread and terminal services. They still share Git's registry,
 // including when their projects start in different linked checkouts of one repository.
 const registryOperations = new Map<string, Promise<void>>()
@@ -301,12 +334,7 @@ export class ThreadWorktrees {
 
   /** Canonical checkout root, so a subdirectory and its root count as the same working copy. */
   async checkoutIdentity(directory: string): Promise<string> {
-    const path = await existingWorkingDirectory(directory)
-    try { return pathKey(await existingWorkingDirectory((await this.git(path, ['rev-parse', '--show-toplevel'])).trim())) }
-    catch (error) {
-      if (error instanceof Error && /not a git repository/u.test(error.message)) return pathKey(path)
-      throw error
-    }
+    return checkoutIdentity(await existingWorkingDirectory(directory), this.git)
   }
 
   /** Discover an established session's folder without moving it or creating anything. */

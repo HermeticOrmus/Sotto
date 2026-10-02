@@ -10,11 +10,12 @@ import { fileRelativePathSchema, type FileWorkspace } from '../../shared/files'
 import { toolListRequestSchema } from '../../shared/tools'
 import { AtomicJsonStore } from '../storage/atomicJsonStore'
 import { ToolOperations, fail, parse, workspace } from './common'
+import { checkoutIdentity } from '../agents/threadWorktrees'
 import type { CheckpointDependencies, CheckpointThread } from './checkpointTypes'
 
 const fileSchema = z.object({ hash: z.string().regex(/^[a-f0-9]{64}$/), mode: z.number() }).strict()
 const snapshotSchema = z.object({ files: z.record(fileRelativePathSchema, fileSchema), index: z.string(), head: z.string() }).strict()
-const recordSchema = z.object({ id: z.string().uuid(), threadId: z.string(), workspaceId: z.string(), cwd: z.string(), providerId: z.string(), bindingId: z.string(), createdAt: z.string().datetime(),
+const recordSchema = z.object({ id: z.string().uuid(), threadId: z.string(), workspaceId: z.string(), cwd: z.string(), checkout: z.string().optional(), providerId: z.string(), bindingId: z.string(), createdAt: z.string().datetime(),
   beforeUsers: z.array(z.string()), afterUsers: z.array(z.string()).optional(), before: snapshotSchema, after: snapshotSchema.optional(),
   status: z.enum(['capturing', 'ready', 'reverting', 'uncertain', 'reverted', 'unavailable']), reason: z.string().optional(),
 }).strict()
@@ -209,13 +210,23 @@ export class CheckpointService extends ToolOperations {
     const cwd = records.find(record => record.threadId === threadId)?.cwd
     return records.some(record => (record.threadId === threadId || cwd !== undefined && record.cwd === cwd) && ['reverting', 'uncertain'].includes(record.status)) || this.locks.has(threadId)
   }
-  async isWorkspaceBlocked(threadId: string): Promise<boolean> {
+  private async sharesCheckout(record: Record, checkout: string): Promise<boolean> {
+    if (record.checkout) return record.checkout === checkout
+    // Older records predate checkout identity. An unavailable unrelated folder must not block every project.
+    try { return await checkoutIdentity(record.cwd) === checkout }
+    catch {
+      const path = relative(checkout, record.cwd)
+      return !isAbsolute(path) && path !== '..' && !path.startsWith(`..${sep}`)
+    }
+  }
+  async isWorkspaceBlocked(threadId: string, destinationFolder?: string): Promise<boolean> {
     await this.load()
     if (this.isBlocked(threadId)) return true
-    const owner = await workspace(this.dependencies.files, threadId)
-    const cwd = await realpath(owner.workingDirectory)
-    return [...this.records.values()].some(record => (process.platform === 'win32' ? record.cwd.toLowerCase() === cwd.toLowerCase() : record.cwd === cwd)
-      && (['reverting', 'uncertain'].includes(record.status) || this.locks.has(record.threadId)))
+    const pending = [...this.records.values()].filter(record => ['reverting', 'uncertain'].includes(record.status) || this.locks.has(record.threadId))
+    if (!pending.length) return false
+    const folder = destinationFolder ?? (await workspace(this.dependencies.files, threadId)).workingDirectory
+    const checkout = await checkoutIdentity(folder)
+    return (await Promise.all(pending.map(record => this.sharesCheckout(record, checkout)))).some(Boolean)
   }
   private git(cwd: string, args: string[]): Promise<string> {
     const env = { ...process.env }
@@ -273,7 +284,7 @@ export class CheckpointService extends ToolOperations {
     await this.afterTurn(threadId)
     return this.serial(async () => {
     await this.load()
-    if (this.isBlocked(threadId)) return fail('blocked', 'Resolve the interrupted checkpoint revert before sending more work.')
+    if (await this.isWorkspaceBlocked(threadId)) return fail('blocked', 'Resolve the interrupted checkpoint revert before sending more work.')
     if (this.dependencies.historyEnabled?.() === false) { await this.save(); return }
     const thread = await this.dependencies.resolveThread(threadId)
     if (!thread) return
@@ -284,14 +295,19 @@ export class CheckpointService extends ToolOperations {
     }
     const owner = await workspace(this.dependencies.files, threadId)
     const canonical = await realpath(owner.workingDirectory)
-    const overlapping = [...this.records.values()].filter(record => record.threadId !== threadId && record.status === 'capturing' && (process.platform === 'win32' ? record.cwd.toLowerCase() === canonical.toLowerCase() : record.cwd === canonical))
+    const checkout = await checkoutIdentity(canonical)
+    const candidates = [...this.records.values()].filter(record => record.threadId !== threadId && record.status === 'capturing')
+    const sameCheckout = await Promise.all(candidates.map(record => this.sharesCheckout(record, checkout)))
+    const overlapping = candidates.filter((_record, index) => sameCheckout[index])
     const overlapReason = overlapping.length ? 'Other thread work overlapped in this shared working copy. Its files cannot be safely attributed to this turn.' : undefined
     for (const other of overlapping) other.reason = overlapReason
     let before: Snapshot
     let reason: string | undefined
+    const release = await this.dependencies.acquireRead?.(threadId)
     try { before = await this.snapshot(owner.workingDirectory) }
     catch (error) { before = { files: {}, index: '', head: '' }; reason = error instanceof Error ? error.message : 'File checkpoint capture was unavailable.' }
-    const record: Record = { id: randomUUID(), threadId, workspaceId: owner.workspaceId, cwd: canonical, providerId: thread.providerId, bindingId: thread.bindingId, beforeUsers: [...thread.userMessageIds], before, status: 'capturing', createdAt: new Date(this.dependencies.now?.() ?? Date.now()).toISOString() }
+    finally { release?.() }
+    const record: Record = { id: randomUUID(), threadId, workspaceId: owner.workspaceId, cwd: canonical, checkout, providerId: thread.providerId, bindingId: thread.bindingId, beforeUsers: [...thread.userMessageIds], before, status: 'capturing', createdAt: new Date(this.dependencies.now?.() ?? Date.now()).toISOString() }
     if (overlapReason) record.reason = overlapReason
     if (reason) { record.status = 'unavailable'; record.reason = reason.slice(0, 2000) }
     this.records.set(record.id, record); await this.save()
@@ -306,8 +322,10 @@ export class CheckpointService extends ToolOperations {
     if (!this.matches(record, thread) || !equal(thread.userMessageIds.slice(0, record.beforeUsers.length), record.beforeUsers)) { record.status = 'unavailable'; record.reason = 'The native conversation binding changed during this turn.'; await this.save(); return }
     if (thread.userMessageIds.length === record.beforeUsers.length) return
     await workspace(this.dependencies.files, threadId, record.workspaceId)
+    const release = await this.dependencies.acquireRead?.(threadId)
     try { record.after = await this.snapshot(record.cwd) }
     catch (error) { record.status = 'unavailable'; record.reason = error instanceof Error ? error.message.slice(0, 2000) : 'Completed file snapshot was unavailable.'; await this.save(); return }
+    finally { release?.() }
     record.afterUsers = [...thread.userMessageIds]
     record.status = record.reason ? 'unavailable' : 'ready'
     if (record.before.index !== record.after.index || record.before.head !== record.after.head) { record.status = 'unavailable'; record.reason = 'This turn changed Git history or staging. Review and restore it with Git.' }
@@ -388,12 +406,14 @@ export class CheckpointService extends ToolOperations {
     const { confirmed: _confirmed, ...request } = parsed; void _confirmed
     const { record, thread } = await this.requested(request)
     if (!thread.rollbackSupported) return fail('blocked', thread.unsupportedReason ?? 'Matching native conversation rollback is unavailable.')
-    if (thread.busy || this.isBlocked(thread.threadId)) return fail('blocked', 'Finish or resolve active and pending work before reverting.')
+    if (thread.busy || await this.isWorkspaceBlocked(thread.threadId)) return fail('blocked', 'Finish or resolve active and pending work before reverting.')
     if (record.status !== 'ready' || !record.afterUsers || !equal(thread.userMessageIds, record.afterUsers)) return fail('blocked', 'Only the latest completed checkpoint with unchanged native history can be reverted.')
     this.locks.add(thread.threadId)
+    let release: (() => void) | undefined
     try {
+      release = await this.dependencies.acquireMutation?.(thread.threadId)
       await this.checkFiles(record)
-      const guarded = await this.dependencies.resolveThread(thread.threadId)
+      const guarded = await this.dependencies.resolveThread(thread.threadId, { mutationHeld: Boolean(release) })
       if (!guarded || guarded.busy || !this.matches(record, guarded) || !equal(guarded.userMessageIds, record.afterUsers)) return fail('blocked', 'Thread work changed while checking the checkpoint. Review it again before reverting.')
       await this.save()
       if (!this.records.has(record.id)) return fail('blocked', 'This checkpoint expired or local history changed. No rollback was sent. Review the working copy.')
@@ -413,20 +433,22 @@ export class CheckpointService extends ToolOperations {
     } catch (error) {
       if (record.status === 'reverting') { record.status = 'uncertain'; record.reason = 'Revert was interrupted. Check recovery to reconcile native history and finish restoring files.'; await this.save() }
       throw error
-    } finally { this.locks.delete(thread.threadId); await this.save() }
+    } finally { release?.(); this.locks.delete(thread.threadId); await this.save() }
   })) }
   recoverCheckpoint(payload: unknown) { return this.run(() => this.serial(async () => {
     await this.load(); await this.save()
+    let release: (() => void) | undefined
     try {
       const { record, thread } = await this.requested(payload)
       if (!['uncertain', 'reverting'].includes(record.status)) return this.public(record, thread)
       if (thread.busy) return fail('blocked', 'Wait for active or pending work to finish before recovery.')
+      release = await this.dependencies.acquireMutation?.(thread.threadId)
       await this.dependencies.refresh(thread.threadId)
       const current = await this.dependencies.resolveThread(thread.threadId)
       if (!current || !this.matches(record, current) || !equal(current.userMessageIds, record.beforeUsers)) return fail('blocked', 'Native rollback is still unconfirmed. No files were changed and rollback was not sent again.')
       await this.restore(record)
       return this.public(record, current)
-    } finally { await this.save() }
+    } finally { release?.(); await this.save() }
   })) }
   dispose(): void { clearInterval(this.maintenance); this.disposed = true }
 }

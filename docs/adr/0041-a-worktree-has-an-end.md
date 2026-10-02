@@ -65,3 +65,10 @@ A clean initialized submodule is part of the parent index (mode 160000), not ano
 After removal, each nested linked worktree’s own repository clears that folder’s registration without pruning other missing checkouts. The nested branch remains available to check out elsewhere. A locked nested worktree refuses removal before anything is deleted; unlock it in its own repository and ask again.
 
 The preview is only the requesting command’s result. It is neither saved nor broadcast to other windows or phones. Older hosts that cannot preview tell the user to update the host; no removal proceeds without a preview.
+
+
+## Correction, October 1, 2026: match the merged branch tip (#574)
+
+The merged rule and Auto-settle merged threads require a merged pull request whose head commit equals the current local branch tip. A branch name alone is insufficient: forks and later work can reuse it. The tip is read again after GitHub answers; a moved or missing branch is left alone. A matching fork pull request counts because it merged the same commit.
+
+The validated tip travels into the thread lane. Reclaim checks it after acquiring the checkout guard and before removing the folder; Auto-settle checks the branch and tip under a read reservation before settling. Sibling sends can proceed; file mutations remain excluded while that read completes. A Git action queued ahead of either decision can advance the branch, in which case current work stays in place.
