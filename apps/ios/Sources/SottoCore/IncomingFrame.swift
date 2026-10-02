@@ -1,7 +1,7 @@
 import Foundation
 
 /// Local receive order, scoped to one socket connection. It is never a host revision or wire field.
-public struct Received<Value: Sendable>: Sendable {
+public final class Received<Value: Sendable>: Sendable {
     public let value: Value
     public let sequence: Int
     public init(_ value: Value, sequence: Int) { self.value = value; self.sequence = sequence }
