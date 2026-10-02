@@ -374,6 +374,8 @@ export class AgentControl {
     if (this.dependencies.host.workspaceSnapshot) this.state.host = this.withSottoRequests(this.dependencies.host.workspaceSnapshot())
     const cutoff = Date.now() - 7 * 86_400_000
     const historyDisabled = this.dependencies.historyEnabled?.() === false
+    // Startup can defer a failed history-store open until this coordinator can run maintenance.
+    this.privacyCleanupPending ||= historyDisabled
     for (const assignment of this.state.assignments) {
       assignment.seenMessageIds = assignment.seenMessageIds.slice(-MAX_SEEN_MESSAGE_IDS)
       if (assignment.contextUpdatedAt < cutoff || historyDisabled) {

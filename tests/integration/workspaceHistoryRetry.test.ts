@@ -35,15 +35,17 @@ afterEach(async () => {
   vi.useRealTimers()
   for (const close of cleanup.splice(0).reverse()) await close()
 })
-async function fixture(history: () => boolean = () => true) {
+async function fixture(history: () => boolean = () => true, initialize = true) {
   const directory = await mkdtemp(join(tmpdir(), 'sotto-history-retry-'))
   cleanup.push(() => rm(directory, { recursive: true, force: true }))
   const adapter = new EventProvider()
   const host = new WorkspaceHost(adapter, directory, history)
   cleanup.push(async () => { await host.close().catch(() => undefined) })
-  await host.initialize()
-  await host.connect()
-  host.observeThreads(['session-workshop'])
+  if (initialize) {
+    await host.initialize()
+    await host.connect()
+    host.observeThreads(['session-workshop'])
+  }
   return { directory, adapter, host }
 }
 function failWrites() {
@@ -199,6 +201,39 @@ it('retries a failed thread-store privacy switch and removes the retained words 
   disk.open()
   try { expect(disk.readMessages('session-workshop').messages).toEqual([]) }
   finally { disk.close() }
+})
+
+it('starts with history off and unavailable storage, then retries cleanup when storage returns', async () => {
+  let history = false
+  const { directory, adapter, host } = await fixture(() => history, false)
+  const open = vi.spyOn(ThreadStore.prototype, 'open').mockImplementation(() => { throw new Error('Synthetic unavailable startup storage') })
+  const credentials = new AgentCredentials(directory, { isEncryptionAvailable: () => false, encryptString: text => Buffer.from(text), decryptString: bytes => bytes.toString() })
+  await credentials.load()
+  const control = new AgentControl({ directory, host, credentials, reasoner: e2eAgentReasoner, historyEnabled: () => history })
+  cleanup.push(async () => { control.dispose(); await control.closed() })
+  vi.useFakeTimers()
+  await expect(control.start()).resolves.toBeUndefined()
+  expect(control.get().host.error).toContain('Thread messages could not be opened')
+  await expect(host.connect()).resolves.toMatchObject({ connected: true })
+  adapter.state.threads[0]!.activities = [{ id: 'private-startup', turnId: 'turn', sequence: 0, kind: 'tool', status: 'completed', title: 'Tool', output: 'PRIVATE_STARTUP_ACTIVITY' }]
+  adapter.publish(added('private-startup', 'PRIVATE_STARTUP_MESSAGE'))
+  await host.snapshot()
+  await vi.advanceTimersByTimeAsync(30_000)
+  await vi.waitFor(() => expect(control.get().error).toContain('Could not finish applying history privacy'))
+  open.mockRestore()
+  await vi.advanceTimersByTimeAsync(30_000)
+  await vi.waitFor(() => expect(control.get().error).toBeNull())
+  history = true
+  await control.privacyChanged()
+  adapter.state.threads[0]!.activities!.push({ id: 'fresh-startup', turnId: 'turn', sequence: 1, kind: 'tool', status: 'completed', title: 'Tool', output: 'Fresh startup activity' })
+  adapter.publish(added('fresh-startup', 'Fresh startup message'))
+  await host.snapshot()
+  const disk = new ThreadStore(join(directory, 'threads.sqlite'))
+  disk.open()
+  try {
+    expect(disk.readMessages('session-workshop').messages.map(message => message.text)).toEqual(['Fresh startup message'])
+    expect(disk.readActivities('session-workshop').map(record => record.output)).toEqual(['Fresh startup activity'])
+  } finally { disk.close() }
 })
 
 it('does not retry into the durable connection if another privacy store fails before it switches', async () => {

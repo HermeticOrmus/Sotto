@@ -956,7 +956,7 @@ export class WorkspaceHost implements AgentHost {
         return messages.length ? [{ threadId: thread.id, messages, ...(thread.activities ? { activities: thread.activities.slice(-MAX_AGENT_ACTIVITIES) } : {}), ...(thread.historyEpoch ? { historyEpoch: thread.historyEpoch } : {}) }] : []
       }))
       this.ready = true
-      await this.privacyChanged()
+      await this.applyHistoryPrivacy(false)
     })().catch(error => { this.loading = undefined; throw error })
     return this.loading
   }
@@ -1712,10 +1712,13 @@ export class WorkspaceHost implements AgentHost {
    * back on hands the file over from here, and what was not kept is gone.
    */
   async privacyChanged(): Promise<void> {
-    try { await this.changeHistoryPrivacy() }
+    await this.applyHistoryPrivacy(true)
+  }
+  private async applyHistoryPrivacy(retryUnavailable: boolean): Promise<void> {
+    try { await this.changeHistoryPrivacy(retryUnavailable) }
     finally { await this.checkpointHooks?.privacyChanged?.() }
   }
-  private async changeHistoryPrivacy(): Promise<void> {
+  private async changeHistoryPrivacy(retryUnavailable: boolean): Promise<void> {
     this.activityInputs.clear()
     if (!this.historyEnabled()) {
       this.activityJsonFallbackAllowed = false
@@ -1757,7 +1760,8 @@ export class WorkspaceHost implements AgentHost {
         }
       } catch { this.saveError = 'Saved agent history could not be removed. Restore access to local storage and try again.'; throw new Error(this.saveError) }
     }
-    if (!this.storeUnavailable || this.historyRedactionPending) {
+    // Startup keeps its unavailable-store fallback; the coordinator retries once it exists.
+    if (!this.storeUnavailable || (retryUnavailable && this.historyRedactionPending)) {
       const wanted = this.historyEnabled()
       if (wanted === this.threadStore.ephemeral || this.historyRedactionPending) {
         const redacting = !wanted || this.historyRedactionPending
@@ -1776,6 +1780,7 @@ export class WorkspaceHost implements AgentHost {
             } finally { this.threadStore.becomeEphemeral() }
             this.historyRedactionPending = false
             this.storeUnavailable = false
+            this.activityStoreUnavailable = false
           }
           if (wanted) {
             this.saveActivities()
