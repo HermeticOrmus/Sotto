@@ -6,6 +6,7 @@ Verified on Windows in `fix/bh-15-index`, after all five package fixes.
 
 - History-off cleanup reaches both the coordinator and personal chats when either fails, then delivers the saved settings notification.
 - A failed thread-store redaction rejects to the coordinator. Its next maintenance retry removes the retained words from the real SQLite file without restarting.
+- After the [PR privacy finding](https://github.com/millZach/Sotto/pull/675#issuecomment-5947630010), activity and legacy-message writes share the event path's guard. Regressions fail redaction once, flush new private words before retry, and inspect SQLite and the saved files. They cover both waiting for retry and turning history back on first; an unfinished redaction still completes before durable writes resume.
 - Host and personal-chat startup failures drain every acquired handle. Phone access closes before the host it serves.
 - A failed title request logs only `thread-title-failed` and `failed`, even when the provider error contains private text and a path.
 - Only the single-instance lock owner prepares legacy user data, before runtime initialization reads it.

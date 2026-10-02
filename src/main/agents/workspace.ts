@@ -222,6 +222,8 @@ export class WorkspaceHost implements AgentHost {
   private readonly pendingEvents = new Map<string, ThreadEvent[]>()
   /** A failed privacy transition must not later promote these pending words to durable history. */
   private pendingEventsPrivate = false
+  /** Turning history back on cannot cancel a durable redaction that has not finished. */
+  private historyRedactionPending = false
   /** Failed batches stay ahead of later events; organization saves cannot acknowledge their warning. */
   private readonly failedEventThreads = new Set<string>()
   private readonly invalidEventThreads = new Set<string>()
@@ -1026,8 +1028,12 @@ export class WorkspaceHost implements AgentHost {
       this.saveError = 'Thread activity could not be saved. Saved activity remains available. Restore local storage and restart Sotto.'
     }
   }
+  private historyWritable(): boolean {
+    return !this.storeUnavailable && (this.threadStore.ephemeral
+      || (this.historyEnabled() && !this.pendingEventsPrivate && !this.historyRedactionPending))
+  }
   private saveActivities(): void {
-    if (this.storeUnavailable || this.activityStoreUnavailable) return
+    if (!this.historyWritable() || this.activityStoreUnavailable) return
     for (const thread of this.state.snapshot.threads) {
       if (thread.activities !== undefined) this.threadStore.syncActivities(thread.id, retainedActivities(thread.activities), thread.historyEpoch)
     }
@@ -1101,7 +1107,7 @@ export class WorkspaceHost implements AgentHost {
     if (this.pendingEvents.size === 0 || !this.ready || this.storeUnavailable) return
     // Another store may have stopped privacyChanged before this connection could be replaced.
     // The setting already forbids durable text, including a timer or shutdown retry.
-    if (!this.threadStore.ephemeral && (!this.historyEnabled() || this.pendingEventsPrivate)) return
+    if (!this.historyWritable()) return
     for (const [threadId, pending] of this.pendingEvents) {
       const events: ThreadEvent[] = []
       for (const event of pending) {
@@ -1197,7 +1203,7 @@ export class WorkspaceHost implements AgentHost {
    * loaded window while a pane is looking at it, nothing at all while none is.
    */
   private record(thread: AgentThread, messages: readonly AgentMessage[], previousEpoch: string | undefined): AgentMessage[] {
-    if (this.storeUnavailable) return [...messages]
+    if (!this.historyWritable()) return [...messages]
     const events = this.differences(thread.id, messages, thread.historyEpoch, previousEpoch)
     if (events.length) {
       try { this.threadStore.appendMany(thread.id, events); this.noteWritten(thread.id, events) }
@@ -1699,6 +1705,7 @@ export class WorkspaceHost implements AgentHost {
     if (!this.historyEnabled()) {
       this.activityJsonFallbackAllowed = false
       this.pendingEventsPrivate = true
+      this.historyRedactionPending ||= !this.threadStore.ephemeral
     } else if (this.pendingEventsPrivate) {
       // Clear before either store switches: an earlier failed redaction may have left this one durable.
       this.pendingEvents.clear()
@@ -1729,24 +1736,27 @@ export class WorkspaceHost implements AgentHost {
     }
     if (!this.storeUnavailable) {
       const wanted = this.historyEnabled()
-      if (wanted === this.threadStore.ephemeral) {
+      if (wanted === this.threadStore.ephemeral || this.historyRedactionPending) {
+        const redacting = !wanted || this.historyRedactionPending
         try {
           // Events held while history was off must never cross into the durable connection.
           // Turning history off instead carries failed durable events into this run's memory store.
           clearTimeout(this.historyRetryTimer)
           this.historyRetryTimer = undefined
           this.historyRetryDelay = 1_000
-          if (wanted) {
-            this.saveActivities()
-            this.threadStore.becomeDurable()
-          } else {
+          if (redacting) {
             // Identity suppression needs no output validation. Even if it fails, erase the durable text.
             try {
               for (const thread of this.state.snapshot.threads) this.threadStore.redactActivityIdentities(thread.id, (thread.activities ?? []).map(activity => activity.id))
             } finally { this.threadStore.becomeEphemeral() }
+            this.historyRedactionPending = false
+          }
+          if (wanted) {
+            this.saveActivities()
+            this.threadStore.becomeDurable()
           }
         } catch {
-          this.saveError = wanted ? HISTORY_OPEN_ERROR : 'Thread messages could not be removed. Restore access to local storage and try again.'
+          this.saveError = redacting ? 'Thread messages could not be removed. Restore access to local storage and try again.' : HISTORY_OPEN_ERROR
           // Keep the transition retryable by the coordinator's privacy maintenance.
           throw new Error(this.saveError)
         }

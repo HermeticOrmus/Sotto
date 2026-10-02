@@ -78,6 +78,44 @@ it('keeps activity snapshots independently mutable without corrupting saved hist
   expect(host.workspaceSnapshot().threads[0]!.activities?.[0]).toEqual(activity('old', 'Retained tool output'))
 })
 
+it.each([false, true])('blocks durable messages and activity after a failed privacy transition, including resume before retry (%s)', async resumeBeforeRetry => {
+  let history = true
+  const f = await fixture(() => history)
+  const host = await f.open()
+  await host.connect()
+  const transition = vi.spyOn(ThreadStore.prototype, 'becomeEphemeral').mockImplementationOnce(() => { throw new Error('Synthetic failed redaction') })
+  history = false
+  await expect(host.privacyChanged()).rejects.toThrow('Thread messages could not be removed')
+  const thread = f.provider.state.threads[0]!
+  thread.activities!.push(activity('private', 'PRIVATE_ACTIVITY_DURING_RETRY'))
+  thread.messages.push({ id: 'private-message', role: 'assistant', text: 'PRIVATE_MESSAGE_DURING_RETRY', createdAt: new Date().toISOString() })
+  await host.snapshot()
+  const disk = new ThreadStore(join(f.directory, 'threads.sqlite'))
+  disk.open()
+  try {
+    expect(disk.readActivities(thread.id).map(record => record.output)).not.toContain('PRIVATE_ACTIVITY_DURING_RETRY')
+    expect(disk.readMessages(thread.id).messages.map(message => message.text)).not.toContain('PRIVATE_MESSAGE_DURING_RETRY')
+  } finally { disk.close() }
+  if (resumeBeforeRetry) history = true
+  await host.privacyChanged()
+  expect(transition).toHaveBeenCalledTimes(2)
+  history = true
+  await host.privacyChanged()
+  thread.messages = []
+  thread.activities!.push(activity('fresh', 'Fresh retained output'))
+  await host.snapshot()
+  disk.open()
+  try {
+    expect(disk.readActivities(thread.id).map(record => record.output)).toEqual(['Fresh retained output'])
+    expect(disk.readMessages(thread.id).messages).toEqual([])
+  } finally { disk.close() }
+  await f.close(host)
+  const bytes = (await Promise.all((await readdir(f.directory)).map(name => readFile(join(f.directory, name), 'latin1')))).join('')
+  expect(bytes).not.toContain('Retained tool output')
+  expect(bytes).not.toContain('PRIVATE_ACTIVITY_DURING_RETRY')
+  expect(bytes).not.toContain('PRIVATE_MESSAGE_DURING_RETRY')
+})
+
 it('erases old activity on privacy changes and never revives it when history is enabled again', async () => {
   let history = true
   const f = await fixture(() => history)
