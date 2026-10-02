@@ -6,29 +6,13 @@ import type { WorkspaceHost } from '../agents/workspace'
 import type { ThreadRegistry } from '../agents/threads'
 import type { FilesService } from '../files/service'
 import { CheckpointService } from './checkpoints'
-import { checkoutIdentity } from '../agents/threadWorktrees'
+import { threadsInCheckout } from '../agents/checkoutCandidates'
 
 export function connectCheckpoints(options: { files: FilesService; directory: string; host: WorkspaceHost; control: AgentControl; registry: ThreadRegistry | null; historyEnabled?: () => boolean; report: (message: string) => void }) {
   const { host, control } = options
   const sharedThreads = async (threadId: string) => {
-    const identities = new Map<string, Promise<string>>()
-    const identity = (folder: string): Promise<string> => {
-      let value = identities.get(folder)
-      if (!value) { value = checkoutIdentity(folder); identities.set(folder, value) }
-      return value
-    }
-    const snapshot = host.workspaceSnapshot(), target = snapshot.threads.find(thread => thread.id === threadId)
-    if (!target) return []
-    const path = await identity(resolveThreadWorkingDirectory(target, snapshot.projects.find(project => project.id === target.projectId)))
-    const candidates = await Promise.all(snapshot.threads.map(async thread => {
-      try {
-        return { thread, path: await identity(resolveThreadWorkingDirectory(thread, snapshot.projects.find(project => project.id === thread.projectId))) }
-      } catch {
-        // An unallocated or unavailable copy cannot share this ready thread's verified folder.
-        return { thread, path: null }
-      }
-    }))
-    return candidates.filter(candidate => candidate.path === path).map(candidate => candidate.thread)
+    const snapshot = host.workspaceSnapshot()
+    return threadsInCheckout(snapshot, threadId, thread => resolveThreadWorkingDirectory(thread, snapshot.projects.find(project => project.id === thread.projectId)))
   }
   const pending = async (threadId: string): Promise<boolean> => (await sharedThreads(threadId)).some(thread => thread.status === 'running' || thread.requests.length > 0
     || thread.historyStatus === 'loading' || thread.historyStatus === 'error' || control.hasPendingThreadWork(thread.id))

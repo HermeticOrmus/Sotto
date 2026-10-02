@@ -1,3 +1,4 @@
+import { threadsInCheckout } from './checkoutCandidates'
 import { CheckoutMutations, checkoutMutationRefusal, type CheckoutHolder } from './checkoutMutations'
 import { loadHostIdentity, migrateWorkspaceHost, stampHostSnapshot } from './hostIdentity'
 import type { BrowserAgentTools } from './browserAgentServer'
@@ -311,21 +312,9 @@ export class WorkspaceHost implements AgentHost {
     const key = await checkoutIdentity(folder)
     const release = this.checkoutMutations.acquireIdentity(key, 'mutation', holder)
     try {
-      const identities = new Map<string, Promise<string>>([[folder, Promise.resolve(key)]])
-      const identity = (path: string): Promise<string> => {
-        let value = identities.get(path)
-        if (!value) { value = checkoutIdentity(path); identities.set(path, value) }
-        return value
-      }
-      const candidates = await Promise.all(this.state.snapshot.threads.map(async thread => {
-        try { return { id: thread.id, key: await identity(this.threadCheckoutFolder(thread.id)) } }
-        catch { return { id: thread.id, key: null } }
-      }))
+      const candidates = await threadsInCheckout(this.state.snapshot, threadId, thread => this.threadCheckoutFolder(thread.id), key)
       for (const candidate of candidates) {
-        if (candidate.key !== key) continue
         const thread = this.thread(candidate.id)
-        // An independent draft has no checkout yet, even though its project is this repository.
-        if (thread.worktree?.mode === 'independent' && (!thread.worktree.path && !thread.worktree.existingWorktreePath || thread.worktree.reclaimedAt)) continue
         if (thread.status === 'running' || thread.requests.length || thread.historyStatus === 'loading' || thread.historyStatus === 'error'
           || this.preparations.has(thread.id) || this.pendingThreadWork(thread.id)) {
           throw checkoutMutationRefusal(this.checkoutThreadHolder(thread.id, thread.status === 'running' ? 'turn' : 'pending-work'))

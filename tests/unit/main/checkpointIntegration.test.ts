@@ -1,3 +1,6 @@
+import * as worktrees from '../../../src/main/agents/threadWorktrees'
+import { join } from 'node:path'
+import { mkdir } from 'node:fs/promises'
 // @vitest-environment node
 import { expect, it, vi } from 'vitest'
 import { workspaceFixture } from '../../fixtures/workspaceFixture'
@@ -67,4 +70,29 @@ it('excludes an unallocated worktree from shared-folder checkpoint guards while 
     integration?.dispose()
     await f.stop(); await f.remove()
   }
+})
+
+it('looks up only related active checkout candidates and caches shared folders for one checkpoint check', async () => {
+  const f = await workspaceFixture()
+  let integration: ReturnType<typeof connectCheckpoints> | undefined
+  try {
+    const snapshot = await f.host.connect()
+    const project = snapshot.projects.find(item => item.providerId === 'codex')!
+    const model = snapshot.models.find(item => item.providerId === 'codex')!
+    await f.host.execute({ type: 'create-thread', commandId: 'ready', threadId: 'ready', projectId: project.id, modelId: model.id, title: 'Ready' })
+    const ready = f.host.workspaceSnapshot().threads.find(t => t.id === 'ready')!
+    const unrelated = join(f.root, 'unrelated'); await mkdir(unrelated)
+    await worktrees.runWorktreeGit(project.path, ['init'])
+    await worktrees.runWorktreeGit(unrelated, ['init'])
+    const copies = [ready, { ...ready, id: 'same' }, { ...ready, id: 'archived', archivedAt: '2026-10-01T00:00:00Z', workingDirectory: join(f.root, 'archived'), worktree: undefined },
+      ...Array.from({ length: 30 }, (_, i) => ({ ...ready, id: `other-${i}`, projectId: `other-project-${i}`, workingDirectory: unrelated, worktree: undefined })),
+      { ...ready, id: 'other-worktree', worktree: { mode: 'independent' as const, status: 'ready' as const, path: unrelated }, workingDirectory: unrelated }]
+    vi.spyOn(f.host, 'workspaceSnapshot').mockReturnValue({ ...f.host.workspaceSnapshot(), threads: copies })
+    const files = new FilesService({ resolveBinding: id => resolveFilesBinding(f.host.workspaceSnapshot(), id), copyPath: vi.fn(), reveal: vi.fn() })
+    integration = connectCheckpoints({ files, directory: f.root, host: f.host, registry: f.registry,
+      control: { subscribe: () => () => undefined, hasPendingThreadWork: () => false } as unknown as AgentControl, report: vi.fn() })
+    const lookup = vi.spyOn(worktrees, 'checkoutIdentity')
+    await expect(integration.canMutate('ready')).resolves.toBe(true)
+    expect(lookup.mock.calls.map(call => call[0])).toEqual([project.path])
+  } finally { vi.restoreAllMocks(); integration?.dispose(); await f.stop(); await f.remove() }
 })
