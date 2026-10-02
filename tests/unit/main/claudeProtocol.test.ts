@@ -10,12 +10,12 @@ vi.mock('node:child_process', () => ({ spawn: vi.fn() }))
 type FakeChild = EventEmitter & { stdout: PassThrough; stderr: PassThrough; stdin: PassThrough; kill: ReturnType<typeof vi.fn> }
 
 /** A child whose stdout is a real stream, so `setEncoding('utf8')` decodes the bytes the test writes. */
-function start(timeout = 5000) {
+function start(timeout = 5000, receive?: (frame: ClaudeFrame) => void) {
   const child = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough(), stdin: new PassThrough(), kill: vi.fn(() => true) }) as FakeChild
   vi.mocked(spawn).mockReturnValueOnce(child as never)
   const frames: ClaudeFrame[] = []
   const onExit = vi.fn()
-  const protocol = new ClaudeProtocol('claude', [], '.', {}, timeout, frame => { frames.push(frame) }, onExit)
+  const protocol = new ClaudeProtocol('claude', [], '.', {}, timeout, frame => { frames.push(frame); receive?.(frame) }, onExit)
   const written: ClaudeFrame[] = []
   let pending = ''
   child.stdin.on('data', (chunk: Buffer) => {
@@ -39,6 +39,21 @@ function split(bytes: Buffer, size: number): Buffer[] {
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); vi.mocked(spawn).mockReset() })
 
 describe('ClaudeProtocol framing', () => {
+  it('drops the connection when a frame handler throws and ignores later frames', async () => {
+    const receive = vi.fn(() => { throw new Error('private handler detail') })
+    const { protocol, child, onExit } = start(5000, receive)
+    const pending = protocol.control({ subtype: 'initialize' }).catch((error: Error) => error.message)
+    expect(() => child.stdout.write('{"type":"a"}\n{"type":"b"}\n')).not.toThrow()
+    expect(child.kill).toHaveBeenCalledTimes(1)
+    expect(await pending).toBe('Claude disconnected before acknowledging the request.')
+    child.stdout.write('{"type":"c"}\n')
+    expect(receive).toHaveBeenCalledTimes(1)
+    await expect(protocol.write({ type: 'user' })).rejects.toThrow('Claude is disconnected.')
+    child.emit('close')
+    await protocol.closed
+    expect(onExit).toHaveBeenCalledTimes(1)
+  })
+
   it('joins one frame split across many chunks, including inside a multi-byte character', async () => {
     const { frames, child, send } = start()
     const text = `${'é'.repeat(3000)} 画像 🎨 ${'x'.repeat(5000)}`
