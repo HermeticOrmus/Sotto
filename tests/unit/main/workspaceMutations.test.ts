@@ -65,7 +65,7 @@ it('reserves a checkout before a sibling send can pass an asynchronous guard', a
     f.host.setGitActions({ pull: vi.fn(async () => ({ status: 'already_up_to_date' })) } as unknown as GitActions)
     action = f.host.pullThreadBranch('a')
     await pause.entered
-    await expect(f.host.execute(send('b'))).rejects.toThrow(/Wait for/)
+    await expect(f.host.execute(send('b'))).rejects.toThrow('Your message was not sent')
     pause.release(); await action
   } finally { pause.release(); await action; await f.stop(); await f.remove() }
 })
@@ -75,7 +75,7 @@ it('uses the checkout root for subdirectories and releases reservations on refus
   try {
     const nested = join(f.project.path, 'nested'); await mkdir(nested)
     const release = await mutations.acquire(nested, 'mutation')
-    await expect(mutations.acquire(f.project.path, 'send')).rejects.toThrow('Wait for')
+    await expect(mutations.acquire(f.project.path, 'send')).rejects.toThrow('Your message was not sent')
     const other = await mutations.acquire(join(f.root, 'claude'), 'mutation'); other()
     release()
     const sendRelease = await mutations.acquire(f.project.path, 'send'); sendRelease()
@@ -105,7 +105,7 @@ it('refuses Git while a sibling first send is pending in a previous worktree', a
     f.host.setPendingThreadWork(() => false)
     const release = await f.host.acquireCheckoutMutation('c')
     try {
-      await expect(f.host.execute(send('d'))).rejects.toThrow('Wait for')
+      await expect(f.host.execute(send('d'))).rejects.toThrow('Your message was not sent')
       expect(f.host.workspaceSnapshot().threads.find(thread => thread.id === 'd')?.worktree?.path).toBeUndefined()
     } finally { release() }
   } finally { await f.stop(); await f.remove() }

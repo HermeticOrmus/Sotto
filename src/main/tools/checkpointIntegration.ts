@@ -47,7 +47,7 @@ export function connectCheckpoints(options: { files: FilesService; directory: st
       }
     },
     acquireRead: threadId => host.acquireCheckoutRead(threadId),
-    acquireMutation: threadId => host.acquireCheckoutMutation(threadId),
+    acquireMutation: threadId => host.acquireCheckoutMutation(threadId, { kind: 'checkpoint-revert' }),
     rollback: (threadId, count, expected) => host.rollbackThread(threadId, count, expected),
     refresh: async threadId => { await host.refreshThread(threadId) },
   })
