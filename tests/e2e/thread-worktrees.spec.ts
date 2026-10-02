@@ -583,14 +583,16 @@ test('a worktree can be reclaimed from the pane or on settle, keeps its branch, 
     expect(await readFile(join(worktreePath, 'README.md'), 'utf8')).toMatch(/^Committed checkout\r?\n$/u)
     await expect.poll(async () => (await activeThread(page)).worktree?.reclaimedAt).toBeUndefined()
 
-    // Settle asks the same question; Keep folder settles without removing, a yes removes.
-    await page.getByRole('button', { name: 'More actions', exact: true }).click()
-    await page.getByRole('menuitem', { name: 'Settle', exact: true }).click()
+    // The sidebar row moves to the closed Settled shelf before its separate removal question opens.
+    const sidebarSettle = page.getByRole('button', { name: 'Settle Reclaim me', exact: true })
+    await sidebarSettle.focus()
+    await sidebarSettle.press('Enter')
     const settleQuestion = page.getByRole('dialog', { name: 'Remove its worktree too?', exact: true })
     await expect(settleQuestion).toBeVisible()
     await page.screenshot({ path: `${RECLAIM_SHOTS}/settle-asks.png`, animations: 'disabled' })
     await settleQuestion.getByRole('button', { name: 'Keep folder', exact: true }).click()
     await expect(settleQuestion).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Settled 1 thread', exact: true })).toBeFocused()
     await expect.poll(async () => Boolean((await activeThread(page)).workspaceSettledAt)).toBe(true)
     expect(existsSync(worktreePath)).toBe(true)
     await page.getByRole('button', { name: `Working copy: ${branch}`, exact: true }).click()
