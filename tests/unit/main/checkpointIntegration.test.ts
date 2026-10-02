@@ -31,6 +31,12 @@ it('excludes an unallocated worktree from shared-folder checkpoint guards while 
     await expect(integration.canMutate('pending')).resolves.toBe(false)
     await expect(integration.canMutate('ready')).resolves.toBe(true)
     expect(pending).not.toHaveBeenCalledWith('pending')
+    // A local PR checkout tests the selected destination without changing the independent draft.
+    await expect(integration.canMutate('pending', project.path)).resolves.toBe(true)
+    pending.mockImplementation((id?: string) => id === 'pending')
+    await expect(integration.canMutate('pending', project.path)).resolves.toBe(false)
+    pending.mockImplementation(() => false)
+    expect(f.host.workspaceSnapshot().threads.find(t => t.id === 'pending')?.worktree).toMatchObject({ mode: 'independent', status: 'pending' })
     const releaseMutation = await f.host.acquireCheckoutMutation('ready')
     await expect(Promise.resolve(hooks.mock.calls[0]![0].isBlocked('ready'))).resolves.toBe(true)
     releaseMutation()

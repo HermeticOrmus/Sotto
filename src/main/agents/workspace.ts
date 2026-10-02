@@ -180,7 +180,7 @@ export class WorkspaceHost implements AgentHost {
   private readonly checkoutMutations = new CheckoutMutations()
   private pendingThreadWork: (threadId: string) => boolean = () => false
   /** Additional desktop checkpoint recovery checks. */
-  private mutationGuard: ((threadId: string) => Promise<boolean> | boolean) | undefined
+  private mutationGuard: ((threadId: string, destinationFolder?: string) => Promise<boolean> | boolean) | undefined
   /** A thread's own history: the log and the message projection every window reads (issue #119). */
   private readonly subagentStore: SubagentStore
   private subagentUnavailable = false
@@ -332,17 +332,17 @@ export class WorkspaceHost implements AgentHost {
     const release = await this.acquireCheckoutMutation(threadId)
     try { return await operation() } finally { release() }
   }
-  setMutationGuard(guard: (threadId: string) => Promise<boolean> | boolean): void { this.mutationGuard = guard }
+  setMutationGuard(guard: (threadId: string, destinationFolder?: string) => Promise<boolean> | boolean): void { this.mutationGuard = guard }
   /** The folder a Git command may act on now, or the reason it may not, in plain words. */
-  private async gitActionFolder(threadId: string): Promise<string> {
+  private async gitActionFolder(threadId: string, destinationFolder?: string): Promise<string> {
     await this.initialize()
     const thread = this.thread(threadId)
     if (thread.status === 'running') throw new GitActionRefusal('Wait for the thread to finish its turn before changing Git.')
     if (thread.requests.length > 0) throw new GitActionRefusal('Answer the thread\'s waiting request before changing Git.')
     if (this.preparations.has(threadId)) throw new GitActionRefusal('Wait for the working copy to be set up before changing Git.')
     if (thread.gitAction?.status === 'running') throw new GitActionRefusal('Git action in progress.')
-    if (this.mutationGuard && !await this.mutationGuard(threadId)) throw new GitActionRefusal('Wait for active or pending thread work before changing Git.')
-    return this.threadWorkingDirectory(threadId)
+    if (this.mutationGuard && !await (destinationFolder === undefined ? this.mutationGuard(threadId) : this.mutationGuard(threadId, destinationFolder))) throw new GitActionRefusal('Wait for active or pending thread work before changing Git.')
+    return destinationFolder ?? this.threadWorkingDirectory(threadId)
   }
   private setGitActionProgress(threadId: string, progress: GitActionProgress): void {
     const thread = this.state.snapshot.threads.find(item => item.id === threadId)
@@ -584,15 +584,21 @@ export class WorkspaceHost implements AgentHost {
           ? await this.selectedWorkingCopy(thread.projectId, { workingCopy: 'shared' }) : undefined
         const release = await this.acquireCheckoutMutationInFolder(threadId, shared?.path ?? this.threadCheckoutFolder(threadId), { kind: 'git-action' })
         try {
+          // Check the destination without exposing a new draft binding to concurrent saves.
+          const cwd = await this.gitActionFolder(threadId, shared?.path)
           if (shared) {
-            // Local is the project's own checkout, so a draft that was set for a worktree works there instead, as in T3.
-            const previous = { worktree: thread.worktree, workingDirectory: thread.workingDirectory }
             const current = this.thread(threadId)
+            const previous = { worktree: current.worktree, workingDirectory: current.workingDirectory }
             current.worktree = shared; current.workingDirectory = shared.path
             this.dirty = true
-            try { await this.flush() } catch (error) { Object.assign(this.thread(threadId), previous); throw error }
+            try { await this.flush() } catch (error) {
+              Object.assign(this.thread(threadId), previous)
+              this.dirty = true
+              try { await this.flush() } catch { this.saveError = BRANCH_SAVE_ERROR }
+              throw error
+            }
           }
-          await service.checkoutLocal(await this.gitActionFolder(threadId), view.url)
+          await service.checkoutLocal(cwd, view.url)
           this.linkPullRequestRecord(threadId, view, 'checkout')
           await this.refreshAfterGitAction(threadId, { followSentBranch: true })
           await this.saveLinks()

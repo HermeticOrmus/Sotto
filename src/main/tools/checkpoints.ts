@@ -219,13 +219,13 @@ export class CheckpointService extends ToolOperations {
       return !isAbsolute(path) && path !== '..' && !path.startsWith(`..${sep}`)
     }
   }
-  async isWorkspaceBlocked(threadId: string): Promise<boolean> {
+  async isWorkspaceBlocked(threadId: string, destinationFolder?: string): Promise<boolean> {
     await this.load()
     if (this.isBlocked(threadId)) return true
     const pending = [...this.records.values()].filter(record => ['reverting', 'uncertain'].includes(record.status) || this.locks.has(record.threadId))
     if (!pending.length) return false
-    const owner = await workspace(this.dependencies.files, threadId)
-    const checkout = await checkoutIdentity(owner.workingDirectory)
+    const folder = destinationFolder ?? (await workspace(this.dependencies.files, threadId)).workingDirectory
+    const checkout = await checkoutIdentity(folder)
     return (await Promise.all(pending.map(record => this.sharesCheckout(record, checkout)))).some(Boolean)
   }
   private git(cwd: string, args: string[]): Promise<string> {

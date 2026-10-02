@@ -69,6 +69,16 @@ describe('completed native turn checkpoints', () => {
     expect(unwrap(await f.service.revertCheckpoint({ ...target, confirmed: true })).status).toBe('uncertain')
     expect(await f.service.isWorkspaceBlocked(f.second.threadId)).toBe(true)
   })
+  it('checks recovery in a proposed destination before an unallocated draft has a file binding', async () => {
+    const f = await fixture(), target = await f.complete()
+    f.dependencies.rollback = async () => ({ accepted: false, uncertain: true })
+    expect(unwrap(await f.service.revertCheckpoint({ ...target, confirmed: true })).status).toBe('uncertain')
+    const unrelated = join(f.root, 'unrelated'); await mkdir(unrelated)
+    git(unrelated, 'init', '-q')
+    f.dependencies.files = new FilesService({ resolveBinding: () => null, copyPath: vi.fn(), reveal: vi.fn() })
+    expect(await f.service.isWorkspaceBlocked('draft', f.repo)).toBe(true)
+    expect(await f.service.isWorkspaceBlocked('draft', unrelated)).toBe(false)
+  })
   it('reserves the checkout before checking revert files', async () => {
     const f = await fixture(), target = await f.complete(), mutations = new CheckoutMutations()
     f.dependencies.acquireMutation = () => mutations.acquire(f.repo, 'mutation')

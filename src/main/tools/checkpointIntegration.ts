@@ -10,11 +10,13 @@ import { threadsInCheckout } from '../agents/checkoutCandidates'
 
 export function connectCheckpoints(options: { files: FilesService; directory: string; host: WorkspaceHost; control: AgentControl; registry: ThreadRegistry | null; historyEnabled?: () => boolean; report: (message: string) => void }) {
   const { host, control } = options
-  const sharedThreads = async (threadId: string) => {
+  const sharedThreads = async (threadId: string, destinationFolder?: string) => {
     const snapshot = host.workspaceSnapshot()
-    return threadsInCheckout(snapshot, threadId, thread => resolveThreadWorkingDirectory(thread, snapshot.projects.find(project => project.id === thread.projectId)))
+    const destination = destinationFolder ? { ...snapshot, threads: snapshot.threads.map(thread => thread.id === threadId
+      ? { ...thread, worktree: undefined, workingDirectory: destinationFolder } : thread) } : snapshot
+    return threadsInCheckout(destination, threadId, thread => resolveThreadWorkingDirectory(thread, destination.projects.find(project => project.id === thread.projectId)))
   }
-  const pending = async (threadId: string): Promise<boolean> => (await sharedThreads(threadId)).some(thread => thread.status === 'running' || thread.requests.length > 0
+  const pending = async (threadId: string, destinationFolder?: string): Promise<boolean> => (await sharedThreads(threadId, destinationFolder)).some(thread => thread.status === 'running' || thread.requests.length > 0
     || thread.historyStatus === 'loading' || thread.historyStatus === 'error' || control.hasPendingThreadWork(thread.id))
   const checkpoints = new CheckpointService({ report: options.report, ...(options.historyEnabled ? { historyEnabled: options.historyEnabled } : {}), files: options.files, directory: join(options.directory, 'checkpoints'),
     resolveThread: async (threadId, held) => {
@@ -79,7 +81,9 @@ export function connectCheckpoints(options: { files: FilesService; directory: st
     }
   })
   return { checkpoints,
-    canMutate: async (threadId: string): Promise<boolean> => !unallocated(threadId) && !await blocked(threadId) && !await pending(threadId),
+    canMutate: async (threadId: string, destinationFolder?: string): Promise<boolean> => destinationFolder
+      ? !await checkpoints.isWorkspaceBlocked(threadId, destinationFolder) && !await pending(threadId, destinationFolder)
+      : !unallocated(threadId) && !await blocked(threadId) && !await pending(threadId),
     dispose: (): void => { unsubscribe(); checkpoints.dispose() },
   }
 }

@@ -242,7 +242,7 @@ it('allows a sibling send while auto-settle reads the merged branch tip', async 
   } finally { pause.release(); await settling; vi.restoreAllMocks(); await f.stop(); await f.remove() }
 })
 
-it('keeps a draft on its original worktree choice when local PR checkout is refused', async () => {
+it.each(['Git action', 'checkpoint recovery'] as const)('keeps a draft on its original worktree choice when local PR checkout is refused by %s', async holder => {
   const f = await fixture(), pause = barrier()
   let action: Promise<unknown> | undefined
   try {
@@ -252,9 +252,11 @@ it('keeps a draft on its original worktree choice when local PR checkout is refu
     const checkoutLocal = vi.fn()
     f.host.setGitPullRequests({ view: async () => ({ url: 'https://github.com/o/r/pull/1', number: 1 }), checkoutLocal } as never)
     f.host.setGitActions({ runStackedAction: async () => { pause.enter(); await pause.held; throw new Error('Draft failed') } } as unknown as GitActions)
-    action = f.host.runGitAction({ threadId: 'a', actionId: 'commit', action: 'commit' })
-    await pause.entered
-    await expect(f.host.checkoutThreadPullRequest('draft', '#1', 'local')).rejects.toThrow('A Git action is running')
+    if (holder === 'Git action') {
+      action = f.host.runGitAction({ threadId: 'a', actionId: 'commit', action: 'commit' })
+      await pause.entered
+    } else f.host.setMutationGuard(() => false)
+    await expect(f.host.checkoutThreadPullRequest('draft', '#1', 'local')).rejects.toThrow(holder === 'Git action' ? 'A Git action is running' : 'Wait for active or pending thread work')
     const after = f.host.workspaceSnapshot().threads.find(t => t.id === 'draft')!
     expect(after.worktree).toEqual(before.worktree)
     expect(after.workingDirectory).toEqual(before.workingDirectory)
@@ -263,4 +265,27 @@ it('keeps a draft on its original worktree choice when local PR checkout is refu
     expect(saved.snapshot.threads.find((t: { id: string }) => t.id === 'draft')?.worktree).toMatchObject({ mode: 'independent', status: 'pending', baseBranch: 'main' })
     pause.release(); await action
   } finally { pause.release(); await action; await f.stop(); await f.remove() }
+})
+
+
+it('never saves a destination binding while local PR eligibility is still being checked', async () => {
+  const f = await fixture(), pause = barrier()
+  let checking: Promise<unknown> | undefined
+  try {
+    const model = f.host.workspaceSnapshot().models.find(item => item.providerId === 'codex')!
+    await f.host.execute({ type: 'create-thread', commandId: 'draft', threadId: 'draft', projectId: f.project.id, modelId: model.id, title: 'Draft', workingCopy: 'independent', baseBranch: 'main' })
+    const before = f.host.workspaceSnapshot().threads.find(t => t.id === 'draft')!
+    const checkoutLocal = vi.fn()
+    f.host.setGitPullRequests({ view: async () => ({ url: 'https://github.com/o/r/pull/1', number: 1 }), checkoutLocal } as never)
+    f.host.setMutationGuard(async () => { pause.enter(); await pause.held; return false })
+    checking = f.host.checkoutThreadPullRequest('draft', '#1', 'local')
+    const refused = expect(checking).rejects.toThrow('Wait for active or pending thread work')
+    await pause.entered
+    await f.host.renameThread('b', 'Unrelated rename')
+    const saved = JSON.parse(await readFile(join(f.root, 'workspace.json'), 'utf8'))
+    expect(saved.snapshot.threads.find((t: { id: string }) => t.id === 'draft')?.worktree).toEqual(before.worktree)
+    expect(f.host.workspaceSnapshot().threads.find(t => t.id === 'draft')?.worktree).toEqual(before.worktree)
+    pause.release(); await refused
+    expect(checkoutLocal).not.toHaveBeenCalled()
+  } finally { pause.release(); await checking?.catch(() => undefined); await f.stop(); await f.remove() }
 })
