@@ -1,6 +1,6 @@
 import * as worktrees from '../../../src/main/agents/threadWorktrees'
 // @vitest-environment node
-import { mkdir, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { expect, it, vi } from 'vitest'
 import { workspaceFixture } from '../../fixtures/workspaceFixture'
@@ -240,4 +240,27 @@ it('allows a sibling send while auto-settle reads the merged branch tip', async 
     pause.release(); await settling
     expect(f.host.workspaceSnapshot().threads.find(t => t.id === 'a')?.workspaceSettledAt).toBeTruthy()
   } finally { pause.release(); await settling; vi.restoreAllMocks(); await f.stop(); await f.remove() }
+})
+
+it('keeps a draft on its original worktree choice when local PR checkout is refused', async () => {
+  const f = await fixture(), pause = barrier()
+  let action: Promise<unknown> | undefined
+  try {
+    const model = f.host.workspaceSnapshot().models.find(item => item.providerId === 'codex')!
+    await f.host.execute({ type: 'create-thread', commandId: 'draft', threadId: 'draft', projectId: f.project.id, modelId: model.id, title: 'Draft', workingCopy: 'independent', baseBranch: 'main' })
+    const before = f.host.workspaceSnapshot().threads.find(t => t.id === 'draft')!
+    const checkoutLocal = vi.fn()
+    f.host.setGitPullRequests({ view: async () => ({ url: 'https://github.com/o/r/pull/1', number: 1 }), checkoutLocal } as never)
+    f.host.setGitActions({ runStackedAction: async () => { pause.enter(); await pause.held; throw new Error('Draft failed') } } as unknown as GitActions)
+    action = f.host.runGitAction({ threadId: 'a', actionId: 'commit', action: 'commit' })
+    await pause.entered
+    await expect(f.host.checkoutThreadPullRequest('draft', '#1', 'local')).rejects.toThrow('A Git action is running')
+    const after = f.host.workspaceSnapshot().threads.find(t => t.id === 'draft')!
+    expect(after.worktree).toEqual(before.worktree)
+    expect(after.workingDirectory).toEqual(before.workingDirectory)
+    expect(checkoutLocal).not.toHaveBeenCalled()
+    const saved = JSON.parse(await readFile(join(f.root, 'workspace.json'), 'utf8'))
+    expect(saved.snapshot.threads.find((t: { id: string }) => t.id === 'draft')?.worktree).toMatchObject({ mode: 'independent', status: 'pending', baseBranch: 'main' })
+    pause.release(); await action
+  } finally { pause.release(); await action; await f.stop(); await f.remove() }
 })

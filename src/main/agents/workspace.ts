@@ -305,14 +305,16 @@ export class WorkspaceHost implements AgentHost {
   /** Check active and queued work after reserving the checkout, before any asynchronous mutation checks. */
   async acquireCheckoutMutation(threadId: string, holder: CheckoutHolder = { kind: 'git-action' }): Promise<() => void> {
     await this.initialize()
+    return this.acquireCheckoutMutationInFolder(threadId, this.threadCheckoutFolder(threadId), holder)
+  }
+  private async acquireCheckoutMutationInFolder(threadId: string, folder: string, holder: CheckoutHolder): Promise<() => void> {
     const own = this.thread(threadId)
     if (own.status === 'running') throw checkoutMutationRefusal(this.checkoutThreadHolder(threadId, 'turn'))
     if (own.requests.length) throw new GitActionRefusal("Answer the thread's waiting request before changing Git.")
-    const folder = this.threadCheckoutFolder(threadId)
     const key = await checkoutIdentity(folder)
     const release = this.checkoutMutations.acquireIdentity(key, 'mutation', holder)
     try {
-      const candidates = await threadsInCheckout(this.state.snapshot, threadId, thread => this.threadCheckoutFolder(thread.id), key)
+      const candidates = await threadsInCheckout(this.state.snapshot, threadId, thread => thread.id === threadId ? folder : this.threadCheckoutFolder(thread.id), key)
       for (const candidate of candidates) {
         const thread = this.thread(candidate.id)
         if (thread.status === 'running' || thread.requests.length || thread.historyStatus === 'loading' || thread.historyStatus === 'error'
@@ -576,24 +578,26 @@ export class WorkspaceHost implements AgentHost {
       if (mode === 'worktree' && !draft) throw new GitPullRequestRefusal('This thread already has a working folder. Use Local, or start a new thread to check the pull request out in a worktree of its own.')
       const view = await service.view(this.threadRepositoryFolder(threadId, 'pull requests'), reference)
       if (mode === 'local') {
-        if (draft && thread.worktree?.mode !== 'shared') {
-          // Local is the project's own checkout, so a draft that was set for a worktree works there instead, as in T3.
-          const previous = { worktree: thread.worktree, workingDirectory: thread.workingDirectory }
-          const shared = await this.selectedWorkingCopy(thread.projectId, { workingCopy: 'shared' })
-          const current = this.thread(threadId)
-          current.worktree = shared; current.workingDirectory = shared.path
-          this.dirty = true
-          try { await this.flush() } catch (error) { Object.assign(this.thread(threadId), previous); throw error }
-        }
-        await this.withCheckoutMutation(threadId, async () => {
+        const shared = draft && thread.worktree?.mode !== 'shared'
+          ? await this.selectedWorkingCopy(thread.projectId, { workingCopy: 'shared' }) : undefined
+        const release = await this.acquireCheckoutMutationInFolder(threadId, shared?.path ?? this.threadCheckoutFolder(threadId), { kind: 'git-action' })
+        try {
+          if (shared) {
+            // Local is the project's own checkout, so a draft that was set for a worktree works there instead, as in T3.
+            const previous = { worktree: thread.worktree, workingDirectory: thread.workingDirectory }
+            const current = this.thread(threadId)
+            current.worktree = shared; current.workingDirectory = shared.path
+            this.dirty = true
+            try { await this.flush() } catch (error) { Object.assign(this.thread(threadId), previous); throw error }
+          }
           await service.checkoutLocal(await this.gitActionFolder(threadId), view.url)
-        })
-        this.linkPullRequestRecord(threadId, view, 'checkout')
-        await this.refreshAfterGitAction(threadId, { followSentBranch: true })
-        await this.saveLinks()
-        const after = this.thread(threadId).worktree
-        const branch = after?.git?.branch ?? after?.branch
-        return { snapshot: this.workspaceSnapshot(), notice: `Checked out PR #${view.number}${branch ? ` on ${branch}` : ''}.` }
+          this.linkPullRequestRecord(threadId, view, 'checkout')
+          await this.refreshAfterGitAction(threadId, { followSentBranch: true })
+          await this.saveLinks()
+          const after = this.thread(threadId).worktree
+          const branch = after?.git?.branch ?? after?.branch
+          return { snapshot: this.workspaceSnapshot(), notice: `Checked out PR #${view.number}${branch ? ` on ${branch}` : ''}.` }
+        } finally { release() }
       }
       const prepared = await service.prepareWorktreeBranch(this.threadRepositoryFolder(threadId, 'pull requests'), view)
       const current = this.thread(threadId)
