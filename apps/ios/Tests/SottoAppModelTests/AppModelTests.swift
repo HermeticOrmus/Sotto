@@ -221,6 +221,29 @@ final class AppModelTests: XCTestCase {
         }
         TestKeychain.locked = false
     }
+    @MainActor func testDamagedNoticeCacheDoesNotBlockHealthyPairings() throws {
+        let (_, ref) = try fixture()
+        TestKeychain.items["recovery-notices"] = Data("incompatible notice cache".utf8)
+        let model = AppModel(keychain: TestKeychain.store)
+        XCTAssertTrue(model.storageReady)
+        XCTAssertEqual(model.computers.map(\.hostID), [ref.hostID])
+        XCTAssertNil(model.feedback)
+        XCTAssertEqual(try TestKeychain.store.read([String].self, account: "recovery-notices"), [])
+        let relaunched = AppModel(keychain: TestKeychain.store)
+        XCTAssertTrue(relaunched.storageReady)
+        XCTAssertNil(relaunched.feedback)
+    }
+    @MainActor func testInaccessibleNoticeCacheStillRefusesLoading() throws {
+        let (_, ref) = try fixture()
+        let before = TestKeychain.items
+        TestKeychain.unreadableAccount = "recovery-notices"
+        defer { TestKeychain.unreadableAccount = nil }
+        let model = AppModel(keychain: TestKeychain.store)
+        XCTAssertFalse(model.storageReady)
+        XCTAssertTrue(model.computers.isEmpty)
+        XCTAssertEqual(TestKeychain.items, before)
+        XCTAssertNotNil(TestKeychain.items[ComputerStore.account(ref.hostID)])
+    }
     @MainActor func testDamagedIndexRecoversComputersAndMarkersWithoutReplacingOriginal() throws {
         let (_, ref) = try fixture()
         let bytes = Data("incompatible index".utf8)

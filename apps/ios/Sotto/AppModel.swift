@@ -221,7 +221,14 @@ struct Live {
         do {
             var warnings: [String] = []
             let noticesAccount = "recovery-notices"
-            let previousNotices = try keychain.read([String].self, account: noticesAccount) ?? []
+            let previousNotices: [String]
+            var resetNotices = false
+            do { previousNotices = try keychain.read([String].self, account: noticesAccount) ?? [] }
+            catch is KeychainStore.UndecodableItem {
+                // This is only notice bookkeeping. Healthy pairings must still load; actual
+                // Keychain access failures keep refusing the load through the outer catch.
+                previousNotices = []; resetNotices = true
+            }
             var notices = Set(previousNotices)
             var unreadableComputers = 0
             func unreadableComputer(_ account: String) {
@@ -267,7 +274,7 @@ struct Live {
             if let adopt = plan.adopt { try keychain.write(adopt, account: ComputerStore.account(adopt.hostID)) }
             if let indexAccount, recoveredIndex || plan.index != index { try keychain.write(plan.index, account: indexAccount) }
             if plan.removeLegacy { try keychain.remove(account: ComputerStore.legacyAccount) }
-            if notices != Set(previousNotices) { try keychain.write(notices.sorted(), account: noticesAccount) }
+            if resetNotices || notices != Set(previousNotices) { try keychain.write(notices.sorted(), account: noticesAccount) }
             pending = markers.filter { marker in kept.contains { marker.matches(hostID: $0.hostID, clientID: $0.pairing.clientId) } }
             computers = kept; computerIndexAccount = indexAccount
             for computer in kept { live[computer.hostID] = Live() }
