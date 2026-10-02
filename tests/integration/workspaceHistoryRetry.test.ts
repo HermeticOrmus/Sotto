@@ -206,6 +206,10 @@ it('retries a failed thread-store privacy switch and removes the retained words 
 it('starts with history off and unavailable storage, then retries cleanup when storage returns', async () => {
   let history = false
   const { directory, adapter, host } = await fixture(() => history, false)
+  const retained = new ThreadStore(join(directory, 'threads.sqlite'))
+  retained.open()
+  retained.replaceThreadMessages('session-workshop', [{ id: 'old-startup', role: 'user', text: 'OLD_STARTUP_MESSAGE', createdAt: at }])
+  retained.close()
   const open = vi.spyOn(ThreadStore.prototype, 'open').mockImplementation(() => { throw new Error('Synthetic unavailable startup storage') })
   const credentials = new AgentCredentials(directory, { isEncryptionAvailable: () => false, encryptString: text => Buffer.from(text), decryptString: bytes => bytes.toString() })
   await credentials.load()
@@ -234,6 +238,35 @@ it('starts with history off and unavailable storage, then retries cleanup when s
     expect(disk.readMessages('session-workshop').messages.map(message => message.text)).toEqual(['Fresh startup message'])
     expect(disk.readActivities('session-workshop').map(record => record.output)).toEqual(['Fresh startup activity'])
   } finally { disk.close() }
+})
+
+it('keeps the restart warning and coordinator retry pending while durable history is unavailable', async () => {
+  let history = true
+  const { directory, adapter, host } = await fixture(() => history)
+  const credentials = new AgentCredentials(directory, { isEncryptionAvailable: () => false, encryptString: text => Buffer.from(text), decryptString: bytes => bytes.toString() })
+  await credentials.load()
+  const control = new AgentControl({ directory, host, credentials, reasoner: e2eAgentReasoner, historyEnabled: () => history })
+  cleanup.push(async () => { control.dispose(); await control.closed() })
+  vi.useFakeTimers()
+  await control.start()
+  history = false
+  await control.privacyChanged()
+  vi.spyOn(ThreadStore.prototype, 'open').mockImplementationOnce(() => { throw new Error('Synthetic failed durable open') })
+  history = true
+  await expect(control.privacyChanged()).rejects.toThrow('Thread messages could not be opened')
+  const sync = vi.spyOn(ThreadStore.prototype, 'syncActivities')
+  adapter.state.threads[0]!.activities = [{ id: 'unsaved', turnId: 'turn', sequence: 0, kind: 'tool', status: 'completed', title: 'Tool', output: 'UNSAVED_DURABLE_ACTIVITY' }]
+  await expect(host.snapshot()).resolves.toMatchObject({ error: expect.stringContaining('restart Sotto') })
+  await expect(host.refreshThread('session-workshop')).resolves.toMatchObject({ error: expect.stringContaining('restart Sotto') })
+  expect(sync).not.toHaveBeenCalled()
+  const privacy = vi.spyOn(host, 'privacyChanged')
+  for (let tick = 1; tick <= 2; tick++) {
+    await vi.advanceTimersByTimeAsync(30_000)
+    await vi.waitFor(() => expect(privacy).toHaveBeenCalledTimes(tick))
+    expect(control.get().error).toContain('Could not finish applying history privacy')
+    expect((await host.snapshot()).error).toContain('restart Sotto')
+    expect(sync).not.toHaveBeenCalled()
+  }
 })
 
 it('does not retry into the durable connection if another privacy store fails before it switches', async () => {

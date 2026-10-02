@@ -1697,7 +1697,7 @@ export class WorkspaceHost implements AgentHost {
               await this.store.write(saved)
               this.savedOrganization = saved
             }
-            if (!this.activityStoreUnavailable) this.saveError = undefined
+            if (!this.storeUnavailable && !this.subagentUnavailable && !this.activityStoreUnavailable) this.saveError = undefined
           }
           catch (error) { this.dirty = true; throw error }
         }
@@ -1807,6 +1807,10 @@ export class WorkspaceHost implements AgentHost {
     }
     this.dirty = true
     await this.flush()
+    if (retryUnavailable && this.storeUnavailable) {
+      this.saveError = HISTORY_OPEN_ERROR
+      throw new Error(HISTORY_OPEN_ERROR)
+    }
   }
   async connect(provider?: ProviderId): Promise<AgentHostSnapshot> {
     await this.initialize(); this.accept(await this.inner.connect(provider)); await this.flush(); return this.workspaceSnapshot()
