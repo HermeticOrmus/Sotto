@@ -143,7 +143,7 @@ export async function createAgentRuntime(options: AgentRuntimeOptions) {
     writeThreadTitle: threadTitleWriter(shortTextWriter, options.writingSettings),
     reasoner,
   })
-  agentHost.setPendingThreadWork(threadId => agentControl.hasPendingThreadWork(threadId))
+  agentHost.setPendingThreadWork(threadId => agentControl.hasPendingThreadWork(threadId), threadId => agentControl.pendingThreadWorkReason(threadId))
   // Reclaims worktrees only under the rules the user turned on (ADR-0041); every rule starts off. The desktop's
   // local host and a headless host both own worktrees, so both get it. Its owner starts it once the owner's own
   // checks are wired (the desktop's open terminals), and close drains it before anything it asks is closed.

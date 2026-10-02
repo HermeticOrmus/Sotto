@@ -146,6 +146,7 @@ it('keeps uncertain dispatch immutable across restart and reconciles exact evide
   const f = await fixture(); f.host.update('workshop', { status: 'running' }); await f.control.command(queued('uncertain'))
   f.host.result = { accepted: false, uncertain: true }; complete(f.host)
   await expect.poll(() => f.control.get().followups?.[0]?.status).toBe('uncertain')
+  expect(f.control.pendingThreadWorkReason('workshop')).toBe('uncertain-send')
   const item = f.control.get().followups![0]!
   expect((await f.control.command({ type: 'remove-followup', threadId: item.threadId, itemId: item.id })).error).toMatch(/may already/)
   f.control.dispose(); await f.control.privacyChanged()
@@ -451,6 +452,7 @@ it('requires explicit resume when an idle thread has no known turn outcome', asy
   delete f.host.state.threads.find(thread => thread.id === 'workshop')!.lastTurn
   f.host.update('workshop', { status: 'idle' })
   await expect.poll(() => f.control.get().followups?.[0]?.status).toBe('paused')
+  expect(f.control.pendingThreadWorkReason('workshop')).toBe('paused-followups')
   f.host.emit(); await f.control.command({ type: 'refresh' })
   expect(f.control.get().followups?.[0]?.status).toBe('paused')
   expect(f.host.attempts).toEqual([])
@@ -550,12 +552,27 @@ it('keeps a checkout-refused follow-up failed in the queue until the user resume
   const execute = vi.spyOn(f.host, 'execute').mockRejectedValue(new CheckoutSendRefusal())
   complete(f.host)
   await expect.poll(() => f.control.get().followups?.[0]?.status).toBe('failed')
+  expect(f.control.pendingThreadWorkReason('workshop')).toBe('failed-followups')
   expect(f.control.get().followups?.[0]).toMatchObject({ text: 'Keep these words', error: 'A Git action is running in this folder. Your follow-up was not sent. It is kept in the queue. Resume the queue when the action finishes.' })
   expect(f.host.state.threads.find(t => t.id === 'workshop')?.messages.some(m => m.text === 'Keep these words')).toBe(false)
   execute.mockRestore()
   await f.control.command({ type: 'resume-followups', threadId: 'workshop' })
   await expect.poll(() => f.control.get().followups?.length).toBe(0)
   expect(f.host.state.threads.find(t => t.id === 'workshop')?.messages.filter(m => m.text === 'Keep these words')).toHaveLength(1)
+})
+
+it('distinguishes managed work from a paused assignment with a queue and leaves an empty paused assignment unblocked', async () => {
+  const f = await fixture()
+  f.host.update('workshop', { status: 'running' })
+  await f.control.command({ type: 'assign', threadId: 'workshop', instruction: 'Keep working' })
+  expect(f.control.pendingThreadWorkReason('workshop')).toBe('managed-assignment')
+  await f.control.command({ type: 'pause', threadId: 'workshop' })
+  expect(f.control.hasPendingThreadWork('workshop')).toBe(false)
+  await f.control.command(queued('Review this work'))
+  await f.control.command({ type: 'resume', threadId: 'workshop' })
+  await f.control.command({ type: 'pause', threadId: 'workshop' })
+  expect(f.control.pendingThreadWorkReason('workshop')).toBe('paused-assignment')
+  expect(f.control.hasPendingThreadWork('workshop')).toBe(true)
 })
 
 it('says a checkout-refused manual prompt is kept and retains its durable draft', async () => {

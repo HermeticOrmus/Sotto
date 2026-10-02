@@ -1,4 +1,4 @@
-import { CheckoutSendRefusal } from './checkoutMutations'
+import { CheckoutSendRefusal, type CheckoutPendingWork } from './checkoutMutations'
 import type { AgentSkillReference } from '../../shared/agentSkills'
 import type { AgentFileReference } from '../../shared/agentFiles'
 import type { AgentActivity } from '../../shared/agentActivity'
@@ -468,10 +468,20 @@ export class AgentControl {
     return this.sottoRequests ? withSottoRequests(snapshot, this.sottoRequests.requests()) : snapshot
   }
   hasPendingThreadWork(threadId: string): boolean {
-    return this.outbox.some(item => item.threadId === threadId)
-      || this.followupStore.peek().items.some(item => item.threadId === threadId)
-      || this.state.assignments.some(item => item.threadId === threadId && item.mode === 'managed' && !item.paused)
-      || (this.state.deliveries ?? []).some(item => item.threadId === threadId && ['queued', 'submitting', 'uncertain'].includes(item.status))
+    return this.pendingThreadWorkReason(threadId) !== null
+  }
+  /** The existing pending-work guard's reason, so a refusal offers the recovery this work actually needs. */
+  pendingThreadWorkReason(threadId: string): CheckoutPendingWork | null {
+    const items = this.followupStore.peek().items.filter(item => item.threadId === threadId)
+    const deliveries = (this.state.deliveries ?? []).filter(item => item.threadId === threadId)
+    const assignment = this.state.assignments.find(item => item.threadId === threadId && item.mode === 'managed')
+    if (items.some(item => item.status === 'uncertain') || deliveries.some(item => item.status === 'uncertain')) return 'uncertain-send'
+    if (items.some(item => item.status === 'failed')) return 'failed-followups'
+    if (items.length && assignment?.paused) return 'paused-assignment'
+    if (items.some(item => item.status === 'paused')) return 'paused-followups'
+    if (assignment && !assignment.paused) return 'managed-assignment'
+    if (items.length || this.outbox.some(item => item.threadId === threadId) || deliveries.some(item => ['queued', 'submitting'].includes(item.status))) return 'pending-work'
+    return null
   }
   /**
    * Where one thread's files are, from the live state. Files, Git changes, the terminal and the browser

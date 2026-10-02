@@ -9,6 +9,7 @@ it.each([
   [{ kind: 'settle' } as const, 'Sotto is settling a thread in this folder.'],
   [{ kind: 'send', threadId: 'a', title: 'Fix parser' } as const, 'A message is being sent in thread "Fix parser" in this folder.'],
   [{ kind: 'turn', threadId: 'a', title: 'Fix parser' } as const, 'Thread "Fix parser" is working in this folder.'],
+  [{ kind: 'preparation', threadId: 'a', title: 'Fix parser' } as const, 'Sotto is setting up the working copy for thread "Fix parser". Try again in a moment.'],
 ])('names the checkout holder %j and releases it after refusal', (holder, copy) => {
   const guard = new CheckoutMutations()
   const release = guard.acquireIdentity('checkout', holder.kind === 'send' || holder.kind === 'turn' ? 'send' : 'mutation', holder)

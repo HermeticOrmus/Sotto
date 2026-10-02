@@ -10,6 +10,32 @@ import { WorktreeCleanup } from '../../../src/main/agents/worktreeCleanup'
 import { DEFAULT_WORKTREE_CLEANUP } from '../../../src/shared/settings'
 import { GitStatusReader } from '../../../src/main/agents/gitStatus'
 import { CheckoutMutations } from '../../../src/main/agents/checkoutMutations'
+import type { AgentThread } from '../../../src/shared/agents'
+
+it.each([
+  ['waiting-answer', 'Thread "b" is waiting for your answer. Answer it, then try again.'],
+  ['history-error', 'Thread "b" could not load its history. Open it to retry, or archive it, then try again.'],
+  ['history-loading', 'Thread "b" is loading its history. Try again in a moment.'],
+  ['failed-followups', 'Thread "b" has queued follow-ups that did not send. Resume or remove them, then try again.'],
+  ['paused-followups', 'Thread "b" has paused follow-ups. Resume or remove them, then try again.'],
+  ['paused-assignment', 'Thread "b" has paused management and queued work. Stop managing it and review its queue, or archive it, then try again.'],
+  ['managed-assignment', 'Thread "b" is managed by Sotto. Stop managing it, or archive it, then try again.'],
+  ['uncertain-send', 'Thread "b" has a message whose delivery is unconfirmed. Open it and refresh to check whether it was sent, then try again.'],
+] as const)('names the sibling reason %s and how to release it', async (reason, copy) => {
+  const f = await fixture()
+  try {
+    await f.host.execute(send('b'))
+    const sibling = f.adapters.codex.state.threads.at(-1)!
+    sibling.status = 'idle'
+    if (reason === 'history-error') sibling.historyStatus = 'error'
+    else if (reason === 'history-loading') sibling.historyStatus = 'loading'
+    else if (reason === 'waiting-answer') sibling.requests = [{ id: 'answer', kind: 'question', text: 'Choose', options: [] } satisfies AgentThread['requests'][number]]
+    else f.host.setPendingThreadWork(id => id === 'b', () => reason)
+    f.adapters.codex.emit()
+    await expect(f.host.pullThreadBranch('a')).rejects.toThrow(copy)
+    expect(await f.host.isCheckoutMutating('a')).toBe(false)
+  } finally { await f.stop(); await f.remove() }
+})
 
 async function fixture() {
   const f = await workspaceFixture()
@@ -81,7 +107,7 @@ it('uses the checkout root for subdirectories and releases reservations on refus
     release()
     const sendRelease = await mutations.acquire(f.project.path, 'send'); sendRelease()
     f.host.setPendingThreadWork(id => id === 'b')
-    await expect(f.host.pullThreadBranch('a')).rejects.toThrow('Wait for')
+    await expect(f.host.pullThreadBranch('a')).rejects.toThrow('Open it to review that work')
     expect(await f.host.isCheckoutMutating('a')).toBe(false)
   } finally { await f.stop(); await f.remove() }
 })
@@ -100,7 +126,7 @@ it('refuses Git while a sibling first send is pending in a previous worktree', a
     const pull = vi.fn(async () => ({ status: 'already_up_to_date' }))
     f.host.setGitActions({ pull } as unknown as GitActions)
     f.host.setPendingThreadWork(id => id === 'd')
-    await expect(f.host.pullThreadBranch('c')).rejects.toThrow('Wait for')
+    await expect(f.host.pullThreadBranch('c')).rejects.toThrow('Open it to review that work')
     expect(pull).not.toHaveBeenCalled()
     expect(await f.host.isCheckoutMutating('c')).toBe(false)
     f.host.setPendingThreadWork(() => false)
@@ -309,7 +335,7 @@ it('refuses local PR checkout when an independent draft queues its first send on
     expect(f.host.workspaceSnapshot().threads.find(t => t.id === 'draft')?.worktree).toMatchObject({ mode: 'independent', status: 'pending', baseBranch: 'main' })
     pause.release(); const error = await outcome
     expect(checkoutLocal).not.toHaveBeenCalled()
-    expect(error?.message).toContain('Thread "Draft" has work waiting in this folder.')
+    expect(error?.message).toContain('Thread "Draft" has pending work in this folder.')
     await sending
     const after = f.host.workspaceSnapshot().threads.find(t => t.id === 'draft')!
     expect(after.worktree).toMatchObject({ mode: 'independent', baseBranch: 'main', status: 'ready' })

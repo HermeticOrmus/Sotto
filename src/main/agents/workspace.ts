@@ -1,5 +1,5 @@
 import { threadsInCheckout } from './checkoutCandidates'
-import { CheckoutMutations, checkoutMutationRefusal, type CheckoutHolder } from './checkoutMutations'
+import { CheckoutMutations, checkoutMutationRefusal, type CheckoutHolder, type CheckoutPendingWork } from './checkoutMutations'
 import { loadHostIdentity, migrateWorkspaceHost, stampHostSnapshot } from './hostIdentity'
 import type { BrowserAgentTools } from './browserAgentServer'
 import type { ScopedThreadTools } from './threadToolServer'
@@ -179,6 +179,7 @@ export class WorkspaceHost implements AgentHost {
   /** Shared by desktop and headless hosts, with one reservation per checkout. */
   private readonly checkoutMutations = new CheckoutMutations()
   private pendingThreadWork: (threadId: string) => boolean = () => false
+  private pendingThreadWorkReason: (threadId: string) => CheckoutPendingWork | null = () => null
   /** Additional desktop checkpoint recovery checks. */
   private mutationGuard: ((threadId: string, destinationFolder?: string) => Promise<boolean> | boolean) | undefined
   /** A thread's own history: the log and the message projection every window reads (issue #119). */
@@ -291,11 +292,23 @@ export class WorkspaceHost implements AgentHost {
     return thread.worktree?.mode === 'independent' && thread.worktree.path
       ? thread.worktree.path : this.threadRepositoryFolder(threadId, 'Git')
   }
-  private checkoutThreadHolder(threadId: string, kind: 'send' | 'turn' | 'pending-work'): CheckoutHolder {
+  private checkoutThreadHolder(threadId: string, kind: Extract<CheckoutHolder, { threadId: string }>['kind']): CheckoutHolder {
     const thread = this.thread(threadId)
     return { kind, threadId, title: thread.title }
   }
-  setPendingThreadWork(pending: (threadId: string) => boolean): void { this.pendingThreadWork = pending }
+  setPendingThreadWork(pending: (threadId: string) => boolean, reason: (threadId: string) => CheckoutPendingWork | null = () => null): void {
+    this.pendingThreadWork = pending
+    this.pendingThreadWorkReason = reason
+  }
+  private checkoutWorkHolder(thread: AgentThread): CheckoutHolder | null {
+    const kind = thread.requests.length ? 'waiting-answer'
+      : thread.status === 'running' ? 'turn'
+      : thread.historyStatus === 'loading' ? 'history-loading'
+      : thread.historyStatus === 'error' ? 'history-error'
+      : this.preparations.has(thread.id) ? 'preparation'
+      : this.pendingThreadWork(thread.id) ? this.pendingThreadWorkReason(thread.id) ?? 'pending-work' : null
+    return kind ? this.checkoutThreadHolder(thread.id, kind) : null
+  }
   async acquireCheckoutRead(threadId: string): Promise<() => void> {
     return this.checkoutMutations.acquire(this.threadCheckoutFolder(threadId), 'send', this.checkoutThreadHolder(threadId, 'send'))
   }
@@ -309,8 +322,8 @@ export class WorkspaceHost implements AgentHost {
   }
   private async acquireCheckoutMutationInFolder(threadId: string, folder: string, holder: CheckoutHolder): Promise<() => void> {
     const own = this.thread(threadId)
+    if (own.requests.length) throw checkoutMutationRefusal(this.checkoutThreadHolder(threadId, 'waiting-answer'))
     if (own.status === 'running') throw checkoutMutationRefusal(this.checkoutThreadHolder(threadId, 'turn'))
-    if (own.requests.length) throw new GitActionRefusal("Answer the thread's waiting request before changing Git.")
     const key = await checkoutIdentity(folder)
     const release = this.checkoutMutations.acquireIdentity(key, 'mutation', holder)
     try {
@@ -318,10 +331,8 @@ export class WorkspaceHost implements AgentHost {
       // The requesting draft may have no folder yet, but its own queued work still holds the destination.
       for (const candidate of [own, ...candidates.filter(candidate => candidate.id !== threadId)]) {
         const thread = this.thread(candidate.id)
-        if (thread.status === 'running' || thread.requests.length || thread.historyStatus === 'loading' || thread.historyStatus === 'error'
-          || this.preparations.has(thread.id) || this.pendingThreadWork(thread.id)) {
-          throw checkoutMutationRefusal(this.checkoutThreadHolder(thread.id, thread.status === 'running' ? 'turn' : 'pending-work'))
-        }
+        const work = this.checkoutWorkHolder(thread)
+        if (work) throw checkoutMutationRefusal(work)
       }
       return release
     } catch (error) { release(); throw error }
@@ -1774,8 +1785,8 @@ export class WorkspaceHost implements AgentHost {
   async setWorkspaceSettled(kind: 'project' | 'thread', id: string, settled: boolean, options?: { expectedMergedTip: string; expectedMergedBranch: string }): Promise<AgentHostSnapshot> {
     if (kind === 'thread' && settled && options) return this.onLane(id, async () => {
       const thread = this.thread(id)
-      if (thread.status === 'running' || thread.requests.length || thread.historyStatus === 'loading' || thread.historyStatus === 'error'
-        || this.preparations.has(id) || this.pendingThreadWork(id)) throw checkoutMutationRefusal(this.checkoutThreadHolder(id, thread.status === 'running' ? 'turn' : 'pending-work'))
+      const work = this.checkoutWorkHolder(thread)
+      if (work) throw checkoutMutationRefusal(work)
       const release = await this.checkoutMutations.acquire(this.threadCheckoutFolder(id), 'send', { kind: 'settle' })
       try {
         const worktree = this.thread(id).worktree
