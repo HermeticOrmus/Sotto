@@ -1,3 +1,4 @@
+import { stderrRateExceeded } from './stderrRate'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
@@ -51,8 +52,6 @@ type Waiter = { resolve(): void; reject(error: Error): void; apply(value: unknow
 // loaded such a thread. These caps are a runaway guard, sized like the Codex transport's.
 const MAX_FRAME_BYTES = 128 * 1024 * 1024
 const MAX_QUEUED_BYTES = MAX_FRAME_BYTES * 2
-/** Diagnostics, not protocol: a client that answers nothing and only floods stderr is still lost. */
-const MAX_STDERR_BYTES = 1024 * 1024
 
 /** Bounded stdio transport. Late responses still apply; mutation timeouts never trigger retries. */
 export class GrokRpc {
@@ -70,7 +69,7 @@ export class GrokRpc {
     // exits those inherited handles must not keep the adapter's shutdown barrier open.
     this.child.once('exit', () => { this.child.stdout.destroy(); this.child.stderr.destroy() })
     this.child.on('error', () => this.fail()); this.child.stdin.on('error', () => this.fail())
-    let buffer = ''; let bufferedBytes = 0; let queued = 0; let stderr = 0
+    let buffer = ''; let bufferedBytes = 0; let queued = 0
     this.child.stdout.setEncoding('utf8')
     this.child.stdout.on('data', (chunk: string) => {
       buffer += chunk; bufferedBytes += Buffer.byteLength(chunk)
@@ -101,7 +100,8 @@ export class GrokRpc {
         }).catch(() => this.fail())
       }
     })
-    this.child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.length; if (stderr > MAX_STDERR_BYTES) this.fail() })
+    const stderrExceeded = stderrRateExceeded()
+    this.child.stderr.on('data', (chunk: Buffer) => { if (stderrExceeded(chunk.length)) this.fail() })
   }
   /** The client process's ID, for telling one thread's process from another's. */
   get pid(): number | undefined { return this.child.pid }
