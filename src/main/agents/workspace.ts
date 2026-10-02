@@ -300,11 +300,11 @@ export class WorkspaceHost implements AgentHost {
     this.pendingThreadWork = pending
     this.pendingThreadWorkReason = reason
   }
-  private checkoutWorkHolder(thread: AgentThread): CheckoutHolder | null {
+  private checkoutWorkHolder(thread: AgentThread, purpose: 'mutation' | 'settle' = 'mutation'): CheckoutHolder | null {
     const kind = thread.requests.length ? 'waiting-answer'
       : thread.status === 'running' ? 'turn'
       : thread.historyStatus === 'loading' ? 'history-loading'
-      : thread.historyStatus === 'error' ? 'history-error'
+      : thread.historyStatus === 'error' && purpose !== 'settle' ? 'history-error'
       : this.preparations.has(thread.id) ? 'preparation'
       : this.pendingThreadWork(thread.id) ? this.pendingThreadWorkReason(thread.id) ?? 'pending-work' : null
     return kind ? this.checkoutThreadHolder(thread.id, kind) : null
@@ -1787,7 +1787,7 @@ export class WorkspaceHost implements AgentHost {
   async setWorkspaceSettled(kind: 'project' | 'thread', id: string, settled: boolean, options?: { expectedMergedTip: string; expectedMergedBranch: string }): Promise<AgentHostSnapshot> {
     if (kind === 'thread' && settled && options) return this.onLane(id, async () => {
       const thread = this.thread(id)
-      const work = this.checkoutWorkHolder(thread)
+      const work = this.checkoutWorkHolder(thread, 'settle')
       if (work) throw checkoutMutationRefusal(work)
       const release = await this.checkoutMutations.acquire(this.threadCheckoutFolder(id), 'send', { kind: 'settle' })
       try {

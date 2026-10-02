@@ -87,6 +87,21 @@ it.each(['checkpoint read', 'desktop guard'] as const)('keeps the last Git resul
   } finally { release?.(); await f.stop(); await f.remove() }
 })
 
+it('auto-settles a checked merged tip despite the thread history error', async () => {
+  const f = await fixture()
+  try {
+    await f.host.execute(send('a'))
+    const native = f.adapters.codex.state.threads.at(-1)!
+    native.status = 'idle'; native.historyStatus = 'error'; f.adapters.codex.emit()
+    const tip = (await git(f.project.path, ['rev-parse', 'HEAD'])).trim()
+    const after = await f.host.setWorkspaceSettled('thread', 'a', true, { expectedMergedTip: tip, expectedMergedBranch: 'main' })
+    expect(after.threads.find(thread => thread.id === 'a')?.workspaceSettledAt).toBeTruthy()
+    expect(after.threads.find(thread => thread.id === 'a')?.historyStatus).toBe('error')
+    expect((await git(f.project.path, ['rev-parse', 'HEAD'])).trim()).toBe(tip)
+    expect(await readFile(join(f.project.path, 'file.txt'), 'utf8')).toBe('baseline')
+  } finally { await f.stop(); await f.remove() }
+})
+
 it('holds a checkout throughout a Git action and refuses a sibling send and branch restore without desktop checkpoint wiring', async () => {
   const f = await fixture(), pause = barrier()
   let action: Promise<unknown> | undefined
