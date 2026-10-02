@@ -8,6 +8,7 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
 }
 
 @MainActor final class HostConnection {
+    private static let httpTimeout: TimeInterval = 30
     var onPush: ((IncomingFrame, Int) -> Void)?
     var onDisconnect: (() -> Void)?
     var onLiveness: (() -> Void)?
@@ -22,7 +23,7 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
         if let made { return made }
         configuration.httpCookieStorage = nil; configuration.urlCredentialStorage = nil
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
-        configuration.timeoutIntervalForRequest = 30
+        configuration.timeoutIntervalForRequest = Self.httpTimeout
         let session = URLSession(configuration: configuration, delegate: redirects, delegateQueue: nil)
         made = session
         return session
@@ -36,11 +37,10 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
     private var session = ""
     private var generation = UUID()
 
-    /// Confirms Sotto is listening at the address before a code is spent on it. Ten seconds, because
-    /// finding a computer may try two ports and nothing answering on the first is the usual miss.
+    /// Confirms Sotto is listening before pairing, reconnecting or removing a computer.
     func health(endpoint: HostEndpoint, reconnecting: Bool = false) async throws -> Health {
         let name = endpoint.machine
-        var request = URLRequest(url: endpoint.route("/v1/health")); request.httpMethod = "GET"; request.timeoutInterval = 10
+        var request = URLRequest(url: endpoint.route("/v1/health")); request.httpMethod = "GET"; request.timeoutInterval = Self.httpTimeout
         let fetched: (Data, URLResponse)
         do { fetched = try await network.data(for: request) } catch { throw ClientError.hostUnreachable(name) }
         let (data, response) = fetched
@@ -185,6 +185,7 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
     }
     private func post(endpoint: HostEndpoint, route: String, token: String? = nil, body: JSONValue? = nil) async throws -> JSONValue {
         var request = URLRequest(url: endpoint.route(route)); request.httpMethod = "POST"
+        request.timeoutInterval = Self.httpTimeout
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if let token { request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization") }
         if let body { request.httpBody = try JSONEncoder().encode(body) }

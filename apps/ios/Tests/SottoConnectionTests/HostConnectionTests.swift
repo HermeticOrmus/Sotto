@@ -104,6 +104,19 @@ private final class HostResponses: URLProtocol {
         do { _ = try await connection.health(endpoint: HostEndpoint("https://forge.example.ts.net")); XCTFail("Expected wait") }
         catch { XCTAssertEqual(error as? ClientError, .rateLimited) }
     }
+    func testHealthAndSessionUseTheSameRequestTimeout() async throws {
+        let endpoint = try HostEndpoint("https://forge.example.ts.net")
+        let pairing = try JSONDecoder().decode(Pairing.self, from: Data("{\"v\":1,\"hostId\":\"\(hostID)\",\"clientId\":\"phone\",\"token\":\"fixture\"}".utf8))
+        let expected = hostID
+        HostResponses.handler = { request in
+            XCTAssertEqual(request.timeoutInterval, 30)
+            if request.url!.path == "/v1/health" { return (200, "{\"v\":1,\"status\":\"ready\",\"hostId\":\"\(expected)\"}") }
+            return (503, "{}")
+        }
+        let connection = connection(); defer { connection.close(); HostResponses.handler = nil }
+        do { _ = try await connection.connect(endpoint: endpoint, pairing: pairing); XCTFail("Expected unavailable session") }
+        catch { XCTAssertEqual(error as? ClientError, .sottoNotRunning("forge")) }
+    }
 
     func testSavedReconnectPreservesStoppedComputerFeedback() async throws {
         let endpoint = try HostEndpoint("https://forge.example.ts.net")
