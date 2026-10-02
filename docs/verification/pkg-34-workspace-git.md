@@ -54,3 +54,16 @@ Merged main at `58714228` without conflicts, retaining the renderer thread fixes
 
 
 The earlier recursive-submodule deadline increase was reverted during the second review because it was unrelated to this PR. The fixture uses its original test deadline and unchanged assertions.
+
+## October 1 second review
+
+Each blocking state now has truthful recovery copy: waiting for an answer, loading or failed history, failed or paused follow-ups, managed work, paused management with queued work, and unconfirmed delivery. The coordinator supplies the reason without changing which work blocks Git. An empty paused assignment still does not block. Eight workspace regressions reproduced the old generic refusal before the fix; coordinator tests verify real queue and assignment states.
+
+Checkpoint reads say Sotto is saving a checkpoint. Their regression reproduced the false send message before the correction. Refused Git presses now leave the previous result and View PR link available; tests cover checkout and desktop-guard refusals. Auto-settle ignores history failure while retaining the guarded branch-tip check; its regression verifies unchanged files and HEAD.
+
+The updated copy prototype is retained outside the product branch on local `prototype/bh-34-checkout-refusals` at `bfd4553a`. The Electron refusal journey now retains a failed follow-up during a held real commit, finishes the commit, refuses the next Git press with the named queue and correct recovery, and checks that the earlier Git result survives. Removing the failed follow-up then permits the retained manual prompt to be sent once. Captures cover both themes at all three supported sizes with reduced motion. Inspected the minimum dark and medium light captures below; the refusal wraps within its notice and the queue recovery controls remain usable. No design baselines were regenerated.
+
+- [Failed queue refusal at minimum size, dark](../../artifacts/pkg-34-workspace-git/failed-queue-820-dark.png)
+- [Failed queue refusal at medium size, light](../../artifacts/pkg-34-workspace-git/failed-queue-1280-light.png)
+
+Separate Standards and Spec reviews by gpt-6.1-sol at high reasoning found no actionable issue in the second-review code changes. The initial CLI review attempts could not create read-only Windows processes because of a sandbox ACL error; independent agents completed both axes using the available tools. The final build and all 14 affected Electron journeys passed serially with one worker (3 minutes 42 seconds). Typecheck, lint and notices passed; notices cover 174 components. Full-suite and latest CI results are recorded in PR #672. Live providers and macOS were not used locally.

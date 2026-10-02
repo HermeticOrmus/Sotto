@@ -309,9 +309,33 @@ node "${hold.replaceAll('\\', '/')}" "${directory.replaceAll('\\', '/')}"
     }
     await page.emulateMedia({ reducedMotion: 'reduce' })
     await expect(prompt).toHaveValue('Keep this refused message')
+    // A retained queue needs the user's recovery, so the next Git refusal must not tell them to wait.
+    await page.evaluate(async threadId => {
+      await window.sotto!.agents!.command({ type: 'queue-followup', threadId, draftId: crypto.randomUUID(), text: 'Keep this failed follow-up' })
+      await window.sotto!.agents!.command({ type: 'resume-followups', threadId })
+    }, sibling)
+    await expect.poll(async () => page.evaluate(async id => (await window.sotto!.agents!.get()).followups?.find(item => item.threadId === id)?.status, sibling)).toBe('failed')
     await writeFile(release, 'finish')
     await expect(committing).resolves.toBeNull()
     await expect.poll(async () => page.evaluate(async id => (await window.sotto!.agents!.get()).host.threads.find(t => t.id === id)?.gitAction?.status, holder)).toBe('done')
+    const previous = await page.evaluate(async id => (await window.sotto!.agents!.get()).host.threads.find(t => t.id === id)?.gitAction, holder)
+    const refusalCopy = 'Thread "Sibling sender" has queued follow-ups that did not send. Resume or remove them, then try again.'
+    const refused = await page.evaluate(async threadId => (await window.sotto!.agents!.command({ type: 'git-action', threadId, actionId: crypto.randomUUID(), action: 'commit' })).error, holder)
+    expect(refused).toBe(refusalCopy)
+    expect(await page.evaluate(async id => (await window.sotto!.agents!.get()).host.threads.find(t => t.id === id)?.gitAction, holder)).toEqual(previous)
+    for (const [width, height, appearance] of [[1600, 1000, 'dark'], [1600, 1000, 'light'], [1280, 800, 'dark'], [1280, 800, 'light'], [820, 560, 'dark'], [820, 560, 'light']] as const) {
+      await page.evaluate(async appearance => { await window.sotto!.updateSettings({ appearance }) }, appearance)
+      await resize(launched, width, height)
+      await expect(pane(page)).toContainText(refusalCopy)
+      await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+      await page.screenshot({ animations: 'disabled', path: `artifacts/pkg-34-workspace-git/failed-queue-${width}-${appearance}.png` })
+    }
+    await page.evaluate(async threadId => {
+      const state = await window.sotto!.agents!.get()
+      const item = state.followups!.find(item => item.threadId === threadId)!
+      await window.sotto!.agents!.command({ type: 'remove-followup', threadId, itemId: item.id })
+    }, sibling)
+    await expect(prompt).toHaveValue('Keep this refused message')
     await prompt.press('Control+Enter')
     await expect.poll(() => userMessageTexts(page, sibling)).toEqual(['Keep this refused message'])
     await expect(prompt).toHaveValue('')
