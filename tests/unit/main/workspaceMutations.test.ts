@@ -85,6 +85,32 @@ it('uses the checkout root for subdirectories and releases reservations on refus
   } finally { await f.stop(); await f.remove() }
 })
 
+it('refuses Git while a sibling first send is pending in a previous worktree', async () => {
+  const f = await fixture()
+  try {
+    const model = f.host.workspaceSnapshot().models.find(item => item.providerId === 'codex')!
+    await f.host.execute({ type: 'create-thread', commandId: 'c', threadId: 'c', projectId: f.project.id, modelId: model.id, title: 'c', workingCopy: 'independent' })
+    await f.host.execute(send('c'))
+    for (const thread of f.adapters.codex.state.threads) thread.status = 'idle'
+    f.adapters.codex.emit()
+    await vi.waitFor(() => expect(f.host.workspaceSnapshot().threads.find(thread => thread.id === 'c')?.status).toBe('idle'))
+    const copy = f.host.workspaceSnapshot().threads.find(thread => thread.id === 'c')!.worktree!
+    await f.host.execute({ type: 'create-thread', commandId: 'd', threadId: 'd', projectId: f.project.id, modelId: model.id, title: 'd', workingCopy: 'independent', existingWorktreePath: copy.path! })
+    const pull = vi.fn(async () => ({ status: 'already_up_to_date' }))
+    f.host.setGitActions({ pull } as unknown as GitActions)
+    f.host.setPendingThreadWork(id => id === 'd')
+    await expect(f.host.pullThreadBranch('c')).rejects.toThrow('Wait for')
+    expect(pull).not.toHaveBeenCalled()
+    expect(await f.host.isCheckoutMutating('c')).toBe(false)
+    f.host.setPendingThreadWork(() => false)
+    const release = await f.host.acquireCheckoutMutation('c')
+    try {
+      await expect(f.host.execute(send('d'))).rejects.toThrow('Wait for')
+      expect(f.host.workspaceSnapshot().threads.find(thread => thread.id === 'd')?.worktree?.path).toBeUndefined()
+    } finally { release() }
+  } finally { await f.stop(); await f.remove() }
+})
+
 it('refuses Git while a sibling send is still awaiting provider acknowledgement', async () => {
   const f = await fixture(), pause = barrier()
   let sending: Promise<unknown> | undefined

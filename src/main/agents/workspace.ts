@@ -321,7 +321,7 @@ export class WorkspaceHost implements AgentHost {
         if (candidate.key !== key) continue
         const thread = this.thread(candidate.id)
         // An independent draft has no checkout yet, even though its project is this repository.
-        if (thread.worktree?.mode === 'independent' && (!thread.worktree.path || thread.worktree.reclaimedAt)) continue
+        if (thread.worktree?.mode === 'independent' && (!thread.worktree.path && !thread.worktree.existingWorktreePath || thread.worktree.reclaimedAt)) continue
         if (thread.status === 'running' || thread.requests.length || thread.historyStatus === 'loading' || thread.historyStatus === 'error'
           || this.preparations.has(thread.id) || this.pendingThreadWork(thread.id)) {
           throw new GitActionRefusal('Wait for active or pending thread work before changing Git.')
@@ -1954,7 +1954,7 @@ export class WorkspaceHost implements AgentHost {
     if (command.type !== 'send' && command.type !== 'steer') return this.executeOne(command)
     await this.initialize()
     const thread = this.thread(command.threadId)
-    if (thread.worktree?.mode === 'independent' && (!thread.worktree.path || thread.worktree.reclaimedAt)) return this.executeOne(command)
+    if (thread.worktree?.mode === 'independent' && (!thread.worktree.path && !thread.worktree.existingWorktreePath || thread.worktree.reclaimedAt)) return this.executeOne(command)
     const release = await this.checkoutMutations.acquire(this.threadCheckoutFolder(thread.id), 'send')
     try { return await this.executeOne(command, true) } finally { release() }
   }
