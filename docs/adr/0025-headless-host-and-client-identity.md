@@ -181,4 +181,4 @@ The phone also accepts growth in URLSession's received-byte counter as progress,
 
 ## October 2 clarification: retained-event cursors
 
-A hello without `afterSeq` asks for no retained events, like the desktop and phone snapshot-only hello. An explicit cursor still pages history. After a hello or event page is delivered, the listener uses that page's last sequence for subsequent shell pushes, so a page already sent is not repeated.
+A hello without `afterSeq` asks for no retained events, like the desktop and phone snapshot-only hello. An explicit cursor still pages history. After a hello or event page is delivered, the listener uses that page's last sequence for subsequent shell pushes, so a page already sent is not repeated. Reading older pages never moves the cursor backward; a thread-filtered page leaves the general shell cursor alone.

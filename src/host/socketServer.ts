@@ -389,8 +389,9 @@ export async function startSocketServer(options: SocketServerOptions) {
       // A revocation while an operation was pending also denies its response.
       if (!authenticated(peer)) { peer.frames.send({ v: 1, id: request.id, ok: false, error: { code: 'unauthenticated', message: errors.unauthenticated } }); peer.frames.close() }
       else if (deliver(peer, response, request.op === 'detail' ? 'thread' : request.op === 'preview' || request.op === 'attachment-content' ? 'preview' : 'list')
-        && response.ok && (request.op === 'hello' || request.op === 'events')) {
-        peer.afterSeq = (response.result as { latestSeq: number }).latestSeq
+        && response.ok && (request.op === 'hello' || (request.op === 'events' && !request.threadId))) {
+        const latestSeq = (response.result as { latestSeq: number }).latestSeq
+        peer.afterSeq = peer.afterSeq === Number.MAX_SAFE_INTEGER ? latestSeq : Math.max(peer.afterSeq, latestSeq)
       }
     })().finally(() => { peer.inFlight-- }))
   }

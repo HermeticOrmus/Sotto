@@ -1105,3 +1105,29 @@ it.each([undefined, 0])('advances hello and event pages before later shell pushe
     await expect.poll(() => peer.messages.find(item => item.event === 'shell')).toMatchObject({ eventPage: { events: [rows[3]], latestSeq: 4 } })
   } finally { peer.frames.close(); await server.close() }
 })
+
+
+it('preserves the shell cursor while reading older and thread-filtered history', async () => {
+  const rows = Array.from({ length: 5 }, (_, index) => ({ seq: index + 1, threadId: index === 4 ? 'other' : 'synthetic',
+    event: { kind: 'messages-reset' as const, at: new Date().toISOString() } }))
+  let publish = () => {}
+  const service: HostService = {
+    shell: () => host.service.shell(), state: () => host.service.state(), threadDetail: id => host.service.threadDetail(id),
+    command: (command, identity) => host.service.command(command, identity),
+    events: (cursor, threadId, limit) => rows.filter(row => row.seq > cursor && (!threadId || row.threadId === threadId)).slice(0, Math.min(limit ?? 1, 1)),
+    subscribe: listener => { publish = () => listener(service.shell()); return () => {} },
+  }
+  const server = await startSocketServer({ service, pairing: host.pairing })
+  const paired = await host.pairing.redeem(host.pairing.issuePairingCode().code, 'History test')
+  const peer = await rawPeer(server.descriptor.port, host.pairing.signSession(paired.clientId))
+  try {
+    await peer.call('hello', { op: 'hello', afterSeq: 2 })
+    expect(await peer.call('older', { op: 'events', afterSeq: 0 })).toMatchObject({ result: { latestSeq: 1 } })
+    publish()
+    await expect.poll(() => peer.messages.find(item => item.event === 'shell')).toMatchObject({ eventPage: { events: [rows[3]], latestSeq: 4 } })
+    peer.messages.length = 0
+    expect(await peer.call('thread', { op: 'events', afterSeq: 4, threadId: 'other' })).toMatchObject({ result: { latestSeq: 5 } })
+    publish()
+    await expect.poll(() => peer.messages.find(item => item.event === 'shell')).toMatchObject({ eventPage: { events: [rows[4]], latestSeq: 5 } })
+  } finally { peer.frames.close(); await server.close() }
+})
