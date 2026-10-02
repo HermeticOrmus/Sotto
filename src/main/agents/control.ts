@@ -1,4 +1,5 @@
 import { CheckoutSendRefusal, type CheckoutPendingWork } from './checkoutMutations'
+import type { ShortTextPurpose, ShortTextFailureReason } from '../llm/shortTextWriter'
 import type { AgentSkillReference } from '../../shared/agentSkills'
 import type { AgentFileReference } from '../../shared/agentFiles'
 import type { AgentActivity } from '../../shared/agentActivity'
@@ -290,7 +291,7 @@ export class AgentControl {
      */
     writeThreadTitle?: (threadId: string, exchange: ThreadTitleExchange) => Promise<string | null>
     /** Local record of a silent failure; never a banner, never shown to the user. */
-    logFailure?: (code: string, detail: string) => void
+    logFailure?: (code: 'client-update-handoff-failed' | 'thread-title-failed' | 'thread-answer-attribution-failed' | 'short-writing-failed', detail: ProviderId | 'failed' | `${ShortTextPurpose} ${ShortTextFailureReason}`) => void
     /** Defers a coalesced broadcast; injectable so tests own the clock. */
     schedule?: PublishScheduler
     /** What each installed client publishes, and the press that installs it. */
@@ -2467,7 +2468,7 @@ export class AgentControl {
       })
     } catch {
       // Never the user's problem and never a lost answer; the log says so by a stable name alone.
-      this.dependencies.logFailure?.('thread-answer-attribution-failed', command.threadId)
+      this.dependencies.logFailure?.('thread-answer-attribution-failed', 'failed')
     }
   }
   private guardAuthority(command: DispatchCommand, turn?: ActiveTurn): void {
