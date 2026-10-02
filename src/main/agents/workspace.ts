@@ -197,6 +197,8 @@ export class WorkspaceHost implements AgentHost {
   private storeUnavailable = false
   /** What the store already holds for a thread, so a publish appends the difference rather than the history. */
   private readonly known = new Map<string, { epoch: string | undefined; messages: MessageMark[] }>()
+  /** Legacy snapshots may replay private messages after retention resumes. Keep their identities alone. */
+  private readonly privateLegacyMessages = new Map<string, { epoch: string | undefined; ids: Set<string> }>()
   /** The threads a window is looking at, each with how many turns of its history it has been given. */
   private readonly watched = new Map<string, number>()
   /** False until a window has said what it is looking at. Until then no thread's history is put away. */
@@ -1220,6 +1222,22 @@ export class WorkspaceHost implements AgentHost {
     if (hidden > 0) thread.earlierAvailable = true
     return hidden > 0 ? messages.slice(hidden) : [...messages]
   }
+  private legacyMessages(thread: AgentThread, messages: readonly AgentMessage[]): readonly AgentMessage[] {
+    let privateMessages = this.privateLegacyMessages.get(thread.id)
+    if (privateMessages && privateMessages.epoch !== thread.historyEpoch) {
+      this.privateLegacyMessages.delete(thread.id)
+      privateMessages = undefined
+    }
+    if (!this.historyEnabled() || this.historyRedactionPending) {
+      if (!privateMessages) {
+        privateMessages = { epoch: thread.historyEpoch, ids: new Set() }
+        this.privateLegacyMessages.set(thread.id, privateMessages)
+      }
+      for (const message of messages) privateMessages.ids.add(message.id)
+      return messages
+    }
+    return privateMessages ? messages.filter(message => !privateMessages.ids.has(message.id)) : messages
+  }
   /** Puts this thread's current window into memory: what the pane draws, and how much sits before it. */
   private loadWindow(threadId: string): void {
     const thread = this.state.snapshot.threads.find(item => item.id === threadId)
@@ -1589,8 +1607,9 @@ export class WorkspaceHost implements AgentHost {
         merged.messages = old?.messages ?? []
         merged.summary = old?.summary ?? this.threadSummary(merged)
       } else {
-        merged.messages = this.record(merged, thread.messages, old?.historyEpoch)
-        merged.summary = this.threadSummary(merged, this.storeUnavailable ? merged.messages : thread.messages)
+        const messages = this.legacyMessages(merged, thread.messages)
+        merged.messages = this.record(merged, messages, old?.historyEpoch)
+        merged.summary = this.threadSummary(merged, this.storeUnavailable ? merged.messages : messages)
       }
       threads.set(thread.id, merged)
     }
@@ -1706,6 +1725,14 @@ export class WorkspaceHost implements AgentHost {
       this.activityJsonFallbackAllowed = false
       this.pendingEventsPrivate = true
       this.historyRedactionPending ||= !this.threadStore.ephemeral
+      if (!this.eventSourced) {
+        for (const thread of this.state.snapshot.threads) {
+          this.legacyMessages(thread, thread.messages)
+          const known = this.known.get(thread.id)
+          const privateMessages = this.privateLegacyMessages.get(thread.id)!
+          if (known && known.epoch === thread.historyEpoch) for (const message of known.messages) privateMessages.ids.add(message.id)
+        }
+      }
     } else if (this.pendingEventsPrivate) {
       // Clear before either store switches: an earlier failed redaction may have left this one durable.
       this.pendingEvents.clear()

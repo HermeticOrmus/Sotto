@@ -78,15 +78,18 @@ it('keeps activity snapshots independently mutable without corrupting saved hist
   expect(host.workspaceSnapshot().threads[0]!.activities?.[0]).toEqual(activity('old', 'Retained tool output'))
 })
 
-it.each([false, true])('blocks durable messages and activity after a failed privacy transition, including resume before retry (%s)', async resumeBeforeRetry => {
+it.each(['retry while off', 'resume before retry', 'successful transition'])('keeps private messages and activity out of durable history (%s)', async mode => {
   let history = true
   const f = await fixture(() => history)
   const host = await f.open()
-  await host.connect()
-  const transition = vi.spyOn(ThreadStore.prototype, 'becomeEphemeral').mockImplementationOnce(() => { throw new Error('Synthetic failed redaction') })
-  history = false
-  await expect(host.privacyChanged()).rejects.toThrow('Thread messages could not be removed')
   const thread = f.provider.state.threads[0]!
+  thread.messages.push({ id: 'old-message', role: 'user', text: 'OLD_MESSAGE_BEFORE_HISTORY_OFF', createdAt: new Date().toISOString() })
+  await host.connect()
+  const transition = vi.spyOn(ThreadStore.prototype, 'becomeEphemeral')
+  if (mode !== 'successful transition') transition.mockImplementationOnce(() => { throw new Error('Synthetic failed redaction') })
+  history = false
+  if (mode === 'successful transition') await host.privacyChanged()
+  else await expect(host.privacyChanged()).rejects.toThrow('Thread messages could not be removed')
   thread.activities!.push(activity('private', 'PRIVATE_ACTIVITY_DURING_RETRY'))
   thread.messages.push({ id: 'private-message', role: 'assistant', text: 'PRIVATE_MESSAGE_DURING_RETRY', createdAt: new Date().toISOString() })
   await host.snapshot()
@@ -96,22 +99,24 @@ it.each([false, true])('blocks durable messages and activity after a failed priv
     expect(disk.readActivities(thread.id).map(record => record.output)).not.toContain('PRIVATE_ACTIVITY_DURING_RETRY')
     expect(disk.readMessages(thread.id).messages.map(message => message.text)).not.toContain('PRIVATE_MESSAGE_DURING_RETRY')
   } finally { disk.close() }
-  if (resumeBeforeRetry) history = true
+  if (mode === 'resume before retry') history = true
   await host.privacyChanged()
-  expect(transition).toHaveBeenCalledTimes(2)
+  expect(transition).toHaveBeenCalledTimes(mode === 'successful transition' ? 1 : 2)
   history = true
   await host.privacyChanged()
-  thread.messages = []
   thread.activities!.push(activity('fresh', 'Fresh retained output'))
+  thread.messages.find(message => message.id === 'private-message')!.text += ' with a later streaming update'
+  thread.messages.push({ id: 'fresh-message', role: 'assistant', text: 'Fresh retained message', createdAt: new Date().toISOString() })
   await host.snapshot()
   disk.open()
   try {
     expect(disk.readActivities(thread.id).map(record => record.output)).toEqual(['Fresh retained output'])
-    expect(disk.readMessages(thread.id).messages).toEqual([])
+    expect(disk.readMessages(thread.id).messages.map(message => message.text)).toEqual(['Fresh retained message'])
   } finally { disk.close() }
   await f.close(host)
   const bytes = (await Promise.all((await readdir(f.directory)).map(name => readFile(join(f.directory, name), 'latin1')))).join('')
   expect(bytes).not.toContain('Retained tool output')
+  expect(bytes).not.toContain('OLD_MESSAGE_BEFORE_HISTORY_OFF')
   expect(bytes).not.toContain('PRIVATE_ACTIVITY_DURING_RETRY')
   expect(bytes).not.toContain('PRIVATE_MESSAGE_DURING_RETRY')
 })
