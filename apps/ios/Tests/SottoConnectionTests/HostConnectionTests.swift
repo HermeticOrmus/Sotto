@@ -60,6 +60,33 @@ private final class HostResponses: URLProtocol {
         catch { XCTAssertEqual(error as? ClientError, .sottoNotRunning("forge")) }
         XCTAssertEqual(routes.values, ["/v1/health", "/v1/session"])
     }
+    func testRemoveUsesReconnectHostCheck() async throws {
+        let endpoint = try HostEndpoint("https://forge.example.ts.net")
+        let pairing = try JSONDecoder().decode(Pairing.self, from: Data("{\"v\":1,\"hostId\":\"\(hostID)\",\"clientId\":\"phone\",\"token\":\"fixture\"}".utf8))
+        let routes = RecordedRoutes()
+        HostResponses.handler = { request in
+            routes.append(request.url!.path)
+            return (200, #"{"v":1,"status":"ready","hostId":"22222222-2222-4222-8222-222222222222"}"#)
+        }
+        let connection = connection(); defer { connection.close(); HostResponses.handler = nil }
+        do { try await connection.revoke(endpoint: endpoint, pairing: pairing); XCTFail("Expected refusal") }
+        catch { XCTAssertEqual(error as? ClientError, .invalidIdentity) }
+        XCTAssertEqual(routes.values, ["/v1/health"])
+    }
+    func testRemoveChecksHealthBeforeRevocation() async throws {
+        let endpoint = try HostEndpoint("https://forge.example.ts.net")
+        let pairing = try JSONDecoder().decode(Pairing.self, from: Data("{\"v\":1,\"hostId\":\"\(hostID)\",\"clientId\":\"phone\",\"token\":\"fixture\"}".utf8))
+        let routes = RecordedRoutes()
+        let expected = hostID
+        HostResponses.handler = { request in
+            routes.append(request.url!.path)
+            if request.url!.path == "/v1/health" { return (200, "{\"v\":1,\"status\":\"ready\",\"hostId\":\"\(expected)\"}") }
+            return (200, #"{"v":1,"revoked":true}"#)
+        }
+        let connection = connection(); defer { connection.close(); HostResponses.handler = nil }
+        try await connection.revoke(endpoint: endpoint, pairing: pairing)
+        XCTAssertEqual(routes.values, ["/v1/health", "/v1/revoke"])
+    }
     func testConnectionFailureMessagesNameTheirCause() {
         XCTAssertEqual(HostConnection.requestFailure(operation: "hello"), .connectionTimedOut)
         XCTAssertEqual(HostConnection.requestFailure(operation: "command"), .uncertain)

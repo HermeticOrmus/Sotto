@@ -480,7 +480,7 @@ struct Live {
         defer { removing = nil }
         var outcome = Revocation.confirmed
         if let endpoint = saved.endpoint {
-            do { try await connection(hostID).revoke(endpoint: endpoint, token: saved.pairing.token) }
+            do { try await connection(hostID).revoke(endpoint: endpoint, pairing: saved.pairing) }
             catch is URLError { outcome = .unreachable }
             catch { outcome = .unconfirmed }
         } else { outcome = .unconfirmed }

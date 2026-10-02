@@ -59,8 +59,10 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
         guard pairing.hostId == expectedHostID else { throw ClientError.invalidIdentity }
         return pairing
     }
-    func revoke(endpoint: HostEndpoint, token: String) async throws {
-        let result = try await post(endpoint: endpoint, route: "/v1/revoke", token: token)
+    func revoke(endpoint: HostEndpoint, pairing: Pairing) async throws {
+        let health = try await health(endpoint: endpoint, reconnecting: true)
+        guard health.hostId == pairing.hostId else { throw ClientError.invalidIdentity }
+        let result = try await post(endpoint: endpoint, route: "/v1/revoke", token: pairing.token)
         guard result["revoked"].bool == true else { throw ClientError.invalidProtocol }
     }
     func connect(endpoint: HostEndpoint, pairing: Pairing) async throws -> Received<Hello> {

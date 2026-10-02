@@ -104,5 +104,5 @@ struct HostRefusal: Error, LocalizedError {
     func close() { disconnect() }
     func health(endpoint: HostEndpoint) async throws -> Health { throw ClientError.disconnected }
     func pair(endpoint: HostEndpoint, expectedHostID: String, code: String) async throws -> Pairing { throw ClientError.disconnected }
-    func revoke(endpoint: HostEndpoint, token: String) async throws {}
+    func revoke(endpoint: HostEndpoint, pairing: Pairing) async throws {}
 }
