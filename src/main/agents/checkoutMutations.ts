@@ -2,12 +2,13 @@ import { checkoutIdentity } from './threadWorktrees'
 import { GitActionRefusal } from './gitActions'
 
 export type CheckoutPendingWork = 'pending-work' | 'failed-followups' | 'paused-followups' | 'paused-assignment' | 'managed-assignment' | 'uncertain-send'
-export type CheckoutHolder = { kind: 'git-action' | 'automatic-pull' | 'checkpoint-revert' | 'settle' | 'remove-folder' }
+export type CheckoutHolder = { kind: 'git-action' | 'automatic-pull' | 'checkpoint' | 'checkpoint-revert' | 'settle' | 'remove-folder' }
   | { kind: 'send' | 'turn' | 'waiting-answer' | 'history-error' | 'history-loading' | 'preparation' | CheckoutPendingWork; threadId: string; title: string }
 
 function holdingMessage(holder: CheckoutHolder): string {
   switch (holder.kind) {
     case 'automatic-pull': return 'Sotto is pulling this folder.'
+    case 'checkpoint': return 'Sotto is saving a checkpoint in this folder.'
     case 'checkpoint-revert': return 'Sotto is reverting a checkpoint in this folder.'
     case 'remove-folder': return 'Sotto is removing this folder.'
     case 'settle': return 'Sotto is settling a thread in this folder.'
@@ -40,6 +41,7 @@ export function checkoutMutationRefusal(holder: CheckoutHolder): GitActionRefusa
     case 'history-loading':
     case 'preparation':
     case 'automatic-pull':
+    case 'checkpoint':
     case 'settle': recovery = 'Try again in a moment.'; break
     default: recovery = 'Wait for it to finish before changing this folder.'
   }

@@ -310,7 +310,7 @@ export class WorkspaceHost implements AgentHost {
     return kind ? this.checkoutThreadHolder(thread.id, kind) : null
   }
   async acquireCheckoutRead(threadId: string): Promise<() => void> {
-    return this.checkoutMutations.acquire(this.threadCheckoutFolder(threadId), 'send', this.checkoutThreadHolder(threadId, 'send'))
+    return this.checkoutMutations.acquire(this.threadCheckoutFolder(threadId), 'send', { kind: 'checkpoint' })
   }
   async isCheckoutMutating(threadId: string): Promise<boolean> {
     return this.checkoutMutations.isMutating(this.threadCheckoutFolder(threadId))

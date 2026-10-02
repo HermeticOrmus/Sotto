@@ -57,6 +57,17 @@ function barrier() {
 }
 const send = (id: string) => ({ type: 'send' as const, threadId: id, commandId: `send-${id}`, messageId: `message-${id}`, text: 'Work' })
 
+it('names a post-turn checkpoint read when a sibling tries to change Git', async () => {
+  const f = await fixture()
+  let release: (() => void) | undefined
+  try {
+    release = await f.host.acquireCheckoutRead('b')
+    await expect(f.host.pullThreadBranch('a')).rejects.toThrow('Sotto is saving a checkpoint in this folder. Try again in a moment.')
+    release(); release = undefined
+    const mutation = await f.host.acquireCheckoutMutation('a'); mutation()
+  } finally { release?.(); await f.stop(); await f.remove() }
+})
+
 it('holds a checkout throughout a Git action and refuses a sibling send and branch restore without desktop checkpoint wiring', async () => {
   const f = await fixture(), pause = barrier()
   let action: Promise<unknown> | undefined
