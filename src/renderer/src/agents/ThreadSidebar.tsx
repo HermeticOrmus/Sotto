@@ -1,4 +1,4 @@
-import React, { memo, useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
+import React, { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Archive, ArchiveRestore, ChevronRight, Columns2, Folder, FolderGit2, GitBranch, Pencil, Sparkles, SquarePen } from 'lucide-react'
 import { isThreadBusy, providerWritesShortText, type AgentState } from '../../../shared/agents'
 import { isThreadArchived } from '../../../shared/threadActivity'
@@ -78,6 +78,11 @@ const ThreadNavRow = memo(function ThreadNavRow({ row, current, open, busy, unse
   const status = finished ? 'Just finished' : label
   const besideAvailable = panes.currentThreadId !== null && !current
   const [renaming, setRenaming] = useState(false)
+  const renameButton = useRef<HTMLButtonElement>(null)
+  const restoreRenameFocus = useRef(false)
+  useLayoutEffect(() => {
+    if (!renaming && restoreRenameFocus.current) { restoreRenameFocus.current = false; renameButton.current?.focus() }
+  }, [renaming])
   // The button's name is the title alone; the state sentence is its description, or the label would swallow it.
   const statusId = useId()
   const timeId = useId()
@@ -92,7 +97,7 @@ const ThreadNavRow = memo(function ThreadNavRow({ row, current, open, busy, unse
   if (renaming) return <li className="thread-nav__row" data-current={current || undefined} data-open={open && !current ? true : undefined}>
     <span className="thread-nav__item thread-nav__item--renaming">
       <ThreadNameField title={title} label={`Rename ${title}`} className="thread-nav__rename tt-focusable"
-        onRename={next => void command({ type: 'rename-thread', threadId: row.thread.id, title: next })} onDone={() => setRenaming(false)} />
+        onRename={next => void command({ type: 'rename-thread', threadId: row.thread.id, title: next })} onDone={restore => { restoreRenameFocus.current = restore; setRenaming(false) }} />
     </span>
   </li>
   return <li className="thread-nav__row thread-nav__row--details" data-current={current || undefined} data-open={open && !current ? true : undefined}>
@@ -117,7 +122,7 @@ const ThreadNavRow = memo(function ThreadNavRow({ row, current, open, busy, unse
     </button>
     <span className="thread-nav__row-actions">
       {besideAvailable && !open ? <button type="button" className="thread-nav__action tt-focusable" aria-label={`Open ${title} beside`} title="Open beside" onClick={() => panes.onOpenBeside(row.thread.id)}><Columns2 size={16} aria-hidden="true" /></button> : null}
-      {!archived ? <button type="button" className="thread-nav__action tt-focusable" aria-label={`Rename ${title}`} title="Rename thread" onClick={() => setRenaming(true)}><Pencil size={16} aria-hidden="true" /></button> : null}
+      {!archived ? <button ref={renameButton} type="button" className="thread-nav__action tt-focusable" aria-label={`Rename ${title}`} title="Rename thread" onClick={() => setRenaming(true)}><Pencil size={16} aria-hidden="true" /></button> : null}
       {/* A name the user typed is never written over, so this thread's own name is the one offered for rewriting. */}
       {!archived && row.thread.titleSource !== 'user' && providerWritesShortText(row.thread.providerId)
         ? <button type="button" className="thread-nav__action tt-focusable" aria-label={`Regenerate title for ${title}`} title="Regenerate title" disabled={busy} onClick={() => void command({ type: 'regenerate-thread-title', threadId: row.thread.id })}><Sparkles size={16} aria-hidden="true" /></button>
