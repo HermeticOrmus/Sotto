@@ -10,6 +10,7 @@ Verified on Windows in `fix/bh-15-index`, after all five package fixes.
 - Host and personal-chat startup failures drain every acquired handle. Phone access closes before the host it serves.
 - A failed title request logs only `thread-title-failed` and `failed`, even when the provider error contains private text and a path.
 - Only the single-instance lock owner prepares legacy user data, before runtime initialization reads it.
+- A fresh-profile probe in Electron 43.1.0 confirmed the lock creates the destination folder and `lockfile` before migration. Migration then copies the legacy settings/history/widget placement and models rather than renaming the folder; the TalkType folder remains. The probe used synthetic settings and the real migration function, and confirmed the copied settings matched.
 - Agent activity still reveals the widget with the idle setting off, as the owner's docs-only decision requires. No reveal rule changed.
 
 The focused regression tests were observed failing before the corresponding fixes and passing afterward. Initial independent standards and spec reviews found no findings; the follow-up standards finding above was reproduced and fixed. The read-only review CLI could not apply its Windows sandbox ACLs; read-only reviewer agents completed both reviews instead.
@@ -21,3 +22,9 @@ The focused regression tests were observed failing before the corresponding fixe
 The Settings journey exercised light, dark and reduced motion at 1600×1000, 1280×800 and 820×560. No UI changed; no evidence images or replacement design baselines are included.
 
 The provider and phone effects are scripted. This proves application behavior through the built Electron boundaries, not a live provider, SSH host or Tailscale account. S-115 required no patch: the obsolete memory-probe launch branch and raw-error log were already removed on `main`, as ADR-0003 and `CONTEXT.md` record; issue #587 has the skip explanation.
+
+## PR rework
+
+The failed-reopen regression reproduced `Thread store is not open` from `snapshot()` before the fix. A failed durable reopen now marks the store unavailable: snapshots and refreshes resolve, writes remain blocked, and restart restores persistence. A second regression reproduced permission and command words remaining in `workspace.json` after failed redaction; the failure path now flushes organization data before reporting the privacy error.
+
+The legacy replay regression now receives a new message after history resumes but before redaction retries. That message remains visible and persists after cleanup, while messages received with history off remain private. Settings notification failures preserve any cleanup failure, failure log details use closed literal types, removed threads discard private identity records, and the quit-drain comments again explain ADR-0041 and Stop setup behavior.
