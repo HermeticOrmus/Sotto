@@ -326,6 +326,30 @@ it('scrubs pending permission words from workspace JSON even when redaction fail
   await host.privacyChanged()
 })
 
+it('keeps Threads usable and retries when redaction closes the store but memory open fails', async () => {
+  let history = true
+  const f = await fixture(() => history)
+  const host = await f.open()
+  await host.connect()
+  const thread = f.provider.state.threads[0]!
+  vi.spyOn(ThreadStore.prototype, 'open').mockImplementationOnce(() => { throw new Error('Synthetic failed memory open') })
+  history = false
+  await expect(host.privacyChanged()).rejects.toThrow('Thread messages could not be removed')
+  await expect(host.snapshot()).resolves.toMatchObject({ connected: true })
+  await expect(host.refreshThread(thread.id)).resolves.toMatchObject({ connected: true })
+  thread.activities!.push(activity('private-after-close', 'PRIVATE_AFTER_FAILED_MEMORY_OPEN'))
+  await host.snapshot()
+  await host.privacyChanged()
+  history = true
+  await host.privacyChanged()
+  thread.activities!.push(activity('fresh-after-retry', 'Fresh after memory retry'))
+  await host.snapshot()
+  const disk = new ThreadStore(join(f.directory, 'threads.sqlite'))
+  disk.open()
+  try { expect(disk.readActivities(thread.id).map(record => record.output)).toEqual(['Fresh after memory retry']) }
+  finally { disk.close() }
+})
+
 it('never falls back to JSON containing private activity when enabling history fails', async () => {
   let history = false
   const f = await fixture(() => history)

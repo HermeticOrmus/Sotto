@@ -1757,7 +1757,7 @@ export class WorkspaceHost implements AgentHost {
         }
       } catch { this.saveError = 'Saved agent history could not be removed. Restore access to local storage and try again.'; throw new Error(this.saveError) }
     }
-    if (!this.storeUnavailable) {
+    if (!this.storeUnavailable || this.historyRedactionPending) {
       const wanted = this.historyEnabled()
       if (wanted === this.threadStore.ephemeral || this.historyRedactionPending) {
         const redacting = !wanted || this.historyRedactionPending
@@ -1768,11 +1768,14 @@ export class WorkspaceHost implements AgentHost {
           this.historyRetryTimer = undefined
           this.historyRetryDelay = 1_000
           if (redacting) {
+            // A failed switch may have closed the connection. Reopen before retrying identity cleanup.
+            if (this.storeUnavailable) this.threadStore.open()
             // Identity suppression needs no output validation. Even if it fails, erase the durable text.
             try {
               for (const thread of this.state.snapshot.threads) this.threadStore.redactActivityIdentities(thread.id, (thread.activities ?? []).map(activity => activity.id))
             } finally { this.threadStore.becomeEphemeral() }
             this.historyRedactionPending = false
+            this.storeUnavailable = false
           }
           if (wanted) {
             this.saveActivities()
@@ -1781,7 +1784,7 @@ export class WorkspaceHost implements AgentHost {
         } catch {
           const redactionFailed = redacting && this.historyRedactionPending
           // A failed reopen can leave no connection. Keep the workspace usable until restart.
-          if (!redactionFailed) this.storeUnavailable = true
+          this.storeUnavailable = true
           const failure = redactionFailed ? 'Thread messages could not be removed. Restore access to local storage and try again.' : HISTORY_OPEN_ERROR
           // Keep the transition retryable by the coordinator's privacy maintenance.
           // Scrub pending request words from workspace.json even while SQLite cleanup must retry.
