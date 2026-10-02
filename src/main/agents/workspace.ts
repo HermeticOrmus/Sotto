@@ -2099,6 +2099,7 @@ export class WorkspaceHost implements AgentHost {
       try { await this.flush() }
       catch (error) {
         this.state.snapshot.threads = this.state.snapshot.threads.filter(item => item.id !== thread.id)
+        this.privateLegacyMessages.delete(thread.id)
         this.state.creations = this.state.creations.filter(item => item.threadId !== thread.id)
         const currentProject = this.state.snapshot.projects.find(item => item.id === command.projectId)
         if (currentProject && projectSettledAt !== null) currentProject.workspaceSettledAt = projectSettledAt

@@ -5,7 +5,8 @@ export async function cleanSettingsHistory(agentControl: { privacyChanged(): Pro
     Promise.resolve().then(() => personalChats.privacyChanged()),
   ])
   // The saved settings already apply, even when a store must retry redaction.
-  await notify()
+  const notification = await Promise.allSettled([Promise.resolve().then(notify)])
   const failure = results.find(result => result.status === 'rejected')
   if (failure?.status === 'rejected') throw failure.reason
+  if (notification[0]?.status === 'rejected') throw notification[0].reason
 }

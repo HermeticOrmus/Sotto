@@ -20,3 +20,14 @@ it.each(['agents', 'chats'] as const)('finishes both privacy hooks and settings 
   expect(await rejected).toBe(failure)
   expect(notify).toHaveBeenCalledOnce()
 })
+
+it.each([false, true])('preserves privacy failure priority when notification fails (cleanup failed: %s)', async failed => {
+  const privacyFailure = new Error('Synthetic failed redaction')
+  const notificationFailure = new Error('Synthetic failed notification')
+  const agents = { privacyChanged: vi.fn(async () => { if (failed) throw privacyFailure }) }
+  const chats = { privacyChanged: vi.fn(async () => undefined) }
+  const notify = vi.fn(async () => { throw notificationFailure })
+  await expect(cleanSettingsHistory(agents, chats, notify)).rejects.toBe(failed ? privacyFailure : notificationFailure)
+  expect(chats.privacyChanged).toHaveBeenCalledOnce()
+  expect(notify).toHaveBeenCalledOnce()
+})
