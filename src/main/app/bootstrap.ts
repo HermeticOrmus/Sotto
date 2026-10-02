@@ -494,6 +494,7 @@ export type BootstrapDiagnostic =
 
 export interface BootstrapDependencies {
   readonly app: BootstrapApplication
+  readonly prepareUserData?: () => void
   readonly initialize: () => RuntimeController | Promise<RuntimeController>
   readonly log: (code: BootstrapDiagnostic) => void
 }
@@ -580,6 +581,8 @@ export async function bootstrapSotto(
   app.on('before-quit', onBeforeQuit)
 
   try {
+    // Only the lock owner may migrate shared files, before runtime reads them.
+    dependencies.prepareUserData?.()
     await app.whenReady()
   } catch {
     if (disposed) {

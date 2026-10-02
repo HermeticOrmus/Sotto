@@ -210,7 +210,6 @@ if (e2eConfiguration === null) {
   delete process.env.SOTTO_E2E
   delete process.env.SOTTO_E2E_SCENARIO
   delete process.env.SOTTO_E2E_USER_DATA
-  migrateLegacyUserData(app.getPath('userData'))
 } else if (e2eConfiguration !== null) {
   app.setPath('userData', e2eConfiguration.userDataPath)
 }
@@ -1342,7 +1341,9 @@ app.setAppUserModelId(APP_ID)
 // Electron's unhandled default does exactly that.
 app.on('window-all-closed', () => undefined)
 
-void bootstrapSotto({ app, initialize: createRuntime, log: logOperational }).catch(() => {
+void bootstrapSotto({ app, initialize: createRuntime, log: logOperational,
+  ...(e2eConfiguration === null ? { prepareUserData: () => migrateLegacyUserData(app.getPath('userData')) } : {}),
+}).catch(() => {
   logOperational('bootstrap-terminal-failed')
   app.quit()
 })
