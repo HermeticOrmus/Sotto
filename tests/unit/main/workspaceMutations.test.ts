@@ -199,3 +199,21 @@ it.each(['reclaim', 'settle'] as const)('rechecks a merged commit inside the lan
     expect((await stat(copy.path!)).isDirectory()).toBe(true)
   } finally { pause.release(); await action; await sweep; await f.stop(); await f.remove() }
 }, 60_000)
+
+it.each([false, true])('removes an owned folder with failed history and a retained follow-up (automatic: %s)', async automatic => {
+  const f = await fixture()
+  try {
+    const model = f.host.workspaceSnapshot().models.find(item => item.providerId === 'codex')!
+    await f.host.execute({ type: 'create-thread', commandId: 'c', threadId: 'c', projectId: f.project.id, modelId: model.id, title: 'c', workingCopy: 'independent' })
+    await f.host.execute(send('c'))
+    const native = f.adapters.codex.state.threads.at(-1)!
+    native.status = 'idle'; native.historyStatus = 'error'; f.adapters.codex.emit()
+    await vi.waitFor(() => expect(f.host.workspaceSnapshot().threads.find(thread => thread.id === 'c')?.historyStatus).toBe('error'))
+    f.host.setPendingThreadWork(id => id === 'c')
+    const copy = f.host.workspaceSnapshot().threads.find(thread => thread.id === 'c')!.worktree!
+    const after = await f.host.reclaimThreadWorktree('c', { automatic })
+    expect(after.threads.find(thread => thread.id === 'c')?.worktree?.reclaimedAt).toBeDefined()
+    await expect(stat(copy.path!)).rejects.toMatchObject({ code: 'ENOENT' })
+    expect((await git(f.project.path, ['rev-parse', `refs/heads/${copy.branch}`])).trim()).not.toBe('')
+  } finally { await f.stop(); await f.remove() }
+})

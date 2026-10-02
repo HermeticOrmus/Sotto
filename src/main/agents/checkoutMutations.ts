@@ -20,13 +20,14 @@ export async function checkoutIdentity(folder: string): Promise<string> {
   return process.platform === 'win32' ? canonical.toLowerCase() : canonical
 }
 
-export type CheckoutHolder = { kind: 'git-action' | 'automatic-pull' | 'checkpoint-revert' | 'settle' }
+export type CheckoutHolder = { kind: 'git-action' | 'automatic-pull' | 'checkpoint-revert' | 'settle' | 'remove-folder' }
   | { kind: 'send' | 'turn' | 'pending-work'; threadId: string; title: string }
 
 function holdingMessage(holder: CheckoutHolder): string {
   switch (holder.kind) {
     case 'automatic-pull': return 'Sotto is pulling this folder.'
     case 'checkpoint-revert': return 'Sotto is reverting a checkpoint in this folder.'
+    case 'remove-folder': return 'Sotto is removing this folder.'
     case 'settle': return 'Sotto is settling a thread in this folder.'
     case 'send': return `A message is being sent in thread "${holder.title}" in this folder.`
     case 'turn': return `Thread "${holder.title}" is working in this folder.`

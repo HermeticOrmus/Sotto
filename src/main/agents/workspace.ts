@@ -712,7 +712,8 @@ export class WorkspaceHost implements AgentHost {
       if (thread.status === 'running' || thread.requests.length || this.preparations.has(threadId)) throw new Error('This thread is still working. Wait for it to finish and answer its requests before removing its folder.')
       if (!await this.ownsCheckoutAlone(threadId)) throw new Error('Another thread works in this folder too, so it stays.')
       if (this.worktreeInUse(threadId)) throw new Error('A terminal is open in this folder. Close it before removing the folder.')
-      return this.withCheckoutMutation(threadId, async () => {
+      const release = await this.checkoutMutations.acquire(this.threadCheckoutFolder(threadId), 'mutation', { kind: 'remove-folder' })
+      try {
         if (options.expectedMergedTip && (await runWorktreeGit(worktree.path!, ['rev-parse', '--verify', 'HEAD^{commit}'])).trim() !== options.expectedMergedTip) {
           throw new Error('This branch changed after its merged pull request was checked. Its folder stays.')
         }
@@ -722,7 +723,7 @@ export class WorkspaceHost implements AgentHost {
         try { await this.flush() } catch { this.saveError = BRANCH_SAVE_ERROR }
         this.publish()
         return this.workspaceSnapshot()
-      })
+      } finally { release() }
     })
   }
   async workingCopyOptions(projectId: string): Promise<AgentWorkingCopyOptions> {
