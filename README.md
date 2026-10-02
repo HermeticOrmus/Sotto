@@ -107,6 +107,12 @@ The iPhone app opens on **Threads**: questions and permissions first, working th
 
 **New thread** on iPhone lets you choose a connected computer, one of its projects or another folder on it, and that computer's model and effort. The thread uses the shared project folder and starts work when you send its first message. Permissions start by asking; a mode that allows actions without asking needs **Can answer** on that computer. Folder names and paths travel over the same private connection, and a creation the computer did not confirm is shown without being sent again.
 
+Remote navigation belongs to each client. Compose, send and draft controls act on the thread that client picked, preserving drafts on other threads. Answers still require Can answer.
+
+The iPhone checks each connection while Sotto is open. Pending reads keep slow thread downloads connected for up to two minutes. After a drop it retries with increasing waits and a small random variation, up to thirty seconds; a successful liveness check resets the wait. It refreshes threads and checks unconfirmed actions without sending them again. Returning from the background opens a fresh connection.
+
+Older phones and desktop connections allow two missed keep-alive rounds. Sending frames and receiving partial frames keep slow transfers from counting as silence.
+
 ## Build from source
 
 With Node.js 24:

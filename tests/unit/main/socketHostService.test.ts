@@ -99,3 +99,17 @@ describe('the version sentence', () => {
     expect(hostVersionMismatch('0.1.15', '0.1.16', true)).toBe('This host is running a newer version of Sotto than this computer. Nothing on the host was lost. Update Sotto on this computer, then connect again.')
   })
 })
+
+it('keeps the saved pairing when an older host refuses an upgrade with 401', async () => {
+  const url = await hostAnswering(frozen)
+  server!.removeAllListeners('request')
+  server!.on('request', (request, response) => {
+    response.writeHead(200, { 'Content-Type': 'application/json' })
+    response.end(JSON.stringify(request.url === '/v1/health' ? frozen : {
+      v: 1, hostId, clientId: 'client', session: 'session', expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    }))
+  })
+  server!.on('upgrade', (_request, stream) => stream.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n'))
+  const client = new SocketHostService({ url, token: 'paired-token' })
+  await expect(client.connect()).rejects.toMatchObject({ code: 'unavailable', pairingRequired: false })
+})

@@ -41,3 +41,23 @@ This choice grants no permission to an agent and writes no policy record. Answer
 - Tailscale often starts after Sotto at sign-in. When Tailscale is not running, the page says so and Sotto looks again every 30 seconds while phone access is on, besides the Try again button.
 - The switch shows the setting, not whether the last attempt worked: a failed step is shown on its own row with what to do, and the owner does not have to turn the switch off and on again. The prototype drew the switch off in those states; keeping the setting on is what lets a reboot race with Tailscale recover by itself.
 - A second desktop on the same tailnet can do the same on its own computer; each serves its own threads on its own 8443.
+
+## October 1 amendment: slow connections and recovery
+
+Only the phone initiates keep-alive pings on its connection, every 25 seconds. A pong, any received message, or growth in received bytes within ten seconds confirms liveness, including a large frame still arriving. The listener answers pings, counts all incoming bytes as progress and closes a silent peer after 75 seconds only when output is no longer buffered. This avoids cutting off slow thread downloads while still releasing abandoned connections.
+
+The active phone reconnects with exponential waits from about one second to a thirty-second cap, with a small random variation (0.8–1.2 before the cap). Hello does not reset the delay; the first successful liveness round does. Reconnect reads threads and reconciles receipts without sending an unconfirmed command again. Backgrounding cancels retries. Physical-device network changes remain a separate verification from simulator tests.
+
+## October 1 amendment: older idle clients
+
+Client-owned pings require `client-liveness` in hello's `accepts`, an additive v1 feature. Only opted-in peers get the 75-second idle close, deferred while output is buffered. Older clients keep host pings every 25 seconds; a missed pong closes them only when no other traffic arrived and no output remains buffered. Their WebSocket implementations can answer host pings while the app is idle. This replaces the earlier listener-only-answer rule for clients without the opt-in.
+
+## October 1 amendment: phone reads on slow links
+
+The phone no longer relies on the WebSocket task's byte counter. Each ten-second liveness round checks completed messages and pong replies, and closes only after two consecutive silent rounds. A request still awaiting its reply within its own deadline prevents silence from accumulating. Detail and observe reads have 120-second deadlines; other requests retain 30 seconds. A connection with no requests closes at the second round, about 60 seconds after opening; an unanswered detail expires at 120 seconds and cannot protect a dead connection indefinitely. Only an actual message or pong resets reconnect backoff. This replaces the earlier byte-progress rule.
+
+## October 2 amendment: late pongs and drained tunnel writes
+
+Both host pings for older clients and Node desktop-client pings require two consecutive silent rounds. Any received bytes reset silence. Frames written since the previous ping or output still buffered prevent a round from being silent, because loopback tunnels can drain Node's buffer before the peer receives the frames. The heartbeat's own ping never renews progress. A completely silent peer closes at 75 seconds; after final incoming traffic or a drained application write, it closes within 75 seconds. Opted-in listener peers count outgoing frames too and close within 100 seconds of the last progress once output drains. Continuing traffic and buffered output defer those bounds.
+
+The phone also accepts growth in URLSession's received-byte counter as progress, sampled across rounds. This supplements rather than replaces pending-read protection: partial-frame counter updates are not guaranteed. An unrequested slow push without counter updates remains a real-device verification limitation. This amends the October 1 silence rules without changing protocol fields, permission authority or reconnect replay behavior.

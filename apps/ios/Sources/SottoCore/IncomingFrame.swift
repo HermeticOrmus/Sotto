@@ -41,7 +41,7 @@ public enum IncomingFrame: Decodable, Sendable {
 public extension Wire {
     /// The phone reads snapshots, not event history. Match the desktop's v1 snapshot-only hello.
     static let snapshotHello: [String: JSONValue] = ["op": .string("hello"), "afterSeq": .number(9_007_199_254_740_991),
-        "accepts": .array([.string("detail-delta")])]
+        "accepts": .array([.string("detail-delta"), .string("client-liveness")])]
 
     // Nonisolated async functions run on the generic executor in this package's Swift 5 mode.
     // Awaiting each frame before receiving the next keeps pushes and replies in socket order.

@@ -20,6 +20,7 @@ export interface ClientIdentity {
   readonly clientId: string
   readonly user: string
   readonly transport: 'ipc' | 'socket'
+  readonly selectedThreadId?: string | null
 }
 
 /**

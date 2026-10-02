@@ -43,7 +43,7 @@ final class StreamingTests: XCTestCase {
         guard case .delta(let threadID, let update) = delta else { return XCTFail("Expected delta") }
         XCTAssertEqual(threadID, "t"); XCTAssertEqual(snapshot?.applying(update)?.revision, 3)
         XCTAssertEqual(Wire.snapshotHello["afterSeq"], .number(9_007_199_254_740_991))
-        XCTAssertEqual(Wire.snapshotHello["accepts"], .array([.string("detail-delta")]))
+        XCTAssertEqual(Wire.snapshotHello["accepts"], .array([.string("detail-delta"), .string("client-liveness")]))
     }
     func testInvalidFramesAndUnrequestedPushesAreRefused() async {
         for json in [#"{"v":2,"event":"detail","threadId":"t","detail":null}"#,
@@ -69,5 +69,50 @@ final class StreamingTests: XCTestCase {
         let computer = ComputerThreads(hostID: "host", name: "Laptop", status: .online, threads: [thread], projects: [project])
         XCTAssertTrue(try XCTUnwrap(ThreadGroups.merged([computer]).first).settled)
         XCTAssertEqual(ThreadGroups.waiting([computer]).count, 1, "Settlement never hides a waiting question")
+    }
+}
+
+final class LivenessProgressTests: XCTestCase {
+    func testUnrequestedLargePushWithOnlyByteProgressStaysConnected() {
+        var liveness = LivenessProgress()
+        XCTAssertFalse(liveness.shouldDisconnect(now: 35, messagesAdvanced: false, pong: false))
+        for now in [60.0, 85.0, 110.0, 135.0] {
+            XCTAssertFalse(liveness.shouldDisconnect(now: now, messagesAdvanced: false, pong: false, bytesAdvanced: true))
+        }
+        XCTAssertFalse(liveness.shouldDisconnect(now: 160, messagesAdvanced: false, pong: false))
+        XCTAssertTrue(liveness.shouldDisconnect(now: 185, messagesAdvanced: false, pong: false))
+    }
+    func testSlowDetailWithoutCompleteMessagesForSixtySecondsStaysConnected() {
+        for operation in ["observe", "detail"] {
+            var liveness = LivenessProgress()
+            liveness.beginRequest(id: "read", operation: operation, now: 0)
+            XCTAssertEqual(LivenessProgress.requestTimeout(operation: operation), 120)
+            for now in [35.0, 60.0, 85.0, 110.0] {
+                XCTAssertFalse(liveness.shouldDisconnect(now: now, messagesAdvanced: false, pong: false))
+            }
+            liveness.finishRequest(id: "read")
+            XCTAssertFalse(liveness.shouldDisconnect(now: 135, messagesAdvanced: false, pong: false))
+            XCTAssertTrue(liveness.shouldDisconnect(now: 160, messagesAdvanced: false, pong: false))
+        }
+    }
+    func testDeadConnectionClosesAtSecondRoundEvenWithExpiredRead() {
+        var liveness = LivenessProgress()
+        XCTAssertFalse(liveness.shouldDisconnect(now: 35, messagesAdvanced: false, pong: false))
+        XCTAssertTrue(liveness.shouldDisconnect(now: 60, messagesAdvanced: false, pong: false))
+        liveness = LivenessProgress()
+        liveness.beginRequest(id: "read", operation: "observe", now: 0)
+        XCTAssertFalse(liveness.shouldDisconnect(now: 110, messagesAdvanced: false, pong: false))
+        XCTAssertFalse(liveness.shouldDisconnect(now: 135, messagesAdvanced: false, pong: false))
+        XCTAssertTrue(liveness.shouldDisconnect(now: 160, messagesAdvanced: false, pong: false))
+    }
+    func testPongOrMessageResetsConsecutiveSilence() {
+        XCTAssertEqual(LivenessProgress.requestTimeout(operation: "command"), 30)
+        for pong in [true, false] {
+            var liveness = LivenessProgress()
+            XCTAssertFalse(liveness.shouldDisconnect(now: 35, messagesAdvanced: false, pong: false))
+            XCTAssertFalse(liveness.shouldDisconnect(now: 60, messagesAdvanced: !pong, pong: pong))
+            XCTAssertFalse(liveness.shouldDisconnect(now: 85, messagesAdvanced: false, pong: false))
+            XCTAssertTrue(liveness.shouldDisconnect(now: 110, messagesAdvanced: false, pong: false))
+        }
     }
 }
