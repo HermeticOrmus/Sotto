@@ -5,14 +5,18 @@ The phone reconnect validates ready host health against the saved computer ident
 ## Local Windows checks
 
 - `npm run typecheck`, `npm run lint`, `npm run notices:verify`: passed; 174 notice components.
-- `tests/integration/socketHost.test.ts` and `tests/unit/main/socketServer.test.ts`: 63 passed. New cursor regressions failed before their fixes and passed afterward.
+- `tests/integration/socketHost.test.ts` and `tests/unit/main/socketServer.test.ts`: 64 passed. New cursor regressions failed before their fixes and passed afterward.
 - `npm run build` and `npx playwright test tests/e2e/phones.spec.ts --workers=1`: passed, one journey. It covers listener setup, pairing, the named phone row, answer authority and revocation. Its fixture supplies the phone name; this does not establish what iOS exposes.
 - Inspected the paired-phone captures at minimum width in dark and light: [dark](../../artifacts/pkg-17-hostconnection/phones-paired-820-dark.png), [light](../../artifacts/pkg-17-hostconnection/phones-paired-820-light.png). The desktop layout is unchanged. The journey also captures 1280 and 1600 widths. No baselines were regenerated.
 - The first full two-worker suite hit the recursive initialized-submodule test's 15-second deadline. The isolated `threadWorktrees.test.ts` rerun passed all 68 tests. Full-suite totals are recorded in the PR.
 
+## CI follow-up
+
+The first Windows CI run exposed a shell arriving before hello: its snapshot-only cursor prevented a history-reading client from catching up. A cursor-only local trace reproduced that ordering. The listener now waits for a successful hello response before shell publication. A deterministic regression exercises the publisher before hello and fails before the fix, then checks hello and subsequent shell cursors. The shared adapter contract and its deadlines are unchanged. The final two-worker socket transport, socket contract and server-unit run passed all 100 tests.
+
 ## Native scope and remaining work
 
-Windows has no Swift or Xcode toolchain. The real connection tests, native build and Focus simulator journeys must be checked by the macOS CI job. No physical-device connection or hands-on VoiceOver check was performed. A throwaway browser preview checked the new connection messages; it is not native UI evidence.
+Windows has no Swift or Xcode toolchain. The macOS job on revision `be4bfa57` passed the real connection tests, unsigned simulator build and all six Focus journeys on both small and large iPhones. CI retains the native screenshots; inspected the small-phone recovery view with larger text in light appearance. No physical-device connection or hands-on VoiceOver check was performed. A throwaway browser preview checked the new connection messages; it is not native UI evidence.
 
 Issue #556 is already addressed on main: `IncomingFrame` decodes pushes directly from `Data` outside the main actor in receive order, and asynchronous `Wire.readValue` handles replies. The existing streaming tests cover that path.
 

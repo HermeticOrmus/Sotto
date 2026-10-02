@@ -1131,3 +1131,27 @@ it('preserves the shell cursor while reading older and thread-filtered history',
     await expect.poll(() => peer.messages.find(item => item.event === 'shell')).toMatchObject({ eventPage: { events: [rows[4]], latestSeq: 5 } })
   } finally { peer.frames.close(); await server.close() }
 })
+
+it('waits for hello before reading events for a shell push', async () => {
+  let publish = () => {}
+  const reads = vi.fn(() => [])
+  const service: HostService = {
+    shell: () => host.service.shell(), state: () => host.service.state(), threadDetail: id => host.service.threadDetail(id),
+    command: (command, identity) => host.service.command(command, identity), events: reads,
+    subscribe: listener => { publish = () => listener(service.shell()); return () => {} },
+  }
+  const server = await startSocketServer({ service, pairing: host.pairing })
+  const paired = await host.pairing.redeem(host.pairing.issuePairingCode().code, 'Opening connection')
+  const peer = await rawPeer(server.descriptor.port, host.pairing.signSession(paired.clientId))
+  try {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    publish()
+    await vi.advanceTimersByTimeAsync(50)
+    expect(reads).not.toHaveBeenCalled()
+    vi.useRealTimers()
+    await peer.call('hello', { op: 'hello', afterSeq: 0 })
+    expect(reads).toHaveBeenCalledWith(0, undefined, HOST_EVENT_PAGE_SIZE + 1)
+    publish()
+    await expect.poll(() => peer.messages.find(item => item.event === 'shell')).toMatchObject({ eventPage: { latestSeq: 0, events: [] } })
+  } finally { vi.useRealTimers(); peer.frames.close(); await server.close() }
+})
