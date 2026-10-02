@@ -270,6 +270,25 @@ it('keeps Threads usable after a failed durable reopen and recovers on restart',
   finally { disk.close() }
 })
 
+it('scrubs pending permission words from workspace JSON even when redaction fails', async () => {
+  let history = true
+  const f = await fixture(() => history)
+  const host = await f.open()
+  const thread = f.provider.state.threads[0]!
+  thread.requests = [{ id: 'pending', kind: 'permission', text: 'PRIVATE_PERMISSION_TEXT', options: [], context: { command: 'PRIVATE_PENDING_COMMAND' } }]
+  await host.connect()
+  const path = join(f.directory, 'workspace.json')
+  expect(await readFile(path, 'utf8')).toContain('PRIVATE_PENDING_COMMAND')
+  vi.spyOn(ThreadStore.prototype, 'becomeEphemeral').mockImplementationOnce(() => { throw new Error('Synthetic failed redaction') })
+  history = false
+  await expect(host.privacyChanged()).rejects.toThrow('Thread messages could not be removed')
+  const saved = await readFile(path, 'utf8')
+  expect(saved).not.toContain('PRIVATE_PERMISSION_TEXT')
+  expect(saved).not.toContain('PRIVATE_PENDING_COMMAND')
+  expect(JSON.parse(saved).snapshot.threads.every((item: { requests: unknown[] }) => item.requests.length === 0)).toBe(true)
+  await host.privacyChanged()
+})
+
 it('never falls back to JSON containing private activity when enabling history fails', async () => {
   let history = false
   const f = await fixture(() => history)

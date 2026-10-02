@@ -1785,9 +1785,13 @@ export class WorkspaceHost implements AgentHost {
         } catch {
           // A failed reopen can leave no connection. Keep the workspace usable until restart.
           if (!redacting) this.storeUnavailable = true
-          this.saveError = redacting ? 'Thread messages could not be removed. Restore access to local storage and try again.' : HISTORY_OPEN_ERROR
+          const failure = redacting ? 'Thread messages could not be removed. Restore access to local storage and try again.' : HISTORY_OPEN_ERROR
           // Keep the transition retryable by the coordinator's privacy maintenance.
-          throw new Error(this.saveError)
+          // Scrub pending request words from workspace.json even while SQLite cleanup must retry.
+          this.dirty = true
+          await this.flush()
+          this.saveError = failure
+          throw new Error(failure)
         }
         // The switch emptied the store either way, so what mirrored it is no longer true.
         this.known.clear()
