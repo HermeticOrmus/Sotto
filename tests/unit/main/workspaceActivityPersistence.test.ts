@@ -253,13 +253,22 @@ it('suppresses legacy activity when first opened with history off, including res
   expect(reopened.workspaceSnapshot().threads[0]!.activities ?? []).toEqual([])
 })
 
-it('keeps Threads usable after a failed durable reopen and recovers on restart', async () => {
-  let history = false
+it.each([false, true])('keeps Threads usable after a failed durable reopen and recovers on restart (redaction retry: %s)', async retry => {
+  let history = retry
   const f = await fixture(() => history)
   const host = await f.open()
   await host.connect()
   const thread = f.provider.state.threads[0]!
-  vi.spyOn(ThreadStore.prototype, 'open').mockImplementationOnce(() => { throw new Error('Synthetic locked file') })
+  if (retry) {
+    vi.spyOn(ThreadStore.prototype, 'becomeEphemeral').mockImplementationOnce(() => { throw new Error('Synthetic failed redaction') })
+    history = false
+    await expect(host.privacyChanged()).rejects.toThrow('Thread messages could not be removed')
+  }
+  const reopen = ThreadStore.prototype.becomeDurable
+  vi.spyOn(ThreadStore.prototype, 'becomeDurable').mockImplementationOnce(function (this: ThreadStore) {
+    vi.spyOn(ThreadStore.prototype, 'open').mockImplementationOnce(() => { throw new Error('Synthetic locked file') })
+    reopen.call(this)
+  })
   history = true
   await expect(host.privacyChanged()).rejects.toThrow('Thread messages could not be opened')
   await expect(host.snapshot()).resolves.toMatchObject({ connected: true })

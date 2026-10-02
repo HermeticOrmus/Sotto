@@ -1783,9 +1783,10 @@ export class WorkspaceHost implements AgentHost {
             this.threadStore.becomeDurable()
           }
         } catch {
+          const redactionFailed = redacting && this.historyRedactionPending
           // A failed reopen can leave no connection. Keep the workspace usable until restart.
-          if (!redacting) this.storeUnavailable = true
-          const failure = redacting ? 'Thread messages could not be removed. Restore access to local storage and try again.' : HISTORY_OPEN_ERROR
+          if (!redactionFailed) this.storeUnavailable = true
+          const failure = redactionFailed ? 'Thread messages could not be removed. Restore access to local storage and try again.' : HISTORY_OPEN_ERROR
           // Keep the transition retryable by the coordinator's privacy maintenance.
           // Scrub pending request words from workspace.json even while SQLite cleanup must retry.
           this.dirty = true
