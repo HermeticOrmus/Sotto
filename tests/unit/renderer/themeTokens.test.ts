@@ -192,6 +192,8 @@ describe('main-window theme tokens', () => {
       'src/renderer/src/tools/browserPlayer.css',
       'src/renderer/src/tools/browserReview.css',
       'src/renderer/src/tools/changes.css',
+      'src/renderer/src/tools/iphoneSurface.css',
+      'src/renderer/src/tools/phonePlayer.css',
       'src/renderer/src/tools/pullRequestSurface.css',
       'src/renderer/src/tools/tools.css',
       'src/renderer/src/tools/toolsRail.css',

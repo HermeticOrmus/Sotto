@@ -65,7 +65,8 @@ export function BrowserPlayer({ state, focusedThreadId, bridge, store, autoShow 
   const ids = state.host.threads.filter(thread => !thread.remoteHost).map(thread => thread.id).join('\n')
   useEffect(() => { store.browser.watchTasks(bridge, ids.split('\n').filter(Boolean)) }, [bridge, store, ids])
 
-  const task = focusedThreadId === null ? undefined : tasks.find(item => item.threadId === focusedThreadId && state.host.threads.some(thread => thread.id === item.threadId))
+  // The test iPhone's tasks float in the phone player instead (ADR-0045).
+  const task = focusedThreadId === null ? undefined : tasks.find(item => item.threadId === focusedThreadId && !item.device && state.host.threads.some(thread => thread.id === item.threadId))
   const threadId = task?.threadId ?? null
   const taskId = task?.id
   useEffect(() => { if (threadId && taskId) playerStore.taskSeen(threadId, taskId, autoShow) }, [threadId, taskId, autoShow, playerStore])

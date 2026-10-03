@@ -6,7 +6,7 @@ import { resolveModel } from '../../../shared/modelCatalog'
 import { useOptionalAgents } from '../agents/AgentContext'
 import { BrowserTaskDetails } from './BrowserTaskDetails'
 import { appendBrowserFeedback, BrowserFeedback } from './BrowserFeedback'
-import { useBrowserTasks, normalizeAddress, pageLabel, useThreadBrowser, type BrowserStore } from './browserStore'
+import { browserPages, useBrowserTasks, normalizeAddress, pageLabel, useThreadBrowser, type BrowserStore } from './browserStore'
 import { useBrowserPageMount } from './useBrowserPageMount'
 import { useOverlayOpen } from './browserOverlay'
 import { ToolsChrome } from './ToolsChrome'
@@ -51,29 +51,30 @@ export function BrowserSurface({ threadId, store, bridge, onStatus, onFloat }: B
   const [problem, setProblem] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
   const surface = useRef<HTMLDivElement>(null)
-  const active = browser?.pages.find(page => page.id === browser.activePageId) ?? null
+  const active = browser?.pages.find(page => page.id === browser.activePageId && !page.device) ?? null
   const activeId = active?.id ?? null
   const activeIdRef = useRef(activeId)
   activeIdRef.current = activeId
   const [selectedTask, setSelectedTask] = useState<string | null>(null)
-  const pageTasks = tasks.filter(item => item.threadId === threadId && item.pageId === activeId)
+  const pageTasks = tasks.filter(item => item.threadId === threadId && item.pageId === activeId && !item.device)
   const task = pageTasks.find(item => item.id === selectedTask) ?? pageTasks[0]
   useEffect(() => { setFeedback(null) }, [activeId])
 
   // A different page, or a navigation the page made itself, shows its own address unless the reader is typing.
   useEffect(() => { setDraft(current => current !== null && current.pageId === activeId ? current : null); setProblem(null) }, [activeId])
 
-  if (!browser || browser.status === 'loading' && browser.pages.length === 0) return <><ToolsChrome title="Browser" /><p className="files-preview__loading" role="status">Loading pages…</p></>
-  if (browser.status === 'error' && browser.pages.length === 0) {
+  if (!browser || browser.status === 'loading' && browserPages(browser.pages).length === 0) return <><ToolsChrome title="Browser" /><p className="files-preview__loading" role="status">Loading pages…</p></>
+  if (browser.status === 'error' && browserPages(browser.pages).length === 0) {
     return <><ToolsChrome title="Browser" /><div className="files-problem files-problem--root" role="status">
       <strong>{listProblem(browser.error ?? { code: 'unavailable', message: '' }, bridge !== undefined)}</strong>
       {bridge ? <button type="button" className="files-link tt-focusable" onClick={() => void store.activate(bridge, threadId)}>Try again</button> : null}
     </div></>
   }
-  const { pages } = browser
+  // The test iPhone is the thread's too, but Tools > iPhone shows it (ADR-0045).
+  const pages = browserPages(browser.pages)
   const newPage = creating || pages.length === 0
   const shown = draft !== null && draft.pageId === (newPage ? null : activeId) ? draft.text : newPage ? '' : active?.url ?? ''
-  const full = pages.length >= 32
+  const full = browser.pages.length >= 32
 
   const submit = (event: FormEvent): void => {
     event.preventDefault()
