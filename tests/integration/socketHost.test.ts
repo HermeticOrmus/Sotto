@@ -21,6 +21,7 @@ import { rawPeer } from '../fixtures/rawHostPeer'
 import { ThreadStore } from '../../src/main/agents/threadStore'
 import { TurnRecorder } from '../../src/main/agents/turns'
 import { HOST_BUSY, HOST_EVENT_PAGE_SIZE } from '../../src/shared/hostProtocol'
+import { AGENT_STATE_PUBLISH_INTERVAL_MS } from '../../src/main/agents/control'
 
 let root: string
 let host: Awaited<ReturnType<typeof startHeadlessHost>>
@@ -347,10 +348,12 @@ describe('authenticated host socket', () => {
     expect((await client.command({ type: 'compose', text: 'Remote draft' })).error).toBeNull()
     expect(host.service.shell().threadDrafts).toEqual(expect.arrayContaining([expect.objectContaining({ threadId: remoteId, text: 'Remote draft' })]))
     await client.observe([remoteId])
-    const detailReads = vi.spyOn(host.service, 'threadDetail')
+    // The reconnect is sent the observed thread whole once, whether the host published it or read it for this client.
+    const wholes: AgentThreadDetailUpdate[] = []
+    const stopCounting = client.subscribeThreadDetail(update => { if (update.threadId === remoteId && !('baseRevision' in update)) wholes.push(update) })
     await client.connect()
-    expect(detailReads.mock.calls.filter(([id]) => id === remoteId)).toHaveLength(1)
-    detailReads.mockRestore()
+    expect(wholes).toHaveLength(1)
+    stopCounting()
     expect((await client.readShell()).activeThreadId).toBe(remoteId)
     expect((await client.command({ type: 'send' })).error).toBeNull()
     expect(host.service.threadDetail(remoteId)!.messages).toEqual(expect.arrayContaining([expect.objectContaining({ role: 'user', text: 'Remote draft' })]))
@@ -561,6 +564,55 @@ it('keeps a client’s place in the event stream when a shell and its events are
   } finally { await client.close(); await server.close() }
 })
 
+it('paces shells to what a client drains: one that stops reading is owed the newest shell instead of being closed, and loses no event (#698)', async () => {
+  const rows: import('../../src/shared/threadEvents').StoredThreadEvent[] = []
+  const rounds = 16
+  let round = 0, publish = (): void => undefined
+  // About 4 MB of model catalog in every shell, standing in for a large one. Sixteen of them queued for a
+  // client that has stopped reading would pass the socket's hard cap of twice the frame limit.
+  const catalog = Array.from({ length: 4000 }, (_, index) => ({ id: 'catalog-' + index, provider: 'Fixture', name: 'Catalog model ' + index + ' ' + 'x'.repeat(1000), ready: true }))
+  const service: HostService = {
+    shell: () => { const state = host.service.shell(); return { ...state, host: { ...state.host, models: [...state.host.models, ...catalog, { id: 'round-' + round, provider: 'Fixture', name: 'Round', ready: true }] } } },
+    state: () => host.service.state(), threadDetail: id => host.service.threadDetail(id),
+    command: (command, identity) => host.service.command(command, identity),
+    events: (afterSeq, threadId, limit) => rows.filter(row => row.seq > afterSeq && (!threadId || row.threadId === threadId)).slice(0, limit),
+    subscribe: listener => { publish = () => listener(host.service.shell()); return () => undefined },
+  }
+  const server = await startSocketServer({ service, pairing: host.pairing })
+  const paired = await host.pairing.redeem(host.pairing.issuePairingCode().code, 'Slow link')
+  const session = host.pairing.signSession(paired.clientId)
+  const slow = await rawPeer(server.descriptor.port, session), steady = await rawPeer(server.descriptor.port, session)
+  const roundOf = (message: Record<string, unknown>): string | undefined => message.event === 'shell'
+    ? (message.state as { host: { models: { id: string }[] } }).host.models.find(model => model.id.startsWith('round-'))?.id : undefined
+  try {
+    await slow.call('hello', { op: 'hello', afterSeq: 0 }); await steady.call('hello', { op: 'hello', afterSeq: 0 })
+    slow.stream.pause()
+    for (round = 1; round <= rounds; round++) {
+      rows.push({ seq: round, threadId: 'synthetic', event: { kind: 'messages-reset', at: new Date().toISOString() } })
+      publish()
+      // A client that keeps reading is sent this round's shell, so the host has run this publish for every peer.
+      await expect.poll(() => steady.messages.some(message => roundOf(message) === 'round-' + round)).toBe(true)
+      steady.messages.length = 0
+    }
+    round = rounds
+    slow.stream.resume()
+    // The client that stopped reading is still connected, and once it reads again it is sent the newest shell.
+    await expect.poll(() => slow.messages.some(message => roundOf(message) === 'round-' + rounds)).toBe(true)
+    expect(await slow.call('still-open', { op: 'receipt', commandId: 'none' })).toMatchObject({ ok: true, result: { status: 'unknown' } })
+    const shells = slow.messages.filter(message => message.event === 'shell')
+    // What was already on its way when it stopped, then the newest it was owed: not a shell a round, and
+    // none older after a newer one. How many were on their way depends on the system's socket buffers.
+    expect(shells.length).toBeLessThan(rounds / 2)
+    const received = shells.map(message => Number(roundOf(message)!.slice('round-'.length)))
+    expect(received).toEqual([...received].sort((a, b) => a - b))
+    expect(received.at(-1)).toBe(rounds)
+    // Its cursor moved only with what was sent, so the shells it did get carry every event, once, in order.
+    expect(shells.flatMap(message => (message.eventPage as { events: { seq: number }[] }).events.map(row => row.seq)))
+      .toEqual(Array.from({ length: rounds }, (_, index) => index + 1))
+    expect(slow.frames.isClosed).toBe(false)
+  } finally { slow.frames.close(); steady.frames.close(); await server.close() }
+})
+
 it('frees a permission mode by what it allows, not by being listed first', async () => {
   // Devin lists only the modes its CLI reports. Without Accept edits there is no Ask first, and Smart,
   // which lets Devin edit unasked, comes first; it still needs the answer policy.
@@ -668,13 +720,30 @@ it('coalesces a burst of shell changes and answers a thread or an event page too
 describe('thread detail over the socket', () => {
   const message = (text: string) => ({ id: 'reply', role: 'assistant' as const, text, createdAt: '2026-09-23T00:00:00.000Z' })
   const delta = (baseRevision: number, revision: number, appendText: string): AgentThreadDetailDelta => ({ threadId: 'streaming', baseRevision, revision, messageDeltas: [{ id: 'reply', appendText }], activityDeltas: [] })
-  /** A service whose one thread's history the test sets, and whose detail stream the test drives. */
+  /**
+   * A service whose two threads' histories the test sets, and whose detail stream the test drives. Like the
+   * coordinator, it publishes a thread whole the moment some client starts observing it, and forgets what it
+   * published once nobody does.
+   */
   async function streamingHost() {
-    const stream: { current: AgentThreadDetail; reads: number; emit: (update: AgentThreadDetailUpdate) => void } = { current: { threadId: 'streaming', revision: 1, messages: [message('Hello')] }, reads: 0, emit: () => undefined }
+    const stream: { current: AgentThreadDetail; quiet: AgentThreadDetail; reads: number; emit: (update: AgentThreadDetailUpdate) => void } = { current: { threadId: 'streaming', revision: 1, messages: [message('Hello')] },
+      quiet: { threadId: 'quiet', revision: 1, messages: [message('Quiet')] }, reads: 0, emit: () => undefined }
+    const published = new Set<string>()
     const service: HostService = {
       shell: () => host.service.shell(), state: () => host.service.state(),
-      threadDetail: id => { if (id !== 'streaming') return host.service.threadDetail(id); stream.reads++; return structuredClone(stream.current) },
-      command: (command, identity) => host.service.command(command, identity),
+      threadDetail: id => {
+        if (id === 'quiet') return structuredClone(stream.quiet)
+        if (id !== 'streaming') return host.service.threadDetail(id)
+        stream.reads++; return structuredClone(stream.current)
+      },
+      command: (command, identity) => {
+        if (command.type === 'observe-threads') {
+          const targets: string[] = command.threadIds.filter(id => id === 'streaming' || id === 'quiet')
+          for (const id of [...published]) if (!targets.includes(id)) published.delete(id)
+          for (const id of targets) if (!published.has(id)) { published.add(id); stream.emit(service.threadDetail(id)!) }
+        }
+        return host.service.command(command, identity)
+      },
       events: (afterSeq, threadId, limit) => host.service.events(afterSeq, threadId, limit), subscribe: listener => host.service.subscribe(listener),
       subscribeThreadDetail: listener => { stream.emit = listener; return () => undefined },
     }
@@ -715,6 +784,81 @@ describe('thread detail over the socket', () => {
       expect(stream.reads).toBe(reads + 1)
       expect(client.threadDetail('streaming')?.revision).toBe(1)
     } finally { await client.close(); await server.close() }
+  })
+
+  it('sends a thread whole once when a client starts observing it, and not again while it holds it (#700)', async () => {
+    const { stream, server, session } = await streamingHost()
+    const phone = await rawPeer(server.descriptor.port, session())
+    const wholes = (threadId: string) => phone.messages.filter(item => item.event === 'detail' && item.threadId === threadId)
+    try {
+      await phone.call('hello', { op: 'hello', accepts: ['detail-delta'] })
+      // Nobody observed this thread: the service publishes it whole as the phone starts observing it, and that is the only copy.
+      await phone.call('observe-quiet', { op: 'observe', threadIds: ['quiet'] })
+      expect(wholes('quiet')).toHaveLength(1)
+      // Adding a thread sends only that thread, and one the phone already holds is not sent again.
+      await phone.call('observe-both', { op: 'observe', threadIds: ['quiet', 'streaming'] })
+      expect(wholes('quiet')).toHaveLength(1)
+      expect(wholes('streaming')).toHaveLength(1)
+      // Opening the same thread again sends nothing, and the read the phone makes when it holds no copy still answers whole.
+      await phone.call('observe-again', { op: 'observe', threadIds: ['quiet', 'streaming'] })
+      expect(phone.messages.filter(item => item.event === 'detail')).toHaveLength(2)
+      expect(await phone.call('read', { op: 'detail', threadId: 'streaming' })).toMatchObject({ ok: true, result: stream.current })
+      // A thread let go and observed again is sent whole again: nothing kept it current in between.
+      await phone.call('observe-one', { op: 'observe', threadIds: ['streaming'] })
+      await phone.call('observe-back', { op: 'observe', threadIds: ['streaming', 'quiet'] })
+      expect(wholes('quiet')).toHaveLength(2)
+      expect(wholes('streaming')).toHaveLength(1)
+    } finally { phone.frames.close(); await server.close() }
+  })
+
+  it('does not send a thread whole a second time when the copy published as it was observed was still waiting to go (#700)', async () => {
+    const { stream, server, session } = await streamingHost()
+    const phone = await rawPeer(server.descriptor.port, session())
+    const wholes = () => phone.messages.filter(item => item.event === 'detail' && item.threadId === 'quiet')
+    try {
+      await phone.call('hello', { op: 'hello', accepts: ['detail-delta'] })
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      // The thread was published a moment ago, so what the service publishes as the phone observes it waits for the window to close.
+      stream.emit(structuredClone(stream.quiet))
+      await phone.call('observe', { op: 'observe', threadIds: ['quiet'] })
+      expect(wholes()).toHaveLength(1)
+      vi.advanceTimersByTime(AGENT_STATE_PUBLISH_INTERVAL_MS)
+      // A delta published after the waiting copy goes out behind it, so its arrival shows the copy was not sent.
+      stream.quiet = { threadId: 'quiet', revision: 2, messages: [message('Quiet now')] }
+      stream.emit({ threadId: 'quiet', baseRevision: 1, revision: 2, messageDeltas: [{ id: 'reply', appendText: ' now' }], activityDeltas: [] })
+      vi.advanceTimersByTime(AGENT_STATE_PUBLISH_INTERVAL_MS)
+      vi.useRealTimers()
+      await expect.poll(() => phone.messages.some(item => item.event === 'detail-delta' && item.threadId === 'quiet')).toBe(true)
+      expect(wholes()).toHaveLength(1)
+    } finally { vi.useRealTimers(); phone.frames.close(); await server.close() }
+  })
+
+  it('sends a thread whole once to a client that starts observing it while another client\'s whole copy is still waiting to go (#700)', async () => {
+    // Every coalescing window stays open until the test closes it, from the first copy the desktop client is sent.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const { stream, server, client, session } = await streamingHost()
+    const phone = await rawPeer(server.descriptor.port, session())
+    const wholes = () => phone.messages.filter(item => item.event === 'detail' && item.threadId === 'streaming')
+    try {
+      await phone.call('hello', { op: 'hello', accepts: ['detail-delta'] })
+      // The desktop client already observes the thread, so observing it publishes nothing. The thread went out a moment
+      // ago and was then rewritten, so its whole copy is waiting to go.
+      stream.emit(structuredClone(stream.current))
+      stream.current = { threadId: 'streaming', revision: 2, messages: [message('Rewritten')] }
+      stream.emit(structuredClone(stream.current))
+      await phone.call('observe', { op: 'observe', threadIds: ['streaming'] })
+      expect(wholes()).toEqual([expect.objectContaining({ detail: stream.current })])
+      vi.advanceTimersByTime(AGENT_STATE_PUBLISH_INTERVAL_MS)
+      await expect.poll(() => client.threadDetail('streaming')?.revision).toBe(2)
+      // A delta published after the waiting copy goes out behind it, so its arrival shows the copy was not sent again.
+      stream.current = { threadId: 'streaming', revision: 3, messages: [message('Rewritten!')] }
+      stream.emit(delta(2, 3, '!'))
+      vi.advanceTimersByTime(AGENT_STATE_PUBLISH_INTERVAL_MS)
+      vi.useRealTimers()
+      await expect.poll(() => phone.messages.some(item => item.event === 'detail-delta' && item.threadId === 'streaming')).toBe(true)
+      expect(wholes()).toHaveLength(1)
+      await expect.poll(() => client.threadDetail('streaming')?.revision).toBe(3)
+    } finally { vi.useRealTimers(); phone.frames.close(); await client.close(); await server.close() }
   })
 
   it('pushes what changed as a delta the client applies and passes on, and the whole thread to a client that never asked for deltas', async () => {
