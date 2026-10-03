@@ -54,6 +54,7 @@ export default tseslint.config(
       'artifacts/background-command/**',
       'artifacts/terminal-loading/**',
       'artifacts/thread-sidebar/**',
+      'artifacts/frosted-window/**',
       'artifacts/forge-hand-test/**',
       'artifacts/effort-furnace/**',
       'artifacts/effort-slider/**',

@@ -33,7 +33,7 @@ import { PersonalChatsView } from './agents/personal/PersonalChatsView'
 import { E2E_THREADS_NOW } from '../../shared/e2e'
 import { MemorySurface } from './features/memory/MemorySurface'
 import { ThemeEditorHost } from './features/settings/themes/ThemeEditor'
-import { appearancePreview, applyAppearance, systemPrefersDark, useAppearancePreviewVersion, useSystemPrefersDark } from './state/appearance'
+import { appearancePreview, applyAppearance, frostAvailable, systemPrefersDark, useAppearancePreviewVersion, useSystemPrefersDark, useSystemReducesTransparency } from './state/appearance'
 
 const recoveryMessages = {
   OPENROUTER_KEY_MIGRATION_FAILED: 'The OpenRouter key could not be stored securely. Enter it again in Settings → Transcription.',
@@ -59,8 +59,9 @@ export function applyDocumentPreferences(
   settings: AppSettings | null,
   root: HTMLElement = document.documentElement,
   systemDark: boolean = systemPrefersDark(),
+  canFrost: boolean = frostAvailable(),
 ): void {
-  if (settings !== null) applyAppearance(appearancePreview.effective(settings), root, systemDark, appearancePreview.draft)
+  if (settings !== null) applyAppearance(appearancePreview.effective(settings), root, systemDark, appearancePreview.draft, canFrost)
   if (settings?.reducedMotion === 'on') root.dataset.reducedMotion = 'on'
   else delete root.dataset.reducedMotion
 }
@@ -107,6 +108,7 @@ export function App({ createMicrophoneTest = () => new BrowserMicrophoneTest() }
   const microphoneReleaseTailRef = useRef<Promise<void>>(Promise.resolve())
   const microphoneReleasesRef = useRef(new WeakMap<MicrophoneTestController, Promise<void>>())
   const systemDark = useSystemPrefersDark()
+  const reducesTransparency = useSystemReducesTransparency()
   const appearanceEdits = useAppearancePreviewVersion()
   const [settingsNotice, setSettingsNotice] = useState<string | null>(null)
   const [themeNotice, setThemeNotice] = useState<ToastMessage | null>(null)
@@ -161,8 +163,8 @@ export function App({ createMicrophoneTest = () => new BrowserMicrophoneTest() }
   // Layout effect: a new appearance is on the root before the browser paints
   // the render that selected it, so the choice and the room never disagree.
   useLayoutEffect(() => {
-    applyDocumentPreferences(app.settings, document.documentElement, systemDark)
-  }, [app.settings, systemDark, appearanceEdits])
+    applyDocumentPreferences(app.settings, document.documentElement, systemDark, window.sotto?.canFrostWindow === true && !reducesTransparency)
+  }, [app.settings, systemDark, reducesTransparency, appearanceEdits])
 
   useEffect(() => {
     const search = (event: KeyboardEvent): void => {

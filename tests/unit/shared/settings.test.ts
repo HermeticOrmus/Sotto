@@ -28,6 +28,8 @@ const customSettings = {
   darkTheme: aurora.id,
   appearanceContrast: 135,
   glassOpacity: 60,
+  frostedWindow: true,
+  frostSeeThrough: 55,
   effortColor: 'aurora',
   customThemes: [aurora],
   webLinkDestination: 'embedded',
@@ -171,6 +173,15 @@ describe('settings', () => {
     expect(parseSettings({ theme: 'ultraviolet' }).theme).toBe('system')
   })
 
+  it('opens a settings file written before the frosted window existed solid, and refuses a see-through it cannot draw', () => {
+    const legacy = { ...customSettings } as Record<string, unknown>
+    delete legacy.frostedWindow
+    delete legacy.frostSeeThrough
+    expect(parseSettings(legacy)).toMatchObject({ frostedWindow: false, frostSeeThrough: 40 })
+    expect(parseSettings({ ...customSettings, frostSeeThrough: 95 })).toMatchObject({ frostedWindow: true, frostSeeThrough: 40 })
+    expect(parseSettings({ ...customSettings, frostSeeThrough: 42 })).toMatchObject({ frostSeeThrough: 40 })
+  })
+
   it('opens a settings file written before appearance existed in dark Sotto, whatever its widget theme', () => {
     for (const theme of ['system', 'light', 'dark'] as const) {
       const legacy = { ...customSettings, theme } as Record<string, unknown>
@@ -255,6 +266,8 @@ describe('settings', () => {
       darkTheme: 't3-code',
       appearanceContrast: 100,
       glassOpacity: 80,
+      frostedWindow: false,
+      frostSeeThrough: 40,
       effortColor: 'ember',
       customThemes: [],
       reducedMotion: 'system',
