@@ -6,10 +6,10 @@ const OVERLAY_SELECTOR = '[role="dialog"], [role="alertdialog"], [role="menu"], 
 /**
  * Overlays that cover only what they overlap, rather than the whole page: the minimized theme editor bar (the
  * reader keeps it up while checking a theme against the page, so the page shows beside it), and the browser
- * player (its own rectangle is exactly where it draws, so a page docked in Tools elsewhere on screen steps aside
- * only if the player is actually sitting over it, not merely open).
+ * and phone players (each one's own rectangle is exactly where it draws, so a page elsewhere on screen steps aside
+ * only if a player is actually sitting over it, not merely open).
  */
-const COVERS_WHERE_IT_OVERLAPS = '[data-theme-editor-panel][data-minimized], .browser-player'
+const COVERS_WHERE_IT_OVERLAPS = '[data-theme-editor-panel][data-minimized], .browser-player, .phone-player__label, .phone-player__phone, .phone-player__status'
 
 /** Whether `element` reaches a pixel of the native page, which main draws at `viewport`'s rounded rectangle. */
 function overlapsPage(element: HTMLElement, viewport: HTMLElement | null): boolean {
@@ -32,7 +32,9 @@ export function useOverlayOpen(inside: RefObject<HTMLElement | null>, viewport: 
     const check = (): void => {
       cancelAnimationFrame(frame)
       frame = 0
-      const overlays = [...document.querySelectorAll<HTMLElement>(OVERLAY_SELECTOR)].filter(element => !inside.current?.contains(element) && element.getClientRects().length > 0)
+      // The phone player marks its whole box, but only its label, phone and status draw; those parts stand in for it.
+      const overlays = [...document.querySelectorAll<HTMLElement>(OVERLAY_SELECTOR)].flatMap(element => element.classList.contains('phone-player') ? [...element.querySelectorAll<HTMLElement>(':scope > *')] : [element])
+        .filter(element => !inside.current?.contains(element) && element.getClientRects().length > 0)
       const bars = overlays.filter(element => element.matches(COVERS_WHERE_IT_OVERLAPS))
       const modal = bars.length < overlays.length
       setOpen(modal || bars.some(bar => overlapsPage(bar, viewport.current)))

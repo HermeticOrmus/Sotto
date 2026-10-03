@@ -23,6 +23,7 @@ export default tseslint.config(
       'artifacts/codex-questions-thread-agents/**',
       'artifacts/agent-browser/**',
       'artifacts/browser-grant/**',
+      'artifacts/test-iphone/**',
       'artifacts/new-thread-setup/**',
       'artifacts/host-folder-browser-run/**',
       'artifacts/command-receipt/**',

@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AgentState } from '../../../../src/shared/agents'
 import { EMPTY_SUBAGENT_SUMMARY, type SubagentsBridge } from '../../../../src/shared/subagents'
 import type { FilesBridge } from '../../../../src/shared/files'
+import type { BrowserBridge, BrowserEvent, BrowserPage, BrowserTask } from '../../../../src/shared/browser'
+import type { ToolsResult } from '../../../../src/shared/tools'
 import { ToolsPanel, ToolsPanelToggle } from '../../../../src/renderer/src/tools/ToolsPanel'
 import { MAX_RENDERED_MARKDOWN_LENGTH, trustedImageSource } from '../../../../src/renderer/src/tools/FilePreview'
 import { ToolsPanelStore, TOOL_SURFACES } from '../../../../src/renderer/src/tools/toolsPanelStore'
@@ -28,7 +30,7 @@ function folders() {
   }
 }
 
-function setup(options: { focused?: string | null; bridge?: FilesBridge | undefined; state?: AgentState; inPane?: boolean; subagents?: SubagentsBridge } = {}) {
+function setup(options: { focused?: string | null; bridge?: FilesBridge | undefined; state?: AgentState; inPane?: boolean; subagents?: SubagentsBridge; browser?: BrowserBridge } = {}) {
   const { focused = 'visual-gate', state = threadsStateFixture(), inPane = false } = options
   const bridge = 'bridge' in options ? options.bridge : fakeFilesBridge(folders())
   const store = new ToolsPanelStore()
@@ -38,11 +40,35 @@ function setup(options: { focused?: string | null; bridge?: FilesBridge | undefi
     {inPane && focusedThreadId !== null
       ? <section key={focusedThreadId} className="thread-pane" data-thread-id={focusedThreadId}><ToolsPanelToggle store={store} state={state} /></section>
       : <ToolsPanelToggle store={store} state={state} />}
-    <ToolsPanel focusedThreadId={focusedThreadId} state={state} command={command} files={bridge} subagents={options.subagents} store={store} />
+    <ToolsPanel focusedThreadId={focusedThreadId} state={state} command={command} files={bridge} subagents={options.subagents} browser={options.browser} store={store} />
   </div>
   const view = render(ui(focused))
   return { store, command, bridge, state, rerender: (next: string | null) => view.rerender(ui(next)) }
 }
+
+const browserOk = <T,>(value: T): ToolsResult<T> => ({ ok: true, value })
+/** A minimal browser bridge for the rail dot tests: only `tasks` and `list` are ever read. */
+function fakeBrowserForDots(tasksByThread: Record<string, BrowserTask[]> = {}) {
+  const listeners = new Set<(event: BrowserEvent) => void>()
+  const bridge: BrowserBridge = {
+    tasks: vi.fn(async ({ threadId }) => browserOk(tasksByThread[threadId] ?? [])),
+    list: vi.fn(async ({ threadId }) => browserOk({ workspace: { threadId, projectId: 'workshop', workingDirectory: 'D:\\work', workspaceId: 'workspace' }, pages: [] })),
+    create: vi.fn(async () => browserOk({} as BrowserPage)), navigate: vi.fn(async () => browserOk({} as BrowserPage)),
+    back: vi.fn(async () => browserOk({} as BrowserPage)), forward: vi.fn(async () => browserOk({} as BrowserPage)),
+    reload: vi.fn(async () => browserOk({} as BrowserPage)), close: vi.fn(async () => browserOk(undefined)),
+    mount: vi.fn(async () => browserOk(undefined)), share: vi.fn(async () => browserOk({} as BrowserPage)), viewport: vi.fn(async () => browserOk({} as BrowserPage)),
+    capture: vi.fn(async () => browserOk({ image: '', url: '', width: 0, height: 0, element: null })),
+    controlTask: vi.fn(async () => browserOk({} as BrowserTask)), answerAction: vi.fn(async () => browserOk({} as BrowserTask)), stopGrant: vi.fn(async () => browserOk(undefined)),
+    openLink: vi.fn(async () => browserOk({ destination: 'external' as const })),
+    onEvent: vi.fn(listener => { listeners.add(listener); return () => { listeners.delete(listener) } }),
+  }
+  return { bridge, emit: (event: BrowserEvent) => { for (const listener of [...listeners]) listener(event) } }
+}
+const phoneTask = (patch: Partial<BrowserTask> = {}): BrowserTask => ({
+  id: 'phone-task', threadId: 'visual-gate', workspaceId: 'workspace', pageId: '11111111-1111-4111-8111-111111111111',
+  status: 'working', description: 'Checking the app', steps: [], thumbnail: null, summary: null, unchecked: [], updatedAt: 1,
+  pendingAction: null, output: null, device: 'iphone', ...patch,
+})
 
 const panel = () => screen.getByRole('complementary', { name: 'Tools' })
 const tree = () => within(panel()).getByRole('tree')
@@ -123,7 +149,7 @@ describe('shared tools panel', () => {
     expect(rail).toHaveAttribute('aria-orientation', 'vertical')
     const tabs = within(rail).getAllByRole('tab')
     expect(tabs.map(tab => tab.textContent)).toEqual(TOOL_SURFACES.map(surface => surface.label))
-    expect(TOOL_SURFACES.map(surface => surface.id)).toEqual(['browser', 'terminal', 'files', 'changes', 'pull-request', 'agents'])
+    expect(TOOL_SURFACES.map(surface => surface.id)).toEqual(['browser', 'iphone', 'terminal', 'files', 'changes', 'pull-request', 'agents'])
     // The tile's word is short; its name is the surface's own.
     expect(within(rail).getByRole('tab', { name: 'Pull request' })).toHaveTextContent('PR')
     expect(within(panel()).getByRole('tab', { name: 'Files' })).toHaveFocus()
@@ -430,6 +456,8 @@ describe('shared tools panel', () => {
     await userEvent.keyboard('{ArrowUp}{ArrowUp}')
     expect(tab('Terminal')).toHaveFocus()
     await userEvent.keyboard('{ArrowLeft}')
+    expect(tab('iPhone')).toHaveFocus()
+    await userEvent.keyboard('{ArrowLeft}')
     expect(tab('Browser')).toHaveFocus()
     await userEvent.keyboard('{ArrowLeft}')
     expect(tab('Agents')).toHaveFocus()
@@ -485,6 +513,24 @@ describe('shared tools panel', () => {
     expect(agents.querySelector('.tools-rail__live')).not.toBeNull()
     rerender('grok-previews')
     expect(within(panel()).getByRole('tab', { name: 'Agents' }).querySelector('.tools-rail__live')).toBeNull()
+  })
+
+  it('marks iPhone live for a task on the test iPhone, waiting or working, while Browser never lights for it', async () => {
+    const browser = fakeBrowserForDots({ 'visual-gate': [phoneTask()] })
+    const { store } = setup({ browser: browser.bridge })
+    act(() => store.setOpen(true))
+    const iphone = await within(panel()).findByRole('tab', { name: 'iPhone' })
+    const browserTab = within(panel()).getByRole('tab', { name: 'Browser' })
+    await waitFor(() => expect(iphone).toHaveAccessibleDescription('An agent is working on the test iPhone'))
+    expect(iphone.querySelector('.tools-rail__live')).not.toBeNull()
+    expect(browserTab).not.toHaveAttribute('aria-description')
+    expect(browserTab.querySelector('.tools-rail__live')).toBeNull()
+
+    act(() => browser.emit({ type: 'task', task: phoneTask({ updatedAt: 2, pendingAction: {
+      id: '33333333-3333-4333-8333-333333333333', action: { type: 'tap', x: 10, y: 20 }, description: 'Tap at 10, 20', expiresAt: Date.now() + 10000,
+    } }) }))
+    expect(iphone).toHaveAccessibleDescription('A test iPhone request is waiting for your answer')
+    expect(browserTab).not.toHaveAttribute('aria-description')
   })
 
   it('expands the tool without losing the selected file, restores width and reopens from the header toggle', async () => {
