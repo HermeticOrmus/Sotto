@@ -42,8 +42,13 @@ class Refusal extends Error { constructor(readonly code: HostErrorCode, message 
 /**
  * `deltas` is set by the client's hello: only a client that accepts `detail-delta` is sent one. `clientUpdates` likewise:
  * only a client that accepts `client-updates` is sent the mise channel and the waiting state in its shell's client updates.
+ *
+ * `held` is the revision of each observed thread's detail the client holds, as far as what it was sent says: set by a
+ * whole detail that went, moved on by a delta that followed it, and dropped by a push that could not go or a delta that
+ * did not follow it. `opening` is each observed thread still owed its first whole detail. `sentAhead` holds each whole
+ * detail this client was sent while that copy was still waiting out the coalescing window, so it is not sent again (#700).
  */
-interface Peer { frames: SocketFrames; client: ClientIdentity; session: string; observed: Set<string>; inFlight: number; window: number; count: number; pageWindow: number; pages: number; preview: boolean; ready: boolean; afterSeq: number; selectedThreadId: string | null; selectedProjectId: string | null; editingThreadId: string | null; deltas: boolean; messageAliases: boolean; clientUpdates: boolean }
+interface Peer { frames: SocketFrames; client: ClientIdentity; session: string; observed: Set<string>; held: Map<string, number>; opening: Set<string>; sentAhead: WeakSet<AgentThreadDetail>; inFlight: number; window: number; count: number; pageWindow: number; pages: number; preview: boolean; ready: boolean; afterSeq: number; selectedThreadId: string | null; selectedProjectId: string | null; editingThreadId: string | null; deltas: boolean; messageAliases: boolean; clientUpdates: boolean }
 export interface SocketServerOptions {
   service: HostService; pairing: PairedClients; port?: number; origins?: readonly string[]
   mayAnswer?: (client: ClientIdentity) => boolean
@@ -178,7 +183,18 @@ export async function startSocketServer(options: SocketServerOptions) {
     await service.command({ type: 'observe-threads', threadIds: ids }, { clientId: 'socket-observations', user: '', transport: 'socket' })
   }
   const track = <T>(task: Promise<T>): Promise<T> => { operations.add(task); void task.finally(() => operations.delete(task)).catch(() => undefined); return task }
-  const detail = (peer: Peer, threadId: string): void => { push(peer, { v: 1, event: 'detail', threadId, detail: service.threadDetail(threadId) }) }
+  /** A thread let go is no longer kept current for this client, so it starts over when it is observed again. */
+  const setObserved = (peer: Peer, threadIds: readonly string[]): void => {
+    peer.observed = new Set(threadIds)
+    for (const id of peer.held.keys()) if (!peer.observed.has(id)) peer.held.delete(id)
+    for (const id of peer.opening) if (!peer.observed.has(id)) peer.opening.delete(id)
+  }
+  const sendWhole = (peer: Peer, threadId: string, detail: AgentThreadDetail | null): void => {
+    peer.opening.delete(threadId)
+    if (push(peer, { v: 1, event: 'detail', threadId, detail }) && detail) peer.held.set(threadId, detail.revision)
+    else peer.held.delete(threadId)
+  }
+  const detail = (peer: Peer, threadId: string): void => { sendWhole(peer, threadId, service.threadDetail(threadId)) }
   // A streaming thread changes the shell many times a second. Pushes go out at most once a window, the
   // same way the desktop's own IPC coalesces them, and each carries the state as it is when it is sent.
   // Details come through their own subscription when the service has one, so a shell change resends no history.
@@ -201,17 +217,32 @@ export async function startSocketServer(options: SocketServerOptions) {
   // (what changed since the revision the client holds) as a detail-delta to every client that accepts
   // one. A client applies a delta only to the revision it was measured from and asks for the whole detail
   // otherwise. A client that never accepted deltas, from before protocol v1 froze, is sent the whole thread.
+  // A client still owed its first copy of a thread is sent no delta: the copy it is about to be sent is current.
+  // A delta no newer than what the client holds is already covered, and a whole it was sent ahead goes no second time.
+  /** The latest whole detail the service published for each thread that has not gone out yet. */
+  const waiting = new Map<string, AgentThreadDetail>()
   const detailPublisher = coalesceAgentThreadDetailPublishes(update => {
     const threadId = update.threadId
+    waiting.delete(threadId)
     let whole: AgentThreadDetail | null | undefined = isAgentThreadDetailDelta(update) ? undefined : update
     for (const peer of peers) {
       if (!peer.observed.has(threadId)) continue
-      if (isAgentThreadDetailDelta(update) && peer.deltas) push(peer, { v: 1, event: 'detail-delta', threadId, delta: update })
-      else push(peer, { v: 1, event: 'detail', threadId, detail: whole === undefined ? (whole = service.threadDetail(threadId)) : whole })
+      if (!isAgentThreadDetailDelta(update)) { if (!peer.sentAhead.has(update)) sendWhole(peer, threadId, update); continue }
+      const held = peer.held.get(threadId)
+      if (peer.opening.has(threadId) || held !== undefined && update.revision <= held) continue
+      if (!peer.deltas) { sendWhole(peer, threadId, whole === undefined ? (whole = service.threadDetail(threadId)) : whole); continue }
+      if (push(peer, { v: 1, event: 'detail-delta', threadId, delta: update }) && held === update.baseRevision) peer.held.set(threadId, update.revision)
+      else peer.held.delete(threadId)
     }
   })
   const unsubscribe = service.subscribe(state => shellPublisher.publish(state))
-  const unsubscribeDetails = service.subscribeThreadDetail?.(update => detailPublisher.publish(update))
+  // A whole the service published may still be waiting out the coalescing window when a client starts observing
+  // its thread. The client is sent that copy before its observe is acknowledged, and it does not follow a second time.
+  // An entry lasts only until the thread's next update goes out, which carries or follows it.
+  const unsubscribeDetails = service.subscribeThreadDetail?.(update => {
+    if (!isAgentThreadDetailDelta(update)) waiting.set(update.threadId, update)
+    detailPublisher.publish(update)
+  })
   /** The permission settings of a new or changed thread's model that let the provider do nothing unasked. */
   const askingProviderModes = (input: AgentCommand): string[] => {
     if (input.type !== 'create-thread' && input.type !== 'configure-thread') return []
@@ -262,7 +293,7 @@ export async function startSocketServer(options: SocketServerOptions) {
         } else if (input.type === 'select-project') {
           peer.selectedProjectId = input.projectId; peer.selectedThreadId = null
         } else if (input.type === 'observe-threads') {
-          peer.observed = new Set(input.threadIds); await observe()
+          setObserved(peer, input.threadIds); await observe()
         } else {
           const previousEditor = peer.editingThreadId
           if (input.type === 'compose') peer.editingThreadId = peer.selectedThreadId
@@ -301,11 +332,24 @@ export async function startSocketServer(options: SocketServerOptions) {
       case 'detail': return service.threadDetail(request.threadId)
       case 'events': return events(peer, request.afterSeq, request.threadId)
       case 'receipt': return receipts.get(peer.client.clientId + ':' + request.commandId)?.receipt ?? { status: 'unknown' }
-      case 'observe':
-        peer.observed = new Set(request.threadIds); await observe()
-        for (const id of peer.observed) { await peer.frames.drained(); if (peer.frames.isClosed) break; detail(peer, id) }
+      case 'observe': {
+        // Only a thread this client does not hold is sent whole: one it holds is kept current by the pushes that follow
+        // it. The service publishes a newly observed thread whole as it is observed, and that copy is the one sent.
+        setObserved(peer, request.threadIds)
+        const owed = [...peer.observed].filter(id => !peer.held.has(id))
+        for (const id of owed) peer.opening.add(id)
+        try { await observe() } catch (error) { for (const id of owed) peer.opening.delete(id); throw error }
+        for (const id of owed) {
+          if (!peer.opening.has(id)) continue
+          await peer.frames.drained(); if (peer.frames.isClosed) break
+          if (!peer.opening.has(id)) continue
+          // A copy still waiting is sent now in its place, so the thread is neither read again nor sent twice.
+          const offered = waiting.get(id)
+          if (offered) { peer.sentAhead.add(offered); sendWhole(peer, id, offered) } else detail(peer, id)
+        }
         await peer.frames.drained()
         return null
+      }
       case 'command': return command(peer, request)
       case 'git-refs':
         if (!service.gitRefs) throw new Refusal('invalid_request')
@@ -389,8 +433,12 @@ export async function startSocketServer(options: SocketServerOptions) {
       catch (error) { const code = error instanceof Refusal ? error.code : 'unavailable'; response = { v: 1, id: request.id, ok: false, error: { code, message: error instanceof Refusal ? error.message : errors[code] } } }
       // A revocation while an operation was pending also denies its response.
       if (!authenticated(peer)) { peer.frames.send({ v: 1, id: request.id, ok: false, error: { code: 'unauthenticated', message: errors.unauthenticated } }); peer.frames.close() }
-      else if (deliver(peer, response, request.op === 'detail' ? 'thread' : request.op === 'preview' || request.op === 'attachment-content' ? 'preview' : 'list')
-        && response.ok && (request.op === 'hello' || (request.op === 'events' && !request.threadId))) {
+      else if (!deliver(peer, response, request.op === 'detail' ? 'thread' : request.op === 'preview' || request.op === 'attachment-content' ? 'preview' : 'list') || !response.ok) return
+      else if (request.op === 'detail') {
+        // A thread read whole is held at that revision, and the deltas that follow it apply.
+        const read = response.result as AgentThreadDetail | null
+        if (read && peer.observed.has(request.threadId) && !peer.opening.has(request.threadId)) peer.held.set(request.threadId, read.revision)
+      } else if (request.op === 'hello' || (request.op === 'events' && !request.threadId)) {
         if (request.op === 'hello') peer.ready = true
         const latestSeq = (response.result as { latestSeq: number }).latestSeq
         peer.afterSeq = peer.afterSeq === Number.MAX_SAFE_INTEGER ? latestSeq : Math.max(peer.afterSeq, latestSeq)
@@ -471,7 +519,7 @@ export async function startSocketServer(options: SocketServerOptions) {
     const accept = createHash('sha1').update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64')
     stream.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' + accept + '\r\n\r\n')
     const frames = new SocketFrames(stream, false, text => onMessage(peer, text))
-    const peer: Peer = { frames, client: identity(clientId), session, observed: new Set(), inFlight: 0, window: Date.now(), count: 0, pageWindow: 0, pages: 0, preview: false, ready: false, afterSeq: Number.MAX_SAFE_INTEGER, selectedThreadId: null, selectedProjectId: null, editingThreadId: null, messageAliases: false, deltas: false, clientUpdates: false }
+    const peer: Peer = { frames, client: identity(clientId), session, observed: new Set(), held: new Map(), opening: new Set(), sentAhead: new WeakSet(), inFlight: 0, window: Date.now(), count: 0, pageWindow: 0, pages: 0, preview: false, ready: false, afterSeq: Number.MAX_SAFE_INTEGER, selectedThreadId: null, selectedProjectId: null, editingThreadId: null, messageAliases: false, deltas: false, clientUpdates: false }
     peers.add(peer)
     frames.startHeartbeat()
     frames.onClose(() => { peers.delete(peer); if (!closing) { track(observe().catch(() => undefined)); options.onPeersChanged?.() } })
@@ -489,7 +537,7 @@ export async function startSocketServer(options: SocketServerOptions) {
   expiry.unref()
   const stopServing = (): void => {
     if (closing) return
-    closing = true; clearInterval(expiry); unsubscribe(); unsubscribeDetails?.(); shellPublisher.dispose(); detailPublisher.dispose()
+    closing = true; clearInterval(expiry); unsubscribe(); unsubscribeDetails?.(); shellPublisher.dispose(); detailPublisher.dispose(); waiting.clear()
     server.removeAllListeners('request')
     server.removeAllListeners('upgrade')
     server.removeAllListeners('connection')
