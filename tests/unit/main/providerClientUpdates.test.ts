@@ -200,7 +200,18 @@ class VersionedHost extends E2EAgentHost {
   async clientUpdated(provider: ProviderId): Promise<void> { this.log.push(`clientUpdated ${provider}`); this.installed = this.onDisk }
 }
 
-async function coordinator(host: VersionedHost, run: RunLike, published = '1.0.40',
+/** A registry a test can publish to, with the clock its one-hour cache runs on. */
+interface Registry { version: string; now: number }
+const HOUR = 60 * 60 * 1000
+/** Connect again, which checks without starting fresh, `after` ms on; resolves once that check's reading has landed. */
+async function recheck(control: AgentControl, registry: Registry, after: number): Promise<void> {
+  registry.now += after
+  const at = new Date(registry.now).toISOString()
+  await control.command({ type: 'connect' })
+  await vi.waitFor(() => { expect(control.get().clientUpdates?.[0]?.checkedAt).toBe(at) })
+}
+
+async function coordinator(host: VersionedHost, run: RunLike, published: string | Registry = '1.0.40',
   extra: Partial<ConstructorParameters<typeof AgentControl>[0]> = {}): Promise<{ control: AgentControl }> {
   const directory = await root('sotto-client-updates-')
   // A real npm global layout, so the channel is detected the way it is on a machine.
@@ -213,7 +224,9 @@ async function coordinator(host: VersionedHost, run: RunLike, published = '1.0.4
   await credentials.load()
   const control = new AgentControl({
     schedule: immediatePublishScheduler, directory, host, credentials,
-    clients: new ProviderClients({ fetchImpl: async () => answer(published), run, npmPath: async () => join(prefix, 'npm.cmd') }),
+    clients: new ProviderClients({ run, npmPath: async () => join(prefix, 'npm.cmd'),
+      ...typeof published === 'string' ? { fetchImpl: async () => answer(published) }
+        : { fetchImpl: async () => answer(published.version), now: () => published.now } }),
     locateClient: async (provider: ProviderId) => join(prefix, `${provider}.exe`),
     reasoner: { intent: async () => ({ type: 'clarify', text: '' }), decide: async () => ({ decision: 'human', text: '' }) },
 
@@ -303,6 +316,61 @@ describe('updating a client from the app', () => {
       expect(result.error).toMatch(/still reports 1\.0\.5\. Nothing was lost and your threads kept working\. Run npm install -g/u)
       expect(host.log).toEqual(['clientUpdated grok'])
       expect(control.get().clientUpdates).toEqual([expect.objectContaining({ installed: '1.0.5', state: 'unchanged' })])
+    } finally { control.dispose() }
+  })
+
+  it('keeps saying a client updated through the next check, until a newer release is published', async () => {
+    const host = new VersionedHost()
+    const registry: Registry = { version: '1.0.40', now: Date.now() }
+    const { control } = await coordinator(host, async () => { host.onDisk = '1.0.40'; return { ok: true } }, registry)
+    try {
+      await control.command({ type: 'connect' })
+      await control.command({ type: 'check-client-updates' })
+      expect((await control.command({ type: 'update-client', provider: 'grok' })).error).toBeNull()
+      // The same release keeps the update's finding.
+      await recheck(control, registry, 1)
+      expect(control.get().clientUpdates).toEqual([expect.objectContaining({ installed: '1.0.40', behind: false, state: 'updated' })])
+      // A newer release, read once the cached answer runs out, makes the client behind again with Update to press.
+      registry.version = '1.0.41'
+      await recheck(control, registry, HOUR + 1)
+      expect(control.get().clientUpdates).toEqual([expect.objectContaining({ installed: '1.0.40', published: '1.0.41', behind: true, canInstall: true, state: 'idle' })])
+    } finally { control.dispose() }
+  })
+
+  it('offers a newer release to a client whose last update failed, rather than the failure', async () => {
+    const host = new VersionedHost()
+    const registry: Registry = { version: '1.0.40', now: Date.now() }
+    const { control } = await coordinator(host, async () => ({ ok: false, detail: 'npm ERR! code EACCES' }), registry)
+    try {
+      await control.command({ type: 'connect' })
+      await control.command({ type: 'check-client-updates' })
+      await control.command({ type: 'update-client', provider: 'grok' })
+      await recheck(control, registry, 1)
+      expect(control.get().clientUpdates).toEqual([expect.objectContaining({ published: '1.0.40', state: 'failed' })])
+      registry.version = '1.0.41'
+      await recheck(control, registry, HOUR + 1)
+      const [reading] = control.get().clientUpdates ?? []
+      expect(reading).toEqual(expect.objectContaining({ installed: '1.0.5', published: '1.0.41', behind: true, state: 'idle' }))
+      expect(reading?.error).toBeUndefined()
+    } finally { control.dispose() }
+  })
+
+  it('keeps a finding through a check that cannot read the registry', async () => {
+    const host = new VersionedHost()
+    const registry: Registry = { version: '1.0.40', now: Date.now() }
+    const { control } = await coordinator(host, async () => { host.onDisk = '1.0.40'; return { ok: true } }, registry)
+    try {
+      await control.command({ type: 'connect' })
+      await control.command({ type: 'check-client-updates' })
+      await control.command({ type: 'update-client', provider: 'grok' })
+      // An empty version fails the registry's schema, which reads as no answer at all.
+      registry.version = ''
+      await recheck(control, registry, HOUR + 1)
+      // The release the update was measured against stays, so the registry answering again with it changes nothing.
+      expect(control.get().clientUpdates).toEqual([expect.objectContaining({ installed: '1.0.40', published: '1.0.40', state: 'updated' })])
+      registry.version = '1.0.40'
+      await recheck(control, registry, HOUR + 1)
+      expect(control.get().clientUpdates).toEqual([expect.objectContaining({ installed: '1.0.40', published: '1.0.40', state: 'updated' })])
     } finally { control.dispose() }
   })
 

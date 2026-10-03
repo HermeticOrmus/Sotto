@@ -150,6 +150,17 @@ function outcomeOf(before: ProviderClientUpdate): Partial<ProviderClientUpdate> 
   for (const key of ['error', 'ranAt', 'step', 'failure', 'printed'] as const) if (before[key] !== undefined) Object.assign(kept, { [key]: before[key] })
   return kept
 }
+/**
+ * Whether a client's last update still describes a new reading of it: the same version installed, measured against the
+ * same release. A newer release makes the client behind again, and "is now 2.1.287" would hide 2.1.288. A registry that
+ * could not be read moves nothing.
+ */
+const outcomeHolds = (before: ProviderClientUpdate, reading: ProviderClientUpdate): boolean =>
+  before.installed === reading.installed && (reading.published === undefined || reading.published === before.published)
+/** A new reading with a client's last update on it. A registry not read this time leaves the release that update was measured against. */
+const withOutcome = (reading: ProviderClientUpdate, before: ProviderClientUpdate): ProviderClientUpdate => ({
+  ...reading, ...reading.published === undefined && before.published !== undefined ? { published: before.published } : {}, ...outcomeOf(before),
+})
 
 /** Owns assignment authority, queue ordering and durable dispatch intent across all host adapters. */
 import type { GitRefsPage, GitRefsRequest } from '../../shared/gitRefs'
@@ -210,7 +221,7 @@ export class AgentControl {
   private readonly clientWaiters = new Map<ProviderId, { resolve: () => void; reject: (error: unknown) => void }[]>()
   private clientLineRunning = false
   /** Where each waiting client stood before it joined the line, so Cancel update puts it back. */
-  private readonly clientLineBefore = new Map<ProviderId, Partial<ProviderClientUpdate>>()
+  private readonly clientLineBefore = new Map<ProviderId, ProviderClientUpdate>()
   private serial: Promise<unknown> = Promise.resolve()
   private unsubscribe: (() => void) | null = null
   private reconnect: ReturnType<typeof setTimeout> | null = null
@@ -934,7 +945,8 @@ export class AgentControl {
   /**
    * What every connected client publishes, against what it is running. A provider that is not
    * connected has no known installed version, so nothing is claimed about it. Findings from an
-   * update already run are kept, so "is now 2.1.278" survives the next check.
+   * update already run are kept, so "is now 2.1.278" survives the next check, until a newer
+   * release is published: then the client is behind again and the old finding would hide it.
    */
   private async checkClientUpdates(fresh = false): Promise<void> {
     if (!this.state.configuration.checkClientUpdates) { delete this.state.clientUpdates; return }
@@ -949,15 +961,17 @@ export class AgentControl {
       // A client in the update line keeps where it stands there, even through a fresh check.
       const lined = this.inClientLine(provider.id)
       const before = fresh && !lined ? undefined : previous.find(item => item.id === provider.id)
-      readings.push(before && (lined || (before.state !== 'idle' && before.installed === reading.installed)) ? { ...reading, ...outcomeOf(before) } : reading)
+      readings.push(before && (lined || (before.state !== 'idle' && outcomeHolds(before, reading))) ? withOutcome(reading, before) : reading)
     }
     if (this.disposed) return
     // The update line runs while this check waits on the registry and the disk: whatever it said about a client
-    // meanwhile (its step, how it ended) is newer than what the check started from, and wins.
+    // meanwhile (its step, how it ended) is newer than what the check started from, and wins. How it ended gives way to
+    // a newer release the check found, while waiting or running never does.
     const latest = this.state.clientUpdates ?? []
     for (const [index, reading] of readings.entries()) {
       const now = latest.find(item => item.id === reading.id)
-      if (now && now !== previous.find(item => item.id === reading.id)) readings[index] = { ...reading, ...outcomeOf(now) }
+      if (now && now !== previous.find(item => item.id === reading.id)
+        && (now.state === 'queued' || now.state === 'updating' || reading.published === undefined || reading.published === now.published)) readings[index] = withOutcome(reading, now)
     }
     // A client that updated, failed or did not change still has something to say after its provider
     // drops: losing the record here would take the sentence about it off the card with it.
@@ -1009,7 +1023,7 @@ export class AgentControl {
       if (refusal) { refusals.push(refusal); continue }
       this.clientLine.push(provider)
       const record = this.state.clientUpdates?.find(item => item.id === provider)
-      if (record) this.clientLineBefore.set(provider, outcomeOf(record))
+      if (record) this.clientLineBefore.set(provider, record)
       this.setClientUpdate(provider, { state: 'queued' }, false)
       added += 1
     }
@@ -1026,8 +1040,10 @@ export class AgentControl {
       const at = this.clientLine.indexOf(provider)
       if (at < 0) continue
       this.clientLine.splice(at, 1)
-      // Back as it was before it joined the line: behind, or with the failure it had.
-      this.setClientUpdate(provider, this.clientLineBefore.get(provider) ?? { state: 'idle' }, false)
+      // Back as it was before it joined the line: behind, or with the failure it had, unless a newer release came out meanwhile.
+      const before = this.clientLineBefore.get(provider)
+      const record = this.state.clientUpdates?.find(item => item.id === provider)
+      this.setClientUpdate(provider, before && record && outcomeHolds(before, record) ? outcomeOf(before) : { state: 'idle' }, false)
       this.clientLineBefore.delete(provider)
       const waiting = this.clientWaiters.get(provider) ?? []
       this.clientWaiters.delete(provider)
