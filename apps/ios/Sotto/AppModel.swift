@@ -43,10 +43,15 @@ struct DraftPhoto: Identifiable {
     }
 }
 
-/// Whichever of two outcomes comes first; the other is ignored.
-@MainActor private final class FirstOutcome<Value> {
-    var continuation: CheckedContinuation<Value, Error>?
-    func finish(_ result: Result<Value, Error>) { continuation?.resume(with: result); continuation = nil }
+/// A photo's original on its way: whichever of its arrival, its time limit or its removal comes first decides,
+/// and the others are ignored.
+@MainActor private final class PhotoLoad {
+    var continuation: CheckedContinuation<Data, Error>?
+    var tasks: [Task<Void, Never>] = []
+    func finish(_ result: Result<Data, Error>) {
+        continuation?.resume(with: result); continuation = nil
+        tasks.forEach { $0.cancel() }; tasks = []
+    }
 }
 
 /// Every paired computer, each with its own connection, session and state. A computer that can't be
@@ -105,8 +110,10 @@ struct DraftPhoto: Identifiable {
     /// Photos are prepared one at a time, so several large photos are never decoded at once.
     private var photoWork: Task<Void, Never>?
     private let preparePhoto: @Sendable (Data, String) async throws -> PreparedPhoto
-    /// How long a photo's original may take to arrive, from iCloud for one not on this iPhone, before it is left out.
-    private static let photoLoadLimit: UInt64 = 120_000_000_000
+    /// Waits out how long a photo's original may take to arrive, from iCloud for one not on this iPhone, before it
+    /// is left out: two minutes.
+    private let photoLoadLimit: @Sendable () async throws -> Void
+    private var photoLoads: [UUID: PhotoLoad] = [:]
     /// Hands a sent reply's photos to whatever draws the thread, so it has them before their message arrives.
     var photosSent: (([DraftPhoto], ThreadRef) -> Void)?
     private let receiptSleep: @Sendable (UInt64) async throws -> Void
@@ -281,12 +288,14 @@ struct DraftPhoto: Identifiable {
          retryJitter: @escaping @Sendable () -> Double = { Double.random(in: 0.8...1.2) },
          retrySleep: @escaping @Sendable (UInt64) async throws -> Void = { try await Task.sleep(nanoseconds: $0) },
          preparePhoto: @escaping @Sendable (Data, String) async throws -> PreparedPhoto = { try await PhotoPipeline.prepare($0, name: $1) },
-         receiptSleep: @escaping @Sendable (UInt64) async throws -> Void = { try await Task.sleep(nanoseconds: $0) }) {
+         receiptSleep: @escaping @Sendable (UInt64) async throws -> Void = { try await Task.sleep(nanoseconds: $0) },
+         photoLoadLimit: @escaping @Sendable () async throws -> Void = { try await Task.sleep(nanoseconds: 120_000_000_000) }) {
         self.keychain = keychain
         self.retrySleep = retrySleep
         self.retryJitter = retryJitter
         self.preparePhoto = preparePhoto
         self.receiptSleep = receiptSleep
+        self.photoLoadLimit = photoLoadLimit
         #if DEBUG && os(iOS)
         if ProcessInfo.processInfo.arguments.contains("--ui-fixture") {
             loadUIFixture()
@@ -792,7 +801,7 @@ struct DraftPhoto: Identifiable {
         // Removed while it waited its turn: nothing is read.
         guard photo(id, in: ref) != nil else { return }
         do {
-            let prepared = try await preparePhoto(try await loaded(source), source.name)
+            let prepared = try await preparePhoto(try await loaded(source, for: id), source.name)
             guard photo(id, in: ref) != nil else { return }
             let others = photos(ref).filter { $0.id != id }.compactMap { $0.prepared?.byteCount }
             guard Photos.fits(prepared.byteCount, with: others) else {
@@ -808,18 +817,19 @@ struct DraftPhoto: Identifiable {
         }
     }
     /// A photo's original bytes, or `tooSlow` once the limit passes, so one that never arrives can't hold up the
-    /// photos chosen after it. A load that ignores cancellation is left to finish on its own.
-    private func loaded(_ source: PhotoSource) async throws -> Data {
-        let first = FirstOutcome<Data>()
+    /// photos chosen after it, and removing the photo ends the wait at once. A load that ignores cancellation is
+    /// left to finish on its own.
+    private func loaded(_ source: PhotoSource, for id: UUID) async throws -> Data {
+        let load = PhotoLoad()
+        photoLoads[id] = load
+        defer { photoLoads[id] = nil }
+        let limit = photoLoadLimit
         return try await withCheckedThrowingContinuation { continuation in
-            first.continuation = continuation
-            let work = Task {
-                do { first.finish(.success(try await source.load())) } catch { first.finish(.failure(error)) }
-            }
-            Task {
-                try? await Task.sleep(nanoseconds: Self.photoLoadLimit)
-                work.cancel(); first.finish(.failure(PhotoPipelineError.tooSlow))
-            }
+            load.continuation = continuation
+            load.tasks = [
+                Task { do { load.finish(.success(try await source.load())) } catch { load.finish(.failure(error)) } },
+                Task { do { try await limit(); load.finish(.failure(PhotoPipelineError.tooSlow)) } catch {} },
+            ]
         }
     }
     /// A photo's staging, started now unless it is already under way: a photo is never staged twice at once.
@@ -881,6 +891,7 @@ struct DraftPhoto: Identifiable {
     /// Takes a photo out of its reply box, saying why when it wasn't the user's choice.
     private func dropPhoto(_ id: UUID, in ref: ThreadRef, reason: String?) {
         guard photo(id, in: ref) != nil else { return }
+        photoLoads[id]?.finish(.failure(CancellationError()))
         draftPhotos[ref.id]?.removeAll { $0.id == id }
         if draftPhotos[ref.id]?.isEmpty == true { draftPhotos[ref.id] = nil }
         photoNotices[ref.id] = reason
@@ -977,8 +988,8 @@ struct DraftPhoto: Identifiable {
         return nil
     }
     /// Reads a command's receipt every two seconds while its computer says it is still carrying it out, and
-    /// settles it once it has finished. A computer that doesn't know the command, a changed connection or ten
-    /// minutes leave it as it is: unconfirmed.
+    /// settles it once it has finished. A computer that doesn't know the command, a changed connection or the last
+    /// read, about ten minutes on, leave it as it is: unconfirmed.
     private func followReceipt(_ operation: PendingOperation, on connection: HostConnection, epoch: UUID?, token: UUID) async {
         defer { if receiptFollowers[operation.id]?.token == token { receiptFollowers[operation.id] = nil } }
         let hostID = operation.hostID

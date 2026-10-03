@@ -134,8 +134,8 @@ struct PhotoViewer: View {
                 .lineLimit(1).truncationMode(.middle).padding(.horizontal, 20).padding(.vertical, 12)
         }
         .background(Palette.canvas.ignoresSafeArea())
-        // Covered while Sotto isn't in front, as the root's cover does for the tabs beneath, which it can't reach
-        // over a full-screen cover, so the app switcher never shows a photo.
+        // A full-screen cover sits above the root's own cover, so it covers itself while Sotto isn't in front,
+        // and the app switcher never shows a photo.
         .overlay {
             if phase != .active {
                 Palette.canvas.ignoresSafeArea().overlay(Text("Sotto").font(.title2).foregroundStyle(Palette.ink))

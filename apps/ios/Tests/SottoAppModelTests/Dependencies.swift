@@ -53,6 +53,8 @@ struct HostRefusal: Error, LocalizedError {
     /// The computer's answer to `stage-attachment` and `preview`, given the request's image or preview fields.
     static var stageHandler: ((JSONValue) async throws -> JSONValue)?
     static var previewHandler: ((JSONValue) async throws -> JSONValue)?
+    /// The photo load limit the photo tests give the model: never passing, unless a test says otherwise.
+    static var photoLoadLimit: @Sendable () async throws -> Void = { try await Task.sleep(nanoseconds: 3_600_000_000_000) }
     static var receipts: [String: JSONValue] = [:]
     var onPush: ((IncomingFrame, Int) -> Void)?
     var onLiveness: (() -> Void)?

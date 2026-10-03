@@ -31,6 +31,7 @@ final class PhotoReplyTests: XCTestCase {
         HostConnection.loseAcknowledgement = false; HostConnection.features = features
         HostConnection.shells = [:]; HostConnection.commandHandler = nil; HostConnection.folderHandler = nil
         HostConnection.stageHandler = nil; HostConnection.previewHandler = nil
+        HostConnection.photoLoadLimit = { try await Task.sleep(nanoseconds: 3_600_000_000_000) }
         let pairing = try json(#"{"v":1,"hostId":"\#(host)","clientId":"phone","token":"fixture"}"#).decode(Pairing.self)
         try TestKeychain.store.write([host], account: ComputerStore.indexAccount)
         try TestKeychain.store.write(SavedComputer(address: "https://laptop.example.ts.net:8443", pairing: pairing, reportedName: "Laptop"), account: ComputerStore.account(host))
@@ -53,7 +54,8 @@ final class PhotoReplyTests: XCTestCase {
         }
         let model = AppModel(keychain: TestKeychain.store,
                              preparePhoto: { _, name in PreparedPhoto(name: name + ".jpg", mimeType: "image/jpeg", base64: "/9j/AA==", byteCount: 4, dimensions: nil, thumbnail: nil) },
-                             receiptSleep: receiptSleep ?? { _ in })
+                             receiptSleep: receiptSleep ?? { _ in },
+                             photoLoadLimit: { try await HostConnection.photoLoadLimit() })
         model.phase(.active); await model.waitForActivation()
         return (model, ThreadRef(hostID: host, threadID: "t"))
     }
@@ -142,6 +144,35 @@ final class PhotoReplyTests: XCTestCase {
         await model.waitForPhotos()
         XCTAssertTrue(model.photos(ref).isEmpty)
         XCTAssertEqual(model.photoNotices[ref.id], PhotoPipelineError.unreadable.errorDescription)
+    }
+    @MainActor func testAPhotoThatNeverArrivesIsLeftOutAndTheNextOneStillGoes() async throws {
+        let (model, ref) = try await fixture()
+        let gate = Gate()
+        // The time limit passes as soon as the stuck photo is waiting on it.
+        HostConnection.photoLoadLimit = { await gate.hold() }
+        model.attachPhotos(ref, from: [PhotoSource(name: "Photo 1") { try await Task.sleep(nanoseconds: 3_600_000_000_000); return Data() }, source("Photo 2")])
+        await gate.arrived()
+        // The next photo's limit never passes, so it goes on its own arrival.
+        HostConnection.photoLoadLimit = { try await Task.sleep(nanoseconds: 3_600_000_000_000) }
+        gate.release()
+        await model.waitForPhotos()
+        XCTAssertEqual(model.photos(ref).count, 1, "The photo that never arrived was left out")
+        XCTAssertEqual(model.photos(ref).first?.staged?.id, "staged-1")
+        XCTAssertEqual(model.photoNotices[ref.id], PhotoPipelineError.tooSlow.errorDescription)
+    }
+    @MainActor func testRemovingAPhotoStillLoadingLetsTheNextOneGo() async throws {
+        let (model, ref) = try await fixture()
+        let loading = Gate()
+        model.attachPhotos(ref, from: [PhotoSource(name: "Photo 1") { await loading.hold(); return Data([1]) }, source("Photo 2")])
+        await loading.arrived()
+        let stuck = try XCTUnwrap(model.photos(ref).first?.id)
+        model.removePhoto(stuck, from: ref)
+        await model.waitForPhotos()
+        XCTAssertEqual(model.photos(ref).count, 1)
+        XCTAssertNotEqual(model.photos(ref).first?.id, stuck)
+        XCTAssertNotNil(model.photos(ref).first?.staged)
+        XCTAssertNil(model.photoNotices[ref.id], "A photo the user removed needs no reason")
+        loading.release()
     }
     @MainActor func testAReplyCarriesAtMostEightPhotos() async throws {
         let (model, ref) = try await fixture()
