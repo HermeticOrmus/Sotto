@@ -35,8 +35,12 @@ async function start(root?: string) {
   controls.add(control)
   await control.start()
   if (!control.get().host.connected) await control.command({ type: 'connect' })
-  return { root: directory, host, control }
+  // Every client reaches the coordinator through the host service, which says what is shown.
+  const service = new LocalHostService({ control })
+  return { root: directory, host, control, service }
 }
+const window = desktopWindowClient()
+const phones = { clientId: 'socket-observations', user: '', transport: 'socket' as const }
 const marked = (state: AgentState, id: string): boolean | undefined => state.host.threads.find(thread => thread.id === id)?.finishedUnread
 /** A turn on the fixture thread: the prompt starts it running, the reply leaves it idle. */
 function runTurn(host: E2EAgentHost, threadId: string): void {
@@ -56,18 +60,18 @@ describe('the coordinator\'s finished-unread mark', () => {
   })
 
   it('never marks a thread a client shows while it finishes', async () => {
-    const { host, control } = await start()
-    await control.commandShell({ type: 'observe-threads', threadIds: ['workshop'] })
+    const { host, control, service } = await start()
+    await service.command({ type: 'observe-threads', threadIds: ['workshop'] }, phones)
     runTurn(host, 'workshop')
     expect(marked(control.shell(), 'workshop')).toBeUndefined()
   })
 
   it('clears the mark for every client when one shows the thread', async () => {
-    const { host, control } = await start()
+    const { host, control, service } = await start()
     runTurn(host, 'workshop')
     const published: AgentState[] = []
     control.subscribe(state => published.push(state))
-    const reply = await control.commandShell({ type: 'observe-threads', threadIds: ['workshop'] })
+    const reply = await service.command({ type: 'observe-threads', threadIds: ['workshop'] }, phones)
     expect(marked(reply, 'workshop')).toBeUndefined()
     // The other clients hear of it without waiting for the thread to change.
     expect(published.length).toBeGreaterThan(0)
@@ -75,15 +79,54 @@ describe('the coordinator\'s finished-unread mark', () => {
   })
 
   it('takes what any of the host\'s clients shows: the desktop window\'s panes and a phone\'s open thread together', async () => {
-    const { host, control } = await start()
-    const service = new LocalHostService({ control })
+    const { host, control, service } = await start()
     runTurn(host, 'workshop'); runTurn(host, 'docs')
-    await service.command({ type: 'observe-threads', threadIds: ['docs'] }, desktopWindowClient())
+    await service.command({ type: 'observe-threads', threadIds: ['docs'] }, window)
     expect(marked(control.shell(), 'docs')).toBeUndefined()
     expect(marked(control.shell(), 'workshop')).toBe(true)
     // The socket server speaks for every paired phone under one client of its own.
-    await service.command({ type: 'observe-threads', threadIds: ['workshop'] }, { clientId: 'socket-observations', user: '', transport: 'socket' })
+    await service.command({ type: 'observe-threads', threadIds: ['workshop'] }, phones)
     expect(marked(control.shell(), 'workshop')).toBeUndefined()
+  })
+
+  it('counts the window\'s panes as shown only while the window has the focus', async () => {
+    const { host, control, service } = await start()
+    await service.command({ type: 'observe-threads', threadIds: ['workshop', 'docs'] }, window)
+    // Finishing in a pane of the focused window is finishing on screen.
+    runTurn(host, 'docs')
+    expect(marked(control.shell(), 'docs')).toBeUndefined()
+    // Behind another app, minimised or in the tray, the same pane shows nothing, so a finish there is unread.
+    service.setWindowFocused(false)
+    runTurn(host, 'workshop')
+    expect(marked(control.shell(), 'workshop')).toBe(true)
+    // The history the window holds keeps coming either way: only showing waits on the focus.
+    expect(control.threadDetail('workshop')?.messages.length).toBeGreaterThan(0)
+    // Coming back to the window reads what its panes show.
+    const published: AgentState[] = []
+    control.subscribe(state => published.push(state))
+    service.setWindowFocused(true)
+    expect(marked(control.shell(), 'workshop')).toBeUndefined()
+    expect(marked(published.at(-1)!, 'workshop')).toBeUndefined()
+  })
+
+  it('reads a finish when the window gains the focus only for the threads in its panes', async () => {
+    const { host, control, service } = await start()
+    service.setWindowFocused(false)
+    await service.command({ type: 'observe-threads', threadIds: ['workshop'] }, window)
+    runTurn(host, 'workshop'); runTurn(host, 'docs')
+    expect(marked(control.shell(), 'workshop')).toBe(true)
+    expect(marked(control.shell(), 'docs')).toBe(true)
+    // Changing panes while unfocused shows nothing either.
+    await service.command({ type: 'observe-threads', threadIds: ['workshop', 'docs'] }, window)
+    expect(marked(control.shell(), 'docs')).toBe(true)
+    await service.command({ type: 'observe-threads', threadIds: ['workshop'] }, window)
+    service.setWindowFocused(true)
+    expect(marked(control.shell(), 'workshop')).toBeUndefined()
+    expect(marked(control.shell(), 'docs')).toBe(true)
+    // A phone shows what it has open whatever the window's focus.
+    service.setWindowFocused(false)
+    await service.command({ type: 'observe-threads', threadIds: ['docs'] }, phones)
+    expect(marked(control.shell(), 'docs')).toBeUndefined()
   })
 
   it('earns nothing when the host disconnects with the turn running', async () => {
@@ -99,7 +142,7 @@ describe('the coordinator\'s finished-unread mark', () => {
   it('keeps the mark across a restart, and keeps a cleared mark cleared', async () => {
     const first = await start()
     runTurn(first.host, 'workshop'); runTurn(first.host, 'docs')
-    await first.control.commandShell({ type: 'observe-threads', threadIds: ['docs'] })
+    await first.service.command({ type: 'observe-threads', threadIds: ['docs'] }, phones)
     await first.control.closed()
     first.control.dispose(); controls.delete(first.control)
     // Thread IDs only: nothing the thread said is saved with the mark.

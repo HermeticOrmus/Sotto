@@ -476,6 +476,17 @@ export class AgentControl {
   private withSottoRequests(snapshot: AgentHostSnapshot): AgentHostSnapshot {
     return this.sottoRequests ? withSottoRequests(snapshot, this.sottoRequests.requests()) : snapshot
   }
+  /**
+   * The threads some client shows now (ADR-0046). The host service says which: every client's observed threads, the
+   * desktop window's only while it has the focus. Showing a thread is what reads its finish, on every client at once,
+   * and the cleared mark is saved so a restart keeps it read. True when a mark was cleared.
+   */
+  showThreads(threadIds: readonly string[]): boolean {
+    if (!this.finishedUnread.show(threadIds)) return false
+    this.publish()
+    void this.persist().catch(() => undefined)
+    return true
+  }
   hasPendingThreadWork(threadId: string): boolean {
     return this.pendingThreadWorkReason(threadId) !== null
   }
@@ -1559,15 +1570,9 @@ export class AgentControl {
     if (command.type === 'select-thread') return this.navigate(command.threadId)
     if (command.type === 'observe-threads') {
       this.viewedThreadIds = [...new Set(command.threadIds)].filter(id => this.state.host.threads.some(thread => thread.id === id))
-      const read = this.finishedUnread.show(this.viewedThreadIds)
       this.observe()
       // A newly viewed thread needs its history now, not at the next provider frame.
       this.broadcastDetail()
-      // Showing a thread is what reads its finish, on every client at once; the cleared mark is saved so a restart keeps it read.
-      if (read) {
-        this.publish()
-        void this.persist().catch(() => undefined)
-      }
       return Promise.resolve(this.shell())
     }
     if (command.type === 'save-thread-draft') return this.saveThreadDraft(command)
