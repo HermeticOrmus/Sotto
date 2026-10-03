@@ -6,7 +6,7 @@ import { designThreadsFixture, E2E_THREADS_NOW } from '../../../src/shared/e2e'
 import type { useAgents } from '../../../src/renderer/src/agents/AgentContext'
 import { ThreadDraftStore } from '../../../src/renderer/src/agents/threadDraftStore'
 import { agentContextFixture } from '../../fixtures/agentContext'
-import { FOLDER_TOGGLES_KEY } from '../../../src/renderer/src/agents/ThreadSidebar'
+import { FOLDER_TOGGLES_KEY, folderKey } from '../../../src/renderer/src/agents/ThreadSidebar'
 
 type Connection = ReturnType<typeof useAgents>
 
@@ -37,7 +37,7 @@ type Status = AgentDelivery['status']
 /** Opens every project folder the Threads sidebar would list for this state, in the open list and in Settled. */
 export function openSidebarFolders(state: AgentState): void {
   const ids = new Set([...state.host.projects.map(project => project.id), ...state.host.threads.map(thread => thread.projectId)])
-  sessionStorage.setItem(FOLDER_TOGGLES_KEY, JSON.stringify([...ids].flatMap(id => [`open:${id}`, `settled:${id}`])))
+  sessionStorage.setItem(FOLDER_TOGGLES_KEY, JSON.stringify([...ids].flatMap(id => [folderKey('open', id), folderKey('settled', id)])))
 }
 
 /**

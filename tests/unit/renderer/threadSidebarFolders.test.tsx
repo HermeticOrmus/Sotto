@@ -39,3 +39,14 @@ it('keeps a folder the user opened open when the sidebar is mounted again in the
   fireEvent.click(screen.getByRole('button', { name: /^workshop \d+ threads?$/ }))
   expect(screen.queryByRole('button', { name: 'Visual gate flake' })).not.toBeInTheDocument()
 })
+
+it('keeps a folder open for the window when session storage refuses the write', () => {
+  const refuse = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('QuotaExceededError') })
+  mount()
+  fireEvent.click(screen.getByRole('button', { name: /^workshop \d+ threads?$/ }))
+  expect(screen.getByRole('button', { name: 'Visual gate flake' })).toBeVisible()
+  refuse.mockRestore()
+  // The next write that storage accepts is read back again.
+  fireEvent.click(screen.getByRole('button', { name: /^workshop \d+ threads?$/ }))
+  expect(screen.queryByRole('button', { name: 'Visual gate flake' })).not.toBeInTheDocument()
+})

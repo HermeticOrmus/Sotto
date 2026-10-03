@@ -135,7 +135,7 @@ const ThreadNavRow = memo(function ThreadNavRow({ row, current, open, busy, live
 })
 
 /** A folder's key in the sidebar's toggled set; a project can appear in both sections. */
-const folderKey = (section: Section, folderId: string): string => `${section}:${folderId}`
+export const folderKey = (section: Section, folderId: string): string => `${section}:${folderId}`
 
 /**
  * The folders the user toggled. Every folder starts closed when Sotto starts; what the user opens stays open while
@@ -144,8 +144,11 @@ const folderKey = (section: Section, folderId: string): string => `${section}:${
  */
 export const FOLDER_TOGGLES_KEY = 'sotto.threadWorkspace.folderToggles'
 const toggleListeners = new Set<() => void>()
+/** The last value this window saved, and whether storage refused it; once refused, the window reads its own copy. */
 let togglesFallback = '[]'
+let togglesUnsaved = false
 function readToggles(): string {
+  if (togglesUnsaved) return togglesFallback
   try { return sessionStorage.getItem(FOLDER_TOGGLES_KEY) ?? '[]' } catch { return togglesFallback }
 }
 function parseToggles(stored: string): Set<string> {
@@ -166,7 +169,7 @@ function useFolderToggles(): readonly [(key: string) => boolean, (key: string) =
     const next = parseToggles(readToggles())
     if (next.has(key)) next.delete(key); else next.add(key)
     togglesFallback = JSON.stringify([...next])
-    try { sessionStorage.setItem(FOLDER_TOGGLES_KEY, togglesFallback) } catch { /* Private mode: the fallback keeps it for this window. */ }
+    try { sessionStorage.setItem(FOLDER_TOGGLES_KEY, togglesFallback); togglesUnsaved = false } catch { togglesUnsaved = true }
     for (const listener of [...toggleListeners]) listener()
   }, [])
   return [isOpen, toggle]
