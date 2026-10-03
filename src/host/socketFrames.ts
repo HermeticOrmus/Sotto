@@ -46,9 +46,14 @@ export class SocketFrames {
   }
   feed(data: Buffer): void { if (data.length) this.receive(data) }
   onClose(listener: () => void): () => void { this.closedListeners.add(listener); return () => this.closedListeners.delete(listener) }
+  /**
+   * True while the stream holds at least its high-water mark of output the peer has not read yet: what is
+   * written now only queues behind it. False once the stream drains or closes.
+   */
+  get backlogged(): boolean { return !this.ended && this.stream.writableNeedDrain }
   /** Waits for buffered output to drain before the next detail in a batch is materialised. */
   drained(): Promise<void> {
-    if (this.ended || !this.stream.writableNeedDrain) return Promise.resolve()
+    if (!this.backlogged) return Promise.resolve()
     return new Promise(resolve => {
       const done = (): void => { this.stream.removeListener('drain', done); this.closedListeners.delete(done); resolve() }
       this.stream.once('drain', done); this.closedListeners.add(done)
