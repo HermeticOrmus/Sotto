@@ -8,7 +8,8 @@ import { projectAtFolder } from './projectFolders'
 /**
  * Add project: choose the computer the project lives on when more than one is paired, then a folder there, and open
  * it as a Sotto project on that host, or open the project that already has it. The folder is made on the host when
- * it is new, by the same create-project that attaches an existing one.
+ * it is new, by the same create-project that attaches an existing one. Only a listed folder is sent as existing, so one
+ * that has gone since it was listed is refused rather than made again.
  */
 export function useAddProject(state: AgentState, command: AgentConnection['command']): {
   readonly add: () => Promise<void>; readonly adding: boolean; readonly error: string | null; readonly clearError: () => void; readonly dialog: ReactNode
@@ -44,7 +45,7 @@ export function useAddProject(state: AgentState, command: AgentConnection['comma
       const defaultModelId = defaultThreadModelId(current.configuration, host.models, current.reasoningAccounts)
       const provider = isSubscriptionReasoning(current.configuration.reasoning) ? current.configuration.reasoning
         : resolveModel(host.models, defaultModelId)?.providerId
-      const result = await command({ type: 'create-project', title: choice.name, path: choice.path, useExisting: true, ...(provider ? { provider } : {}) })
+      const result = await command({ type: 'create-project', title: choice.name, path: choice.path, ...(choice.isNew ? {} : { useExisting: true }), ...(provider ? { provider } : {}) })
       if (result === null || result.error !== null) { setDialogError(result?.error ?? 'Could not confirm the new project. Choose the folder again to check; it will not be added twice.'); return }
       setOpen(false)
     } catch { setDialogError('Could not add the project. Nothing was changed. Try again.') }

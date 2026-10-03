@@ -7,6 +7,7 @@ import type { AgentCommand, AgentState } from '../../../src/shared/agents'
 import type { HostFoldersClientRequest, HostFoldersResult } from '../../../src/shared/hostFolders'
 import { browsableHosts, FolderBrowserDialog } from '../../../src/renderer/src/agents/FolderBrowserDialog'
 import { useAddProject } from '../../../src/renderer/src/agents/addProject'
+import { projectForFolder } from '../../../src/renderer/src/agents/ProjectChooser'
 import { threadsStateFixture } from './liveAgentState'
 
 const LOCAL = '11111111-1111-4111-8111-111111111111'
@@ -135,7 +136,7 @@ describe('FolderBrowserDialog', () => {
     expect(screen.getByText(/This folder is new/)).toBeVisible()
     expect(onUse).not.toHaveBeenCalled()
     await user.click(screen.getByRole('button', { name: 'Use this folder' }))
-    expect(onUse).toHaveBeenCalledWith({ hostId: FORGE, path: '/home/zach/code/voice-lab', name: 'voice-lab' })
+    expect(onUse).toHaveBeenCalledWith({ hostId: FORGE, path: '/home/zach/code/voice-lab', name: 'voice-lab', isNew: true })
   })
 
   it('offers Open project for a folder that is one, and uses the folder with Ctrl+Enter', async () => {
@@ -231,6 +232,23 @@ describe('Add project', () => {
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Use this folder' })).toBeNull())
   })
 
+  it('asks the host to make a folder named with New folder rather than attach it as existing', async () => {
+    stubBridge()
+    const state = twoHosts()
+    const command = vi.fn<(request: AgentCommand) => Promise<AgentState | null>>(async () => state as AgentState | null)
+    const user = userEvent.setup()
+    render(<Harness state={state} command={command} />)
+    await user.click(screen.getByRole('button', { name: 'Add project' }))
+    await user.click(screen.getByRole('button', { name: /forge/ }))
+    await user.click(await screen.findByRole('button', { name: 'code' }))
+    await screen.findByRole('button', { name: /forge-ml/ })
+    await user.click(screen.getByRole('button', { name: 'New folder' }))
+    await user.type(screen.getByRole('textbox', { name: 'New folder name' }), 'voice-lab{Enter}')
+    await user.click(screen.getByRole('button', { name: 'Use this folder' }))
+    await waitFor(() => expect(command).toHaveBeenCalledWith(expect.objectContaining({ type: 'create-project', title: 'voice-lab', path: '/home/zach/code/voice-lab' })))
+    expect(command.mock.calls.find(([request]) => request.type === 'create-project')![0]).not.toHaveProperty('useExisting')
+  })
+
   it('opens the project a folder already is, on that computer', async () => {
     stubBridge()
     const state = twoHosts()
@@ -258,5 +276,17 @@ describe('Add project', () => {
     await user.click(screen.getByRole('button', { name: 'Use this folder' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('Connect Codex before creating a project.')
     expect(screen.getByRole('button', { name: 'Use this folder' })).toBeEnabled()
+  })
+})
+
+describe('a folder chosen in New thread or New terminal', () => {
+  it('is made when it was named with New folder, and otherwise attached only if it is still there', async () => {
+    const state = twoHosts()
+    const command = vi.fn<(request: AgentCommand) => Promise<AgentState | null>>(async () => state as AgentState | null)
+    const common = { command, latest: () => state, providerId: undefined, hostId: FORGE }
+    await projectForFolder({ ...common, folder: '/home/zach/code/voice-lab', isNew: true, attempted: new Set() })
+    expect(command).toHaveBeenNthCalledWith(1, { type: 'create-project', title: 'voice-lab', path: '/home/zach/code/voice-lab' })
+    await projectForFolder({ ...common, folder: '/home/zach/code/sotto', attempted: new Set() })
+    expect(command).toHaveBeenCalledWith({ type: 'create-project', title: 'sotto', path: '/home/zach/code/sotto', useExisting: true })
   })
 })
