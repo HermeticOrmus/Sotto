@@ -2137,10 +2137,12 @@ export class AgentControl {
         if (!target || !isAbsolute(target)) throw new Error('Choose an absolute project folder or configure a default projects directory.')
         const path = resolve(target)
         const existing = await stat(path).catch((error: NodeJS.ErrnoException) => { if (error.code !== 'ENOENT') throw error; return null })
-        if (existing && (!existing.isDirectory() || !command.useExisting)) throw new Error('That folder already exists. Select “Use existing folder” to attach it without overwriting its contents.')
+        if (existing && !existing.isDirectory()) throw new Error('A file with that name is already there. Nothing was added. Choose another name.')
         if (command.useExisting && !existing) throw new Error('That folder no longer exists. Nothing was added. Choose another folder.')
         const folderKey = (value: string): string => process.platform === 'win32' ? resolve(value).toLowerCase() : resolve(value)
-        const known = command.useExisting ? this.state.host.projects.find(project => folderKey(project.path) === folderKey(path) && (!project.providerId || project.providerId === provider)) : undefined
+        // A folder that is already this provider's project opens either way, so a retry for a new folder made a moment ago finds it.
+        const known = existing ? this.state.host.projects.find(project => folderKey(project.path) === folderKey(path) && (!project.providerId || project.providerId === provider)) : undefined
+        if (existing && !known && !command.useExisting) throw new Error('That folder already exists. Nothing was added. Choose another name, or choose the folder itself to use it as it is.')
         if (known) {
           if (selectionRevision === this.selectionRevision) {
             this.state.activeProjectId = known.id; this.state.activeThreadId = null

@@ -7,7 +7,7 @@ import type { AgentCommand, AgentState } from '../../../src/shared/agents'
 import type { HostFoldersClientRequest, HostFoldersResult } from '../../../src/shared/hostFolders'
 import { browsableHosts, FolderBrowserDialog } from '../../../src/renderer/src/agents/FolderBrowserDialog'
 import { useAddProject } from '../../../src/renderer/src/agents/addProject'
-import { projectForFolder } from '../../../src/renderer/src/agents/ProjectChooser'
+import { projectForFolder, useProjectChooser, type ProjectChoice } from '../../../src/renderer/src/agents/ProjectChooser'
 import { threadsStateFixture } from './liveAgentState'
 
 const LOCAL = '11111111-1111-4111-8111-111111111111'
@@ -280,6 +280,26 @@ describe('Add project', () => {
 })
 
 describe('a folder chosen in New thread or New terminal', () => {
+  function Chooser({ onChoose }: { readonly onChoose: (choice: ProjectChoice) => void }) {
+    const chooser = useProjectChooser(twoHosts(), onChoose, { hostId: FORGE })
+    return <>{chooser.choices}</>
+  }
+
+  it('carries New folder through the project chooser', async () => {
+    stubBridge()
+    const onChoose = vi.fn()
+    const user = userEvent.setup()
+    render(<Chooser onChoose={onChoose} />)
+    await user.click(screen.getByRole('button', { name: /Folder on forge/ }))
+    await user.click(await screen.findByRole('button', { name: 'code' }))
+    // forge-ml is listed as a project too, so the folder list shows it a second time once code is open.
+    await waitFor(() => expect(screen.getAllByRole('button', { name: /forge-ml/ })).toHaveLength(2))
+    await user.click(screen.getByRole('button', { name: 'New folder' }))
+    await user.type(screen.getByRole('textbox', { name: 'New folder name' }), 'voice-lab{Enter}')
+    await user.click(screen.getByRole('button', { name: 'Use this folder' }))
+    expect(onChoose).toHaveBeenCalledWith({ folder: '/home/zach/code/voice-lab', isNew: true })
+  })
+
   it('is made when it was named with New folder, and otherwise attached only if it is still there', async () => {
     const state = twoHosts()
     const command = vi.fn<(request: AgentCommand) => Promise<AgentState | null>>(async () => state as AgentState | null)

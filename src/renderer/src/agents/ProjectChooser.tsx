@@ -99,7 +99,7 @@ export async function projectForFolder({ folder, isNew = false, command, latest,
   let acknowledgement: AgentState | null = null
   if (!project && !attempted.has(attemptKey)) {
     attempted.add(attemptKey)
-    acknowledgement = await command({ type: 'create-project', title: folderName(folder), path: folder, ...(isNew ? {} : { useExisting: true }),...(providerId ? { provider: providerId } : {}) })
+    acknowledgement = await command({ type: 'create-project', title: folderName(folder), path: folder, ...(isNew ? {} : { useExisting: true }), ...(providerId ? { provider: providerId } : {}) })
     project = findProject(acknowledgement) ?? findProject(latest())
   }
   if (!project) {

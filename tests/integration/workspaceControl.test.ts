@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, rm, stat } from 'node:fs/promises'
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { workspaceFixture } from '../fixtures/workspaceFixture'
@@ -279,6 +279,27 @@ describe('workspace controller integration', () => {
     expect(result.host.projects).toEqual(before)
     await expect(stat(path)).rejects.toMatchObject({ code: 'ENOENT' })
     expect(f.adapters.codex.commands).toHaveLength(0)
+  })
+  it('makes a new folder once, opens it on a retry, and refuses a folder or file that is already there', async () => {
+    const f = await fixture()
+    const path = join(f.root, 'voice-lab')
+    const made = await f.control.command({ type: 'create-project', provider: 'codex', title: 'voice-lab', path })
+    expect(made.error).toBeNull()
+    expect((await stat(path)).isDirectory()).toBe(true)
+    const project = made.host.projects.find(item => item.path === path)!
+    // The acknowledgement was lost and the same new folder is sent again: it opens rather than being refused.
+    const retried = await f.control.command({ type: 'create-project', provider: 'codex', title: 'voice-lab', path })
+    expect(retried.error).toBeNull()
+    expect(retried.activeProjectId).toBe(project.id)
+    expect(retried.host.projects.filter(item => item.path === path)).toHaveLength(1)
+    const other = join(f.root, 'not-a-project')
+    await mkdir(other)
+    expect((await f.control.command({ type: 'create-project', provider: 'codex', title: 'not-a-project', path: other })).error)
+      .toBe('That folder already exists. Nothing was added. Choose another name, or choose the folder itself to use it as it is.')
+    const file = join(f.root, 'notes')
+    await writeFile(file, '')
+    expect((await f.control.command({ type: 'create-project', provider: 'codex', title: 'notes', path: file, useExisting: true })).error)
+      .toBe('A file with that name is already there. Nothing was added. Choose another name.')
   })
   it('opens existing projects without changing scope, creates multiple manual threads, and keeps coordinator settings independent', async () => {
     const f = await fixture()
