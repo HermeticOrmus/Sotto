@@ -2138,11 +2138,10 @@ export class AgentControl {
         const path = resolve(target)
         const existing = await stat(path).catch((error: NodeJS.ErrnoException) => { if (error.code !== 'ENOENT') throw error; return null })
         if (existing && !existing.isDirectory()) throw new Error('A file with that name is already there. Nothing was added. Choose another name.')
+        if (existing && !command.useExisting) throw new Error('That folder already exists. Nothing was added. Choose another folder, or add this one with Add project to use it as it is.')
         if (command.useExisting && !existing) throw new Error('That folder no longer exists. Nothing was added. Choose another folder.')
         const folderKey = (value: string): string => process.platform === 'win32' ? resolve(value).toLowerCase() : resolve(value)
-        // A folder that is already this provider's project opens either way, so a retry for a new folder made a moment ago finds it.
-        const known = existing ? this.state.host.projects.find(project => folderKey(project.path) === folderKey(path) && (!project.providerId || project.providerId === provider)) : undefined
-        if (existing && !known && !command.useExisting) throw new Error('That folder already exists. Nothing was added. Choose another name, or choose the folder itself to use it as it is.')
+        const known = command.useExisting ? this.state.host.projects.find(project => folderKey(project.path) === folderKey(path) && (!project.providerId || project.providerId === provider)) : undefined
         if (known) {
           if (selectionRevision === this.selectionRevision) {
             this.state.activeProjectId = known.id; this.state.activeThreadId = null

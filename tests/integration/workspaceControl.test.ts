@@ -280,26 +280,29 @@ describe('workspace controller integration', () => {
     await expect(stat(path)).rejects.toMatchObject({ code: 'ENOENT' })
     expect(f.adapters.codex.commands).toHaveLength(0)
   })
-  it('makes a new folder once, opens it on a retry, and refuses a folder or file that is already there', async () => {
+  it('makes a new folder, opens it when it is sent again as existing, and refuses a folder or file already there', async () => {
     const f = await fixture()
     const path = join(f.root, 'voice-lab')
     const made = await f.control.command({ type: 'create-project', provider: 'codex', title: 'voice-lab', path })
     expect(made.error).toBeNull()
     expect((await stat(path)).isDirectory()).toBe(true)
     const project = made.host.projects.find(item => item.path === path)!
-    // The acknowledgement was lost and the same new folder is sent again: it opens rather than being refused.
-    const retried = await f.control.command({ type: 'create-project', provider: 'codex', title: 'voice-lab', path })
+    // Add project's retry after an unanswered first try sends the folder as existing, and finds the project it made.
+    const retried = await f.control.command({ type: 'create-project', provider: 'codex', title: 'voice-lab', path, useExisting: true })
     expect(retried.error).toBeNull()
     expect(retried.activeProjectId).toBe(project.id)
     expect(retried.host.projects.filter(item => item.path === path)).toHaveLength(1)
+    const before = retried.host.projects
     const other = join(f.root, 'not-a-project')
     await mkdir(other)
-    expect((await f.control.command({ type: 'create-project', provider: 'codex', title: 'not-a-project', path: other })).error)
-      .toBe('That folder already exists. Nothing was added. Choose another name, or choose the folder itself to use it as it is.')
+    const refused = await f.control.command({ type: 'create-project', provider: 'codex', title: 'not-a-project', path: other })
+    expect(refused.error).toBe('That folder already exists. Nothing was added. Choose another folder, or add this one with Add project to use it as it is.')
+    expect(refused.host.projects).toEqual(before)
     const file = join(f.root, 'notes')
     await writeFile(file, '')
-    expect((await f.control.command({ type: 'create-project', provider: 'codex', title: 'notes', path: file, useExisting: true })).error)
-      .toBe('A file with that name is already there. Nothing was added. Choose another name.')
+    const onFile = await f.control.command({ type: 'create-project', provider: 'codex', title: 'notes', path: file, useExisting: true })
+    expect(onFile.error).toBe('A file with that name is already there. Nothing was added. Choose another name.')
+    expect(onFile.host.projects).toEqual(before)
   })
   it('opens existing projects without changing scope, creates multiple manual threads, and keeps coordinator settings independent', async () => {
     const f = await fixture()

@@ -249,6 +249,27 @@ describe('Add project', () => {
     expect(command.mock.calls.find(([request]) => request.type === 'create-project')![0]).not.toHaveProperty('useExisting')
   })
 
+  it('attaches a new folder as existing when its first try went unanswered', async () => {
+    stubBridge()
+    const state = twoHosts()
+    const command = vi.fn<(request: AgentCommand) => Promise<AgentState | null>>(async () => null)
+    const user = userEvent.setup()
+    render(<Harness state={state} command={command} />)
+    await user.click(screen.getByRole('button', { name: 'Add project' }))
+    await user.click(screen.getByRole('button', { name: /forge/ }))
+    await user.click(await screen.findByRole('button', { name: 'code' }))
+    await screen.findByRole('button', { name: /forge-ml/ })
+    await user.click(screen.getByRole('button', { name: 'New folder' }))
+    await user.type(screen.getByRole('textbox', { name: 'New folder name' }), 'voice-lab{Enter}')
+    await user.click(screen.getByRole('button', { name: 'Use this folder' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not confirm the new project.')
+    await user.click(screen.getByRole('button', { name: 'Use this folder' }))
+    await waitFor(() => expect(command.mock.calls.filter(([request]) => request.type === 'create-project')).toHaveLength(2))
+    const [first, second] = command.mock.calls.filter(([request]) => request.type === 'create-project').map(([request]) => request)
+    expect(first).not.toHaveProperty('useExisting')
+    expect(second).toMatchObject({ path: '/home/zach/code/voice-lab', useExisting: true })
+  })
+
   it('opens the project a folder already is, on that computer', async () => {
     stubBridge()
     const state = twoHosts()

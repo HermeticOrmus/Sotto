@@ -20,6 +20,7 @@ export function useAddProject(state: AgentState, command: AgentConnection['comma
   const [dialogError, setDialogError] = useState<string | null>(null)
   const latest = useRef(state)
   latest.current = state
+  const unansweredNew = useRef(new Set<string>())
   const add = async (): Promise<void> => {
     if (adding) return
     setError(null); setDialogError(null); setOpen(true)
@@ -45,7 +46,12 @@ export function useAddProject(state: AgentState, command: AgentConnection['comma
       const defaultModelId = defaultThreadModelId(current.configuration, host.models, current.reasoningAccounts)
       const provider = isSubscriptionReasoning(current.configuration.reasoning) ? current.configuration.reasoning
         : resolveModel(host.models, defaultModelId)?.providerId
-      const result = await command({ type: 'create-project', title: choice.name, path: choice.path, ...(choice.isNew ? {} : { useExisting: true }), ...(provider ? { provider } : {}) })
+      // A new folder whose first try went unanswered may have been made, so the next try attaches it as existing.
+      const unanswered = `${choice.hostId}:${choice.path}`
+      const asNew = choice.isNew && !unansweredNew.current.has(unanswered)
+      if (asNew) unansweredNew.current.add(unanswered)
+      const result = await command({ type: 'create-project', title: choice.name, path: choice.path, ...(asNew ? {} : { useExisting: true }), ...(provider ? { provider } : {}) })
+      if (asNew && result !== null) unansweredNew.current.delete(unanswered)
       if (result === null || result.error !== null) { setDialogError(result?.error ?? 'Could not confirm the new project. Choose the folder again to check; it will not be added twice.'); return }
       setOpen(false)
     } catch { setDialogError('Could not add the project. Nothing was changed. Try again.') }
