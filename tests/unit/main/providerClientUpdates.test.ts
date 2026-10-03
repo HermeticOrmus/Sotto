@@ -1,5 +1,6 @@
 // @vitest-environment node
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { spawn } from 'node:child_process'
+import { copyFile, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -7,7 +8,7 @@ import { AgentControl } from '../../../src/main/agents/control'
 import { AgentCredentials } from '../../../src/main/agents/credentials'
 import { clientVersionOf, compareClientVersions } from '../../../src/main/agents/clientVersions'
 import { installerDetail } from '../../../src/main/agents/installerDetail'
-import { detectClientChannel, ProviderClients, updateActionFor, type RunLike } from '../../../src/main/agents/providerClients'
+import { clearLeftoverPackage, detectClientChannel, ProviderClients, updateActionFor, type RunLike } from '../../../src/main/agents/providerClients'
 import { E2EAgentHost } from '../../../src/main/e2e/agentEffects'
 import type { AgentHostSnapshot, ProviderId } from '../../../src/shared/agents'
 import { immediatePublishScheduler } from '../../fixtures/publishScheduler'
@@ -173,6 +174,63 @@ describe('which channel owns an install', () => {
     const reading = await clients.check('codex', '0.155.1', join(elsewhere, 'codex'), {})
     expect(reading).toMatchObject({ behind: true, channel: 'unknown', canInstall: false })
     expect(reading.command).toBeUndefined()
+  })
+})
+
+describe('what an earlier update left behind', () => {
+  /** Codex's package as `npm install -g` lays it out on Windows, in `scope/name`; answers the folder holding codex.exe. */
+  const codexPackage = async (scope: string, name: string): Promise<string> => {
+    const bin = join(scope, name, 'node_modules', '@openai', 'codex-win32-x64', 'vendor', 'x86_64-pc-windows-msvc', 'bin')
+    await mkdir(bin, { recursive: true })
+    await writeFile(join(bin, 'codex.exe'), '')
+    return bin
+  }
+  /** An npm global root holding Codex. */
+  const codexInstall = async (): Promise<{ scope: string; executable: string }> => {
+    const scope = join(await root('sotto-npm-leftover-'), 'node_modules', '@openai')
+    const bin = await codexPackage(scope, 'codex')
+    await writeFile(join(scope, 'codex', 'package.json'), '{}')
+    return { scope, executable: join(bin, 'codex.exe') }
+  }
+
+  it('deletes the folder npm moved the last version to, and nothing else beside the package', async () => {
+    const { scope } = await codexInstall()
+    await codexPackage(scope, '.codex-6TeUjdn8')
+    await codexPackage(scope, '.codex-HJxjGPEp.old-1759500000000')
+    for (const name of ['.codex-short', '.grok-6TeUjdn8', 'codex-6TeUjdn8']) await mkdir(join(scope, name))
+    await clearLeftoverPackage(join(scope, 'codex'))
+    expect((await readdir(scope)).sort()).toEqual(['.codex-short', '.grok-6TeUjdn8', 'codex', 'codex-6TeUjdn8'])
+  })
+
+  it.runIf(process.platform === 'win32')('clears the leftover before npm runs, so npm finds its folder free', async () => {
+    const { scope, executable } = await codexInstall()
+    await codexPackage(scope, '.codex-6TeUjdn8')
+    let seen: string[] = []
+    const clients = new ProviderClients({ npmPath: async () => 'npm-cli.js', run: async () => { seen = await readdir(scope); return { ok: true } } })
+    expect(await clients.install('codex', executable, {})).toMatchObject({ ok: true })
+    expect(seen).toEqual(['codex'])
+  })
+
+  it.runIf(process.platform === 'win32')('moves a leftover whose program still runs out of npm\u2019s way, and deletes it once it stops', async () => {
+    const { scope } = await codexInstall()
+    // An older Codex still running from the folder npm moved it to: the update after that one stopped on EBUSY.
+    const bin = await codexPackage(scope, '.codex-6TeUjdn8')
+    const program = join(bin, 'held.exe')
+    await copyFile(join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'PING.EXE'), program)
+    const running = spawn(program, ['-n', '600', '127.0.0.1'], { stdio: 'ignore', windowsHide: true })
+    try {
+      await new Promise<void>((resolve, reject) => { running.once('spawn', resolve); running.once('error', reject) })
+      await clearLeftoverPackage(join(scope, 'codex'), () => 1759500000000)
+      expect((await readdir(scope)).sort(), 'npm\u2019s name is free and the running program untouched').toEqual(['.codex-6TeUjdn8.old-1759500000000', 'codex'])
+      expect(running.exitCode).toBeNull()
+      await clearLeftoverPackage(join(scope, 'codex'), () => 1759500009999)
+      expect((await readdir(scope)).sort(), 'a moved folder stays put while its program runs').toEqual(['.codex-6TeUjdn8.old-1759500000000', 'codex'])
+    } finally {
+      running.kill()
+      await new Promise(resolve => running.exitCode === null ? running.once('exit', resolve) : resolve(undefined))
+    }
+    await clearLeftoverPackage(join(scope, 'codex'))
+    expect(await readdir(scope)).toEqual(['codex'])
   })
 })
 
