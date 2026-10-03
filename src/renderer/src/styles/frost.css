@@ -3,8 +3,9 @@
    data-frost only then, so nothing here applies on a solid window.
 
    The room's layers stop painting the canvas one over another: the page paints it once, part see-through, and the
-   sidebar sits on that a little more solid. Messages, the composer, the terminal, dialogs and menus keep their own
-   surfaces so text stays readable. The :root prefix outranks each layer's own background. Colours come from
+   sidebar sits on that a little more solid. A pane's terminal drawer is more solid again, its terminal see-through
+   over it (terminalView.ts). Messages, the composer, dialogs and menus keep their own surfaces so text stays
+   readable. The :root prefix outranks each layer's own background. Colours come from
    tokens.css only. */
 
 :root[data-frost] {
@@ -21,4 +22,12 @@
 
 :root[data-frost] :is(.thread-nav) {
   background: var(--tt-frost-sidebar);
+}
+
+:root[data-frost] .pane-terminal {
+  background: var(--tt-frost-terminal);
+}
+
+:root[data-frost] .pane-terminal .terminal-view {
+  background: transparent;
 }

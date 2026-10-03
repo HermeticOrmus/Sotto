@@ -126,7 +126,7 @@ export function AppearanceSettings({ settings, platform, onSave, getSettings }: 
             {shown.frostedWindow && canFrost
               ? <AppearanceSlider
                   label="See-through"
-                  description="How much of the desktop shows through the room. The sidebar stays a little more solid, and messages, the composer, the terminal and menus keep their own colour."
+                  description="How much of the desktop shows through the room. The sidebar and a pane's terminal drawer stay a little more solid, and messages, the composer and menus keep their own colour."
                   bounds={FROST_SEE_THROUGH}
                   value={shown.frostSeeThrough}
                   onPreview={value => appearancePreview.choose({ frostSeeThrough: value })}

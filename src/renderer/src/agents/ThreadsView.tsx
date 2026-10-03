@@ -58,12 +58,16 @@ export interface ThreadsViewProps {
   readonly updateControl?: ReactNode
   /** One shared tools panel, rendered beside the thread panes. */
   readonly tools?: ThreadToolsSlot | undefined
-  /** Once, at the end of the focused pane's header actions (the tools panel's toggle). */
+  /** Once, in the focused pane's header actions, before the every-pane actions (the tools panel's toggle). */
   readonly focusedPaneActions?: ReactNode
+  /** In every pane's header actions, focused or not (the pane terminal drawer's own toggle). */
+  readonly paneActions?: ThreadPaneSlot | undefined
   /** The working-copy control in each pane's header, after the project title. */
   readonly paneWorkingCopy?: ThreadPaneSlot | undefined
   /** In each pane, directly above its composer. */
   readonly paneNotice?: ThreadPaneSlot | undefined
+  /** In every pane, directly after its composer: the pane's own terminal drawer. */
+  readonly paneDrawer?: ThreadPaneSlot | undefined
   /**
    * The threads shown in panes, including one hidden by narrow focus, whenever that list changes; an empty list
    * when Threads closes. It is for keeping those threads current and never selects or grants anything.
@@ -76,7 +80,7 @@ export interface ThreadsViewProps {
   readonly paneAreaWidth?: number | undefined
   readonly paneAreaHeight?: number | undefined
 }
-export function ThreadsView({ onOpenAgents, now: fixedNow, updateControl, tools, focusedPaneActions, paneWorkingCopy, paneNotice, onPaneThreadsChange, layoutStore = splitLayoutStore, terminals, paneAreaWidth, paneAreaHeight }: ThreadsViewProps): ReactNode {
+export function ThreadsView({ onOpenAgents, now: fixedNow, updateControl, tools, focusedPaneActions, paneActions, paneWorkingCopy, paneNotice, paneDrawer, onPaneThreadsChange, layoutStore = splitLayoutStore, terminals, paneAreaWidth, paneAreaHeight }: ThreadsViewProps): ReactNode {
   const agents = useAgents()
   const app = useOptionalApp()
   // Voice is hidden for the beta, and the Agents room is a voice surface: without it the page offers only a new thread.
@@ -258,10 +262,15 @@ export function ThreadsView({ onOpenAgents, now: fixedNow, updateControl, tools,
     if (row === undefined) return null
     const focused = threadId === focusedId
     const slot: ThreadPaneSlotProps = { row, state, command, focused, focusPrompt: () => focusInPane(threadId) }
+    // The focused pane's own actions come first: the header's actions sit at its right edge, so one that appears
+    // only on focus must not push the every-pane actions sideways under a pointer that is focusing the pane.
+    const focusedActions = focused ? focusedPaneActions : undefined
+    const everyPaneActions = paneActions?.(slot)
+    const actions = focusedActions || everyPaneActions ? <>{focusedActions}{everyPaneActions}</> : undefined
     return <ThreadPane row={row} state={state} command={command} store={store} focused={focused}
       promptId={split ? threadPromptId(threadId) : THREAD_PROMPT_ID} error={focused ? error : null} onOpenThread={openThread}
       onFocusPane={() => focusPane(threadId)} onOpenBeside={() => openBeside(threadId)} now={fixedNow}
-      workingCopy={paneWorkingCopy?.(slot)} notice={paneNotice?.(slot)} actions={focused ? focusedPaneActions : undefined} />
+      workingCopy={paneWorkingCopy?.(slot)} notice={paneNotice?.(slot)} actions={actions} drawer={paneDrawer?.(slot)} />
   }
 
   return <SidebarChromeProvider updateControl={updateControl}><div className={page} onKeyDown={grid.onKeyDown}>
