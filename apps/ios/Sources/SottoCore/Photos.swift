@@ -38,10 +38,12 @@ public struct StagedImage: Decodable, Equatable, Sendable {
     }
     /// Whether this is a handle the host would take back: the shape `agentAttachmentHandleSchema` checks.
     public var valid: Bool {
-        !id.isEmpty && id.count <= 128 && id.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_" || $0 == "-") })
-            && !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && name.count <= 255
-            && PhotoLimits.mimeTypes.contains(mimeType) && (1...PhotoLimits.bytesEach).contains(sizeBytes)
-            && digest.count == 64 && digest.allSatisfy({ $0.isHexDigit && !$0.isUppercase })
+        let idCharacters = id.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_" || $0 == "-") }
+        let validID = !id.isEmpty && id.count <= 128 && idCharacters
+        let validName = !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && name.count <= 255
+        let validDigest = digest.count == 64 && digest.allSatisfy { $0.isHexDigit && !$0.isUppercase }
+        let validSize = (1...PhotoLimits.bytesEach).contains(sizeBytes)
+        return validID && validName && validDigest && validSize && PhotoLimits.mimeTypes.contains(mimeType)
     }
     public var wire: JSONValue {
         var fields: [String: JSONValue] = ["id": .string(id), "name": .string(name), "mimeType": .string(mimeType),
@@ -59,7 +61,7 @@ public enum PhotoSupport: Equatable, Sendable {
     public init(online: Bool, thread: ThreadSummary?, host: HostSnapshot?, features: [String]) {
         guard online else { self = .offline; return }
         guard features.contains("attachment-staging") else { self = .needsUpdate; return }
-        guard let modelID = thread?.modelId, let model = host?.models?.first(where: { $0.id == modelID }) else { self = .modelUnknown; return }
+        guard let model = CatalogEntry.model(host?.models ?? [], id: thread?.modelId) else { self = .modelUnknown; return }
         self = model.supportsImages == true ? .available : .modelCannot
     }
     /// Why the photo control does nothing, in words, or nil when it works.

@@ -10,6 +10,18 @@ final class PhotoReplyTests: XCTestCase {
     }
     /// Holds what a test's injected closures need to reach once the model exists.
     @MainActor private final class Box { var model: AppModel?; var sleeps = 0; var sendingWhileWaiting: Bool?; var staged = 0 }
+    /// Holds a staging request until the test lets it go.
+    @MainActor private final class Gate {
+        private var held: CheckedContinuation<Void, Never>?
+        private var arrival: CheckedContinuation<Void, Never>?
+        private(set) var reached = false
+        func hold() async {
+            reached = true; arrival?.resume(); arrival = nil
+            await withCheckedContinuation { held = $0 }
+        }
+        func arrived() async { if !reached { await withCheckedContinuation { arrival = $0 } } }
+        func release() { held?.resume(); held = nil }
+    }
 
     @MainActor private func fixture(supportsImages: Bool = true, features: [String] = ["host-folders", "attachment-staging"],
                                     receiptSleep: (@Sendable (UInt64) async throws -> Void)? = nil) async throws -> (AppModel, ThreadRef) {
@@ -68,6 +80,34 @@ final class PhotoReplyTests: XCTestCase {
         XCTAssertEqual(connection.operations.filter { $0 == "stage-attachment" }.count, 1, "A fresh handle is not staged again")
         XCTAssertTrue(model.photos(ref).isEmpty)
         XCTAssertTrue(model.pending.isEmpty)
+    }
+    @MainActor func testASecondPressWhileAPhotoIsStagedAgainSendsNothing() async throws {
+        let (model, ref) = try await fixture()
+        let connection = try XCTUnwrap(HostConnection.instances.last)
+        let working = try XCTUnwrap(HostConnection.stageHandler)
+        HostConnection.stageHandler = { _ in throw ClientError.readTimedOut }
+        model.attachPhotos(ref, from: [source()])
+        await model.waitForPhotos()
+        let gate = Gate()
+        HostConnection.stageHandler = { image in await gate.hold(); return try await working(image) }
+        let first = Task { await model.send(ref) }
+        await gate.arrived()
+        XCTAssertTrue(model.preparingSends.contains(ref.id))
+        XCTAssertFalse(model.canSendReply(ref))
+        await model.send(ref)
+        XCTAssertTrue(sent(connection).isEmpty, "The second press found the reply already on its way")
+        gate.release()
+        await first.value
+        XCTAssertEqual(sent(connection).count, 1)
+        XCTAssertEqual(connection.operations.filter { $0 == "stage-attachment" }.count, 2)
+    }
+    @MainActor func testAOneMillionContextThreadTakesPhotosLikeItsBaseModel() async throws {
+        let (model, ref) = try await fixture()
+        guard case .object(var root) = HostConnection.shell, case .object(var host) = root["host"],
+              case .array(var threads) = host["threads"], case .object(var thread) = threads[0] else { return XCTFail("Unexpected fixture") }
+        thread["modelId"] = .string("m[1m]"); threads[0] = .object(thread); host["threads"] = .array(threads); root["host"] = .object(host)
+        try XCTUnwrap(HostConnection.instances.last).push(.shell(try JSONValue.object(root).decode(Shell.self)))
+        XCTAssertEqual(model.photoSupport(ref), .available)
     }
     @MainActor func testAPhotoThatNeverReachedTheComputerIsStagedWhenTheReplyIsSent() async throws {
         let (model, ref) = try await fixture()
@@ -148,7 +188,6 @@ final class PhotoReplyTests: XCTestCase {
         await model.send(ref)
         XCTAssertEqual(box.sendingWhileWaiting, true, "A reply on its way is not an unconfirmed one")
         XCTAssertTrue(model.pending.isEmpty)
-        XCTAssertTrue(model.sendingOperations.isEmpty)
         XCTAssertNil(model.feedback)
     }
     @MainActor func testASlowProviderStaysSendingWhileTheComputerSaysItIsWorking() async throws {

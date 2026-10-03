@@ -243,9 +243,10 @@ public enum Wire {
         let encoder = JSONEncoder(); encoder.outputFormatting = .withoutEscapingSlashes
         return try encoder.encode(JSONValue.object(fields))
     }
-    /// `request`, off the main actor: a staged image makes a frame of up to 14 MB, too much to encode
-    /// where the interface draws. Nonisolated async functions run on the generic executor in Swift 5 mode.
-    public static func requestInBackground(id: String, session: String, operation: [String: JSONValue]) async throws -> Data {
-        try request(id: id, session: session, operation: operation)
+    /// `request` as the text a socket frame carries, made off the main actor: a staged image makes a frame of up
+    /// to 14 MB, too much to encode where the interface draws. Nonisolated async functions run on the generic
+    /// executor in Swift 5 mode.
+    public static func requestTextInBackground(id: String, session: String, operation: [String: JSONValue]) async throws -> String {
+        String(decoding: try request(id: id, session: session, operation: operation), as: UTF8.self)
     }
 }

@@ -33,6 +33,10 @@ enum PhotoPipelineError: Error, LocalizedError {
 enum PhotoPipeline {
     /// The reply box's thumbnails and a sent photo's thumbnail in the thread.
     static let thumbnailEdge = 640
+    /// A sent photo opened full screen: about the size of the largest iPhone screen.
+    static let screenEdge = 2048
+    /// A moving GIF with more frames than this goes as its first frame, so rewriting it stays bounded.
+    private static let gifFrames = 500
     private static let uncached: CFDictionary = [kCGImageSourceShouldCache: false] as [CFString: Any] as CFDictionary
 
     static func prepare(_ data: Data, name base: String) async throws -> PreparedPhoto {
@@ -47,13 +51,13 @@ enum PhotoPipeline {
         let longest = max(width, height)
         // A moving GIF that already fits keeps moving, as the desktop leaves GIFs alone (ADR-0030): its frames are
         // written again with their timing and nothing else. Any other moving image is sent as its first frame.
-        if type == UTType.gif.identifier, CGImageSourceGetCount(source) > 1, longest <= PhotoLimits.longEdge,
-           let gif = animatedGIF(source), gif.count <= PhotoLimits.bytesEach {
+        if type == UTType.gif.identifier, (2...gifFrames).contains(CGImageSourceGetCount(source)), longest <= PhotoLimits.longEdge,
+           data.count <= PhotoLimits.bytesEach, let gif = animatedGIF(source), gif.count <= PhotoLimits.bytesEach {
             return PreparedPhoto(name: base + ".gif", mimeType: "image/gif", base64: gif.base64EncodedString(), byteCount: gif.count,
-                                 dimensions: nil, thumbnail: thumbnail(source, edge: thumbnailEdge))
+                                 dimensions: nil, thumbnail: scaled(source, edge: thumbnailEdge))
         }
         // Drawing a new image keeps none of the original's metadata: no location, no camera details.
-        guard let image = thumbnail(source, edge: min(longest, PhotoLimits.longEdge)) else { throw PhotoPipelineError.unreadable }
+        guard let image = scaled(source, edge: min(longest, PhotoLimits.longEdge)) else { throw PhotoPipelineError.unreadable }
         let sent = ImageSize(width: image.width, height: image.height)
         // A screenshot stays lossless; anything else, HEIC included, goes as JPEG.
         var encoded: (data: Data, mimeType: String, ext: String)?
@@ -66,17 +70,17 @@ enum PhotoPipeline {
         guard let encoded else { throw PhotoPipelineError.tooLarge }
         return PreparedPhoto(name: base + "." + encoded.ext, mimeType: encoded.mimeType, base64: encoded.data.base64EncodedString(),
                              byteCount: encoded.data.count, dimensions: ImageDimensions(original: original, sent: sent),
-                             thumbnail: thumbnail(source, edge: thumbnailEdge))
+                             thumbnail: scaled(source, edge: thumbnailEdge))
     }
 
     /// A sent photo's bytes from its computer, made small for the thread or the size of the screen to open.
     static func image(_ data: Data, edge: Int) async -> CGImage? {
         guard let source = CGImageSourceCreateWithData(data as CFData, Self.uncached) else { return nil }
-        return thumbnail(source, edge: edge)
+        return scaled(source, edge: edge)
     }
 
     /// An upright image at most `edge` pixels on its longest side, decoded at that size rather than whole.
-    private static func thumbnail(_ source: CGImageSource, edge: Int) -> CGImage? {
+    private static func scaled(_ source: CGImageSource, edge: Int) -> CGImage? {
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true,
             kCGImageSourceShouldCacheImmediately: true, kCGImageSourceThumbnailMaxPixelSize: max(1, edge),

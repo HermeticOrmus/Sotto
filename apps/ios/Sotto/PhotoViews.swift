@@ -57,7 +57,7 @@ import SottoCore
         let task = Task { [weak self] () -> CGImage? in
             guard let data = await model.sentPhoto(key.ref, messageID: key.messageID, attachmentID: key.attachmentID, wanted: {
                 (self?.shown[key] ?? 0) > 0
-            }), let image = await PhotoPipeline.image(data, edge: 2048) else { return nil }
+            }), let image = await PhotoPipeline.image(data, edge: PhotoPipeline.screenEdge) else { return nil }
             self?.opened = (key, image)
             return image
         }
@@ -116,23 +116,30 @@ struct PhotoViewer: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var previews: PhotoPreviews
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var phase
     @State var opened: OpenPhotos
     var body: some View {
         VStack(spacing: 0) {
             HStack {
                 Button("Done") { dismiss() }.fontWeight(.semibold).frame(minHeight: 44)
                 Spacer()
-                if opened.photos.count > 1 { Text("\(opened.index + 1) of \(opened.photos.count)").foregroundStyle(.white.opacity(0.8)) }
-            }.padding(.horizontal, 20).foregroundStyle(.white)
+                if opened.photos.count > 1 { Text("\(opened.index + 1) of \(opened.photos.count)").foregroundStyle(Palette.muted) }
+            }.padding(.horizontal, 20).foregroundStyle(Palette.ink)
             TabView(selection: $opened.index) {
                 ForEach(Array(opened.photos.enumerated()), id: \.element.id) { index, photo in
                     FullPhoto(key: PhotoPreviews.Key(ref: opened.ref, messageID: opened.messageID, attachmentID: photo.id), name: photo.name).tag(index)
                 }
             }.tabViewStyle(.page(indexDisplayMode: opened.photos.count > 1 ? .always : .never))
-            Text(opened.photos[safe: opened.index]?.name ?? "").font(.footnote).foregroundStyle(.white.opacity(0.8))
+            Text(opened.photos[safe: opened.index]?.name ?? "").font(.footnote).foregroundStyle(Palette.muted)
                 .lineLimit(1).truncationMode(.middle).padding(.horizontal, 20).padding(.vertical, 12)
         }
-        .background(Color.black.ignoresSafeArea())
+        .background(Palette.canvas.ignoresSafeArea())
+        // Covered while Sotto isn't in front, like every other page, so the app switcher never shows a photo.
+        .overlay {
+            if phase != .active {
+                Palette.canvas.ignoresSafeArea().overlay(Text("Sotto").font(.title2).foregroundStyle(Palette.ink))
+            }
+        }
         .accessibilityAction(.escape) { dismiss() }
     }
 }
@@ -150,8 +157,8 @@ private struct FullPhoto: View {
                 Image(image, scale: 1, label: Text("Photo: \(name)")).resizable().scaledToFit()
             } else if missing {
                 Text("This photo couldn’t be loaded from \(model.name(key.ref.hostID)). Nothing was lost. Try again when it’s connected.")
-                    .multilineTextAlignment(.center).foregroundStyle(.white.opacity(0.8)).padding(32)
-            } else { ProgressView().tint(.white) }
+                    .multilineTextAlignment(.center).foregroundStyle(Palette.muted).padding(32)
+            } else { ProgressView() }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear { previews.appeared(key) }
@@ -197,14 +204,14 @@ private struct DraftPhotoView: View {
                 } else { Palette.surface }
             }
             .frame(width: width, height: 88)
-            .overlay { if photo.preparing || photo.staging { ZStack { Color.black.opacity(0.35); ProgressView().tint(.white) } } }
+            .overlay { if photo.preparing || photo.staging { ZStack { Palette.canvas.opacity(0.55); ProgressView() } } }
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .accessibilityElement()
             .accessibilityLabel("Photo \(number) of \(count)")
             .accessibilityValue(photo.preparing ? "Getting it ready" : photo.staging ? "Sending it to the computer" : "Ready")
             Button(action: remove) {
-                Image(systemName: "xmark").font(.system(size: 11, weight: .bold)).foregroundStyle(.white)
-                    .frame(width: 22, height: 22).background(Color.black.opacity(0.75), in: Circle())
+                Image(systemName: "xmark").font(.system(size: 11, weight: .bold)).foregroundStyle(Palette.canvas)
+                    .frame(width: 22, height: 22).background(Palette.ink.opacity(0.85), in: Circle())
                     .frame(width: 44, height: 44, alignment: .topTrailing).padding(4).contentShape(Rectangle())
             }
             .buttonStyle(.plain).offset(x: 4, y: -4).disabled(locked)

@@ -199,13 +199,13 @@ private struct UnconfirmedRow: View {
             if sending {
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.mini)
-                    Text(sendingWords)
+                    Text(words.sending)
                 }.font(.footnote).foregroundStyle(Palette.muted)
                     .accessibilityElement(children: .combine)
             } else {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Image(systemName: "exclamationmark.triangle").accessibilityHidden(true)
-                    Text(sentence).fixedSize(horizontal: false, vertical: true)
+                    Text(words.unconfirmed).fixedSize(horizontal: false, vertical: true)
                 }.font(.footnote).foregroundStyle(Palette.warning)
                 HStack(spacing: 8) {
                     Button("I checked", action: dismiss).buttonStyle(PlainStyle(compact: true))
@@ -214,18 +214,12 @@ private struct UnconfirmedRow: View {
             }
         }.frame(maxWidth: .infinity, alignment: .trailing)
     }
-    private var sendingWords: String {
+    /// What the row says for its kind: on its way, and unconfirmed.
+    private var words: (sending: String, unconfirmed: String) {
         switch item.kind {
-        case "answer": return "Sending your answer…"
-        case "interrupt": return "Stopping…"
-        default: return "Sending…"
-        }
-    }
-    private var sentence: String {
-        switch item.kind {
-        case "answer": return "Your answer isn’t confirmed. Check the thread before you answer again."
-        case "interrupt": return "Stop isn’t confirmed. Check whether the thread is still working."
-        default: return "Not confirmed. Check the thread before you send it again."
+        case "answer": return ("Sending your answer…", "Your answer isn’t confirmed. Check the thread before you answer again.")
+        case "interrupt": return ("Stopping…", "Stop isn’t confirmed. Check whether the thread is still working.")
+        default: return ("Sending…", "Not confirmed. Check the thread before you send it again.")
         }
     }
 }

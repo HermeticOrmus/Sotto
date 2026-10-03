@@ -39,6 +39,33 @@ public struct ModelCatalogCache: Sendable {
     }
 }
 
+/// A model in a computer's catalog, read as the host reads it (`catalogEntry` in src/shared/modelCatalog.ts): the
+/// exact entry, or its base model's for a 1M-context variant (`…[1m]`) the catalog lists only as its base.
+public enum CatalogEntry {
+    public static func model(_ models: [ThreadModel], id: String?) -> ThreadModel? {
+        guard let id else { return nil }
+        if let exact = models.first(where: { $0.id == id }) { return exact }
+        guard let base = baseID(id) else { return nil }
+        return models.first { $0.id == base }
+    }
+    /// The base of a 1M-context variant: `opus` for `opus[1m]`, and the same inside a public Claude model ID.
+    /// Nil for anything else, and for another provider's public ID.
+    static func baseID(_ id: String) -> String? {
+        let prefix = "native:claude:model:"
+        var value = id
+        if id.hasPrefix("native:") {
+            guard id.hasPrefix(prefix), let decoded = String(id.dropFirst(prefix.count)).removingPercentEncoding else { return nil }
+            value = decoded
+        }
+        guard value.count > 4, value.lowercased().hasSuffix("[1m]") else { return nil }
+        let base = String(value.dropLast(4))
+        guard id.hasPrefix(prefix) else { return base }
+        return prefix + (base.addingPercentEncoding(withAllowedCharacters: uriComponent) ?? base)
+    }
+    /// What `encodeURIComponent` leaves as it is.
+    private static let uriComponent = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.!~*'()")
+}
+
 extension HostSnapshot {
     /// The catalog this snapshot carries whole under a revision, when it does.
     var carriedCatalog: CarriedCatalog? {

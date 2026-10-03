@@ -174,15 +174,15 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
     private func request(_ operation: [String: JSONValue], id: String) async throws -> Received<Reply> {
         guard let socket, !session.isEmpty else { throw ClientError.disconnected }
         let operationName = operation["op"]?.string ?? ""
-        let data: Data
+        let text: String
         if operationName == "stage-attachment" {
-            // An image makes a frame of up to 14 MB: encoded off the main actor, then sent only on the
+            // An image makes a frame of up to 14 MB: made off the main actor, then sent only on the
             // connection it was made for.
             let current = generation
-            data = try await Wire.requestInBackground(id: id, session: session, operation: operation)
+            text = try await Wire.requestTextInBackground(id: id, session: session, operation: operation)
             guard current == generation, self.socket === socket else { throw ClientError.disconnected }
-        } else { data = try Wire.request(id: id, session: session, operation: operation) }
-        guard data.count <= Wire.maximumFrameBytes else { throw ClientError.invalidRequest }
+        } else { text = String(decoding: try Wire.request(id: id, session: session, operation: operation), as: UTF8.self) }
+        guard text.utf8.count <= Wire.maximumFrameBytes else { throw ClientError.invalidRequest }
         return try await withCheckedThrowingContinuation { continuation in
             pending[id] = continuation
             liveness.beginRequest(id: id, operation: operationName, now: ProcessInfo.processInfo.systemUptime)
@@ -192,7 +192,7 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
                 self?.finish(id: id, result: .failure(Self.requestFailure(operation: operationName)))
             }
             Task { [weak self] in
-                do { try await socket.send(.string(String(decoding: data, as: UTF8.self))) }
+                do { try await socket.send(.string(text)) }
                 catch { self?.finish(id: id, result: .failure(Self.requestFailure(operation: operationName))) }
             }
         }

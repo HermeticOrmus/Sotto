@@ -12,6 +12,7 @@ final class NewThreadModelTests: XCTestCase {
         HostConnection.receipt = .object(["status": .string("unknown")]); HostConnection.loseAcknowledgement = false
         HostConnection.features = ["host-folders"]; HostConnection.receipts = [:]
         HostConnection.shells = [:]; HostConnection.commandHandler = nil; HostConnection.folderHandler = nil
+        HostConnection.stageHandler = nil; HostConnection.previewHandler = nil
         let store = TestKeychain.store, hosts = twoComputers ? [laptop, forge] : [laptop]
         try store.write(hosts, account: ComputerStore.indexAccount)
         for host in hosts {

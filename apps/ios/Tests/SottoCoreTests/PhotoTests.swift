@@ -110,6 +110,15 @@ final class PhotoTests: XCTestCase {
         XCTAssertFalse(try decode(Receipt.self, #"{"status":"unknown"}"#).stillWorking)
         XCTAssertFalse(try decode(Receipt.self, #"{"status":"completed"}"#).stillWorking)
     }
+    func testAOneMillionContextThreadReadsItsBaseModelsEntry() throws {
+        let models = try decode([ThreadModel].self, #"[{"id":"opus","name":"Opus","provider":"Claude","ready":true,"supportsImages":true},{"id":"native:claude:model:claude-opus-4-7","name":"Opus 4.7","provider":"Claude","ready":true,"supportsImages":true}]"#)
+        XCTAssertEqual(CatalogEntry.model(models, id: "opus")?.id, "opus")
+        XCTAssertEqual(CatalogEntry.model(models, id: "opus[1m]")?.id, "opus")
+        XCTAssertEqual(CatalogEntry.model(models, id: "native:claude:model:claude-opus-4-7%5B1m%5D")?.id, "native:claude:model:claude-opus-4-7")
+        XCTAssertNil(CatalogEntry.model(models, id: "native:codex:model:opus%5B1m%5D"), "Only Claude names a 1M-context variant")
+        XCTAssertNil(CatalogEntry.model(models, id: "[1m]"))
+        XCTAssertNil(CatalogEntry.model(models, id: nil))
+    }
     func testAnImageGoingEitherWayGetsTwoMinutes() {
         XCTAssertEqual(LivenessProgress.requestTimeout(operation: "stage-attachment"), 120)
         XCTAssertEqual(LivenessProgress.requestTimeout(operation: "preview"), 120)
