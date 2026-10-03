@@ -7,8 +7,8 @@ import type { HostService, ClientIdentity } from '../main/agents/hostService'
 import { PairedClients, originAllowed, SESSION_LIFETIME_MS } from '../main/agents/pairing'
 import { coalesceAgentStatePublishes, coalesceAgentThreadDetailPublishes } from '../main/agents/control'
 import { RefusedImage } from '../main/agents/attachmentStore'
-import { shellForProtocolV1, clientUpdateForOlderClient, HOST_BUSY, HOST_EVENT_PAGE_SIZE, HOST_FEATURES, HOST_MAX_FRAME_BYTES, HOST_SESSION_REJECTED, hostRequestEnvelopeSchema, hostRequestSchema, type HostDescriptor, type HostErrorCode, type HostPush, type HostReceipt, type HostRequest, type HostResponse } from '../shared/hostProtocol'
-import type { AgentCommand, AgentThreadDetail } from '../shared/agents'
+import { shellForProtocolV1, clientUpdateForOlderClient, deltaWithActivitySummaries, detailWithActivitySummaries, HOST_BUSY, HOST_EVENT_PAGE_SIZE, HOST_FEATURES, HOST_MAX_FRAME_BYTES, HOST_SESSION_REJECTED, hostRequestEnvelopeSchema, hostRequestSchema, type HostDescriptor, type HostErrorCode, type HostPush, type HostReceipt, type HostRequest, type HostResponse } from '../shared/hostProtocol'
+import type { AgentCommand, AgentThreadDetail, AgentThreadDetailDelta } from '../shared/agents'
 import { isAgentThreadDetailDelta } from '../shared/agentThreadDetail'
 import { resolveModel } from '../shared/modelCatalog'
 import { version as packageVersion } from '../../package.json'
@@ -42,8 +42,9 @@ class Refusal extends Error { constructor(readonly code: HostErrorCode, message 
 /**
  * `deltas` is set by the client's hello: only a client that accepts `detail-delta` is sent one. `clientUpdates` likewise:
  * only a client that accepts `client-updates` is sent the mise channel and the waiting state in its shell's client updates.
+ * `activitySummaries` too: only a client that accepts `activity-summaries` is sent activity records as their summaries.
  */
-interface Peer { frames: SocketFrames; client: ClientIdentity; session: string; observed: Set<string>; inFlight: number; window: number; count: number; pageWindow: number; pages: number; preview: boolean; ready: boolean; afterSeq: number; selectedThreadId: string | null; selectedProjectId: string | null; editingThreadId: string | null; deltas: boolean; messageAliases: boolean; clientUpdates: boolean }
+interface Peer { frames: SocketFrames; client: ClientIdentity; session: string; observed: Set<string>; inFlight: number; window: number; count: number; pageWindow: number; pages: number; preview: boolean; ready: boolean; afterSeq: number; selectedThreadId: string | null; selectedProjectId: string | null; editingThreadId: string | null; deltas: boolean; messageAliases: boolean; clientUpdates: boolean; activitySummaries: boolean }
 export interface SocketServerOptions {
   service: HostService; pairing: PairedClients; port?: number; origins?: readonly string[]
   mayAnswer?: (client: ClientIdentity) => boolean
@@ -178,7 +179,23 @@ export async function startSocketServer(options: SocketServerOptions) {
     await service.command({ type: 'observe-threads', threadIds: ids }, { clientId: 'socket-observations', user: '', transport: 'socket' })
   }
   const track = <T>(task: Promise<T>): Promise<T> => { operations.add(task); void task.finally(() => operations.delete(task)).catch(() => undefined); return task }
-  const detail = (peer: Peer, threadId: string): void => { push(peer, { v: 1, event: 'detail', threadId, detail: service.threadDetail(threadId) }) }
+  /**
+   * Reads each thread's detail once however many peers are sent it, and makes its activity summaries once however
+   * many of them accept those (#701); every other peer is sent the detail whole, as before. `known` is a detail
+   * already in hand, which is not read again.
+   */
+  const detailReads = (known?: AgentThreadDetail) => {
+    const whole = new Map<string, AgentThreadDetail | null>(known ? [[known.threadId, known]] : [])
+    const summaries = new Map<string, AgentThreadDetail | null>()
+    return (peer: Peer, threadId: string): AgentThreadDetail | null => {
+      if (!whole.has(threadId)) whole.set(threadId, service.threadDetail(threadId))
+      const detail = whole.get(threadId)!
+      if (!peer.activitySummaries || detail === null) return detail
+      if (!summaries.has(threadId)) summaries.set(threadId, detailWithActivitySummaries(detail))
+      return summaries.get(threadId)!
+    }
+  }
+  const detail = (peer: Peer, threadId: string, read = detailReads()): void => { push(peer, { v: 1, event: 'detail', threadId, detail: read(peer, threadId) }) }
   // A streaming thread changes the shell many times a second. Pushes go out at most once a window, the
   // same way the desktop's own IPC coalesces them, and each carries the state as it is when it is sent.
   // Details come through their own subscription when the service has one, so a shell change resends no history.
@@ -187,6 +204,7 @@ export async function startSocketServer(options: SocketServerOptions) {
   // a page too large to ride along is left behind and the shell says there is more, so the client reads
   // the events itself from its own cursor instead of never being sent them.
   const shellPublisher = coalesceAgentStatePublishes(() => {
+    const read = detailReads()
     for (const peer of peers) {
       if (!authenticated(peer)) { peer.frames.close(); continue }
       if (!peer.ready) continue
@@ -194,20 +212,23 @@ export async function startSocketServer(options: SocketServerOptions) {
       const full = JSON.stringify({ v: 1, event: 'shell', state, eventPage })
       if (fits(full)) { peer.frames.sendText(full); peer.afterSeq = eventPage.latestSeq }
       else if (push(peer, { v: 1, event: 'shell', state, eventPage: { events: [], latestSeq: peer.afterSeq, hasMore: true } })) peer.afterSeq = eventPage.latestSeq
-      if (detailsFollowShell) for (const threadId of peer.observed) detail(peer, threadId)
+      if (detailsFollowShell) for (const threadId of peer.observed) detail(peer, threadId, read)
     }
   })
   // Each observed thread's update goes out as the service published it: a whole detail as one, and a delta
   // (what changed since the revision the client holds) as a detail-delta to every client that accepts
   // one. A client applies a delta only to the revision it was measured from and asks for the whole detail
   // otherwise. A client that never accepted deltas, from before protocol v1 froze, is sent the whole thread.
+  // A delta of activity summaries is made once for every peer that accepts both.
   const detailPublisher = coalesceAgentThreadDetailPublishes(update => {
     const threadId = update.threadId
-    let whole: AgentThreadDetail | null | undefined = isAgentThreadDetailDelta(update) ? undefined : update
+    const read = detailReads(isAgentThreadDetailDelta(update) ? undefined : update)
+    let summaries: AgentThreadDetailDelta | undefined
     for (const peer of peers) {
       if (!peer.observed.has(threadId)) continue
-      if (isAgentThreadDetailDelta(update) && peer.deltas) push(peer, { v: 1, event: 'detail-delta', threadId, delta: update })
-      else push(peer, { v: 1, event: 'detail', threadId, detail: whole === undefined ? (whole = service.threadDetail(threadId)) : whole })
+      if (isAgentThreadDetailDelta(update) && peer.deltas) {
+        push(peer, { v: 1, event: 'detail-delta', threadId, delta: peer.activitySummaries ? (summaries ??= deltaWithActivitySummaries(update)) : update })
+      } else detail(peer, threadId, read)
     }
   })
   const unsubscribe = service.subscribe(state => shellPublisher.publish(state))
@@ -296,9 +317,10 @@ export async function startSocketServer(options: SocketServerOptions) {
         peer.messageAliases = request.accepts?.includes('message-aliases') ?? false
         peer.afterSeq = request.afterSeq ?? Number.MAX_SAFE_INTEGER; peer.deltas = request.accepts?.includes('detail-delta') ?? false
         peer.clientUpdates = request.accepts?.includes('client-updates') ?? false
+        peer.activitySummaries = request.accepts?.includes('activity-summaries') ?? false
         return { hostId, clientId: peer.client.clientId, shell: shell(peer), capabilities: { mayAnswer: options.mayAnswer?.(peer.client) ?? false }, sottoVersion, features: [...features], ...events(peer, peer.afterSeq) }
       case 'shell': return shell(peer)
-      case 'detail': return service.threadDetail(request.threadId)
+      case 'detail': return detailReads()(peer, request.threadId)
       case 'events': return events(peer, request.afterSeq, request.threadId)
       case 'receipt': return receipts.get(peer.client.clientId + ':' + request.commandId)?.receipt ?? { status: 'unknown' }
       case 'observe':
@@ -471,7 +493,7 @@ export async function startSocketServer(options: SocketServerOptions) {
     const accept = createHash('sha1').update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64')
     stream.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' + accept + '\r\n\r\n')
     const frames = new SocketFrames(stream, false, text => onMessage(peer, text))
-    const peer: Peer = { frames, client: identity(clientId), session, observed: new Set(), inFlight: 0, window: Date.now(), count: 0, pageWindow: 0, pages: 0, preview: false, ready: false, afterSeq: Number.MAX_SAFE_INTEGER, selectedThreadId: null, selectedProjectId: null, editingThreadId: null, messageAliases: false, deltas: false, clientUpdates: false }
+    const peer: Peer = { frames, client: identity(clientId), session, observed: new Set(), inFlight: 0, window: Date.now(), count: 0, pageWindow: 0, pages: 0, preview: false, ready: false, afterSeq: Number.MAX_SAFE_INTEGER, selectedThreadId: null, selectedProjectId: null, editingThreadId: null, messageAliases: false, deltas: false, clientUpdates: false, activitySummaries: false }
     peers.add(peer)
     frames.startHeartbeat()
     frames.onClose(() => { peers.delete(peer); if (!closing) { track(observe().catch(() => undefined)); options.onPeersChanged?.() } })
