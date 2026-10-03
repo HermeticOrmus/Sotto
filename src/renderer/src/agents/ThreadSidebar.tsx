@@ -1,4 +1,4 @@
-import React, { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import React, { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { Archive, ArchiveRestore, ChevronRight, Columns2, Folder, FolderGit2, GitBranch, Pencil, Sparkles, SquarePen } from 'lucide-react'
 import { isThreadBusy, providerWritesShortText, type AgentState } from '../../../shared/agents'
 import { isThreadArchived } from '../../../shared/threadActivity'
@@ -134,8 +134,43 @@ const ThreadNavRow = memo(function ThreadNavRow({ row, current, open, busy, live
   </li>
 })
 
-/** A folder's key in the sidebar's collapsed set; a project can appear in both sections. */
+/** A folder's key in the sidebar's toggled set; a project can appear in both sections. */
 const folderKey = (section: Section, folderId: string): string => `${section}:${folderId}`
+
+/**
+ * The folders the user toggled. Every folder starts closed when Sotto starts; what the user opens stays open while
+ * the window lives, across pages that remount the sidebar, which is why it is kept in session storage. The e2e
+ * harness starts them open, as it holds the clock still, so its journeys and design captures reach the rows.
+ */
+export const FOLDER_TOGGLES_KEY = 'sotto.threadWorkspace.folderToggles'
+const toggleListeners = new Set<() => void>()
+let togglesFallback = '[]'
+function readToggles(): string {
+  try { return sessionStorage.getItem(FOLDER_TOGGLES_KEY) ?? '[]' } catch { return togglesFallback }
+}
+function parseToggles(stored: string): Set<string> {
+  try {
+    const value: unknown = JSON.parse(stored)
+    return new Set(Array.isArray(value) ? value.filter((key): key is string => typeof key === 'string') : [])
+  } catch { return new Set() }
+}
+function useFolderToggles(): readonly [(key: string) => boolean, (key: string) => void] {
+  const subscribe = useCallback((listener: () => void) => { toggleListeners.add(listener); return () => { toggleListeners.delete(listener) } }, [])
+  const stored = useSyncExternalStore(subscribe, readToggles, () => '[]')
+  const isOpen = useMemo(() => {
+    const toggled = parseToggles(stored)
+    const startOpen = window.sottoE2E !== undefined
+    return (key: string): boolean => startOpen !== toggled.has(key)
+  }, [stored])
+  const toggle = useCallback((key: string): void => {
+    const next = parseToggles(readToggles())
+    if (next.has(key)) next.delete(key); else next.add(key)
+    togglesFallback = JSON.stringify([...next])
+    try { sessionStorage.setItem(FOLDER_TOGGLES_KEY, togglesFallback) } catch { /* Private mode: the fallback keeps it for this window. */ }
+    for (const listener of [...toggleListeners]) listener()
+  }, [])
+  return [isOpen, toggle]
+}
 
 /** One project folder and its rows. Memoised for the same reason a row is: its folder is shared across updates. */
 const FolderView = memo(function FolderView({ folder, section, panes, activeProjectId, expanded, liveClock, onToggle, onOpen, onNewThread, command, settle, globalLaneBusy, busyThreadIds, host, newThreadShortcut }: {
@@ -207,16 +242,11 @@ export function ThreadSidebar({ state, command, organization, query, liveClock =
   const [settledOpen, setSettledOpen] = useState(false)
   const settledButton = useRef<HTMLButtonElement>(null)
   const { settle, dialog: settleDialog } = useSettleThread(command, settledButton)
-  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set())
+  const [isFolderOpen, toggle] = useFolderToggles()
   // One object for the whole list, rebuilt only when a pane action actually changes: every row compares it.
   const panes = useMemo<PaneActions>(() => ({ currentThreadId, openThreadIds, onOpenBeside, onDragThread }),
     [currentThreadId, openThreadIds, onOpenBeside, onDragThread])
   const searching = query.trim() !== ''
-  const toggle = useCallback((key: string): void => setCollapsed(previous => {
-    const next = new Set(previous)
-    if (next.has(key)) next.delete(key); else next.add(key)
-    return next
-  }), [])
   const connections = state.connections
   const hosts = useMemo(() => listedHosts({ connections }), [connections])
   const folderView = (section: Section) => (folder: ProjectFolder): ReactNode => {
@@ -224,7 +254,7 @@ export function ThreadSidebar({ state, command, organization, query, liveClock =
     const hostId = hosts.length ? hostIdOf(folder.project) ?? hostIdOf({ id: folder.id }) ?? folder.rows[0]?.thread.hostId : undefined
     return <FolderView key={key} folder={folder} section={section} panes={panes} activeProjectId={state.activeProjectId} liveClock={liveClock}
       host={hosts.find(item => item.hostId === hostId)} newThreadShortcut={newThreadShortcut}
-      expanded={searching || !collapsed.has(key)} onToggle={toggle} onOpen={onOpen} onNewThread={onNewThread} command={command} settle={settle} globalLaneBusy={state.globalLaneBusy} busyThreadIds={state.busyThreadIds} />
+      expanded={searching || isFolderOpen(key)} onToggle={toggle} onOpen={onOpen} onNewThread={onNewThread} command={command} settle={settle} globalLaneBusy={state.globalLaneBusy} busyThreadIds={state.busyThreadIds} />
   }
   const { open, settled } = organization
   const settledThreads = settled.reduce((count, folder) => count + folder.rows.length, 0)

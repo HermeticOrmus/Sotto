@@ -4,7 +4,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import type { AgentCommand } from '../../../src/shared/agents'
 import { ThreadSidebar } from '../../../src/renderer/src/agents/ThreadSidebar'
 import { describeThreads, organizeWorkspace } from '../../../src/renderer/src/agents/threadFacts'
-import { threadsStateFixture } from './liveAgentState'
+import { openSidebarFolders, threadsStateFixture } from './liveAgentState'
 
 afterEach(cleanup)
 
@@ -24,6 +24,7 @@ it('queues concurrent settle questions and asks for each folder acknowledgement 
       ? Promise.resolve(preview(first, '.first-secret')) : new Promise(resolve => { previewSecond = resolve })
     return Promise.resolve(state)
   })
+  openSidebarFolders(state)
   render(<ThreadSidebar state={state} command={command} organization={organizeWorkspace(state, describeThreads(state, Date.now()), '', state.activeProjectId)}
     query="" onQuery={vi.fn()} onOpen={vi.fn()} onNewThread={vi.fn()} currentThreadId={first.id} openThreadIds={[first.id]} onOpenBeside={vi.fn()} onDragThread={vi.fn()} />)
   fireEvent.click(screen.getByRole('button', { name: 'Settle First' }))
@@ -66,6 +67,7 @@ it.each(['Keep folder', 'Escape', 'Remove worktree'])('keeps the settle question
     return <ThreadSidebar state={state} command={command} organization={organizeWorkspace(state, describeThreads(state, Date.now()), '', state.activeProjectId)}
       query="" onQuery={vi.fn()} onOpen={vi.fn()} onNewThread={vi.fn()} currentThreadId={target.id} openThreadIds={[target.id]} onOpenBeside={vi.fn()} onDragThread={vi.fn()} />
   }
+  openSidebarFolders(initial)
   render(<Sidebar />)
   const settle = screen.getByRole('button', { name: `Settle ${target.title}` })
   settle.focus()
