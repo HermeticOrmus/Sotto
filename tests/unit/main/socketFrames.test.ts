@@ -265,6 +265,25 @@ describe('bounded WebSocket framing', () => {
     await closing
     expect(h.stream.listenerCount('drain')).toBe(0)
   })
+  it('reports a backlog while a write past the high-water mark is unread, and none once it drains or closes', async () => {
+    let finish: (() => void) | undefined
+    const stream = new Duplex({ read() {}, write(_chunk, _encoding, callback) { finish = callback } })
+    const frames = new SocketFrames(stream, false, () => {})
+    expect(frames.backlogged).toBe(false)
+    frames.sendText('small')
+    expect(frames.backlogged).toBe(false)
+    finish!()
+    frames.sendText('a'.repeat(stream.writableHighWaterMark))
+    expect(frames.backlogged).toBe(true)
+    const drained = frames.drained()
+    finish!()
+    await drained
+    expect(frames.backlogged).toBe(false)
+    frames.sendText('a'.repeat(stream.writableHighWaterMark))
+    expect(frames.backlogged).toBe(true)
+    frames.close()
+    expect(frames.backlogged).toBe(false)
+  })
   it('closes a slow consumer before accumulating unbounded writes', () => {
     const h = harness()
     Object.defineProperty(h.stream, 'writableLength', { value: HOST_MAX_FRAME_BYTES * 2 })
