@@ -14,7 +14,8 @@ import { HostConnectionError, SocketHostService } from '../../src/main/agents/so
 import { E2EAgentHost, e2eAgentReasoner } from '../../src/main/e2e/agentEffects'
 import { execFileSync } from 'node:child_process'
 import { SCREENSHOT_NOT_ITS_TYPE, type AgentCommand, type AgentThreadDetail, type AgentThreadDetailDelta, type AgentThreadDetailUpdate } from '../../src/shared/agents'
-import { hostVersionMismatch } from '../../src/shared/hostProtocol'
+import { hostPushSchema, hostVersionMismatch } from '../../src/shared/hostProtocol'
+import { agentActivitySchema, type AgentActivity } from '../../src/shared/agentActivity'
 import { version as packageVersion } from '../../package.json'
 import { rawPeer } from '../fixtures/rawHostPeer'
 import { ThreadStore } from '../../src/main/agents/threadStore'
@@ -875,7 +876,7 @@ describe('thread detail over the socket', () => {
       // A client from before the freeze says nothing about deltas in its hello, and keeps getting whole threads.
       const legacy = await rawPeer(server.descriptor.port, session())
       try {
-        expect(await legacy.call('hello', { op: 'hello', afterSeq: 0 })).toMatchObject({ ok: true, result: { sottoVersion: packageVersion, features: ['client-liveness', 'message-aliases', 'detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders'] } })
+        expect(await legacy.call('hello', { op: 'hello', afterSeq: 0 })).toMatchObject({ ok: true, result: { sottoVersion: packageVersion, features: ['client-liveness', 'message-aliases', 'detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders', 'activity-summaries'] } })
         await legacy.call('observe', { op: 'observe', threadIds: ['streaming'] })
         stream.current = { threadId: 'streaming', revision: 3, messages: [message('Hello, world!')] }
         stream.emit(delta(2, 3, '!'))
@@ -885,6 +886,87 @@ describe('thread detail over the socket', () => {
         expect(updates.at(-1)).toEqual(delta(2, 3, '!'))
       } finally { legacy.frames.close() }
     } finally { await client.close(); await server.close() }
+  })
+
+  it('sends activity summaries to a client that accepts them, in every detail, delta and detail answer, and whole records to one that does not (#701)', async () => {
+    const at = '2026-09-23T00:00:00.000Z'
+    const running: AgentActivity = { id: 'build', turnId: 'turn', sequence: 1, kind: 'command', status: 'running', title: 'Run the build',
+      command: 'npm run build', cwd: '/synthetic/project', output: 'compiled '.repeat(2_000), startedAt: at, timingSource: 'observed' }
+    const activities: AgentActivity[] = [
+      { id: 'turn', turnId: 'turn', sequence: 0, kind: 'turn', status: 'running', title: 'Turn', startedAt: at },
+      running,
+      { id: 'edit', turnId: 'turn', sequence: 2, kind: 'file-change', status: 'completed', title: 'Edited two files', afterMessageId: 'reply',
+        changes: [{ path: 'src/a.ts', kind: 'update', diff: '+a\n'.repeat(500) }, { path: 'src/b.ts', kind: 'add', diff: '+b\n'.repeat(500) }], durationMs: 40 },
+      { id: 'think', turnId: 'turn', sequence: 3, kind: 'reasoning', status: 'completed', title: 'Thinking', text: 'considered '.repeat(500) },
+      { id: 'plan', turnId: 'turn', sequence: 4, kind: 'plan', status: 'completed', title: 'Plan', steps: [{ text: 'Build it', status: 'running' }] },
+      { id: 'agents', turnId: 'turn', sequence: 5, kind: 'subagent', status: 'failed', title: 'Reviewers', error: 'One reviewer stopped.', parentId: 'turn',
+        agents: [{ id: 'reviewer', status: 'failed', message: 'review notes '.repeat(200), prompt: 'Review the change' }], context: { before: 1000, after: 400 } },
+      { id: 'test', turnId: 'turn', sequence: 6, kind: 'command', status: 'failed', title: 'Run the tests', command: 'npm test', output: 'FAIL '.repeat(1_000),
+        error: 'Exit 1', exitCode: 1, durationMs: 1234.5, startedAt: at, completedAt: at },
+    ]
+    /** What a summary row reads, and nothing else. */
+    const summary = (record: AgentActivity) => {
+      const kept: Record<string, unknown> = { id: record.id, turnId: record.turnId, sequence: record.sequence, kind: record.kind, status: record.status, title: record.title }
+      for (const key of ['command', 'exitCode', 'durationMs', 'startedAt'] as const) if (record[key] !== undefined) kept[key] = record[key]
+      if (record.changes) kept.changes = record.changes.map(change => ({ path: change.path, kind: change.kind }))
+      return kept
+    }
+    /** Fields a summary row never reads, checked on the activity alone: a message has text of its own. */
+    const bodies = ['text', 'output', 'error', 'cwd', 'diff', 'steps', 'agents', 'context', 'completedAt', 'timingSource', 'parentId', 'afterMessageId']
+    const carriesNoBodies = (value: unknown) => { for (const key of bodies) expect(JSON.stringify(value)).not.toContain(`"${key}":`) }
+    const { stream, server, client, session } = await streamingHost()
+    const summaries = await rawPeer(server.descriptor.port, session())
+    const wholePeer = await rawPeer(server.descriptor.port, session())
+    // A client may take summaries without deltas: it is sent each change as a whole detail of summaries.
+    const summariesNoDeltas = await rawPeer(server.descriptor.port, session())
+    const peers = [summaries, wholePeer, summariesNoDeltas]
+    try {
+      stream.current = { threadId: 'streaming', revision: 2, messages: [message('Hello')], activities }
+      await summaries.call('hello', { op: 'hello', accepts: ['detail-delta', 'activity-summaries'] })
+      await wholePeer.call('hello', { op: 'hello', accepts: ['detail-delta'] })
+      await summariesNoDeltas.call('hello', { op: 'hello', accepts: ['activity-summaries'] })
+      for (const peer of peers) await peer.call('observe', { op: 'observe', threadIds: ['streaming'] })
+      const detailPush = (peer: typeof summaries, revision: number) => peer.messages.find(item => item.event === 'detail' && (item.detail as AgentThreadDetail).revision === revision)
+      const summarised = (detail: AgentThreadDetail) => ({ ...detail, activities: detail.activities!.map(summary) })
+      // The detail each observer is sent on observing.
+      for (const peer of [summaries, summariesNoDeltas]) {
+        const pushed = detailPush(peer, 2)!
+        expect(hostPushSchema.parse(pushed)).toEqual(pushed)
+        expect(pushed.detail).toEqual(summarised(stream.current))
+        carriesNoBodies((pushed.detail as AgentThreadDetail).activities)
+        for (const record of (pushed.detail as AgentThreadDetail).activities!) expect(agentActivitySchema.parse(record)).toEqual(record)
+      }
+      expect(detailPush(wholePeer, 2)!.detail).toEqual(stream.current)
+
+      // The running command's output grew and the plan went. The record goes as its summary to the client that accepts
+      // summaries and whole to the one that does not; the revisions are the same, so both apply it.
+      const grown: AgentActivity = { ...running, output: running.output + 'linked '.repeat(1_000) }
+      stream.current = { ...stream.current, revision: 3, activities: activities.filter(record => record.id !== 'plan').map(record => record.id === 'build' ? grown : record) }
+      stream.emit({ threadId: 'streaming', baseRevision: 2, revision: 3, messageDeltas: [], activityDeltas: [{ record: grown }, { id: 'plan', removed: true }] })
+      const deltaPush = (peer: typeof summaries) => peer.messages.find(item => item.event === 'detail-delta' && (item.delta as AgentThreadDetailDelta).revision === 3)
+      await expect.poll(() => deltaPush(summaries)).toBeTruthy()
+      await expect.poll(() => deltaPush(wholePeer)).toBeTruthy()
+      expect(hostPushSchema.parse(deltaPush(summaries))).toEqual(deltaPush(summaries))
+      expect(deltaPush(summaries)!.delta).toEqual({ threadId: 'streaming', baseRevision: 2, revision: 3, messageDeltas: [], activityDeltas: [{ record: summary(grown) }, { id: 'plan', removed: true }] })
+      carriesNoBodies((deltaPush(summaries)!.delta as AgentThreadDetailDelta).activityDeltas)
+      expect(deltaPush(wholePeer)!.delta).toEqual({ threadId: 'streaming', baseRevision: 2, revision: 3, messageDeltas: [], activityDeltas: [{ record: grown }, { id: 'plan', removed: true }] })
+      await expect.poll(() => detailPush(summariesNoDeltas, 3)).toBeTruthy()
+      expect(detailPush(summariesNoDeltas, 3)!.detail).toEqual(summarised(stream.current))
+      // The desktop's own client never asks for summaries and keeps every record whole.
+      await expect.poll(() => client.threadDetail('streaming')?.revision).toBe(3)
+      expect(client.threadDetail('streaming')).toEqual(stream.current)
+
+      // A whole detail the service publishes, and the detail a client reads, follow the same rule.
+      stream.current = { ...stream.current, revision: 4 }
+      stream.emit(stream.current)
+      await expect.poll(() => detailPush(summaries, 4)).toBeTruthy()
+      await expect.poll(() => detailPush(wholePeer, 4)).toBeTruthy()
+      expect(detailPush(summaries, 4)!.detail).toEqual(summarised(stream.current))
+      expect(detailPush(wholePeer, 4)!.detail).toEqual(stream.current)
+      expect((await summaries.call('read', { op: 'detail', threadId: 'streaming' })).result).toEqual(summarised(stream.current))
+      expect((await wholePeer.call('read', { op: 'detail', threadId: 'streaming' })).result).toEqual(stream.current)
+      expect(await client.readThreadDetail('streaming')).toEqual(stream.current)
+    } finally { for (const peer of peers) peer.frames.close(); await client.close(); await server.close() }
   })
 
   it('delivers saved long messages in whole details and replacement deltas and reopens without disconnecting', async () => {
@@ -1026,11 +1108,11 @@ describe('staged images over the socket (ADR-0031)', () => {
 describe('host version and features', () => {
   it('advertises the Sotto version and features in health, the listener file and the hello reply', async () => {
     const health = await (await fetch(url + '/v1/health')).json() as Record<string, unknown>
-    expect(health).toMatchObject({ v: 1, status: 'ready', sottoVersion: packageVersion, features: ['client-liveness', 'message-aliases', 'detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders', 'provider-sign-in', 'client-updates'] })
+    expect(health).toMatchObject({ v: 1, status: 'ready', sottoVersion: packageVersion, features: ['client-liveness', 'message-aliases', 'detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders', 'provider-sign-in', 'client-updates', 'activity-summaries'] })
     const listener = JSON.parse(await readFile(join(root, 'host-listener.json'), 'utf8')) as Record<string, unknown>
-    expect(listener).toMatchObject({ v: 1, sottoVersion: packageVersion, features: ['client-liveness', 'message-aliases', 'detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders', 'provider-sign-in', 'client-updates'] })
+    expect(listener).toMatchObject({ v: 1, sottoVersion: packageVersion, features: ['client-liveness', 'message-aliases', 'detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders', 'provider-sign-in', 'client-updates', 'activity-summaries'] })
     const { client } = await pair()
-    expect(await client.connect()).toMatchObject({ sottoVersion: packageVersion, features: ['client-liveness', 'message-aliases', 'detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders', 'provider-sign-in', 'client-updates'], capabilities: { mayAnswer: false } })
+    expect(await client.connect()).toMatchObject({ sottoVersion: packageVersion, features: ['client-liveness', 'message-aliases', 'detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders', 'provider-sign-in', 'client-updates', 'activity-summaries'], capabilities: { mayAnswer: false } })
   })
 
   it('runs client updates only where it offers them: the headless host does, the phone listener does not (#480)', async () => {

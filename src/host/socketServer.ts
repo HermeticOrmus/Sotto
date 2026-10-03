@@ -7,8 +7,8 @@ import type { HostService, ClientIdentity } from '../main/agents/hostService'
 import { PairedClients, originAllowed, SESSION_LIFETIME_MS } from '../main/agents/pairing'
 import { coalesceAgentStatePublishes, coalesceAgentThreadDetailPublishes } from '../main/agents/control'
 import { RefusedImage } from '../main/agents/attachmentStore'
-import { shellForProtocolV1, clientUpdateForOlderClient, HOST_BUSY, HOST_EVENT_PAGE_SIZE, HOST_FEATURES, HOST_MAX_FRAME_BYTES, HOST_SESSION_REJECTED, hostRequestEnvelopeSchema, hostRequestSchema, type HostDescriptor, type HostErrorCode, type HostPush, type HostReceipt, type HostRequest, type HostResponse } from '../shared/hostProtocol'
-import type { AgentCommand, AgentThreadDetail } from '../shared/agents'
+import { shellForProtocolV1, clientUpdateForOlderClient, deltaWithActivitySummaries, detailWithActivitySummaries, HOST_BUSY, HOST_EVENT_PAGE_SIZE, HOST_FEATURES, HOST_MAX_FRAME_BYTES, HOST_SESSION_REJECTED, hostRequestEnvelopeSchema, hostRequestSchema, type HostDescriptor, type HostErrorCode, type HostPush, type HostReceipt, type HostRequest, type HostResponse } from '../shared/hostProtocol'
+import type { AgentCommand, AgentThreadDetail, AgentThreadDetailDelta } from '../shared/agents'
 import { isAgentThreadDetailDelta } from '../shared/agentThreadDetail'
 import { resolveModel } from '../shared/modelCatalog'
 import { version as packageVersion } from '../../package.json'
@@ -42,13 +42,14 @@ class Refusal extends Error { constructor(readonly code: HostErrorCode, message 
 /**
  * `deltas` is set by the client's hello: only a client that accepts `detail-delta` is sent one. `clientUpdates` likewise:
  * only a client that accepts `client-updates` is sent the mise channel and the waiting state in its shell's client updates.
+ * `activitySummaries` too: only a client that accepts `activity-summaries` is sent activity records as their summaries.
  *
  * `held` is the revision of each observed thread's detail the client holds, as far as what it was sent says: set by a
  * whole detail that went, moved on by a delta that followed it, and dropped by a push that could not go or a delta that
  * did not follow it. `opening` is each observed thread still owed its first whole detail. `sentAhead` holds each whole
  * detail this client was sent while that copy was still waiting out the coalescing window, so it is not sent again (#700).
  */
-interface Peer { frames: SocketFrames; client: ClientIdentity; session: string; observed: Set<string>; held: Map<string, number>; opening: Set<string>; sentAhead: WeakSet<AgentThreadDetail>; inFlight: number; window: number; count: number; pageWindow: number; pages: number; preview: boolean; ready: boolean; afterSeq: number; selectedThreadId: string | null; selectedProjectId: string | null; editingThreadId: string | null; deltas: boolean; messageAliases: boolean; clientUpdates: boolean }
+interface Peer { frames: SocketFrames; client: ClientIdentity; session: string; observed: Set<string>; held: Map<string, number>; opening: Set<string>; sentAhead: WeakSet<AgentThreadDetail>; inFlight: number; window: number; count: number; pageWindow: number; pages: number; preview: boolean; ready: boolean; afterSeq: number; selectedThreadId: string | null; selectedProjectId: string | null; editingThreadId: string | null; deltas: boolean; messageAliases: boolean; clientUpdates: boolean; activitySummaries: boolean }
 export interface SocketServerOptions {
   service: HostService; pairing: PairedClients; port?: number; origins?: readonly string[]
   mayAnswer?: (client: ClientIdentity) => boolean
@@ -189,9 +190,17 @@ export async function startSocketServer(options: SocketServerOptions) {
     for (const id of peer.held.keys()) if (!peer.observed.has(id)) peer.held.delete(id)
     for (const id of peer.opening) if (!peer.observed.has(id)) peer.opening.delete(id)
   }
+  /** Each whole detail's activity summaries, made once however many peers accept them (#701); every other peer is sent it whole. */
+  const summarised = new WeakMap<AgentThreadDetail, AgentThreadDetail>()
+  const forPeer = (peer: Peer, detail: AgentThreadDetail | null): AgentThreadDetail | null => {
+    if (!peer.activitySummaries || detail === null) return detail
+    let summary = summarised.get(detail)
+    if (!summary) summarised.set(detail, summary = detailWithActivitySummaries(detail))
+    return summary
+  }
   const sendWhole = (peer: Peer, threadId: string, detail: AgentThreadDetail | null): void => {
     peer.opening.delete(threadId)
-    if (push(peer, { v: 1, event: 'detail', threadId, detail }) && detail) peer.held.set(threadId, detail.revision)
+    if (push(peer, { v: 1, event: 'detail', threadId, detail: forPeer(peer, detail) }) && detail) peer.held.set(threadId, detail.revision)
     else peer.held.delete(threadId)
   }
   const detail = (peer: Peer, threadId: string): void => { sendWhole(peer, threadId, service.threadDetail(threadId)) }
@@ -233,6 +242,7 @@ export async function startSocketServer(options: SocketServerOptions) {
   // (what changed since the revision the client holds) as a detail-delta to every client that accepts
   // one. A client applies a delta only to the revision it was measured from and asks for the whole detail
   // otherwise. A client that never accepted deltas, from before protocol v1 froze, is sent the whole thread.
+  // A delta of activity summaries is made once for every peer that accepts both.
   // A client still owed its first copy of a thread is sent no delta: the copy it is about to be sent is current.
   // A delta no newer than what the client holds is already covered, and a whole it was sent ahead goes no second time.
   /** The latest whole detail the service published for each thread that has not gone out yet. */
@@ -241,13 +251,14 @@ export async function startSocketServer(options: SocketServerOptions) {
     const threadId = update.threadId
     waiting.delete(threadId)
     let whole: AgentThreadDetail | null | undefined = isAgentThreadDetailDelta(update) ? undefined : update
+    let summaries: AgentThreadDetailDelta | undefined
     for (const peer of peers) {
       if (!peer.observed.has(threadId)) continue
       if (!isAgentThreadDetailDelta(update)) { if (!peer.sentAhead.has(update)) sendWhole(peer, threadId, update); continue }
       const held = peer.held.get(threadId)
       if (peer.opening.has(threadId) || held !== undefined && update.revision <= held) continue
       if (!peer.deltas) { sendWhole(peer, threadId, whole === undefined ? (whole = service.threadDetail(threadId)) : whole); continue }
-      if (push(peer, { v: 1, event: 'detail-delta', threadId, delta: update }) && held === update.baseRevision) peer.held.set(threadId, update.revision)
+      if (push(peer, { v: 1, event: 'detail-delta', threadId, delta: peer.activitySummaries ? (summaries ??= deltaWithActivitySummaries(update)) : update }) && held === update.baseRevision) peer.held.set(threadId, update.revision)
       else peer.held.delete(threadId)
     }
   })
@@ -343,9 +354,10 @@ export async function startSocketServer(options: SocketServerOptions) {
         peer.messageAliases = request.accepts?.includes('message-aliases') ?? false
         peer.afterSeq = request.afterSeq ?? Number.MAX_SAFE_INTEGER; peer.deltas = request.accepts?.includes('detail-delta') ?? false
         peer.clientUpdates = request.accepts?.includes('client-updates') ?? false
+        peer.activitySummaries = request.accepts?.includes('activity-summaries') ?? false
         return { hostId, clientId: peer.client.clientId, shell: shell(peer), capabilities: { mayAnswer: options.mayAnswer?.(peer.client) ?? false }, sottoVersion, features: [...features], ...events(peer, peer.afterSeq) }
       case 'shell': return shell(peer)
-      case 'detail': return service.threadDetail(request.threadId)
+      case 'detail': return forPeer(peer, service.threadDetail(request.threadId))
       case 'events': return events(peer, request.afterSeq, request.threadId)
       case 'receipt': return receipts.get(peer.client.clientId + ':' + request.commandId)?.receipt ?? { status: 'unknown' }
       case 'observe': {
@@ -535,7 +547,7 @@ export async function startSocketServer(options: SocketServerOptions) {
     const accept = createHash('sha1').update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64')
     stream.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' + accept + '\r\n\r\n')
     const frames = new SocketFrames(stream, false, text => onMessage(peer, text))
-    const peer: Peer = { frames, client: identity(clientId), session, observed: new Set(), held: new Map(), opening: new Set(), sentAhead: new WeakSet(), inFlight: 0, window: Date.now(), count: 0, pageWindow: 0, pages: 0, preview: false, ready: false, afterSeq: Number.MAX_SAFE_INTEGER, selectedThreadId: null, selectedProjectId: null, editingThreadId: null, messageAliases: false, deltas: false, clientUpdates: false }
+    const peer: Peer = { frames, client: identity(clientId), session, observed: new Set(), held: new Map(), opening: new Set(), sentAhead: new WeakSet(), inFlight: 0, window: Date.now(), count: 0, pageWindow: 0, pages: 0, preview: false, ready: false, afterSeq: Number.MAX_SAFE_INTEGER, selectedThreadId: null, selectedProjectId: null, editingThreadId: null, messageAliases: false, deltas: false, clientUpdates: false, activitySummaries: false }
     peers.add(peer)
     frames.startHeartbeat()
     frames.onClose(() => { peers.delete(peer); if (!closing) { track(observe().catch(() => undefined)); options.onPeersChanged?.() } })
