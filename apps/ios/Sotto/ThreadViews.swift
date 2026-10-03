@@ -93,7 +93,8 @@ private struct MessagesPane: View {
                             .foregroundStyle(Palette.muted).padding(.vertical, 24)
                     }
                     ForEach(model.pending(for: ref)) { item in
-                        UnconfirmedRow(item: item, text: model.submitted[item.id], photos: model.submittedPhotos[item.id] ?? []) { dismissMarker = item }
+                        UnconfirmedRow(item: item, text: model.submitted[item.id], photos: model.submittedPhotos[item.id] ?? [],
+                                       sending: model.isSending(item)) { dismissMarker = item }
                     }
                     if let text = model.failedReplies[ref.id] {
                         let photos = model.failedPhotos[ref.id] ?? []
@@ -173,13 +174,15 @@ private struct MessageBubble: View, Equatable {
     }
 }
 
-/// A reply, answer or stop the thread's computer hasn't confirmed, with the photos it carried. It is never
-/// sent again on its own.
+/// A reply, answer or stop on its way to the thread's computer, or one it hasn't confirmed. While the computer
+/// hasn't answered, or says it is still carrying it out, it reads as sending and asks nothing of the user.
+/// Only one it couldn't confirm is marked, with what to do. It is never sent again on its own.
 private struct UnconfirmedRow: View {
     @EnvironmentObject var model: AppModel
     let item: PendingOperation
     let text: String?
     let photos: [DraftPhoto]
+    let sending: Bool
     let dismiss: () -> Void
     var body: some View {
         VStack(alignment: .trailing, spacing: 6) {
@@ -193,15 +196,30 @@ private struct UnconfirmedRow: View {
                 Text(text).foregroundStyle(Palette.bubbleInk).padding(.horizontal, 14).padding(.vertical, 10)
                     .background(Palette.bubble.opacity(0.6), in: RoundedRectangle(cornerRadius: 20)).padding(.leading, 48)
             }
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Image(systemName: "exclamationmark.triangle").accessibilityHidden(true)
-                Text(sentence).fixedSize(horizontal: false, vertical: true)
-            }.font(.footnote).foregroundStyle(Palette.warning)
-            HStack(spacing: 8) {
-                Button("I checked", action: dismiss).buttonStyle(PlainStyle(compact: true))
-                Button("Check again") { Task { await model.checkDelivery(item.hostID) } }.buttonStyle(PlainStyle(compact: true)).disabled(!model.online(item.hostID))
+            if sending {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.mini)
+                    Text(sendingWords)
+                }.font(.footnote).foregroundStyle(Palette.muted)
+                    .accessibilityElement(children: .combine)
+            } else {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle").accessibilityHidden(true)
+                    Text(sentence).fixedSize(horizontal: false, vertical: true)
+                }.font(.footnote).foregroundStyle(Palette.warning)
+                HStack(spacing: 8) {
+                    Button("I checked", action: dismiss).buttonStyle(PlainStyle(compact: true))
+                    Button("Check again") { Task { await model.checkDelivery(item.hostID) } }.buttonStyle(PlainStyle(compact: true)).disabled(!model.online(item.hostID))
+                }
             }
         }.frame(maxWidth: .infinity, alignment: .trailing)
+    }
+    private var sendingWords: String {
+        switch item.kind {
+        case "answer": return "Sending your answer…"
+        case "interrupt": return "Stopping…"
+        default: return "Sending…"
+        }
     }
     private var sentence: String {
         switch item.kind {

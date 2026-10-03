@@ -602,7 +602,8 @@ final class AppModelTests: XCTestCase {
         XCTAssertTrue(model.canSend(ref))
         XCTAssertNil(model.feedback, "Only this marker's delivery message is cleared")
         XCTAssertEqual(connection.operations.filter { $0 == "command" }.count, 1)
-        XCTAssertEqual(connection.operations.filter { $0 == "receipt" }.count, 0)
+        // One read asks whether the computer is still carrying the command out; it didn't know it, so nothing more.
+        XCTAssertEqual(connection.operations.filter { $0 == "receipt" }.count, 1)
         XCTAssertEqual(try TestKeychain.store.read([PendingOperation].self, account: ComputerStore.pendingAccount), [])
     }
     @MainActor func testLiveShellSettlesAnAnswerAndRestoresAFailedReply() async throws {

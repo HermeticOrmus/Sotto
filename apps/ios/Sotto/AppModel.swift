@@ -82,6 +82,14 @@ struct DraftPhoto: Identifiable {
     @Published private(set) var failedPhotos: [String: [DraftPhoto]] = [:]
     /// Threads whose reply is having its photos staged again before it is sent. A second press finds it here.
     @Published private(set) var preparingSends: Set<String> = []
+    /// Replies, answers and stops on their way: the computer hasn't answered yet, or says it is still
+    /// carrying the command out. They read as sending, not as unconfirmed.
+    @Published private var dispatchingOperations: Set<String> = []
+    /// Who is reading each command's receipt, and over which connection. A newer connection takes over from an
+    /// older one, which then stops without touching what the newer one shows.
+    @Published private var receiptFollowers: [String: ReceiptFollower] = [:]
+    private struct ReceiptFollower { let token: UUID; let connection: UUID? }
+    var sendingOperations: Set<String> { dispatchingOperations.union(receiptFollowers.keys) }
     private var stagingTasks: [UUID: Task<Bool, Never>] = [:]
     /// The last large request queued for each computer, which refuses a second while one is on its way.
     private var largeRequests: [String: Task<Void, Never>] = [:]
@@ -90,6 +98,7 @@ struct DraftPhoto: Identifiable {
     private let preparePhoto: @Sendable (Data, String) async throws -> PreparedPhoto
     /// Hands a sent reply's photos to whatever draws the thread, so it has them before their message arrives.
     var photosSent: (([DraftPhoto], ThreadRef) -> Void)?
+    private let receiptSleep: @Sendable (UInt64) async throws -> Void
     /// The computer step 1 of adding found, waiting for its code in step 2.
     @Published private(set) var found: FoundHost?
     /// Whether the Add computer sheet is over the tabs.
@@ -243,6 +252,8 @@ struct DraftPhoto: Identifiable {
     func photoSupport(_ ref: ThreadRef) -> PhotoSupport {
         PhotoSupport(online: online(ref.hostID), thread: thread(ref), host: live[ref.hostID]?.shell?.host, features: live[ref.hostID]?.features ?? [])
     }
+    /// A reply, answer or stop still on its way, as opposed to one its computer couldn't confirm.
+    func isSending(_ item: PendingOperation) -> Bool { dispatchingOperations.contains(item.id) || receiptFollowers[item.id] != nil }
     func canInterrupt(_ ref: ThreadRef) -> Bool {
         online(ref.hostID) && pending(for: ref).allSatisfy { $0.kind == "reply" }
             && thread(ref)?.status == "running" && (capabilities(for: ref)?.interrupt ?? false)
@@ -258,11 +269,13 @@ struct DraftPhoto: Identifiable {
     init(keychain: KeychainStore = KeychainStore(),
          retryJitter: @escaping @Sendable () -> Double = { Double.random(in: 0.8...1.2) },
          retrySleep: @escaping @Sendable (UInt64) async throws -> Void = { try await Task.sleep(nanoseconds: $0) },
-         preparePhoto: @escaping @Sendable (Data, String) async throws -> PreparedPhoto = { try await PhotoPipeline.prepare($0, name: $1) }) {
+         preparePhoto: @escaping @Sendable (Data, String) async throws -> PreparedPhoto = { try await PhotoPipeline.prepare($0, name: $1) },
+         receiptSleep: @escaping @Sendable (UInt64) async throws -> Void = { try await Task.sleep(nanoseconds: $0) }) {
         self.keychain = keychain
         self.retrySleep = retrySleep
         self.retryJitter = retryJitter
         self.preparePhoto = preparePhoto
+        self.receiptSleep = receiptSleep
         #if DEBUG && os(iOS)
         if ProcessInfo.processInfo.arguments.contains("--ui-fixture") {
             loadUIFixture()
@@ -602,6 +615,7 @@ struct DraftPhoto: Identifiable {
         photoNotices = photoNotices.filter { !$0.key.hasPrefix(prefix) }
         submitted = submitted.filter { !gone.contains($0.key) }
         submittedPhotos = submittedPhotos.filter { !gone.contains($0.key) }
+        dispatchingOperations.subtract(gone); gone.forEach { receiptFollowers[$0] = nil }
         largeRequests[hostID] = nil
         let words = outcome.words(name: saved.name, clientID: saved.pairing.clientId)
         feedback = words
@@ -890,7 +904,10 @@ struct DraftPhoto: Identifiable {
     @discardableResult private func dispatch(_ command: JSONValue, operation: PendingOperation) async -> Shell? {
         let hostID = operation.hostID, current = generations[hostID]
         if operation.kind == "answer" { dispatchingAnswers.insert(operation.id) }
-        defer { dispatchingAnswers.remove(operation.id) }
+        // From here, which follows its marker without a wait, until this returns, it reads as sending;
+        // a marker still kept after that is unconfirmed.
+        dispatchingOperations.insert(operation.id)
+        defer { dispatchingAnswers.remove(operation.id); dispatchingOperations.remove(operation.id) }
         guard let connection = connections[hostID] else { operationFeedback(ClientError.uncertain.localizedDescription, operations: [operation.id]); return nil }
         do {
             let result = try await connection.callReceived(["op": .string("command"), "command": command], as: Shell.self, id: operation.id)
@@ -914,8 +931,41 @@ struct DraftPhoto: Identifiable {
             if error.failure.code == "forbidden" { update(hostID) { $0.mayAnswer = false } }
             if error.failure.code == "unauthenticated" { update(hostID) { $0.status = .unreachable; $0.problem = error.localizedDescription } }
             feedback = error.localizedDescription
-        } catch { if generations[hostID] == current { operationFeedback("Delivery is unconfirmed. Reconnect and check the thread before sending again.", operations: [operation.id]) } }
+        } catch {
+            guard generations[hostID] == current else { return nil }
+            // A slow provider can outlast the acknowledgement's deadline. While the computer says it is still
+            // carrying the command out, it is still sending; either way it is never sent again.
+            if let token = claimReceipt(operation.id, over: current) { await followReceipt(operation, on: connection, epoch: current, token: token) }
+            if generations[hostID] == current, pending.contains(where: { $0.id == operation.id }) {
+                operationFeedback("Delivery is unconfirmed. Reconnect and check the thread before sending again.", operations: [operation.id])
+            }
+        }
         return nil
+    }
+    /// Reads a command's receipt every two seconds while its computer says it is still carrying it out, and
+    /// settles it once it has finished. A computer that doesn't know the command, a changed connection or ten
+    /// minutes leave it as it is: unconfirmed.
+    private func followReceipt(_ operation: PendingOperation, on connection: HostConnection, epoch: UUID?, token: UUID) async {
+        defer { if receiptFollowers[operation.id]?.token == token { receiptFollowers[operation.id] = nil } }
+        let hostID = operation.hostID
+        for _ in 0..<300 {
+            guard receiptFollowers[operation.id]?.token == token, generations[hostID] == epoch, online(hostID),
+                  pending.contains(where: { $0.id == operation.id }),
+                  let receipt = try? await connection.call(["op": .string("receipt"), "commandId": .string(operation.id)], as: Receipt.self),
+                  generations[hostID] == epoch else { return }
+            guard receipt.stillWorking else {
+                if receipt.status == "completed" { await checkDelivery(hostID) }
+                return
+            }
+            do { try await receiptSleep(2_000_000_000) } catch { return }
+        }
+    }
+    /// Claims a command's receipt for this connection, unless it is already followed over it.
+    private func claimReceipt(_ id: String, over connection: UUID?) -> UUID? {
+        guard receiptFollowers[id].map({ $0.connection != connection }) ?? true else { return nil }
+        let token = UUID()
+        receiptFollowers[id] = ReceiptFollower(token: token, connection: connection)
+        return token
     }
     func checkDelivery(_ hostID: String) async {
         guard online(hostID), !scoped(hostID).isEmpty, let connection = connections[hostID] else { return }
@@ -932,6 +982,12 @@ struct DraftPhoto: Identifiable {
                 guard generations[hostID] == current else { return }
                 guard scoped(hostID).contains(where: { $0.id == item.id }) else { continue }
                 try settle(item, receipt: receipt, shell: live[hostID]?.shell)
+                // Still being carried out after a reconnect: it reads as sending until its receipt settles it.
+                // Claimed now, so it never reads as unconfirmed while the follow starts.
+                if receipt.stillWorking, !dispatchingOperations.contains(item.id), scoped(hostID).contains(where: { $0.id == item.id }),
+                   let token = claimReceipt(item.id, over: current) {
+                    Task { [weak self] in await self?.followReceipt(item, on: connection, epoch: current, token: token) }
+                }
             }
         } catch { if generations[hostID] == current { operationFeedback("Delivery to \(name(hostID)) could not be checked. Nothing was resent. Reconnect to try again.", operations: Set(scoped(hostID).map(\.id))) } }
     }

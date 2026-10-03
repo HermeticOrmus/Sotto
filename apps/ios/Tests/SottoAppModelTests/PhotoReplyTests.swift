@@ -1,15 +1,18 @@
 import XCTest
 import SottoCore
 
-/// Photos from the reply box.
+/// Photos from the reply box, and replies that read as sending until their computer answers.
 final class PhotoReplyTests: XCTestCase {
     private let host = "00000000-0000-4000-8000-000000000001"
     private func json(_ value: String) throws -> JSONValue { try JSONDecoder().decode(JSONValue.self, from: Data(value.utf8)) }
     private func refusal(_ code: String, _ message: String) throws -> HostRefusal {
         HostRefusal(failure: try JSONDecoder().decode(WireFailure.self, from: Data(#"{"code":"\#(code)","message":"\#(message)"}"#.utf8)))
     }
+    /// Holds what a test's injected closures need to reach once the model exists.
+    @MainActor private final class Box { var model: AppModel?; var sleeps = 0; var sendingWhileWaiting: Bool?; var staged = 0 }
 
-    @MainActor private func fixture(supportsImages: Bool = true, features: [String] = ["host-folders", "attachment-staging"]) async throws -> (AppModel, ThreadRef) {
+    @MainActor private func fixture(supportsImages: Bool = true, features: [String] = ["host-folders", "attachment-staging"],
+                                    receiptSleep: (@Sendable (UInt64) async throws -> Void)? = nil) async throws -> (AppModel, ThreadRef) {
         TestKeychain.items = [:]; TestKeychain.locked = false; TestKeychain.unreadableAccount = nil; TestKeychain.unwritableAccount = nil
         HostConnection.instances = []; HostConnection.afterGreeting = nil; HostConnection.failDetail = false; HostConnection.holdDetail = false
         HostConnection.mayAnswer = false; HostConnection.receipt = .object(["status": .string("unknown")]); HostConnection.receipts = [:]
@@ -37,7 +40,8 @@ final class PhotoReplyTests: XCTestCase {
             return HostConnection.shell
         }
         let model = AppModel(keychain: TestKeychain.store,
-                             preparePhoto: { _, name in PreparedPhoto(name: name + ".jpg", mimeType: "image/jpeg", base64: "/9j/AA==", byteCount: 4, dimensions: nil, thumbnail: nil) })
+                             preparePhoto: { _, name in PreparedPhoto(name: name + ".jpg", mimeType: "image/jpeg", base64: "/9j/AA==", byteCount: 4, dimensions: nil, thumbnail: nil) },
+                             receiptSleep: receiptSleep ?? { _ in })
         model.phase(.active); await model.waitForActivation()
         return (model, ThreadRef(hostID: host, threadID: "t"))
     }
@@ -130,5 +134,83 @@ final class PhotoReplyTests: XCTestCase {
         model.restoreReply(ref)
         XCTAssertEqual(model.photos(ref).count, 2)
         XCTAssertNil(model.failedPhotos[ref.id])
+    }
+
+    @MainActor func testAReplyReadsAsSendingUntilItsComputerAnswers() async throws {
+        let (model, ref) = try await fixture()
+        let box = Box(); box.model = model
+        let answering = HostConnection.commandHandler
+        HostConnection.commandHandler = { host, command, id in
+            box.sendingWhileWaiting = box.model?.pending.first.map { box.model!.isSending($0) }
+            return try await answering!(host, command, id)
+        }
+        model.drafts[ref.id] = "Continue"
+        await model.send(ref)
+        XCTAssertEqual(box.sendingWhileWaiting, true, "A reply on its way is not an unconfirmed one")
+        XCTAssertTrue(model.pending.isEmpty)
+        XCTAssertTrue(model.sendingOperations.isEmpty)
+        XCTAssertNil(model.feedback)
+    }
+    @MainActor func testASlowProviderStaysSendingWhileTheComputerSaysItIsWorking() async throws {
+        let box = Box()
+        let (model, ref) = try await fixture(receiptSleep: { _ in
+            await MainActor.run {
+                box.sleeps += 1
+                box.sendingWhileWaiting = box.model?.pending.first.map { box.model!.isSending($0) }
+                // The provider takes the reply while the iPhone waits: the computer finishes the command.
+                guard let marker = box.model?.pending.first, case .object(var root) = HostConnection.shell else { return }
+                root["deliveries"] = .array([.object(["threadId": .string(marker.threadID), "draftId": .string(marker.draftID!), "status": .string("accepted")])])
+                HostConnection.shell = .object(root)
+                HostConnection.receipt = .object(["status": .string("completed")])
+            }
+        })
+        box.model = model
+        let connection = try XCTUnwrap(HostConnection.instances.last)
+        HostConnection.loseAcknowledgement = true
+        HostConnection.receipt = .object(["status": .string("pending")])
+        model.drafts[ref.id] = "Continue"
+        await model.send(ref)
+        XCTAssertEqual(box.sleeps, 1)
+        XCTAssertEqual(box.sendingWhileWaiting, true)
+        XCTAssertTrue(model.pending.isEmpty, "Its receipt settled it once the computer finished")
+        XCTAssertNil(model.feedback)
+        XCTAssertEqual(connection.operations.filter { $0 == "command" }.count, 1, "Nothing is sent again")
+    }
+    @MainActor func testALostReplyTheComputerNeverHeardOfIsUnconfirmed() async throws {
+        let (model, ref) = try await fixture()
+        HostConnection.loseAcknowledgement = true
+        model.drafts[ref.id] = "Continue"
+        await model.send(ref)
+        let marker = try XCTUnwrap(model.pending.first)
+        XCTAssertFalse(model.isSending(marker))
+        XCTAssertEqual(model.feedback, "Delivery is unconfirmed. Reconnect and check the thread before sending again.")
+    }
+    @MainActor func testAReconnectFindingTheCommandStillRunningShowsItAsSending() async throws {
+        let box = Box()
+        let (model, ref) = try await fixture(receiptSleep: { _ in
+            await MainActor.run {
+                box.sleeps += 1
+                box.sendingWhileWaiting = box.model?.pending.first.map { box.model!.isSending($0) }
+                HostConnection.receipt = .object(["status": .string("completed")])
+            }
+        })
+        box.model = model
+        HostConnection.loseAcknowledgement = true
+        model.drafts[ref.id] = "Continue"
+        await model.send(ref)
+        let marker = try XCTUnwrap(model.pending.first)
+        XCTAssertFalse(model.isSending(marker))
+        // The computer, reached again, says it is still carrying the reply out.
+        HostConnection.receipt = .object(["status": .string("pending")])
+        await model.checkDelivery(ref.hostID)
+        XCTAssertTrue(model.isSending(marker))
+        XCTAssertEqual(model.pending, [marker])
+        // Once the computer has finished without the reply reaching the provider, it is unconfirmed again.
+        for _ in 0..<1_000 where model.isSending(marker) { await Task.yield() }
+        XCTAssertEqual(box.sleeps, 1)
+        XCTAssertEqual(box.sendingWhileWaiting, true)
+        XCTAssertFalse(model.isSending(marker))
+        XCTAssertEqual(model.pending, [marker], "Nothing settles a reply the provider never took, and nothing is resent")
+        XCTAssertEqual(HostConnection.instances.last?.operations.filter { $0 == "command" }.count, 1)
     }
 }

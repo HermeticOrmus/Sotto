@@ -118,6 +118,8 @@ public struct Receipt: Decodable, Sendable {
     public let status: String; public let error: WireFailure?; public let answerDelivered: Bool?
     /// Older hosts record transport completion only; it cannot confirm the phone's answer.
     public var confirmsAnswer: Bool { status == "completed" && error == nil && answerDelivered == true }
+    /// The computer has the command and is still carrying it out: a slow provider, not a lost command.
+    public var stillWorking: Bool { status == "pending" }
 }
 public struct Hello: Decodable, Sendable {
     /// `shell` is a `var` only so the connection can put back a catalog the host named by revision (`ModelCatalogCache`).

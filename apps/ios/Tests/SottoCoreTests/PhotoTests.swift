@@ -105,6 +105,11 @@ final class PhotoTests: XCTestCase {
         XCTAssertTrue(Photos.needsRestaging(stagedAt: now.addingTimeInterval(-45 * 60), now: now))
         XCTAssertLessThan(PhotoLimits.restageAfter, 60 * 60, "The host lets an unowned image go after an hour")
     }
+    func testAReceiptStillBeingCarriedOutIsNotAnUnconfirmedOne() throws {
+        XCTAssertTrue(try decode(Receipt.self, #"{"status":"pending"}"#).stillWorking)
+        XCTAssertFalse(try decode(Receipt.self, #"{"status":"unknown"}"#).stillWorking)
+        XCTAssertFalse(try decode(Receipt.self, #"{"status":"completed"}"#).stillWorking)
+    }
     func testAnImageGoingEitherWayGetsTwoMinutes() {
         XCTAssertEqual(LivenessProgress.requestTimeout(operation: "stage-attachment"), 120)
         XCTAssertEqual(LivenessProgress.requestTimeout(operation: "preview"), 120)
