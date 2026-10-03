@@ -335,6 +335,9 @@ export const agentThreadSchema = z.object({
   messages: z.array(agentMessageSchema), requests: z.array(agentRequestSchema),
   /** Present on the shell stream, where `messages` is empty; absent when the messages themselves are here. */
   summary: agentThreadSummarySchema.optional(),
+  /** The thread finished its work while no client showed it, and no client has shown it since (ADR-0046). The host's
+   * coordinator sets and clears it; absent otherwise, and from hosts that predate it. */
+  finishedUnread: z.literal(true).optional(),
   /** The newest message of the user's the provider's adapter has recorded, whether or not `messages` still
    * holds it. A send names it back so the adapter can refuse one that raced the user's own input; a window
    * the adapter put away and took back up carries none of the older messages, so it cannot say. */

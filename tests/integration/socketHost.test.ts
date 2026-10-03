@@ -13,13 +13,16 @@ import { startHeadlessHost } from '../../src/host'
 import { HostConnectionError, SocketHostService } from '../../src/main/agents/socketHostService'
 import { E2EAgentHost, e2eAgentReasoner } from '../../src/main/e2e/agentEffects'
 import { execFileSync } from 'node:child_process'
-import { SCREENSHOT_NOT_ITS_TYPE, type AgentCommand, type AgentThreadDetail, type AgentThreadDetailDelta, type AgentThreadDetailUpdate } from '../../src/shared/agents'
-import { hostVersionMismatch } from '../../src/shared/hostProtocol'
+import { SCREENSHOT_NOT_ITS_TYPE, type AgentCommand, type AgentModel, type AgentThreadDetail, type AgentThreadDetailDelta, type AgentThreadDetailUpdate } from '../../src/shared/agents'
+import { hostPushSchema, hostVersionMismatch } from '../../src/shared/hostProtocol'
+import { agentActivitySchema, type AgentActivity } from '../../src/shared/agentActivity'
 import { version as packageVersion } from '../../package.json'
 import { rawPeer } from '../fixtures/rawHostPeer'
+import { syntheticModelCatalog } from '../fixtures/modelCatalog'
 import { ThreadStore } from '../../src/main/agents/threadStore'
 import { TurnRecorder } from '../../src/main/agents/turns'
 import { HOST_BUSY, HOST_EVENT_PAGE_SIZE } from '../../src/shared/hostProtocol'
+import { AGENT_STATE_PUBLISH_INTERVAL_MS } from '../../src/main/agents/control'
 
 let root: string
 let host: Awaited<ReturnType<typeof startHeadlessHost>>
@@ -346,10 +349,12 @@ describe('authenticated host socket', () => {
     expect((await client.command({ type: 'compose', text: 'Remote draft' })).error).toBeNull()
     expect(host.service.shell().threadDrafts).toEqual(expect.arrayContaining([expect.objectContaining({ threadId: remoteId, text: 'Remote draft' })]))
     await client.observe([remoteId])
-    const detailReads = vi.spyOn(host.service, 'threadDetail')
+    // The reconnect is sent the observed thread whole once, whether the host published it or read it for this client.
+    const wholes: AgentThreadDetailUpdate[] = []
+    const stopCounting = client.subscribeThreadDetail(update => { if (update.threadId === remoteId && !('baseRevision' in update)) wholes.push(update) })
     await client.connect()
-    expect(detailReads.mock.calls.filter(([id]) => id === remoteId)).toHaveLength(1)
-    detailReads.mockRestore()
+    expect(wholes).toHaveLength(1)
+    stopCounting()
     expect((await client.readShell()).activeThreadId).toBe(remoteId)
     expect((await client.command({ type: 'send' })).error).toBeNull()
     expect(host.service.threadDetail(remoteId)!.messages).toEqual(expect.arrayContaining([expect.objectContaining({ role: 'user', text: 'Remote draft' })]))
@@ -411,6 +416,30 @@ describe('socket client isolation and reconnect', () => {
     // The Pull request surface asks the same way; a branch with no pull request and no links has none to show, and gh is not asked.
     await expect(client.gitPullRequest({ threadId })).resolves.toBeNull()
     await expect(client.gitPullRequest({ threadId: 'no-such-thread' })).rejects.toThrow()
+  })
+  it('carries the finished-unread mark to a paired client and clears it for every client when one opens the thread (ADR-0046)', async () => {
+    const phone = await pair('Phone'), desktop = await pair('Desktop')
+    await phone.client.command({ type: 'configure', patch: { enabledProviders: ['codex'], provider: 'codex' } })
+    await phone.client.command({ type: 'connect', provider: 'codex' })
+    const workshop = () => phone.client.shell().host.threads.find(thread => thread.title === 'Workshop')
+    await expect.poll(() => workshop()).toBeDefined()
+    const threadId = workshop()!.id
+    const marked = (client: SocketHostService) => client.shell().host.threads.find(thread => thread.id === threadId)?.finishedUnread
+    native.event({ type: 'manual', threadId: 'workshop', text: 'Synthetic prompt' })
+    await expect.poll(() => workshop()?.status).toBe('running')
+    native.event({ type: 'ready', threadId: 'workshop', text: 'Synthetic reply' })
+    await expect.poll(() => marked(phone.client)).toBe(true)
+    await expect.poll(() => marked(desktop.client)).toBe(true)
+    // Opening the thread on one client reads it on all of them.
+    await phone.client.observe([threadId])
+    await expect.poll(() => marked(desktop.client)).toBeUndefined()
+    expect(marked(phone.client)).toBeUndefined()
+    // While a client has it open, finishing again earns nothing.
+    native.event({ type: 'manual', threadId: 'workshop', text: 'Synthetic prompt' })
+    await expect.poll(() => workshop()?.status).toBe('running')
+    native.event({ type: 'ready', threadId: 'workshop', text: 'Synthetic reply' })
+    await expect.poll(() => workshop()?.status).toBe('idle')
+    expect(marked(desktop.client)).toBeUndefined()
   })
   it('lists a temp folder\'s subfolders over the socket for the Add project dialog\'s folder browser', async () => {
     const { client } = await pair()
@@ -716,13 +745,30 @@ it('coalesces a burst of shell changes and answers a thread or an event page too
 describe('thread detail over the socket', () => {
   const message = (text: string) => ({ id: 'reply', role: 'assistant' as const, text, createdAt: '2026-09-23T00:00:00.000Z' })
   const delta = (baseRevision: number, revision: number, appendText: string): AgentThreadDetailDelta => ({ threadId: 'streaming', baseRevision, revision, messageDeltas: [{ id: 'reply', appendText }], activityDeltas: [] })
-  /** A service whose one thread's history the test sets, and whose detail stream the test drives. */
+  /**
+   * A service whose two threads' histories the test sets, and whose detail stream the test drives. Like the
+   * coordinator, it publishes a thread whole the moment some client starts observing it, and forgets what it
+   * published once nobody does.
+   */
   async function streamingHost() {
-    const stream: { current: AgentThreadDetail; reads: number; emit: (update: AgentThreadDetailUpdate) => void } = { current: { threadId: 'streaming', revision: 1, messages: [message('Hello')] }, reads: 0, emit: () => undefined }
+    const stream: { current: AgentThreadDetail; quiet: AgentThreadDetail; reads: number; emit: (update: AgentThreadDetailUpdate) => void } = { current: { threadId: 'streaming', revision: 1, messages: [message('Hello')] },
+      quiet: { threadId: 'quiet', revision: 1, messages: [message('Quiet')] }, reads: 0, emit: () => undefined }
+    const published = new Set<string>()
     const service: HostService = {
       shell: () => host.service.shell(), state: () => host.service.state(),
-      threadDetail: id => { if (id !== 'streaming') return host.service.threadDetail(id); stream.reads++; return structuredClone(stream.current) },
-      command: (command, identity) => host.service.command(command, identity),
+      threadDetail: id => {
+        if (id === 'quiet') return structuredClone(stream.quiet)
+        if (id !== 'streaming') return host.service.threadDetail(id)
+        stream.reads++; return structuredClone(stream.current)
+      },
+      command: (command, identity) => {
+        if (command.type === 'observe-threads') {
+          const targets: string[] = command.threadIds.filter(id => id === 'streaming' || id === 'quiet')
+          for (const id of [...published]) if (!targets.includes(id)) published.delete(id)
+          for (const id of targets) if (!published.has(id)) { published.add(id); stream.emit(service.threadDetail(id)!) }
+        }
+        return host.service.command(command, identity)
+      },
       events: (afterSeq, threadId, limit) => host.service.events(afterSeq, threadId, limit), subscribe: listener => host.service.subscribe(listener),
       subscribeThreadDetail: listener => { stream.emit = listener; return () => undefined },
     }
@@ -765,6 +811,81 @@ describe('thread detail over the socket', () => {
     } finally { await client.close(); await server.close() }
   })
 
+  it('sends a thread whole once when a client starts observing it, and not again while it holds it (#700)', async () => {
+    const { stream, server, session } = await streamingHost()
+    const phone = await rawPeer(server.descriptor.port, session())
+    const wholes = (threadId: string) => phone.messages.filter(item => item.event === 'detail' && item.threadId === threadId)
+    try {
+      await phone.call('hello', { op: 'hello', accepts: ['detail-delta'] })
+      // Nobody observed this thread: the service publishes it whole as the phone starts observing it, and that is the only copy.
+      await phone.call('observe-quiet', { op: 'observe', threadIds: ['quiet'] })
+      expect(wholes('quiet')).toHaveLength(1)
+      // Adding a thread sends only that thread, and one the phone already holds is not sent again.
+      await phone.call('observe-both', { op: 'observe', threadIds: ['quiet', 'streaming'] })
+      expect(wholes('quiet')).toHaveLength(1)
+      expect(wholes('streaming')).toHaveLength(1)
+      // Opening the same thread again sends nothing, and the read the phone makes when it holds no copy still answers whole.
+      await phone.call('observe-again', { op: 'observe', threadIds: ['quiet', 'streaming'] })
+      expect(phone.messages.filter(item => item.event === 'detail')).toHaveLength(2)
+      expect(await phone.call('read', { op: 'detail', threadId: 'streaming' })).toMatchObject({ ok: true, result: stream.current })
+      // A thread let go and observed again is sent whole again: nothing kept it current in between.
+      await phone.call('observe-one', { op: 'observe', threadIds: ['streaming'] })
+      await phone.call('observe-back', { op: 'observe', threadIds: ['streaming', 'quiet'] })
+      expect(wholes('quiet')).toHaveLength(2)
+      expect(wholes('streaming')).toHaveLength(1)
+    } finally { phone.frames.close(); await server.close() }
+  })
+
+  it('does not send a thread whole a second time when the copy published as it was observed was still waiting to go (#700)', async () => {
+    const { stream, server, session } = await streamingHost()
+    const phone = await rawPeer(server.descriptor.port, session())
+    const wholes = () => phone.messages.filter(item => item.event === 'detail' && item.threadId === 'quiet')
+    try {
+      await phone.call('hello', { op: 'hello', accepts: ['detail-delta'] })
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      // The thread was published a moment ago, so what the service publishes as the phone observes it waits for the window to close.
+      stream.emit(structuredClone(stream.quiet))
+      await phone.call('observe', { op: 'observe', threadIds: ['quiet'] })
+      expect(wholes()).toHaveLength(1)
+      vi.advanceTimersByTime(AGENT_STATE_PUBLISH_INTERVAL_MS)
+      // A delta published after the waiting copy goes out behind it, so its arrival shows the copy was not sent.
+      stream.quiet = { threadId: 'quiet', revision: 2, messages: [message('Quiet now')] }
+      stream.emit({ threadId: 'quiet', baseRevision: 1, revision: 2, messageDeltas: [{ id: 'reply', appendText: ' now' }], activityDeltas: [] })
+      vi.advanceTimersByTime(AGENT_STATE_PUBLISH_INTERVAL_MS)
+      vi.useRealTimers()
+      await expect.poll(() => phone.messages.some(item => item.event === 'detail-delta' && item.threadId === 'quiet')).toBe(true)
+      expect(wholes()).toHaveLength(1)
+    } finally { vi.useRealTimers(); phone.frames.close(); await server.close() }
+  })
+
+  it('sends a thread whole once to a client that starts observing it while another client\'s whole copy is still waiting to go (#700)', async () => {
+    // Every coalescing window stays open until the test closes it, from the first copy the desktop client is sent.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const { stream, server, client, session } = await streamingHost()
+    const phone = await rawPeer(server.descriptor.port, session())
+    const wholes = () => phone.messages.filter(item => item.event === 'detail' && item.threadId === 'streaming')
+    try {
+      await phone.call('hello', { op: 'hello', accepts: ['detail-delta'] })
+      // The desktop client already observes the thread, so observing it publishes nothing. The thread went out a moment
+      // ago and was then rewritten, so its whole copy is waiting to go.
+      stream.emit(structuredClone(stream.current))
+      stream.current = { threadId: 'streaming', revision: 2, messages: [message('Rewritten')] }
+      stream.emit(structuredClone(stream.current))
+      await phone.call('observe', { op: 'observe', threadIds: ['streaming'] })
+      expect(wholes()).toEqual([expect.objectContaining({ detail: stream.current })])
+      vi.advanceTimersByTime(AGENT_STATE_PUBLISH_INTERVAL_MS)
+      await expect.poll(() => client.threadDetail('streaming')?.revision).toBe(2)
+      // A delta published after the waiting copy goes out behind it, so its arrival shows the copy was not sent again.
+      stream.current = { threadId: 'streaming', revision: 3, messages: [message('Rewritten!')] }
+      stream.emit(delta(2, 3, '!'))
+      vi.advanceTimersByTime(AGENT_STATE_PUBLISH_INTERVAL_MS)
+      vi.useRealTimers()
+      await expect.poll(() => phone.messages.some(item => item.event === 'detail-delta' && item.threadId === 'streaming')).toBe(true)
+      expect(wholes()).toHaveLength(1)
+      await expect.poll(() => client.threadDetail('streaming')?.revision).toBe(3)
+    } finally { vi.useRealTimers(); phone.frames.close(); await client.close(); await server.close() }
+  })
+
   it('pushes what changed as a delta the client applies and passes on, and the whole thread to a client that never asked for deltas', async () => {
     const { stream, server, client, updates, session } = await streamingHost()
     try {
@@ -780,7 +901,7 @@ describe('thread detail over the socket', () => {
       // A client from before the freeze says nothing about deltas in its hello, and keeps getting whole threads.
       const legacy = await rawPeer(server.descriptor.port, session())
       try {
-        expect(await legacy.call('hello', { op: 'hello', afterSeq: 0 })).toMatchObject({ ok: true, result: { sottoVersion: packageVersion, features: ['client-liveness', 'message-aliases', 'detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders'] } })
+        expect(await legacy.call('hello', { op: 'hello', afterSeq: 0 })).toMatchObject({ ok: true, result: { sottoVersion: packageVersion, features: ['client-liveness', 'message-aliases', 'detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders', 'activity-summaries', 'model-catalog-revision'] } })
         await legacy.call('observe', { op: 'observe', threadIds: ['streaming'] })
         stream.current = { threadId: 'streaming', revision: 3, messages: [message('Hello, world!')] }
         stream.emit(delta(2, 3, '!'))
@@ -790,6 +911,87 @@ describe('thread detail over the socket', () => {
         expect(updates.at(-1)).toEqual(delta(2, 3, '!'))
       } finally { legacy.frames.close() }
     } finally { await client.close(); await server.close() }
+  })
+
+  it('sends activity summaries to a client that accepts them, in every detail, delta and detail answer, and whole records to one that does not (#701)', async () => {
+    const at = '2026-09-23T00:00:00.000Z'
+    const running: AgentActivity = { id: 'build', turnId: 'turn', sequence: 1, kind: 'command', status: 'running', title: 'Run the build',
+      command: 'npm run build', cwd: '/synthetic/project', output: 'compiled '.repeat(2_000), startedAt: at, timingSource: 'observed' }
+    const activities: AgentActivity[] = [
+      { id: 'turn', turnId: 'turn', sequence: 0, kind: 'turn', status: 'running', title: 'Turn', startedAt: at },
+      running,
+      { id: 'edit', turnId: 'turn', sequence: 2, kind: 'file-change', status: 'completed', title: 'Edited two files', afterMessageId: 'reply',
+        changes: [{ path: 'src/a.ts', kind: 'update', diff: '+a\n'.repeat(500) }, { path: 'src/b.ts', kind: 'add', diff: '+b\n'.repeat(500) }], durationMs: 40 },
+      { id: 'think', turnId: 'turn', sequence: 3, kind: 'reasoning', status: 'completed', title: 'Thinking', text: 'considered '.repeat(500) },
+      { id: 'plan', turnId: 'turn', sequence: 4, kind: 'plan', status: 'completed', title: 'Plan', steps: [{ text: 'Build it', status: 'running' }] },
+      { id: 'agents', turnId: 'turn', sequence: 5, kind: 'subagent', status: 'failed', title: 'Reviewers', error: 'One reviewer stopped.', parentId: 'turn',
+        agents: [{ id: 'reviewer', status: 'failed', message: 'review notes '.repeat(200), prompt: 'Review the change' }], context: { before: 1000, after: 400 } },
+      { id: 'test', turnId: 'turn', sequence: 6, kind: 'command', status: 'failed', title: 'Run the tests', command: 'npm test', output: 'FAIL '.repeat(1_000),
+        error: 'Exit 1', exitCode: 1, durationMs: 1234.5, startedAt: at, completedAt: at },
+    ]
+    /** What a summary row reads, and nothing else. */
+    const summary = (record: AgentActivity) => {
+      const kept: Record<string, unknown> = { id: record.id, turnId: record.turnId, sequence: record.sequence, kind: record.kind, status: record.status, title: record.title }
+      for (const key of ['command', 'exitCode', 'durationMs', 'startedAt'] as const) if (record[key] !== undefined) kept[key] = record[key]
+      if (record.changes) kept.changes = record.changes.map(change => ({ path: change.path, kind: change.kind }))
+      return kept
+    }
+    /** Fields a summary row never reads, checked on the activity alone: a message has text of its own. */
+    const bodies = ['text', 'output', 'error', 'cwd', 'diff', 'steps', 'agents', 'context', 'completedAt', 'timingSource', 'parentId', 'afterMessageId']
+    const carriesNoBodies = (value: unknown) => { for (const key of bodies) expect(JSON.stringify(value)).not.toContain(`"${key}":`) }
+    const { stream, server, client, session } = await streamingHost()
+    const summaries = await rawPeer(server.descriptor.port, session())
+    const wholePeer = await rawPeer(server.descriptor.port, session())
+    // A client may take summaries without deltas: it is sent each change as a whole detail of summaries.
+    const summariesNoDeltas = await rawPeer(server.descriptor.port, session())
+    const peers = [summaries, wholePeer, summariesNoDeltas]
+    try {
+      stream.current = { threadId: 'streaming', revision: 2, messages: [message('Hello')], activities }
+      await summaries.call('hello', { op: 'hello', accepts: ['detail-delta', 'activity-summaries'] })
+      await wholePeer.call('hello', { op: 'hello', accepts: ['detail-delta'] })
+      await summariesNoDeltas.call('hello', { op: 'hello', accepts: ['activity-summaries'] })
+      for (const peer of peers) await peer.call('observe', { op: 'observe', threadIds: ['streaming'] })
+      const detailPush = (peer: typeof summaries, revision: number) => peer.messages.find(item => item.event === 'detail' && (item.detail as AgentThreadDetail).revision === revision)
+      const summarised = (detail: AgentThreadDetail) => ({ ...detail, activities: detail.activities!.map(summary) })
+      // The detail each observer is sent on observing.
+      for (const peer of [summaries, summariesNoDeltas]) {
+        const pushed = detailPush(peer, 2)!
+        expect(hostPushSchema.parse(pushed)).toEqual(pushed)
+        expect(pushed.detail).toEqual(summarised(stream.current))
+        carriesNoBodies((pushed.detail as AgentThreadDetail).activities)
+        for (const record of (pushed.detail as AgentThreadDetail).activities!) expect(agentActivitySchema.parse(record)).toEqual(record)
+      }
+      expect(detailPush(wholePeer, 2)!.detail).toEqual(stream.current)
+
+      // The running command's output grew and the plan went. The record goes as its summary to the client that accepts
+      // summaries and whole to the one that does not; the revisions are the same, so both apply it.
+      const grown: AgentActivity = { ...running, output: running.output + 'linked '.repeat(1_000) }
+      stream.current = { ...stream.current, revision: 3, activities: activities.filter(record => record.id !== 'plan').map(record => record.id === 'build' ? grown : record) }
+      stream.emit({ threadId: 'streaming', baseRevision: 2, revision: 3, messageDeltas: [], activityDeltas: [{ record: grown }, { id: 'plan', removed: true }] })
+      const deltaPush = (peer: typeof summaries) => peer.messages.find(item => item.event === 'detail-delta' && (item.delta as AgentThreadDetailDelta).revision === 3)
+      await expect.poll(() => deltaPush(summaries)).toBeTruthy()
+      await expect.poll(() => deltaPush(wholePeer)).toBeTruthy()
+      expect(hostPushSchema.parse(deltaPush(summaries))).toEqual(deltaPush(summaries))
+      expect(deltaPush(summaries)!.delta).toEqual({ threadId: 'streaming', baseRevision: 2, revision: 3, messageDeltas: [], activityDeltas: [{ record: summary(grown) }, { id: 'plan', removed: true }] })
+      carriesNoBodies((deltaPush(summaries)!.delta as AgentThreadDetailDelta).activityDeltas)
+      expect(deltaPush(wholePeer)!.delta).toEqual({ threadId: 'streaming', baseRevision: 2, revision: 3, messageDeltas: [], activityDeltas: [{ record: grown }, { id: 'plan', removed: true }] })
+      await expect.poll(() => detailPush(summariesNoDeltas, 3)).toBeTruthy()
+      expect(detailPush(summariesNoDeltas, 3)!.detail).toEqual(summarised(stream.current))
+      // The desktop's own client never asks for summaries and keeps every record whole.
+      await expect.poll(() => client.threadDetail('streaming')?.revision).toBe(3)
+      expect(client.threadDetail('streaming')).toEqual(stream.current)
+
+      // A whole detail the service publishes, and the detail a client reads, follow the same rule.
+      stream.current = { ...stream.current, revision: 4 }
+      stream.emit(stream.current)
+      await expect.poll(() => detailPush(summaries, 4)).toBeTruthy()
+      await expect.poll(() => detailPush(wholePeer, 4)).toBeTruthy()
+      expect(detailPush(summaries, 4)!.detail).toEqual(summarised(stream.current))
+      expect(detailPush(wholePeer, 4)!.detail).toEqual(stream.current)
+      expect((await summaries.call('read', { op: 'detail', threadId: 'streaming' })).result).toEqual(summarised(stream.current))
+      expect((await wholePeer.call('read', { op: 'detail', threadId: 'streaming' })).result).toEqual(stream.current)
+      expect(await client.readThreadDetail('streaming')).toEqual(stream.current)
+    } finally { for (const peer of peers) peer.frames.close(); await client.close(); await server.close() }
   })
 
   it('delivers saved long messages in whole details and replacement deltas and reopens without disconnecting', async () => {
@@ -931,11 +1133,11 @@ describe('staged images over the socket (ADR-0031)', () => {
 describe('host version and features', () => {
   it('advertises the Sotto version and features in health, the listener file and the hello reply', async () => {
     const health = await (await fetch(url + '/v1/health')).json() as Record<string, unknown>
-    expect(health).toMatchObject({ v: 1, status: 'ready', sottoVersion: packageVersion, features: ['client-liveness', 'message-aliases', 'detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders', 'provider-sign-in', 'client-updates'] })
+    expect(health).toMatchObject({ v: 1, status: 'ready', sottoVersion: packageVersion, features: ['client-liveness', 'message-aliases', 'detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders', 'provider-sign-in', 'client-updates', 'activity-summaries', 'model-catalog-revision'] })
     const listener = JSON.parse(await readFile(join(root, 'host-listener.json'), 'utf8')) as Record<string, unknown>
-    expect(listener).toMatchObject({ v: 1, sottoVersion: packageVersion, features: ['client-liveness', 'message-aliases', 'detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders', 'provider-sign-in', 'client-updates'] })
+    expect(listener).toMatchObject({ v: 1, sottoVersion: packageVersion, features: ['client-liveness', 'message-aliases', 'detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders', 'provider-sign-in', 'client-updates', 'activity-summaries', 'model-catalog-revision'] })
     const { client } = await pair()
-    expect(await client.connect()).toMatchObject({ sottoVersion: packageVersion, features: ['client-liveness', 'message-aliases', 'detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders', 'provider-sign-in', 'client-updates'], capabilities: { mayAnswer: false } })
+    expect(await client.connect()).toMatchObject({ sottoVersion: packageVersion, features: ['client-liveness', 'message-aliases', 'detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders', 'provider-sign-in', 'client-updates', 'activity-summaries', 'model-catalog-revision'], capabilities: { mayAnswer: false } })
   })
 
   it('runs client updates only where it offers them: the headless host does, the phone listener does not (#480)', async () => {
@@ -1028,6 +1230,121 @@ describe('host version and features', () => {
       await expect(skewed.command(unreadable)).rejects.toMatchObject({ code: 'version_mismatch', message: hostVersionMismatch(packageVersion, '0.0.1', false) })
       expect(await skewed.receipt('still-open')).toEqual({ status: 'unknown' })
     } finally { await skewed.close(); await server.close() }
+  })
+})
+
+describe('model catalog revisions (#699)', () => {
+  /** A host whose shell lists `models()`, rebuilt into new arrays on every read the way the coordinator's shell is. */
+  function catalogHost(models: () => AgentModel[], large: () => boolean = () => false) {
+    let publish = (): void => undefined
+    const huge = [{ id: 'huge', role: 'assistant' as const, text: 'x'.repeat(17 * 1024 * 1024), createdAt: new Date().toISOString() }]
+    const service: HostService = {
+      shell: () => {
+        const state = host.service.shell()
+        const threads = large() ? [{ id: 'huge', projectId: 'project', title: 'Huge', modelId: 'fixture-model', status: 'idle' as const, messages: huge, requests: [] }] : state.host.threads
+        return { ...state, host: { ...state.host, threads, models: structuredClone(models()) } }
+      },
+      state: () => host.service.state(), threadDetail: id => host.service.threadDetail(id),
+      command: (command, identity) => host.service.command(command, identity), events: () => [],
+      subscribe: listener => { publish = () => listener(service.shell()); return () => undefined },
+    }
+    return { service, publish: () => publish() }
+  }
+  type Frame = Record<string, unknown> & { result?: { host?: Record<string, unknown>; shell?: { host: Record<string, unknown> } }; state?: { host: Record<string, unknown> } }
+  /** The host of the first shell push `peer` receives after `send`, or the error push sent in its place. */
+  async function nextShell(peer: Awaited<ReturnType<typeof rawPeer>>, send: () => void): Promise<Record<string, unknown>> {
+    const from = peer.messages.length
+    const arrived = () => peer.messages.slice(from).find(message => message.event === 'shell' || message.event === 'error') as Frame | undefined
+    send()
+    await expect.poll(arrived).toBeDefined()
+    const frame = arrived()!
+    return frame.event === 'shell' ? frame.state!.host : frame
+  }
+
+  it('sends an accepting client the catalog once per revision, again when it changes and on a fresh connection, and every other client the whole catalog', async () => {
+    let models = syntheticModelCatalog(5)
+    const { service, publish } = catalogHost(() => models)
+    const server = await startSocketServer({ service, pairing: host.pairing })
+    expect(server.descriptor.features).toContain('model-catalog-revision')
+    const paired = await host.pairing.redeem(host.pairing.issuePairingCode().code, 'iPhone')
+    const session = host.pairing.signSession(paired.clientId)
+    const phone = await rawPeer(server.descriptor.port, session), older = await rawPeer(server.descriptor.port, session)
+    let fresh: Awaited<ReturnType<typeof rawPeer>> | undefined
+    try {
+      const hello = await phone.call('hello', { op: 'hello', accepts: ['detail-delta', 'model-catalog-revision'] }) as Frame
+      expect(hello.result!.shell!.host).toMatchObject({ models, modelsRevision: expect.any(Number) })
+      const first = hello.result!.shell!.host.modelsRevision as number
+      const olderHello = await older.call('hello', { op: 'hello', accepts: ['detail-delta'] }) as Frame
+      expect(olderHello.result!.shell!.host.models).toEqual(models)
+      expect(olderHello.result!.shell!.host).not.toHaveProperty('modelsRevision')
+
+      // Unchanged: every shell names the revision and leaves the catalog out, push, read and command answer alike.
+      const pushed = await nextShell(phone, publish)
+      expect(pushed).toMatchObject({ modelsRevision: first }); expect(pushed).not.toHaveProperty('models')
+      const read = await phone.call('read', { op: 'shell' }) as Frame
+      expect(read.result!.host).toMatchObject({ modelsRevision: first }); expect(read.result!.host).not.toHaveProperty('models')
+      const answered = await phone.call('select', { op: 'command', command: { type: 'select-project', projectId: 'project' } }) as Frame
+      expect(answered).toMatchObject({ ok: true }); expect(answered.result!.host).toMatchObject({ modelsRevision: first })
+      expect(answered.result!.host).not.toHaveProperty('models')
+
+      // A client that did not accept the feature is sent exactly what v1 sends: the whole catalog, every time.
+      const olderPush = await nextShell(older, publish)
+      expect(olderPush.models).toEqual(models); expect(olderPush).not.toHaveProperty('modelsRevision')
+      const olderAnswer = await older.call('select', { op: 'command', command: { type: 'select-project', projectId: 'project' } }) as Frame
+      expect(olderAnswer.result!.host!.models).toEqual(models); expect(olderAnswer.result!.host).not.toHaveProperty('modelsRevision')
+
+      // A changed catalog goes whole once, under a new revision, then is named again.
+      models = syntheticModelCatalog(6)
+      const changed = await nextShell(phone, publish)
+      expect(changed.models).toEqual(models)
+      const second = changed.modelsRevision as number
+      expect(second).toBeGreaterThan(first)
+      const repeat = await nextShell(phone, publish)
+      expect(repeat).toMatchObject({ modelsRevision: second }); expect(repeat).not.toHaveProperty('models')
+
+      // A new connection starts with nothing recorded, so its hello carries the catalog whole.
+      fresh = await rawPeer(server.descriptor.port, session)
+      const again = await fresh.call('hello', { op: 'hello', accepts: ['model-catalog-revision'] }) as Frame
+      expect(again.result!.shell!.host).toMatchObject({ models, modelsRevision: second })
+    } finally { phone.frames.close(); older.frames.close(); fresh?.frames.close(); await server.close() }
+  })
+
+  it('records a catalog as sent only once a frame carrying it was written, not when too_large went in its place', async () => {
+    let models = syntheticModelCatalog(3), large = false
+    const { service, publish } = catalogHost(() => models, () => large)
+    const server = await startSocketServer({ service, pairing: host.pairing })
+    const paired = await host.pairing.redeem(host.pairing.issuePairingCode().code, 'iPhone')
+    const phone = await rawPeer(server.descriptor.port, host.pairing.signSession(paired.clientId))
+    try {
+      const hello = await phone.call('hello', { op: 'hello', accepts: ['model-catalog-revision'] }) as Frame
+      const first = hello.result!.shell!.host.modelsRevision as number
+      models = syntheticModelCatalog(4); large = true
+      expect(await nextShell(phone, publish)).toMatchObject({ event: 'error', error: { code: 'too_large' } })
+      expect(await phone.call('read', { op: 'shell' })).toMatchObject({ ok: false, error: { code: 'too_large' } })
+      large = false
+      const next = await nextShell(phone, publish)
+      expect(next.models).toEqual(models)
+      expect(next.modelsRevision).toBeGreaterThan(first)
+    } finally { phone.frames.close(); await server.close() }
+  })
+
+  it('keeps sending the desktop’s own client the whole catalog from a host that offers revisions', async () => {
+    const models = syntheticModelCatalog(4)
+    const { service, publish } = catalogHost(() => models)
+    const server = await startSocketServer({ service, pairing: host.pairing })
+    const paired = await host.pairing.redeem(host.pairing.issuePairingCode().code, 'Desktop')
+    const client = new SocketHostService({ url: 'http://127.0.0.1:' + server.descriptor.port, token: paired.token }); clients.push(client)
+    try {
+      await client.connect()
+      expect(client.shell().host.models).toEqual(models)
+      let shells = 0
+      client.subscribe(() => { shells++ })
+      publish()
+      await expect.poll(() => shells).toBe(1)
+      expect(client.shell().host.models).toEqual(models)
+      expect((await client.readShell()).host.models).toEqual(models)
+      expect((await client.command({ type: 'select-project', projectId: 'project' })).host.models).toEqual(models)
+    } finally { await client.close(); await server.close() }
   })
 })
 

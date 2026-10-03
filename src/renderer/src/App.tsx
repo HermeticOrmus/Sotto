@@ -25,7 +25,6 @@ import { HostQuestionDialog } from './features/settings/HostQuestionDialog'
 import { ToastRegion, type ToastMessage } from './components/ToastRegion'
 import { AgentProvider } from './agents/AgentContext'
 import { ClientUpdateCard } from './agents/ClientUpdateCard'
-import { FinishedThreadWatch } from './agents/finishedThreads'
 import { PageSidebar } from './agents/PageSidebar'
 import { SidebarChromeProvider } from './agents/SidebarFrame'
 import { AgentAppearance, AgentRoom } from './agents/AgentRoom'
@@ -480,7 +479,6 @@ export function App({ createMicrophoneTest = () => new BrowserMicrophoneTest() }
 
   return (
     <AgentProvider settings={app.settings} dictation={app.dictation}>
-      <FinishedThreadWatch />
       {management ? content : (
         <AppShell
           navigation={null}

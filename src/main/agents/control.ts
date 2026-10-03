@@ -40,6 +40,7 @@ import { resolveFilesBinding } from '../files/binding'
 import { THREAD_SCOPED_COMMAND_TYPES } from '../../shared/threadLanes'
 import type { FilesBinding } from '../files/service'
 import { isSottoRequest, withSottoRequests, type SottoThreadRequests } from './sottoRequests'
+import { FinishedUnread } from './finishedUnread'
 
 /** One shared empty array stands in for every shell thread's history; the clone that follows copies nothing. */
 const EMPTY_MESSAGES: AgentMessage[] = []
@@ -85,6 +86,8 @@ const savedSchema = z.object({
   pendingRequest: z.string().max(20_000).default(''),
   contextSavedAt: z.number().default(0),
   coordinatorConversation: z.boolean().default(false),
+  /** The threads that finished while no client showed them, oldest first (ADR-0046). */
+  finishedUnread: z.array(z.string()).default([]),
   composing: z.boolean(), outbox: z.array(z.object({
     id: z.string(), type: z.enum(['send', 'steer', 'create-project', 'create-thread', 'configure-thread', 'answer', 'interrupt', 'compact-thread']),
     provider: providerIdSchema.optional(),
@@ -150,6 +153,17 @@ function outcomeOf(before: ProviderClientUpdate): Partial<ProviderClientUpdate> 
   for (const key of ['error', 'ranAt', 'step', 'failure', 'printed'] as const) if (before[key] !== undefined) Object.assign(kept, { [key]: before[key] })
   return kept
 }
+/**
+ * Whether a client's last update still describes a new reading of it: the same version installed, measured against the
+ * same release. A newer release makes the client behind again, and "is now 2.1.287" would hide 2.1.288. A registry that
+ * could not be read moves nothing.
+ */
+const outcomeHolds = (before: ProviderClientUpdate, reading: ProviderClientUpdate): boolean =>
+  before.installed === reading.installed && (reading.published === undefined || reading.published === before.published)
+/** A new reading with a client's last update on it. A registry not read this time leaves the release that update was measured against. */
+const withOutcome = (reading: ProviderClientUpdate, before: ProviderClientUpdate): ProviderClientUpdate => ({
+  ...reading, ...reading.published === undefined && before.published !== undefined ? { published: before.published } : {}, ...outcomeOf(before),
+})
 
 /** Owns assignment authority, queue ordering and durable dispatch intent across all host adapters. */
 import type { GitRefsPage, GitRefsRequest } from '../../shared/gitRefs'
@@ -210,7 +224,7 @@ export class AgentControl {
   private readonly clientWaiters = new Map<ProviderId, { resolve: () => void; reject: (error: unknown) => void }[]>()
   private clientLineRunning = false
   /** Where each waiting client stood before it joined the line, so Cancel update puts it back. */
-  private readonly clientLineBefore = new Map<ProviderId, Partial<ProviderClientUpdate>>()
+  private readonly clientLineBefore = new Map<ProviderId, ProviderClientUpdate>()
   private serial: Promise<unknown> = Promise.resolve()
   private unsubscribe: (() => void) | null = null
   private reconnect: ReturnType<typeof setTimeout> | null = null
@@ -248,6 +262,8 @@ export class AgentControl {
   private answeredRequests: Saved['answeredRequests'] = []
   /** Ephemeral view interest; never persisted, selected or granted assignment authority. */
   private viewedThreadIds: readonly string[] = []
+  /** Threads that finished while no client showed them; what a client shows is what it observes (ADR-0046). */
+  private finishedUnread = new FinishedUnread()
   private readonly dispatchTurns = new Map<string, ActiveTurn>()
   private readonly feedbackReady = new Set<ActiveTurn>()
   private broadcastCancel: (() => void) | null = null
@@ -358,8 +374,9 @@ export class AgentControl {
     this.persistedDrafts = this.draftSignatures(images.threadDrafts)
     await this.attachmentPreviews.load(this.stageInline)
     this.contextActivityAt = saved.contextSavedAt
-    const { outbox, contextSavedAt, coordinatorConversation, manualDraftId, deliveredPromptDigests, answeredRequests, ...restored } = saved
+    const { outbox, contextSavedAt, coordinatorConversation, manualDraftId, deliveredPromptDigests, answeredRequests, finishedUnread, ...restored } = saved
     this.coordinatorConversation = coordinatorConversation
+    this.finishedUnread.restore(finishedUnread)
     this.queueSelectionPinned = coordinatorConversation
     this.deliveredPromptDigests = deliveredPromptDigests
     this.answeredRequests = answeredRequests
@@ -470,6 +487,17 @@ export class AgentControl {
   private withSottoRequests(snapshot: AgentHostSnapshot): AgentHostSnapshot {
     return this.sottoRequests ? withSottoRequests(snapshot, this.sottoRequests.requests()) : snapshot
   }
+  /**
+   * The threads some client shows now (ADR-0046). The host service says which: every client's observed threads, the
+   * desktop window's only while it has the focus. Showing a thread is what reads its finish, on every client at once,
+   * and the cleared mark is saved so a restart keeps it read. True when a mark was cleared.
+   */
+  showThreads(threadIds: readonly string[]): boolean {
+    if (!this.finishedUnread.show(threadIds)) return false
+    this.publish()
+    void this.persist().catch(() => undefined)
+    return true
+  }
   hasPendingThreadWork(threadId: string): boolean {
     return this.pendingThreadWorkReason(threadId) !== null
   }
@@ -501,6 +529,7 @@ export class AgentControl {
    */
   get(): AgentState {
     const state = structuredClone(this.state)
+    state.host.threads = state.host.threads.map(thread => this.finishedUnread.publish(thread))
     state.hostId = state.host.hostId
     state.threadDraftPersistence = this.draftPersistence()
     state.historyEnabled = this.dependencies.historyEnabled?.() !== false
@@ -541,7 +570,7 @@ export class AgentControl {
   }
   shell(): AgentState {
     const threads = this.state.host.threads
-    const bare = { ...this.state, host: { ...this.state.host, threads: threads.map(thread => ({
+    const bare = { ...this.state, host: { ...this.state.host, threads: threads.map(thread => this.finishedUnread.publish({
       ...thread, messages: EMPTY_MESSAGES,
       ...(thread.activities === undefined ? {} : { activities: EMPTY_ACTIVITIES }),
       summary: threadSummaryOf(thread),
@@ -746,6 +775,7 @@ export class AgentControl {
       activeThreadId, activeProjectId, draft, draftThreadId, draftRequestId, draftAttachments: this.state.draftAttachments ?? [], composing, pendingRequest: retainContext ? pendingRequest : '',
       contextSavedAt: this.contextActivityAt, outbox: this.outbox, manualDraftId: this.manualDraftId, deliveredDrafts: this.state.deliveredDrafts ?? [],
       coordinatorConversation: this.coordinatorConversation,
+      finishedUnread: this.finishedUnread.saved(),
       deliveredPromptDigests: this.deliveredPromptDigests,
       answeredRequests: this.answeredRequests,
       threadDrafts: this.state.threadDrafts ?? [], deliveries: this.state.deliveries ?? [] })
@@ -934,7 +964,8 @@ export class AgentControl {
   /**
    * What every connected client publishes, against what it is running. A provider that is not
    * connected has no known installed version, so nothing is claimed about it. Findings from an
-   * update already run are kept, so "is now 2.1.278" survives the next check.
+   * update already run are kept, so "is now 2.1.278" survives the next check, until a newer
+   * release is published: then the client is behind again and the old finding would hide it.
    */
   private async checkClientUpdates(fresh = false): Promise<void> {
     if (!this.state.configuration.checkClientUpdates) { delete this.state.clientUpdates; return }
@@ -949,15 +980,17 @@ export class AgentControl {
       // A client in the update line keeps where it stands there, even through a fresh check.
       const lined = this.inClientLine(provider.id)
       const before = fresh && !lined ? undefined : previous.find(item => item.id === provider.id)
-      readings.push(before && (lined || (before.state !== 'idle' && before.installed === reading.installed)) ? { ...reading, ...outcomeOf(before) } : reading)
+      readings.push(before && (lined || (before.state !== 'idle' && outcomeHolds(before, reading))) ? withOutcome(reading, before) : reading)
     }
     if (this.disposed) return
     // The update line runs while this check waits on the registry and the disk: whatever it said about a client
-    // meanwhile (its step, how it ended) is newer than what the check started from, and wins.
+    // meanwhile (its step, how it ended) is newer than what the check started from, and wins. How it ended gives way to
+    // a newer release the check found, while waiting or running never does.
     const latest = this.state.clientUpdates ?? []
     for (const [index, reading] of readings.entries()) {
       const now = latest.find(item => item.id === reading.id)
-      if (now && now !== previous.find(item => item.id === reading.id)) readings[index] = { ...reading, ...outcomeOf(now) }
+      if (now && now !== previous.find(item => item.id === reading.id)
+        && (now.state === 'queued' || now.state === 'updating' || reading.published === undefined || reading.published === now.published)) readings[index] = withOutcome(reading, now)
     }
     // A client that updated, failed or did not change still has something to say after its provider
     // drops: losing the record here would take the sentence about it off the card with it.
@@ -1009,7 +1042,7 @@ export class AgentControl {
       if (refusal) { refusals.push(refusal); continue }
       this.clientLine.push(provider)
       const record = this.state.clientUpdates?.find(item => item.id === provider)
-      if (record) this.clientLineBefore.set(provider, outcomeOf(record))
+      if (record) this.clientLineBefore.set(provider, record)
       this.setClientUpdate(provider, { state: 'queued' }, false)
       added += 1
     }
@@ -1026,8 +1059,10 @@ export class AgentControl {
       const at = this.clientLine.indexOf(provider)
       if (at < 0) continue
       this.clientLine.splice(at, 1)
-      // Back as it was before it joined the line: behind, or with the failure it had.
-      this.setClientUpdate(provider, this.clientLineBefore.get(provider) ?? { state: 'idle' }, false)
+      // Back as it was before it joined the line: behind, or with the failure it had, unless a newer release came out meanwhile.
+      const before = this.clientLineBefore.get(provider)
+      const record = this.state.clientUpdates?.find(item => item.id === provider)
+      this.setClientUpdate(provider, before && record && outcomeHolds(before, record) ? outcomeOf(before) : { state: 'idle' }, false)
       this.clientLineBefore.delete(provider)
       const waiting = this.clientWaiters.get(provider) ?? []
       this.clientWaiters.delete(provider)
@@ -2941,6 +2976,8 @@ export class AgentControl {
     this.processedAssignmentThreads = new Set()
     const previousThreads = new Map(this.state.host.threads.map(thread => [thread.id, thread]))
     this.state.host = snapshot
+    // Saved with the persist below; a disconnected snapshot changes no mark, so its early return loses nothing.
+    this.finishedUnread.track(snapshot)
     this.scheduleProviderReconnects()
     if (this.state.activeProjectId) this.state.activeProjectId = this.dependencies.host.resolveProjectId?.(this.state.activeProjectId) ?? this.state.activeProjectId
     if (this.state.configuration.defaultModelId) this.state.configuration.defaultModelId = this.dependencies.host.resolveModelId?.(this.state.configuration.defaultModelId) ?? this.state.configuration.defaultModelId

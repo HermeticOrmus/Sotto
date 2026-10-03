@@ -93,6 +93,19 @@ describe('desktop host routing', () => {
     await expect(router.stageAttachment({ threadId: hostEntityKey(REMOTE, 'thread'), name: 'Shot.png', mimeType: 'image/png', bytes })).rejects.toThrow('Nothing was attached.')
     expect(await router.attachmentContent({ threadId: hostEntityKey(REMOTE, 'thread'), digest: handle.digest })).toBeNull()
   })
+  it('passes each host\'s finished-unread mark to the window on that host\'s thread, and sends the window\'s panes to the host that owns them (ADR-0046)', async () => {
+    const router = new DesktopHostRouter(emptyDesktopState), local = fixture(LOCAL, 'local'), remote = fixture(REMOTE, 'remote')
+    router.add(local.connection); router.add(remote.connection)
+    remote.state.host.threads = [{ ...remote.state.host.threads[0]!, finishedUnread: true }]
+    const thread = (hostId: string) => router.shell().host.threads.find(item => item.id === hostEntityKey(hostId, 'thread'))
+    expect(thread(REMOTE)?.finishedUnread).toBe(true)
+    expect(thread(LOCAL)).not.toHaveProperty('finishedUnread')
+    // Showing the remote thread is the remote host's to hear: it clears the mark there, and the next shell carries that.
+    await router.command({ type: 'observe-threads', threadIds: [hostEntityKey(REMOTE, 'thread')] }, desktopWindowClient())
+    expect(remote.observe).toHaveBeenCalledWith(['thread'])
+    expect(local.observe).toHaveBeenCalledWith([])
+    router.dispose()
+  })
   it("names each host's unconfirmed settings changes by the thread's client key", () => {
     const router = new DesktopHostRouter(emptyDesktopState), local = fixture(LOCAL, 'local'), remote = fixture(REMOTE, 'remote')
     router.add(local.connection); router.add(remote.connection)
