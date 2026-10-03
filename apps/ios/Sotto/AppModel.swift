@@ -43,6 +43,12 @@ struct DraftPhoto: Identifiable {
     }
 }
 
+/// Whichever of two outcomes comes first; the other is ignored.
+@MainActor private final class FirstOutcome<Value> {
+    var continuation: CheckedContinuation<Value, Error>?
+    func finish(_ result: Result<Value, Error>) { continuation?.resume(with: result); continuation = nil }
+}
+
 /// Every paired computer, each with its own connection, session and state. A computer that can't be
 /// reached, or fails, never holds up the others. Everything that names a thread names its computer too.
 @MainActor final class AppModel: ObservableObject {
@@ -90,7 +96,7 @@ struct DraftPhoto: Identifiable {
     private struct ReceiptFollower { let token: UUID; let generation: UUID? }
     /// The kinds that read as sending. A thread or project creation keeps its own sheet and its own wait.
     private static let sendingKinds: Set<String> = ["reply", "answer", "interrupt"]
-    /// A receipt the computer says is still being carried out is read again this often, this many times: ten minutes.
+    /// A receipt the computer says is still being carried out is read again this often, this many times: about ten minutes.
     private static let receiptInterval: UInt64 = 2_000_000_000
     private static let receiptReads = 300
     private var stagingTasks: [UUID: Task<Bool, Never>] = [:]
@@ -99,6 +105,8 @@ struct DraftPhoto: Identifiable {
     /// Photos are prepared one at a time, so several large photos are never decoded at once.
     private var photoWork: Task<Void, Never>?
     private let preparePhoto: @Sendable (Data, String) async throws -> PreparedPhoto
+    /// How long a photo's original may take to arrive, from iCloud for one not on this iPhone, before it is left out.
+    private static let photoLoadLimit: UInt64 = 120_000_000_000
     /// Hands a sent reply's photos to whatever draws the thread, so it has them before their message arrives.
     var photosSent: (([DraftPhoto], ThreadRef) -> Void)?
     private let receiptSleep: @Sendable (UInt64) async throws -> Void
@@ -784,7 +792,7 @@ struct DraftPhoto: Identifiable {
         // Removed while it waited its turn: nothing is read.
         guard photo(id, in: ref) != nil else { return }
         do {
-            let prepared = try await preparePhoto(try await source.load(), source.name)
+            let prepared = try await preparePhoto(try await loaded(source), source.name)
             guard photo(id, in: ref) != nil else { return }
             let others = photos(ref).filter { $0.id != id }.compactMap { $0.prepared?.byteCount }
             guard Photos.fits(prepared.byteCount, with: others) else {
@@ -799,8 +807,21 @@ struct DraftPhoto: Identifiable {
             dropPhoto(id, in: ref, reason: reason ?? PhotoPipelineError.unreadable.errorDescription!)
         }
     }
-    /// Stages one prepared photo on its thread's computer. A photo that couldn't reach it stays in the box and
-    /// is staged when the reply is sent; one the computer refused for what it is leaves the box, with its reason.
+    /// A photo's original bytes, or `tooSlow` once the limit passes, so one that never arrives can't hold up the
+    /// photos chosen after it. A load that ignores cancellation is left to finish on its own.
+    private func loaded(_ source: PhotoSource) async throws -> Data {
+        let first = FirstOutcome<Data>()
+        return try await withCheckedThrowingContinuation { continuation in
+            first.continuation = continuation
+            let work = Task {
+                do { first.finish(.success(try await source.load())) } catch { first.finish(.failure(error)) }
+            }
+            Task {
+                try? await Task.sleep(nanoseconds: Self.photoLoadLimit)
+                work.cancel(); first.finish(.failure(PhotoPipelineError.tooSlow))
+            }
+        }
+    }
     /// A photo's staging, started now unless it is already under way: a photo is never staged twice at once.
     private func staging(_ id: UUID, in ref: ThreadRef) -> Task<Bool, Never>? {
         if let running = stagingTasks[id] { return running }
@@ -816,6 +837,8 @@ struct DraftPhoto: Identifiable {
         return task
     }
     private func stage(_ id: UUID, in ref: ThreadRef) async -> Bool { await staging(id, in: ref)?.value ?? false }
+    /// Stages one prepared photo on its thread's computer. A photo that couldn't reach it stays in the box and
+    /// is staged when the reply is sent; one the computer refused for what it is leaves the box, with its reason.
     private func requestStaging(_ prepared: PreparedPhoto, as id: UUID, in ref: ThreadRef) async -> Bool {
         let over = generations[ref.hostID]
         do {
@@ -836,8 +859,10 @@ struct DraftPhoto: Identifiable {
     /// or again if it has been there long enough to be let go. Nil, with the reason, when one can't be.
     private func readyPhotos(_ ref: ThreadRef) async -> [StagedImage]? {
         // Only this reply's own photos are waited for: one still on its way is joined, not sent again.
-        for photo in photos(ref) where stagingTasks[photo.id] != nil || photo.needsStaging(generation: generations[ref.hostID]) {
-            guard await stage(photo.id, in: ref) else {
+        // Each photo is read as it is now, not as it was when the loop began: one staged meanwhile is not staged again.
+        for id in photos(ref).map(\.id) {
+            guard let photo = photo(id, in: ref), stagingTasks[id] != nil || photo.needsStaging(generation: generations[ref.hostID]) else { continue }
+            guard await stage(id, in: ref) else {
                 if photoNotices[ref.id] == nil {
                     photoNotices[ref.id] = "A photo couldn’t reach \(name(ref.hostID)), so nothing was sent. Try again when it’s connected."
                 }

@@ -19,11 +19,12 @@ struct PreparedPhoto: @unchecked Sendable {
 }
 
 enum PhotoPipelineError: Error, LocalizedError {
-    case unreadable, tooLarge
+    case unreadable, tooLarge, tooSlow
     var errorDescription: String? {
         switch self {
         case .unreadable: return "This photo couldn’t be read, so it wasn’t added. Try another photo."
         case .tooLarge: return "This photo is still over 10 MB after resizing, so it wasn’t added. Try another photo."
+        case .tooSlow: return "This photo didn’t arrive within two minutes, so it wasn’t added. If it’s in iCloud, try again once it has downloaded."
         }
     }
 }

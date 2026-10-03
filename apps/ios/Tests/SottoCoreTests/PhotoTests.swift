@@ -117,6 +117,10 @@ final class PhotoTests: XCTestCase {
         XCTAssertEqual(CatalogEntry.model(models, id: "native:claude:model:claude-opus-4-7%5B1m%5D")?.id, "native:claude:model:claude-opus-4-7")
         XCTAssertNil(CatalogEntry.model(models, id: "native:codex:model:opus%5B1m%5D"), "Only Claude names a 1M-context variant")
         XCTAssertNil(CatalogEntry.model(models, id: "[1m]"))
+        XCTAssertEqual(CatalogEntry.model(models, id: "opus[1M]")?.id, "opus", "The suffix is read in either case")
+        XCTAssertEqual(CatalogEntry.model(models, id: "native:claude:model:claude-opus-4-7%5b1m%5d")?.id, "native:claude:model:claude-opus-4-7")
+        XCTAssertNil(CatalogEntry.model(models, id: "opus[1m][1m]"), "Only one suffix is taken off, as the host does")
+        XCTAssertNil(CatalogEntry.model(models, id: "native:claude:model:%E0%A4%A"), "A value that won't decode names nothing")
         XCTAssertNil(CatalogEntry.model(models, id: nil))
     }
     func testAnImageGoingEitherWayGetsTwoMinutes() {
