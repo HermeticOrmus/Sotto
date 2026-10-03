@@ -7,7 +7,7 @@ const sessionEntrySchema = z.object({
   startedAt: z.number(), endedAt: z.number().nullable(), minutes: z.number().int().nonnegative(),
 }).strict()
 export type CloudUsageEntry = z.infer<typeof sessionEntrySchema>
-/** A release or a deletion that did not finish; retried on service start and every minute until it does (ADR-0046). */
+/** A release or a deletion that did not finish; retried on service start and every minute until it does (ADR-0047). */
 const cleanupEntrySchema = z.object({ kind: z.enum(['session', 'asset']), handle: z.string(), since: z.number() }).strict()
 export type CloudCleanupEntry = z.infer<typeof cleanupEntrySchema>
 const usageDocSchema = z.object({
@@ -27,7 +27,7 @@ export function monthKey(timestamp: number): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
 }
 
-/** `cloud-iphone-usage.json` (ADR-0046): every billed cloud iPhone session, so the monthly cap can be read back cold. */
+/** `cloud-iphone-usage.json` (ADR-0047): every billed cloud iPhone session, so the monthly cap can be read back cold. */
 export class CloudUsageLedger {
   private readonly store: AtomicJsonStore<UsageDoc>
   private doc: UsageDoc = { version: 1, sessions: [], months: {}, cleanup: [] }

@@ -1,4 +1,4 @@
-/* Settings > Cloud iPhone: the run.cloud key, the monthly cap, this month's minutes and recent sessions (ADR-0046). */
+/* Settings > Cloud iPhone: the run.cloud key, the monthly cap, this month's minutes and recent sessions (ADR-0047). */
 .settings-view .cloud-iphone-settings { gap: 20px; }
 .settings-view .cloud-iphone-intro { margin: -4px 0 0; color: var(--tt-text-muted); font-size: 14px; }
 .settings-view .cloud-iphone-card { display: grid; gap: 10px; padding: 16px 18px; }

@@ -49,7 +49,7 @@ export interface CloudIphoneSettingsProps {
 }
 
 /**
- * Settings > Cloud iPhone (ADR-0046): the run.cloud key, the monthly spending cap, the idle timeout, this month's
+ * Settings > Cloud iPhone (ADR-0047): the run.cloud key, the monthly spending cap, the idle timeout, this month's
  * minutes against the cap, and recent sessions. Nothing here starts a session; that is the thread's own request card.
  */
 export function CloudIphoneSettings({ settings, onUpdateSettings, bridge = bridgeCloudIphone(), store = cloudIphoneStore }: CloudIphoneSettingsProps): ReactNode {

@@ -23,7 +23,7 @@ export function hostClientBridge<T extends object>(bridge: T): T {
     }
     return hostId === undefined ? value : mapHostReferences(value, id => parseHostEntityKey(id) ? id : hostEntityKey(hostId, id))
   }
-  // A remote host's thread has no cloud iPhone here (ADR-0046): wrapped like `browser`, so a host-scoped
+  // A remote host's thread has no cloud iPhone here (ADR-0047): wrapped like `browser`, so a host-scoped
   // thread ID reaching this local bridge is refused the same way.
   const domains = new Set(['agents', 'terminal', 'terminals', 'browser', 'cloudIphone', 'gitChanges', 'files', 'subagents', 'requestDrafts', 'memory'])
   const wrap = (object: object, domain?: string): object => Object.freeze(Object.fromEntries(Object.entries(object).map(([name, member]) => {

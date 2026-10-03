@@ -7,7 +7,7 @@ import { CLOUD_BUTTONS, CLOUD_KEYS } from '../../../shared/cloudIphone'
 /** A simulator build, once run.cloud has accepted it. */
 export interface CloudStartedSession { id: string; viewerUrl: string; device: string }
 /**
- * Sotto's own interaction vocabulary (ADR-0046): `x`/`y`/`toX`/`toY` are 0..1 fractions of the screen, and `key`/
+ * Sotto's own interaction vocabulary (ADR-0047): `x`/`y`/`toX`/`toY` are 0..1 fractions of the screen, and `key`/
  * `button` use Sotto's `CLOUD_KEYS`/`CLOUD_BUTTONS` names. Only `RunCloudClient` knows run.cloud's own flat wire
  * shape and its key and button names; nothing outside this file does.
  */
@@ -26,7 +26,7 @@ export interface CloudAccessibilityNode {
 export interface CloudAccessibilitySnapshot { screen: { width: number; height: number }; roots: CloudAccessibilityNode[] }
 
 /**
- * run.cloud sits behind this one adapter (ADR-0046): every route it answers lives here, in Node's own
+ * run.cloud sits behind this one adapter (ADR-0047): every route it answers lives here, in Node's own
  * `fetch`, so the rest of Sotto addresses a cloud iPhone by its Sotto session, never by run.cloud's IDs.
  * Every failure becomes a plain `Error` that never repeats the key, a viewer URL or a raw response body.
  */

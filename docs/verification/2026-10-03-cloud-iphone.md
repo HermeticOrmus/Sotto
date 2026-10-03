@@ -1,6 +1,6 @@
 # The cloud iPhone in the running app
 
-October 3, 2026, on Windows 11 with Electron 43, from `tests/e2e/cloud-iphone.spec.ts` against the built app (ADR-0046). The app talks to `tests/fixtures/fakeRunCloud.mjs`, a local fake of run.cloud's API, through `SOTTO_RUN_CLOUD_API_URL`. No real run.cloud key or minutes were used. The fake Workshop thread is driven through the same `sotto_browser` dispatcher a provider reaches.
+October 3, 2026, on Windows 11 with Electron 43, from `tests/e2e/cloud-iphone.spec.ts` against the built app (ADR-0047). The app talks to `tests/fixtures/fakeRunCloud.mjs`, a local fake of run.cloud's API, through `SOTTO_RUN_CLOUD_API_URL`. No real run.cloud key or minutes were used. The fake Workshop thread is driven through the same `sotto_browser` dispatcher a provider reaches.
 
 ## What was shown
 

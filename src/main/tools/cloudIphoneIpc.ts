@@ -3,7 +3,7 @@ import { CLOUD_IPHONE_CHANNEL } from '../../shared/cloudIphone'
 import { isAuthorizedIpcSender, type IpcMainAdapter, type TrustedIpcSender } from '../ipc/registerIpc'
 import type { CloudIphoneService } from './cloudIphone/service'
 
-/** The renderer's view of the cloud iPhone (ADR-0046): status, setKey, sessions, answer, end, mount. Main window only. */
+/** The renderer's view of the cloud iPhone (ADR-0047): status, setKey, sessions, answer, end, mount. Main window only. */
 export function registerCloudIphoneIpc(ipc: IpcMainAdapter, service: CloudIphoneService, senders: () => readonly TrustedIpcSender[]): () => Promise<void> {
   const channels: string[] = []
   const register = (channel: string, operation: (payload: unknown) => unknown): void => {
@@ -15,7 +15,7 @@ export function registerCloudIphoneIpc(ipc: IpcMainAdapter, service: CloudIphone
     channels.push(channel)
   }
   for (const method of ['status', 'setKey', 'sessions', 'answer', 'end', 'mount'] as const) register(CLOUD_IPHONE_CHANNEL + method, payload => service[method](payload))
-  // Awaited by the caller (ADR-0046: a session must finish releasing before quit proceeds), not discarded.
+  // Awaited by the caller (ADR-0047: a session must finish releasing before quit proceeds), not discarded.
   return async () => {
     for (const channel of channels) ipc.removeHandler(channel)
     await service.dispose()

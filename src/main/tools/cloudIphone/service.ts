@@ -42,7 +42,7 @@ interface SessionRecord {
   session: CloudSession
   resolvedBuildPath: string | null
   provider: CloudDeviceProvider | null
-  /** run.cloud's own simulator session id. Opaque outside this file (ADR-0046): never shown, logged or compared by shape. */
+  /** run.cloud's own simulator session id. Opaque outside this file (ADR-0047): never shown, logged or compared by shape. */
   deviceHandle: string | null
   /** run.cloud's own uploaded-build id. */
   uploadHandle: string | null
@@ -62,7 +62,7 @@ export interface CloudIphoneDependencies {
   threadTitle(threadId: string): string
   getWindow(): BrowserWindow | null
   emit(event: CloudEvent): void
-  /** run.cloud behind one adapter (ADR-0046); a test supplies a fake instead. */
+  /** run.cloud behind one adapter (ADR-0047); a test supplies a fake instead. */
   provider(key: string): CloudDeviceProvider
   /** Clock and timers, injectable for tests; default to the wall clock and Node's own timers. */
   now?(): number
@@ -92,7 +92,7 @@ function combineProblem(...parts: (string | null)[]): string | null {
   const joined = parts.filter((part): part is string => Boolean(part)).join(' ')
   return joined.length > 0 ? joined : null
 }
-/** `https:`, or `http:` only on a loopback address: how a local fake's viewer URL is allowed in a test (ADR-0046). */
+/** `https:`, or `http:` only on a loopback address: how a local fake's viewer URL is allowed in a test (ADR-0047). */
 function viewerUrlAllowed(url: string): boolean {
   let parsed: URL
   try { parsed = new URL(url) } catch { return false }
@@ -101,7 +101,7 @@ function viewerUrlAllowed(url: string): boolean {
 }
 
 /**
- * One cloud iPhone (run.cloud) session per thread at most (ADR-0046). Every lifecycle decision (asking,
+ * One cloud iPhone (run.cloud) session per thread at most (ADR-0047). Every lifecycle decision (asking,
  * the monthly cap, the idle timer) lives here; `RunCloudClient` alone knows run.cloud's own wire shapes.
  */
 export class CloudIphoneService extends ToolOperations {
@@ -224,7 +224,7 @@ export class CloudIphoneService extends ToolOperations {
     this.resolveWaiters(record)
     this.emitSession(record.session.id)
   }
-  /** Marks a running session as ending before any teardown await, so a racing `startSession` sees it at once (finding 2, ADR-0046). */
+  /** Marks a running session as ending before any teardown await, so a racing `startSession` sees it at once (finding 2, ADR-0047). */
   private beginEnd(record: SessionRecord, reason: CloudEndReason): void {
     record.session.status = 'ended'
     record.session.endReason = reason
@@ -386,7 +386,7 @@ export class CloudIphoneService extends ToolOperations {
   private touchIdle(record: SessionRecord): void { this.armIdleTimer(record) }
   private tickInFlight: Promise<void> | null = null
   /**
-   * Every session's retry queue, the cap and a gone thread, on one timer rather than one per session (ADR-0046).
+   * Every session's retry queue, the cap and a gone thread, on one timer rather than one per session (ADR-0047).
    * A tick that is still checking skips the next firing rather than overlap it: each tick's own thread checks
    * share `FilesService`'s small concurrency budget with the agent's own calls, which must not starve.
    */
@@ -533,7 +533,7 @@ export class CloudIphoneService extends ToolOperations {
     record.session.steps = [...record.session.steps, { id: randomUUID(), action: action.slice(0, 40), status, at: this.now(), detail: detail.slice(0, 2000) }].slice(-60)
   }
 
-  /** `iphone_cloud_action`: taps, types and the rest do not ask; the session the user started already covers them (ADR-0046). */
+  /** `iphone_cloud_action`: taps, types and the rest do not ask; the session the user started already covers them (ADR-0047). */
   agentAction(payload: unknown) { return this.run(async (): Promise<CloudAgentResult> => {
     const request = parse(cloudAgentActionSchema, payload)
     await this.owner(request.threadId, request.workspaceId)
@@ -635,7 +635,7 @@ export class CloudIphoneService extends ToolOperations {
     this.setBounds(record, window, request.bounds)
   }) }
 
-  /** A thread Sotto no longer lists takes its cloud iPhone session with it (ADR-0046). */
+  /** A thread Sotto no longer lists takes its cloud iPhone session with it (ADR-0047). */
   forgetThread(threadId: string): void {
     for (const record of this.records.values()) {
       if (record.session.threadId !== threadId) continue

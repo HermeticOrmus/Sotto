@@ -1168,7 +1168,7 @@ async function createRuntime(): Promise<NativeRuntimeController> {
         provider: key => new RunCloudClient(key),
       })
       const cleanupCloudIphone = registerCloudIphoneIpc(ipcMain, cloudIphoneService, () => windows.getTrustedRenderers())
-      // Quit waits for this (ADR-0046: run.cloud is never left billing), the same way it waits for other async shutdown.
+      // Quit waits for this (ADR-0047: run.cloud is never left billing), the same way it waits for other async shutdown.
       quitHandles.cloudIphone = { close: () => cloudIphoneService?.dispose() ?? Promise.resolve() }
       // Resumes any release or deletion a previous run could not finish, using the key already in the credential store.
       void cloudIphoneService.resumeCleanup()
@@ -1288,7 +1288,7 @@ async function createRuntime(): Promise<NativeRuntimeController> {
         worktreeCleanup?.dispose()
         cleanupTools()
         browserService = undefined
-        // The quit drain already awaited this service's own dispose (ADR-0046); this just drops its IPC handlers.
+        // The quit drain already awaited this service's own dispose (ADR-0047); this just drops its IPC handlers.
         void cleanupCloudIphone()
         cloudIphoneService = undefined
         void browserAgentServer.close()

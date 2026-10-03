@@ -16,7 +16,7 @@ function sameBounds(a: BrowserBounds | null, b: BrowserBounds | null): boolean {
 interface Mounted { readonly threadId: string; readonly workspaceId: string; readonly sessionId: string; readonly bounds: BrowserBounds }
 
 /**
- * Cloud iPhone sessions (ADR-0046) and this computer's run.cloud status: the one thing Settings, the thread's
+ * Cloud iPhone sessions (ADR-0047) and this computer's run.cloud status: the one thing Settings, the thread's
  * request card, the phone player and Tools > iPhone all read. A remote host's threads have no sessions here,
  * since a cloud iPhone is this computer's own run.cloud adapter.
  */

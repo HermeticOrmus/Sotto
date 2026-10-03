@@ -58,7 +58,7 @@ ADR-0045; `CONTEXT.md` (Test iPhone, Phone player, the Tools panel's seven surfa
 
 ## Phase 2: a cloud iPhone (#711)
 
-Native apps on a run.cloud iOS simulator (ADR-0046, `docs/research/2026-10-03-cloud-ios-devices.md`, `docs/research/2026-10-03-run-cloud-api.md`).
+Native apps on a run.cloud iOS simulator (ADR-0047, `docs/research/2026-10-03-cloud-ios-devices.md`, `docs/research/2026-10-03-run-cloud-api.md`).
 
 What Zach decided on October 3, 2026:
 - An agent passes the path of a simulator build it made in the thread's folder.

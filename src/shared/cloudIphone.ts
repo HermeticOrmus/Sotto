@@ -2,7 +2,7 @@ import { z } from 'zod'
 import { toolTargetSchema, type ToolsResult } from './tools'
 
 /**
- * The cloud iPhone (ADR-0046): a run.cloud iOS simulator session one thread starts, after the user answers, to test
+ * The cloud iPhone (ADR-0047): a run.cloud iOS simulator session one thread starts, after the user answers, to test
  * a native build. Everything outside the run.cloud adapter names a session by its Sotto ID and its thread, never by
  * run.cloud's own IDs, so another service could replace it.
  */
@@ -74,7 +74,7 @@ export const cloudKeySchema = z.object({ value: z.string().max(16_384) }).strict
 export const cloudKeyResultSchema = z.object({ saved: z.boolean(), problem: z.string().max(2000).nullable() }).strict()
 
 export const cloudSessionRequestSchema = toolTargetSchema.extend({ sessionId: z.string().uuid() })
-/** The user's answer in the thread's card. Start covers this session and nothing after it (ADR-0046). */
+/** The user's answer in the thread's card. Start covers this session and nothing after it (ADR-0047). */
 export const cloudAnswerSchema = cloudSessionRequestSchema.extend({ allow: z.boolean() })
 const boundsSchema = z.object({ x: z.number().finite().min(0).max(32768), y: z.number().finite().min(0).max(32768), width: z.number().finite().positive().max(32768), height: z.number().finite().positive().max(32768) }).strict()
 /** Where the phone player draws the session's live view, or null to take it off the window. */

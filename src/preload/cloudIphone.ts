@@ -7,7 +7,7 @@ import {
 } from '../shared/cloudIphone'
 import type { IpcRendererAdapter } from './index'
 
-/** `window.sotto.cloudIphone`: the renderer's one view of cloud sessions (ADR-0046); the key and viewer URL never cross this bridge. */
+/** `window.sotto.cloudIphone`: the renderer's one view of cloud sessions (ADR-0047); the key and viewer URL never cross this bridge. */
 export function createCloudIphoneBridge(renderer: IpcRendererAdapter): CloudIphoneBridge {
   const call = async <T>(channel: string, input: z.ZodType, output: z.ZodType<T>, payload: unknown) => toolsResultSchema(output).parse(await renderer.invoke(channel, input.parse(payload)))
   return Object.freeze<CloudIphoneBridge>({

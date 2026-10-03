@@ -56,7 +56,7 @@ async function dispatchCloud(cloud: CloudIphoneService, name: string, data: unkn
   if (name === 'iphone_cloud_open') {
     const opened = await cloud.agentOpen(payload)
     if (!opened.ok) return text(opened.error, true)
-    // The agent gave no sessionId; the thread's own live or active session (ADR-0046) is the only one addressed.
+    // The agent gave no sessionId; the thread's own live or active session (ADR-0047) is the only one addressed.
     const session = opened.value.status === 'asking' ? await cloud.waitForAnswer(opened.value.id) ?? opened.value : opened.value
     return text({ session })
   }

@@ -1,6 +1,6 @@
 # run.cloud's iOS simulator API, as raw HTTP
 
-Read October 3, 2026, for the cloud iPhone adapter (ADR-0046). Sources:
+Read October 3, 2026, for the cloud iPhone adapter (ADR-0047). Sources:
 
 - run.cloud's docs: `docs.run.cloud/llms.txt` and the 36 pages it lists.
 - The published `@run-cloud/sdk@0.38.1` npm package. It is MIT-licensed and ships unminified `dist/index.js` and `index.d.ts`. Its source repository is private.

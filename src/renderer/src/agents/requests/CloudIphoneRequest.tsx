@@ -25,7 +25,7 @@ export interface CloudIphoneRequestProps {
 }
 
 /**
- * The thread's cloud iPhone request (ADR-0046), in the transcript right after its permission requests: asking,
+ * The thread's cloud iPhone request (ADR-0047), in the transcript right after its permission requests: asking,
  * starting, or why it was refused or failed. A session that is active, ended or denied shows no card here; the
  * phone player and Tools > iPhone carry it from there.
  */

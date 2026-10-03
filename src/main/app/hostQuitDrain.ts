@@ -13,7 +13,7 @@ export interface HostQuitHandles {
   hostUpdates?: { dispose(): void }
   hostRouter?: { dispose(): void }
   stopPublishing?: () => void
-  /** Releases every live cloud iPhone session (ADR-0046) before Sotto exits, so run.cloud is never left billing. */
+  /** Releases every live cloud iPhone session (ADR-0047) before Sotto exits, so run.cloud is never left billing. */
   cloudIphone?: AsyncClose
 }
 

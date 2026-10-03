@@ -38,7 +38,7 @@ function browserAction(action: Frame): string {
   return 'work in the page'
 }
 
-/** The cloud iPhone (ADR-0046) drives the same session the user already started by answering iphone_cloud_open. */
+/** The cloud iPhone (ADR-0047) drives the same session the user already started by answering iphone_cloud_open. */
 function cloudAction(action: Frame): string {
   if (action.type === 'inspect') return 'look at the cloud iPhone’s screen'
   if (action.type === 'screenshot') return 'take a picture of the cloud iPhone’s screen'
