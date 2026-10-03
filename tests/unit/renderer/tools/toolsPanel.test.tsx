@@ -10,6 +10,8 @@ import type { ToolsResult } from '../../../../src/shared/tools'
 import { ToolsPanel, ToolsPanelToggle } from '../../../../src/renderer/src/tools/ToolsPanel'
 import { MAX_RENDERED_MARKDOWN_LENGTH, trustedImageSource } from '../../../../src/renderer/src/tools/FilePreview'
 import { ToolsPanelStore, TOOL_SURFACES } from '../../../../src/renderer/src/tools/toolsPanelStore'
+import { CloudIphoneStore } from '../../../../src/renderer/src/tools/cloudIphoneStore'
+import type { CloudIphoneBridge, CloudEvent } from '../../../../src/shared/cloudIphone'
 import { threadsStateFixture } from '../liveAgentState'
 import { TOKEN_A, TOKEN_B, fakeFilesBridge, markdown, text } from './fakeFilesBridge'
 
@@ -30,20 +32,34 @@ function folders() {
   }
 }
 
-function setup(options: { focused?: string | null; bridge?: FilesBridge | undefined; state?: AgentState; inPane?: boolean; subagents?: SubagentsBridge; browser?: BrowserBridge } = {}) {
+function setup(options: { focused?: string | null; bridge?: FilesBridge | undefined; state?: AgentState; inPane?: boolean; subagents?: SubagentsBridge; browser?: BrowserBridge; cloudBridge?: CloudIphoneBridge } = {}) {
   const { focused = 'visual-gate', state = threadsStateFixture(), inPane = false } = options
   const bridge = 'bridge' in options ? options.bridge : fakeFilesBridge(folders())
   const store = new ToolsPanelStore()
+  const cloudStore = new CloudIphoneStore()
   const command = vi.fn()
   // With `inPane`, the toggle sits in the focused pane's header, as the workspace places it.
   const ui = (focusedThreadId: string | null) => <div className="thread-workspace__body">
     {inPane && focusedThreadId !== null
       ? <section key={focusedThreadId} className="thread-pane" data-thread-id={focusedThreadId}><ToolsPanelToggle store={store} state={state} /></section>
       : <ToolsPanelToggle store={store} state={state} />}
-    <ToolsPanel focusedThreadId={focusedThreadId} state={state} command={command} files={bridge} subagents={options.subagents} browser={options.browser} store={store} />
+    <ToolsPanel focusedThreadId={focusedThreadId} state={state} command={command} files={bridge} subagents={options.subagents} browser={options.browser} store={store}
+      cloudStore={cloudStore} cloudBridge={options.cloudBridge} />
   </div>
   const view = render(ui(focused))
-  return { store, command, bridge, state, rerender: (next: string | null) => view.rerender(ui(next)) }
+  return { store, command, bridge, state, cloudStore, rerender: (next: string | null) => view.rerender(ui(next)) }
+}
+
+const cloudOk = <T,>(value: T): ToolsResult<T> => ({ ok: true, value })
+/** A minimal cloud iPhone bridge for the rail dot tests: only `sessions` and `onEvent` are ever read. */
+function fakeCloudBridgeForDots() {
+  const listeners = new Set<(event: CloudEvent) => void>()
+  const bridge: CloudIphoneBridge = {
+    status: vi.fn(async () => cloudOk({ keySaved: true, month: '2026-10', monthMinutes: 0, capMinutes: 750, recent: [] })),
+    setKey: vi.fn(), sessions: vi.fn(async () => cloudOk([])), answer: vi.fn(), end: vi.fn(), mount: vi.fn(async () => cloudOk(undefined)),
+    onEvent: vi.fn(listener => { listeners.add(listener); return () => { listeners.delete(listener) } }),
+  }
+  return { bridge, emit: (event: CloudEvent) => { for (const listener of [...listeners]) listener(event) } }
 }
 
 const browserOk = <T,>(value: T): ToolsResult<T> => ({ ok: true, value })
@@ -531,6 +547,26 @@ describe('shared tools panel', () => {
     } }) }))
     expect(iphone).toHaveAccessibleDescription('A test iPhone request is waiting for your answer')
     expect(browserTab).not.toHaveAttribute('aria-description')
+  })
+
+  it('marks iPhone live for a cloud iPhone request waiting for an answer, then for a running session', async () => {
+    const cloud = fakeCloudBridgeForDots()
+    const { store } = setup({ cloudBridge: cloud.bridge })
+    act(() => store.setOpen(true))
+    const iphone = await within(panel()).findByRole('tab', { name: 'iPhone' })
+    expect(iphone).not.toHaveAttribute('aria-description')
+    act(() => cloud.emit({ type: 'session', session: {
+      id: '11111111-1111-4111-8111-111111111111', threadId: 'visual-gate', workspaceId: 'workspace', status: 'asking',
+      description: 'Checking a build', buildPath: 'apps/ios/build/Sotto.app.zip', buildBytes: 1000, device: null,
+      expiresAt: Date.now() + 300_000, startedAt: null, endedAt: null, endReason: null, minutes: 0, problem: null, steps: [], summary: null, unchecked: [],
+    } }))
+    expect(iphone).toHaveAccessibleDescription('A cloud iPhone request is waiting for your answer')
+    act(() => cloud.emit({ type: 'session', session: {
+      id: '11111111-1111-4111-8111-111111111111', threadId: 'visual-gate', workspaceId: 'workspace', status: 'active',
+      description: 'Checking a build', buildPath: 'apps/ios/build/Sotto.app.zip', buildBytes: 1000, device: 'iPhone 16',
+      expiresAt: null, startedAt: Date.now(), endedAt: null, endReason: null, minutes: 1, problem: null, steps: [], summary: null, unchecked: [],
+    } }))
+    expect(iphone).toHaveAccessibleDescription('A cloud iPhone session is running')
   })
 
   it('expands the tool without losing the selected file, restores width and reopens from the header toggle', async () => {

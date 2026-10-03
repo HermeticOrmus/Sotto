@@ -215,7 +215,7 @@ describe('SettingsView', () => {
       expect(screen.getByRole('tab', { name })).toHaveAttribute('aria-selected', 'true')
       // The sidebar foot's room switch is a tablist of its own, so the count is scoped to the sections.
       expect(within(screen.getByRole('tablist', { name: 'Settings sections' })).getAllByRole('tab', { selected: true })).toHaveLength(1)
-      expect(screen.getAllByRole('tabpanel', { hidden: true })).toHaveLength(11)
+      expect(screen.getAllByRole('tabpanel', { hidden: true })).toHaveLength(12)
     }
     screen.getByRole('tab', { name: 'Application' }).focus()
     await user.keyboard('{Home}')
@@ -1173,7 +1173,7 @@ describe('SettingsView', () => {
     await selectCategory('Agents')
     const nav = screen.getByRole('tablist', { name: 'Settings sections' })
     expect(within(nav).getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
-      'Dictation', 'Transcription', 'Cleanup', 'Providers', 'Hosts', 'Phones', 'Agents', 'Output', 'Appearance', 'Application', 'Git',
+      'Dictation', 'Transcription', 'Cleanup', 'Providers', 'Hosts', 'Phones', 'Cloud iPhone', 'Agents', 'Output', 'Appearance', 'Application', 'Git',
     ])
     const agents = container.querySelector('#settings-agents') as HTMLElement
     expect(within(agents).queryByRole('button', { name: 'Configure agents' })).toBeNull()

@@ -12,6 +12,7 @@ import { CHAT_PROMPT_GENERATE, CHAT_PROMPT_COPY, chatPromptInputSchema, chatProm
 import { contextBridge, ipcRenderer } from 'electron'
 import { SUBAGENTS_PAGE, SUBAGENTS_ASSIGNMENTS, SUBAGENTS_CHANGED, subagentPageRequestSchema, subagentAssignmentsRequestSchema, subagentPageSchema, subagentAssignmentsPageSchema, subagentChangeSchema, type SubagentsBridge } from '../shared/subagents'
 import { createToolsBridges } from './tools'
+import { createCloudIphoneBridge } from './cloudIphone'
 import { createTerminalWorkspaceBridge } from './terminals'
 import { createThemesBridge } from './themes'
 import { FILES_LIST, FILES_PREVIEW, FILES_COPY_PATH, FILES_REVEAL, fileListRequestSchema, fileRequestSchema, fileListingSchema, filePreviewSchema, filePathSchema, filesResultSchema, type FilesBridge } from '../shared/files'
@@ -337,6 +338,7 @@ export function createSottoBridge(
       signIn: request => renderer.invoke(HOSTS_SIGN_IN, hostSignInRequestSchema.parse(request)) as Promise<ProviderSignInView | null> }),
     phones: Object.freeze<import('../shared/phones').PhonesBridge>({ get: () => renderer.invoke(PHONES_GET) as Promise<PhonesState>, command: command => renderer.invoke(PHONES_COMMAND, phonesCommandSchema.parse(command)) as Promise<PhonesState>, onChanged: listener => subscribe(renderer, PHONES_CHANGED, trustedState<PhonesState>('phones'), listener) }),
     ...createToolsBridges(renderer),
+    cloudIphone: createCloudIphoneBridge(renderer),
     terminals: createTerminalWorkspaceBridge(renderer),
     themes: createThemesBridge(renderer),
     subagents: Object.freeze<SubagentsBridge>({

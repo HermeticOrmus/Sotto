@@ -307,6 +307,7 @@ export interface SottoBridge {
   readonly terminal?: import('./terminal').TerminalBridge
   readonly terminals?: import('./terminalWorkspace').TerminalWorkspaceBridge
   readonly browser?: import('./browser').BrowserBridge
+  readonly cloudIphone?: import('./cloudIphone').CloudIphoneBridge
   readonly themes?: import('./themes/bridge').ThemesBridge
   readonly gitChanges?: import('./gitChanges').GitChangesBridge
   readonly subagents?: import('./subagents').SubagentsBridge

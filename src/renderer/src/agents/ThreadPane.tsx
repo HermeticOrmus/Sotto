@@ -11,6 +11,7 @@ import { PaneMenu, type PaneMenuItem } from './PaneMenu'
 import { GitActionButton } from './GitActionButton'
 import { ProviderMark } from './ProviderMark'
 import { AgentRequestCard } from './requests/AgentRequestCard'
+import { CloudIphoneRequest } from './requests/CloudIphoneRequest'
 import { RequestDraftRecovery } from './requests/RequestDraftRecovery'
 import { requestAnswerOwnerKey, requestAnswerStore, requestMode } from './requests/requestAnswers'
 import { ThreadComposer, sendThreadRevision } from './ThreadComposer'
@@ -265,6 +266,7 @@ export function ThreadPane({ row, state, command, store, focused, promptId, erro
     <ThreadWebLinks threadId={thread.id} threadTitle={thread.title} focused={focused}><ThreadTranscript row={row} state={state} command={command} store={store} followSignal={followSignal}>
       <ThreadRequests kind="permission" row={row} state={state} command={command} blocked={threadBusy ? 'Waiting for Sotto…' : !rowConnected ? `Reconnect ${row.provider} to answer.` : null}
         onAnswer={focusAnswerComposer} />
+      {!isThreadClosed(thread) && !thread.remoteHost ? <CloudIphoneRequest threadId={thread.id} threadTitle={thread.title} onAnswer={focusAnswerComposer} /> : null}
       {/* Answers saved for questions no live card shows, such as ones the provider closed while Sotto was shut. */}
       <RequestDraftRecovery owner={{ kind: 'thread', ownerId: thread.id, providerId: row.providerId ?? state.configuration.provider }}
         live={closed ? [] : thread.requests} provider={row.provider}
