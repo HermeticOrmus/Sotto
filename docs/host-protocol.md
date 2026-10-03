@@ -93,6 +93,8 @@ A push has `event` in place of `id`. The host coalesces them the way the desktop
 
 Every shell returned by hello, a read or a command, and every shell push, may include `clientCapabilities: { mayAnswer }`. This is the receiving client's current host policy, read when that shell is sent. Changing Can answer publishes a new shell even if no thread changed. Older hosts omit the field; those clients retain the authority from hello until reconnecting. The field reports authority and never grants it.
 
+A thread in the shell may carry `finishedUnread: true`: it finished while no client observed it, and no client has observed it since (ADR-0046). The host sets and clears it and saves it across a restart. Observing the thread, with `observe` or the `observe-threads` command, is what clears it, for every client, and the next shell says so. Older hosts never send it, and a client that does not know it ignores it.
+
 ### Detail deltas
 
 A delta is `{ threadId, baseRevision, revision, messageDeltas, activityDeltas }`, the same form the desktop's window gets over IPC (`AgentThreadDetailDelta` in `src/shared/agents.ts`, arithmetic in `src/shared/agentThreadDetail.ts`). A message delta is a whole message `{ message }`, or `{ id, appendText }` for text a streaming message grew by. An activity delta is a record as it now stands `{ record }`, or `{ id, removed: true }`.

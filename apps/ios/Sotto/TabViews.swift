@@ -10,7 +10,7 @@ struct ThreadsView: View {
     @State private var settledExpanded = false
     @FocusState private var searching: Bool
     var body: some View {
-        let groups = FocusThreads(model.lists, show: model.show, query: query)
+        let groups = FocusThreads(model.lists, show: model.show, query: query, opened: model.selected)
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 0) {
                 ComputerMenu().padding(.bottom, 6)
@@ -43,7 +43,7 @@ struct ThreadsView: View {
                 }
                 if !groups.recent.isEmpty {
                     FocusHeading("Recent", count: groups.recent.count)
-                    ForEach(groups.recent) { row in threadLink(row, style: .recent); Divider().overlay(Palette.hairline) }
+                    ForEach(groups.recent) { row in threadLink(row, style: .recent, unread: groups.isUnreadFinish(row)); Divider().overlay(Palette.hairline) }
                 }
                 if !groups.settled.isEmpty {
                     if groups.searching { FocusHeading("Settled", count: groups.settled.count) }
@@ -60,7 +60,7 @@ struct ThreadsView: View {
                             .accessibilityValue("\(groups.settled.count) threads, \(settledExpanded ? "expanded" : "collapsed")")
                     }
                     if settledExpanded || groups.searching {
-                        ForEach(groups.settled) { row in threadLink(row, style: .recent); Divider().overlay(Palette.hairline) }
+                        ForEach(groups.settled) { row in threadLink(row, style: .recent, unread: groups.isUnreadFinish(row)); Divider().overlay(Palette.hairline) }
                     }
                 }
                 }.padding(.horizontal, 22).padding(.bottom, 24)
@@ -91,8 +91,8 @@ struct ThreadsView: View {
             .background(Palette.raised, in: Capsule())
             .overlay(Capsule().stroke(searching ? Palette.accent : Palette.hairline, lineWidth: 1))
     }
-    private func threadLink(_ row: HostedThread, style: FocusRow.Style) -> some View {
-        NavigationLink(value: ThreadRoute(ref: row.ref)) { FocusRow(row: row, style: style) }
+    private func threadLink(_ row: HostedThread, style: FocusRow.Style, unread: Bool = false) -> some View {
+        NavigationLink(value: ThreadRoute(ref: row.ref)) { FocusRow(row: row, style: style, unread: unread) }
             .buttonStyle(.plain).accessibilityIdentifier("thread-\(row.id)")
     }
     private func connectionNote(_ computer: ComputerThreads) -> some View {
@@ -147,6 +147,10 @@ private struct FocusRow: View {
     enum Style { case question, working, recent }
     let row: HostedThread
     let style: Style
+    /// Finished while nothing showed it and not opened since (ADR-0046): a dot in the margin, a bold title, "Just finished".
+    var unread = false
+    /// Where the margin dot sits beside the title's first line, growing with the text size.
+    @ScaledMetric(relativeTo: .headline) var unreadDotTop: CGFloat = 5
     private var state: ThreadState { ThreadState(row.thread) }
     var body: some View {
         Group {
@@ -179,15 +183,25 @@ private struct FocusRow: View {
                     .overlay(RoundedRectangle(cornerRadius: 17).stroke(Palette.hairline, lineWidth: 1))
             case .recent:
                 VStack(alignment: .leading, spacing: 7) {
-                    HStack(alignment: .firstTextBaseline, spacing: 12) { title; Spacer(minLength: 0); timestamp }
-                    if !row.reachable || state == .failed { status }
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                        // The dot sits in the margin, outside the text column, so the row keeps its place and its width.
+                        title.overlay(alignment: .topLeading) {
+                            if unread {
+                                Circle().fill(Palette.accent).frame(width: 9, height: 9)
+                                    .offset(x: -15, y: unreadDotTop).accessibilityHidden(true)
+                            }
+                        }
+                        .accessibilityLabel(titleLabel)
+                        Spacer(minLength: 0); timestamp
+                    }
+                    if unread { justFinished } else if !row.reachable || state == .failed { status }
                     metadata
                 }.frame(maxWidth: .infinity, minHeight: 56, alignment: .leading).padding(.vertical, 14)
             }
         }.contentShape(Rectangle()).accessibilityElement(children: .combine)
     }
     private var title: some View {
-        Text(row.thread.title).font(.figtree(style == .working ? 18 : 16, .headline, .semibold))
+        Text(row.thread.title).font(.figtree(style == .working ? 18 : 16, .headline, unread ? .bold : .semibold))
             .foregroundStyle(Palette.ink).lineLimit(3).fixedSize(horizontal: false, vertical: true)
     }
     private var metadata: some View {
@@ -203,6 +217,15 @@ private struct FocusRow: View {
             if row.reachable { StatusDot(state: state, size: 5) }
             Text(row.reachable ? state.words : row.status.words)
         }.font(.figtree(12, .caption)).foregroundStyle(!row.reachable ? Palette.muted : state == .failed ? Palette.danger : Palette.accent)
+    }
+    /// The title as VoiceOver reads it; a thread that finished out of sight says so right after its name.
+    private var titleLabel: String { unread ? "\(row.thread.title), just finished, not opened yet" : row.thread.title }
+    /// The status line of a thread that finished out of sight. The title's label already says it, so this is not read twice.
+    private var justFinished: some View {
+        HStack(spacing: 6) {
+            Circle().fill(Palette.accent).frame(width: 7, height: 7)
+            Text("Just finished")
+        }.font(.figtree(12, .caption)).foregroundStyle(Palette.accent).accessibilityHidden(true)
     }
     private var workDescription: String {
         if state == .compacting { return "Making room in the thread’s context." }

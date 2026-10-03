@@ -412,6 +412,30 @@ describe('socket client isolation and reconnect', () => {
     await expect(client.gitPullRequest({ threadId })).resolves.toBeNull()
     await expect(client.gitPullRequest({ threadId: 'no-such-thread' })).rejects.toThrow()
   })
+  it('carries the finished-unread mark to a paired client and clears it for every client when one opens the thread (ADR-0046)', async () => {
+    const phone = await pair('Phone'), desktop = await pair('Desktop')
+    await phone.client.command({ type: 'configure', patch: { enabledProviders: ['codex'], provider: 'codex' } })
+    await phone.client.command({ type: 'connect', provider: 'codex' })
+    const workshop = () => phone.client.shell().host.threads.find(thread => thread.title === 'Workshop')
+    await expect.poll(() => workshop()).toBeDefined()
+    const threadId = workshop()!.id
+    const marked = (client: SocketHostService) => client.shell().host.threads.find(thread => thread.id === threadId)?.finishedUnread
+    native.event({ type: 'manual', threadId: 'workshop', text: 'Synthetic prompt' })
+    await expect.poll(() => workshop()?.status).toBe('running')
+    native.event({ type: 'ready', threadId: 'workshop', text: 'Synthetic reply' })
+    await expect.poll(() => marked(phone.client)).toBe(true)
+    await expect.poll(() => marked(desktop.client)).toBe(true)
+    // Opening the thread on one client reads it on all of them.
+    await phone.client.observe([threadId])
+    await expect.poll(() => marked(desktop.client)).toBeUndefined()
+    expect(marked(phone.client)).toBeUndefined()
+    // While a client has it open, finishing again earns nothing.
+    native.event({ type: 'manual', threadId: 'workshop', text: 'Synthetic prompt' })
+    await expect.poll(() => workshop()?.status).toBe('running')
+    native.event({ type: 'ready', threadId: 'workshop', text: 'Synthetic reply' })
+    await expect.poll(() => workshop()?.status).toBe('idle')
+    expect(marked(desktop.client)).toBeUndefined()
+  })
   it('lists a temp folder\'s subfolders over the socket for the Add project dialog\'s folder browser', async () => {
     const { client } = await pair()
     const folder = join(root, 'browse')
