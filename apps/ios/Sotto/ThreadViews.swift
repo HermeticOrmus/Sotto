@@ -73,6 +73,7 @@ private struct MessagesPane: View {
     let ref: ThreadRef
     let detail: ThreadDetail?
     @State private var dismissMarker: PendingOperation?
+    @State private var viewing: OpenPhotos?
     var body: some View {
         let thread = model.thread(ref)
         let online = model.online(ref.hostID)
@@ -84,18 +85,24 @@ private struct MessagesPane: View {
                             .buttonStyle(PlainStyle(compact: true)).frame(maxWidth: .infinity).disabled(!online)
                     }
                     if let detail {
-                        ForEach(detail.messages) { message in MessageBubble(message: message, provider: Words.provider(thread?.providerId)).equatable() }
+                        ForEach(detail.messages) { message in
+                            MessageBubble(message: message, provider: Words.provider(thread?.providerId), ref: ref) { viewing = $0 }.equatable()
+                        }
                     } else if model.detailProblem == nil || !online {
                         Text(model.status(ref.hostID) == .unreachable ? "Reconnect to read this thread." : "Reading this thread…")
                             .foregroundStyle(Palette.muted).padding(.vertical, 24)
                     }
-                    ForEach(model.pending(for: ref)) { item in UnconfirmedRow(item: item, text: model.submitted[item.id]) { dismissMarker = item } }
+                    ForEach(model.pending(for: ref)) { item in
+                        UnconfirmedRow(item: item, text: model.submitted[item.id], photos: model.submittedPhotos[item.id] ?? []) { dismissMarker = item }
+                    }
                     if let text = model.failedReplies[ref.id] {
+                        let photos = model.failedPhotos[ref.id] ?? []
                         VStack(alignment: .leading, spacing: 10) {
                             Text("Your reply wasn’t sent").fontWeight(.semibold)
-                            Text(text).textSelection(.enabled)
+                            if !text.isEmpty { Text(text).textSelection(.enabled) }
+                            if !photos.isEmpty { Text(photos.count == 1 ? "With 1 photo" : "With \(photos.count) photos").font(.footnote).foregroundStyle(Palette.muted) }
                             Button("Put it back in the reply box") { model.restoreReply(ref) }.buttonStyle(PlainStyle(compact: true))
-                                .disabled(!(model.drafts[ref.id] ?? "").isEmpty)
+                                .disabled(!(model.drafts[ref.id] ?? "").isEmpty || !model.photos(ref).isEmpty)
                         }.card()
                     }
                     if let live = detail?.activities?.last(where: { $0.status == "running" && $0.kind != "turn" }) {
@@ -111,6 +118,7 @@ private struct MessagesPane: View {
             .scrollDismissesKeyboard(.interactively)
             .onChange(of: detail?.revision) { _, _ in proxy.scrollTo("end", anchor: .bottom) }
         }
+        .fullScreenCover(item: $viewing) { PhotoViewer(opened: $0) }
         .confirmationDialog("Stop waiting for confirmation?", isPresented: Binding(get: { dismissMarker != nil }, set: { if !$0 { dismissMarker = nil } }), titleVisibility: .visible) {
             Button("I checked the thread") { if let item = dismissMarker { model.acknowledgeUnknown(item.id) }; dismissMarker = nil }
             Button("Cancel", role: .cancel) { dismissMarker = nil }
@@ -121,12 +129,26 @@ private struct MessagesPane: View {
 private struct MessageBubble: View, Equatable {
     let message: Message
     let provider: String
+    let ref: ThreadRef
+    let open: (OpenPhotos) -> Void
+    /// Drawn again only when what it shows changes; opening a photo is the same action for every message.
+    static func == (a: Self, b: Self) -> Bool { a.message == b.message && a.provider == b.provider && a.ref == b.ref }
     var body: some View {
         if message.role == "user" {
-            content.foregroundStyle(Palette.bubbleInk)
-                .padding(.horizontal, 14).padding(.vertical, 10)
-                .background(Palette.bubble, in: UnevenRoundedRectangle(topLeadingRadius: 20, bottomLeadingRadius: 20, bottomTrailingRadius: 6, topTrailingRadius: 20))
-                .frame(maxWidth: .infinity, alignment: .trailing).padding(.leading, 48)
+            let photos = (message.attachments ?? []).filter(\.hasPreview)
+            // Photos stand on their own above the words, the way Messages shows them.
+            VStack(alignment: .trailing, spacing: 4) {
+                ForEach(Array(photos.enumerated()), id: \.element.id) { index, photo in
+                    Button { open(OpenPhotos(ref: ref, messageID: message.id, photos: photos, index: index)) } label: {
+                        SentPhotoView(key: PhotoPreviews.Key(ref: ref, messageID: message.id, attachmentID: photo.id), name: photo.name)
+                    }.buttonStyle(.plain).accessibilityLabel("Open photo \(photo.name)")
+                }
+                if !message.text.isEmpty || photos.count != (message.attachments ?? []).count {
+                    content.foregroundStyle(Palette.bubbleInk)
+                        .padding(.horizontal, 14).padding(.vertical, 10)
+                        .background(Palette.bubble, in: UnevenRoundedRectangle(topLeadingRadius: 20, bottomLeadingRadius: 20, bottomTrailingRadius: 6, topTrailingRadius: 20))
+                }
+            }.frame(maxWidth: .infinity, alignment: .trailing).padding(.leading, 48)
         } else if message.role == "assistant" {
             VStack(alignment: .leading, spacing: 12) {
                 Text(provider).font(.figtree(13, .footnote, .semibold)).foregroundStyle(Palette.muted)
@@ -138,9 +160,10 @@ private struct MessageBubble: View, Equatable {
     }
     private var content: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(Self.rendered(message.text)).textSelection(.enabled)
-            ForEach(message.attachments ?? []) { attachment in
-                Label("\(attachment.name) (open on the desktop)", systemImage: "paperclip").font(.footnote).foregroundStyle(Palette.muted)
+            if !message.text.isEmpty { Text(Self.rendered(message.text)).textSelection(.enabled) }
+            // A user's photo its computer keeps is drawn above; any other image is named.
+            ForEach((message.attachments ?? []).filter { message.role != "user" || !$0.hasPreview }) { attachment in
+                Label("\(attachment.name) (open on the desktop)", systemImage: "photo").font(.footnote).foregroundStyle(Palette.muted)
             }
         }
     }
@@ -150,15 +173,23 @@ private struct MessageBubble: View, Equatable {
     }
 }
 
-/// A reply, answer or stop the thread's computer hasn't confirmed. It is never sent again on its own.
+/// A reply, answer or stop the thread's computer hasn't confirmed, with the photos it carried. It is never
+/// sent again on its own.
 private struct UnconfirmedRow: View {
     @EnvironmentObject var model: AppModel
     let item: PendingOperation
     let text: String?
+    let photos: [DraftPhoto]
     let dismiss: () -> Void
     var body: some View {
         VStack(alignment: .trailing, spacing: 6) {
-            if let text {
+            ForEach(photos) { photo in
+                if let thumbnail = photo.prepared?.thumbnail {
+                    Image(decorative: thumbnail, scale: 1).resizable().scaledToFit().frame(maxWidth: 220, maxHeight: 240)
+                        .clipShape(RoundedRectangle(cornerRadius: 16)).opacity(0.6).padding(.leading, 48)
+                }
+            }
+            if let text, !text.isEmpty {
                 Text(text).foregroundStyle(Palette.bubbleInk).padding(.horizontal, 14).padding(.vertical, 10)
                     .background(Palette.bubble.opacity(0.6), in: RoundedRectangle(cornerRadius: 20)).padding(.leading, 48)
             }
@@ -267,24 +298,41 @@ private struct ComposerView: View {
                 }
             } else {
                 HStack(alignment: .bottom, spacing: 8) {
-                    TextField("Reply", text: Binding(get: { model.drafts[ref.id] ?? "" }, set: { model.drafts[ref.id] = $0 }), axis: .vertical)
-                        .lineLimit(1...6).padding(.horizontal, 16).padding(.vertical, 11)
-                        .background(Palette.raised, in: RoundedRectangle(cornerRadius: 22))
-                        .accessibilityLabel("Reply to this thread")
+                    AttachPhotosButton(ref: ref)
+                    // Photos wait inside the reply box, above the words, as in Messages.
+                    VStack(alignment: .leading, spacing: 8) {
+                        if !model.photos(ref).isEmpty { DraftPhotoStrip(ref: ref) }
+                        if let notice = model.photoNotices[ref.id] {
+                            Text(notice).font(.footnote).foregroundStyle(Palette.danger).fixedSize(horizontal: false, vertical: true)
+                                .accessibilityAddTraits(.updatesFrequently)
+                        }
+                        TextField("Reply", text: Binding(get: { model.drafts[ref.id] ?? "" }, set: { model.drafts[ref.id] = $0 }), axis: .vertical)
+                            .lineLimit(1...6).accessibilityLabel("Reply to this thread")
+                            // Locked while the reply's photos are staged, so nothing typed now joins it.
+                            .disabled(model.preparingSends.contains(ref.id))
+                    }
+                    .padding(.horizontal, 16).padding(.vertical, 11)
+                    .background(Palette.raised, in: RoundedRectangle(cornerRadius: model.photos(ref).isEmpty ? 22 : 18))
                     if model.canInterrupt(ref) {
                         Button { Task { await model.interrupt(ref) } } label: { Image(systemName: "stop.fill").frame(width: 44, height: 44) }
                             .foregroundStyle(Palette.ink).background(Palette.raised, in: Circle())
                             .accessibilityLabel("Stop this turn")
                     } else {
-                        Button { Task { await model.send(ref) } } label: { Image(systemName: "arrow.up").fontWeight(.semibold).frame(width: 44, height: 44) }
-                            .foregroundStyle(Palette.actionInk).background(canSend ? Palette.action : Palette.raised, in: Circle())
-                            .disabled(!canSend).accessibilityLabel("Send reply")
+                        let preparing = model.preparingSends.contains(ref.id)
+                        Button { Task { await model.send(ref) } } label: {
+                            Group {
+                                if preparing { ProgressView().tint(Palette.actionInk) }
+                                else { Image(systemName: "arrow.up").fontWeight(.semibold) }
+                            }.frame(width: 44, height: 44)
+                        }
+                            .foregroundStyle(Palette.actionInk).background(canSend || preparing ? Palette.action : Palette.raised, in: Circle())
+                            .disabled(!canSend).accessibilityLabel(preparing ? "Sending reply" : "Send reply")
                     }
                 }.padding(.horizontal, 12).padding(.vertical, 8)
             }
         }.background(Palette.canvas)
     }
-    private var canSend: Bool { model.canSend(ref) && !(model.drafts[ref.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    private var canSend: Bool { model.canSendReply(ref) }
 }
 
 // MARK: Question and permission sheet

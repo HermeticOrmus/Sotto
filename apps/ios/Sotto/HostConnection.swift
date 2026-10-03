@@ -173,11 +173,18 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
     }
     private func request(_ operation: [String: JSONValue], id: String) async throws -> Received<Reply> {
         guard let socket, !session.isEmpty else { throw ClientError.disconnected }
-        let data = try Wire.request(id: id, session: session, operation: operation)
+        let operationName = operation["op"]?.string ?? ""
+        let data: Data
+        if operationName == "stage-attachment" {
+            // An image makes a frame of up to 14 MB: encoded off the main actor, then sent only on the
+            // connection it was made for.
+            let current = generation
+            data = try await Wire.requestInBackground(id: id, session: session, operation: operation)
+            guard current == generation, self.socket === socket else { throw ClientError.disconnected }
+        } else { data = try Wire.request(id: id, session: session, operation: operation) }
         guard data.count <= Wire.maximumFrameBytes else { throw ClientError.invalidRequest }
         return try await withCheckedThrowingContinuation { continuation in
             pending[id] = continuation
-            let operationName = operation["op"]?.string ?? ""
             liveness.beginRequest(id: id, operation: operationName, now: ProcessInfo.processInfo.systemUptime)
             let timeout = UInt64(LivenessProgress.requestTimeout(operation: operationName) * 1_000_000_000)
             deadlines[id] = Task { [weak self] in

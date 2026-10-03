@@ -159,6 +159,8 @@ public struct ProviderCapabilities: Decodable, Sendable {
 public struct ThreadSummary: Decodable, Identifiable, Sendable {
     public let id: String; public let hostId: String?; public let projectId: String; public let title: String
     public let providerId: String?; public let status: String; public let requests: [AgentRequest]
+    /// The thread's model in its computer's catalog (`host.models`), which says whether it takes photos.
+    public let modelId: String?
     public let earlierAvailable: Bool?; public let archivedAt: String?; public let summary: Summary?
     public let workspaceSettledAt: String?; public let settledAt: String?; public let settledOverride: String?
     public let backgroundWork: [BackgroundWork]?; public let compaction: Compaction?
@@ -195,7 +197,15 @@ public struct Message: Decodable, Identifiable, Equatable, Sendable {
     public let id: String; public let role: String; public let text: String; public let commandId: String?
     public let attachments: [Attachment]?
 }
-public struct Attachment: Decodable, Identifiable, Equatable, Sendable { public let id: String; public let name: String }
+/// An image a message carries. Its bytes stay on the computer; `preview` says the computer keeps a copy
+/// it will hand back by message and attachment ID (the `preview` request).
+public struct Attachment: Decodable, Identifiable, Equatable, Sendable {
+    public let id: String; public let name: String; public let mimeType: String?; public let sizeBytes: Int?
+    public let preview: Preview?
+    /// Only the marker is read: the computer never puts a preview's bytes in a thread it sends a client.
+    public struct Preview: Decodable, Equatable, Sendable { public let available: Bool? }
+    public var hasPreview: Bool { preview != nil }
+}
 public struct DeliveryReceipt: Decodable, Sendable { public let threadId: String; public let draftId: String }
 public struct Delivery: Decodable, Sendable { public let threadId: String; public let draftId: String; public let status: String }
 public struct AgentRequest: Decodable, Equatable, Identifiable, Sendable {
@@ -227,6 +237,13 @@ public enum Wire {
     }
     public static func request(id: String, session: String, operation: [String: JSONValue]) throws -> Data {
         var fields = operation; fields["v"] = .number(1); fields["id"] = .string(id); fields["session"] = .string(session)
-        return try JSONEncoder().encode(JSONValue.object(fields))
+        // A staged image is base64, which is full of slashes; escaped, they would only make the frame larger.
+        let encoder = JSONEncoder(); encoder.outputFormatting = .withoutEscapingSlashes
+        return try encoder.encode(JSONValue.object(fields))
+    }
+    /// `request`, off the main actor: a staged image makes a frame of up to 14 MB, too much to encode
+    /// where the interface draws. Nonisolated async functions run on the generic executor in Swift 5 mode.
+    public static func requestInBackground(id: String, session: String, operation: [String: JSONValue]) async throws -> Data {
+        try request(id: id, session: session, operation: operation)
     }
 }

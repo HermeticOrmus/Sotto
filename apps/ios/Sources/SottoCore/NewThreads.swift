@@ -10,6 +10,8 @@ public struct ThreadModel: Decodable, Identifiable, Sendable {
     public let ready: Bool; public let recommended: Bool?
     public let reasoningEfforts: [String]?; public let defaultReasoningEffort: String?
     public let runtimeModes: [String]?; public let providerModes: [ProviderMode]?
+    /// Whether the model reads images. Only a model that says so is sent photos.
+    public let supportsImages: Bool?
     public struct ProviderMode: Decodable, Sendable {
         public let id: String; public let name: String; public let allows: String?; public let asks: String?
     }

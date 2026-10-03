@@ -19,6 +19,30 @@ struct Live {
     var problem: String?
 }
 
+/// Where a photo comes from: a name for it and its original bytes, read when its turn comes.
+struct PhotoSource: Sendable {
+    let name: String
+    let load: @Sendable () async throws -> Data
+}
+
+/// A photo in a thread's reply box. It is prepared on this iPhone, then staged on the thread's computer,
+/// and stays in memory until the reply is sent or the photo is removed. Nothing is written to disk.
+struct DraftPhoto: Identifiable {
+    let id = UUID()
+    var prepared: PreparedPhoto?
+    var staged: StagedImage?
+    var stagedAt: Date?
+    /// The connection it was staged over. A computer reached again may have restarted and let it go.
+    var stagedOver: UUID?
+    var staging = false
+    var preparing: Bool { prepared == nil }
+    /// Not yet on the computer, on it long enough that the computer may have let it go, or staged over a
+    /// connection that has since ended.
+    func needsStaging(connection: UUID?) -> Bool {
+        staged == nil || stagedOver != connection || stagedAt.map { Photos.needsRestaging(stagedAt: $0) } != false
+    }
+}
+
 /// Every paired computer, each with its own connection, session and state. A computer that can't be
 /// reached, or fails, never holds up the others. Everything that names a thread names its computer too.
 @MainActor final class AppModel: ObservableObject {
@@ -49,6 +73,23 @@ struct Live {
     @Published var drafts: [String: String] = [:]
     @Published private(set) var submitted: [String: String] = [:]
     @Published private(set) var failedReplies: [String: String] = [:]
+    /// Photos in each thread's reply box, by `ThreadRef.id`, in the order they were chosen.
+    @Published private(set) var draftPhotos: [String: [DraftPhoto]] = [:]
+    /// Why the last photo chosen for a reply box wasn't added, by `ThreadRef.id`.
+    @Published var photoNotices: [String: String] = [:]
+    /// The photos of a reply on its way, by operation ID, and of a refused reply, by `ThreadRef.id`.
+    @Published private(set) var submittedPhotos: [String: [DraftPhoto]] = [:]
+    @Published private(set) var failedPhotos: [String: [DraftPhoto]] = [:]
+    /// Threads whose reply is having its photos staged again before it is sent. A second press finds it here.
+    @Published private(set) var preparingSends: Set<String> = []
+    private var stagingTasks: [UUID: Task<Bool, Never>] = [:]
+    /// The last large request queued for each computer, which refuses a second while one is on its way.
+    private var largeRequests: [String: Task<Void, Never>] = [:]
+    /// Photos are prepared one at a time, so several large photos are never decoded at once.
+    private var photoWork: Task<Void, Never>?
+    private let preparePhoto: @Sendable (Data, String) async throws -> PreparedPhoto
+    /// Hands a sent reply's photos to whatever draws the thread, so it has them before their message arrives.
+    var photosSent: (([DraftPhoto], ThreadRef) -> Void)?
     /// The computer step 1 of adding found, waiting for its code in step 2.
     @Published private(set) var found: FoundHost?
     /// Whether the Add computer sheet is over the tabs.
@@ -190,6 +231,18 @@ struct Live {
         let source = provider(for: ref)
         return (capabilities(for: ref)?.submit ?? false) && (source == nil || source?.connection == "connected")
     }
+    /// Whether the reply box holds something to send and nothing still being made ready: words or photos,
+    /// every photo prepared, and none of them on a thread whose model can't take them.
+    func canSendReply(_ ref: ThreadRef) -> Bool {
+        let photos = self.photos(ref)
+        let written = !(drafts[ref.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return canSend(ref) && !preparingSends.contains(ref.id) && (written || !photos.isEmpty)
+            && !photos.contains(where: \.preparing) && (photos.isEmpty || photoSupport(ref) == .available)
+    }
+    func photos(_ ref: ThreadRef) -> [DraftPhoto] { draftPhotos[ref.id] ?? [] }
+    func photoSupport(_ ref: ThreadRef) -> PhotoSupport {
+        PhotoSupport(online: online(ref.hostID), thread: thread(ref), host: live[ref.hostID]?.shell?.host, features: live[ref.hostID]?.features ?? [])
+    }
     func canInterrupt(_ ref: ThreadRef) -> Bool {
         online(ref.hostID) && pending(for: ref).allSatisfy { $0.kind == "reply" }
             && thread(ref)?.status == "running" && (capabilities(for: ref)?.interrupt ?? false)
@@ -204,10 +257,12 @@ struct Live {
 
     init(keychain: KeychainStore = KeychainStore(),
          retryJitter: @escaping @Sendable () -> Double = { Double.random(in: 0.8...1.2) },
-         retrySleep: @escaping @Sendable (UInt64) async throws -> Void = { try await Task.sleep(nanoseconds: $0) }) {
+         retrySleep: @escaping @Sendable (UInt64) async throws -> Void = { try await Task.sleep(nanoseconds: $0) },
+         preparePhoto: @escaping @Sendable (Data, String) async throws -> PreparedPhoto = { try await PhotoPipeline.prepare($0, name: $1) }) {
         self.keychain = keychain
         self.retrySleep = retrySleep
         self.retryJitter = retryJitter
+        self.preparePhoto = preparePhoto
         #if DEBUG && os(iOS)
         if ProcessInfo.processInfo.arguments.contains("--ui-fixture") {
             loadUIFixture()
@@ -320,6 +375,8 @@ struct Live {
     }
     /// Wait for the connection work scheduled by activation, including delivery checks.
     func waitForActivation() async { await activationConnection?.value }
+    /// Wait until every photo chosen so far has been prepared and staged, or has left its reply box.
+    func waitForPhotos() async { await photoWork?.value }
     func reconnectAll() async {
         let ids = computers.map(\.hostID)
         await withTaskGroup(of: Void.self) { group in
@@ -540,7 +597,12 @@ struct Live {
         let prefix = hostID + "/"
         drafts = drafts.filter { !$0.key.hasPrefix(prefix) }
         failedReplies = failedReplies.filter { !$0.key.hasPrefix(prefix) }
+        draftPhotos = draftPhotos.filter { !$0.key.hasPrefix(prefix) }
+        failedPhotos = failedPhotos.filter { !$0.key.hasPrefix(prefix) }
+        photoNotices = photoNotices.filter { !$0.key.hasPrefix(prefix) }
         submitted = submitted.filter { !gone.contains($0.key) }
+        submittedPhotos = submittedPhotos.filter { !gone.contains($0.key) }
+        largeRequests[hostID] = nil
         let words = outcome.words(name: saved.name, clientID: saved.pairing.clientId)
         feedback = words
         // With nothing left paired the app goes back to the pairing steps, which show this instead.
@@ -646,15 +708,157 @@ struct Live {
 
     // MARK: Replies, answers and stops, each to its thread's own computer
 
+    /// Sends the reply box: its words, its photos, or both. The reply is marked before it goes, and from the
+    /// first press until then a second press finds nothing to send, so one reply is never sent twice.
     func send(_ ref: ThreadRef) async {
-        guard canSend(ref), let text = drafts[ref.id], let computer = self.computer(ref.hostID) else { return }
+        guard canSendReply(ref), computer(ref.hostID) != nil else { return }
+        // The words as pressed. The reply box is locked while its photos are staged, so nothing typed
+        // after the press joins a reply already on its way.
+        let text = drafts[ref.id] ?? ""
+        var images: [StagedImage] = []
+        if !photos(ref).isEmpty {
+            preparingSends.insert(ref.id)
+            let ready = await readyPhotos(ref)
+            preparingSends.remove(ref.id)
+            guard let ready else { return }
+            images = ready
+        }
+        // Nothing below waits until the marker is kept, so the checks hold when it is.
+        guard canSend(ref), images.isEmpty || photoSupport(ref) == .available, let computer = self.computer(ref.hostID) else {
+            if !images.isEmpty { photoNotices[ref.id] = "Your reply wasn’t sent. It’s still in the reply box." }
+            return
+        }
         let draft = UUID().uuidString
         do {
-            let command = try Commands.prompt(threadID: ref.threadID, text: text, draftID: draft)
+            let command = try Commands.prompt(threadID: ref.threadID, text: text, draftID: draft, images: images)
             let operation = PendingOperation(hostID: ref.hostID, clientID: computer.pairing.clientId, threadID: ref.threadID, draftID: draft, kind: "reply")
             try remember(operation); submitted[operation.id] = text; drafts[ref.id] = ""
+            if !images.isEmpty { submittedPhotos[operation.id] = photos(ref); photosSent?(photos(ref), ref); draftPhotos[ref.id] = nil }
+            photoNotices[ref.id] = nil
             await dispatch(command, operation: operation)
         } catch { feedback = error.localizedDescription }
+    }
+
+    // MARK: Photos in the reply box
+
+    /// Adds photos to a thread's reply box. Each is prepared off the main actor and staged on the thread's
+    /// computer in the order chosen, one at a time, so several large photos are never held decoded at once.
+    func attachPhotos(_ ref: ThreadRef, from sources: [PhotoSource]) {
+        guard !sources.isEmpty, photoSupport(ref) == .available, !preparingSends.contains(ref.id) else { return }
+        let room = PhotoLimits.count - photos(ref).count
+        guard room > 0 else { photoNotices[ref.id] = "A reply can carry \(PhotoLimits.count) photos."; return }
+        let added = sources.prefix(room).map { (photo: DraftPhoto(), source: $0) }
+        draftPhotos[ref.id, default: []] += added.map { $0.photo }
+        photoNotices[ref.id] = sources.count > room ? "A reply can carry \(PhotoLimits.count) photos. The others weren’t added." : nil
+        let previous = photoWork
+        photoWork = Task { [weak self] in
+            await previous?.value
+            for item in added { await self?.prepare(item.photo.id, in: ref, from: item.source) }
+        }
+    }
+    func removePhoto(_ id: UUID, from ref: ThreadRef) {
+        guard !preparingSends.contains(ref.id) else { return }
+        draftPhotos[ref.id]?.removeAll { $0.id == id }
+        if draftPhotos[ref.id]?.isEmpty == true { draftPhotos[ref.id] = nil }
+        photoNotices[ref.id] = nil
+    }
+    private func prepare(_ id: UUID, in ref: ThreadRef, from source: PhotoSource) async {
+        // Removed while it waited its turn: nothing is read.
+        guard photo(id, in: ref) != nil else { return }
+        do {
+            let prepared = try await preparePhoto(try await source.load(), source.name)
+            guard photo(id, in: ref) != nil else { return }
+            let others = photos(ref).filter { $0.id != id }.compactMap { $0.prepared?.byteCount }
+            guard Photos.fits(prepared.byteCount, with: others) else {
+                throw ClientError.rejected("These photos would take the reply over 20 MB, so this one wasn’t added. Send these first, or remove one.")
+            }
+            change(id, in: ref) { $0.prepared = prepared }
+        } catch {
+            // A photo the library couldn't hand over reads as one that couldn't be read.
+            let reason = (error as? PhotoPipelineError)?.errorDescription ?? (error as? ClientError)?.errorDescription
+            dropPhoto(id, in: ref, reason: reason ?? PhotoPipelineError.unreadable.errorDescription!)
+            return
+        }
+        await stage(id, in: ref)
+    }
+    /// Stages one prepared photo on its thread's computer. A photo that couldn't reach it stays in the box and
+    /// is staged when the reply is sent; one the computer refused for what it is leaves the box, with its reason.
+    /// A photo already being staged is waited for, not staged twice.
+    @discardableResult private func stage(_ id: UUID, in ref: ThreadRef) async -> Bool {
+        if let running = stagingTasks[id] { return await running.value }
+        guard let prepared = photo(id, in: ref)?.prepared else { return false }
+        let task = Task { [weak self] () -> Bool in await self?.upload(prepared, as: id, in: ref) ?? false }
+        stagingTasks[id] = task
+        change(id, in: ref) { $0.staging = true }
+        let staged = await task.value
+        stagingTasks[id] = nil
+        change(id, in: ref) { $0.staging = false }
+        return staged
+    }
+    private func upload(_ prepared: PreparedPhoto, as id: UUID, in ref: ThreadRef) async -> Bool {
+        let over = generations[ref.hostID]
+        do {
+            let operation = try Photos.stage(name: prepared.name, mimeType: prepared.mimeType, base64: prepared.base64, dimensions: prepared.dimensions)
+            let handle = try await largeRequest(on: ref.hostID) { connection -> StagedImage in
+                let handle = try await connection.call(operation, as: StagedImage.self)
+                guard handle.valid else { throw ClientError.invalidProtocol }
+                return handle
+            }
+            change(id, in: ref) { $0.staged = handle; $0.stagedAt = Date(); $0.stagedOver = over }
+            return true
+        } catch let refusal as HostRefusal where refusal.failure.code == "invalid_request" {
+            dropPhoto(id, in: ref, reason: refusal.failure.message)
+        } catch {}
+        return false
+    }
+    /// Every photo in the reply box with a handle its computer still keeps: staged now if it never got there,
+    /// or again if it has been there long enough to be let go. Nil, with the reason, when one can't be.
+    private func readyPhotos(_ ref: ThreadRef) async -> [StagedImage]? {
+        // Only this reply's own photos are waited for: one still on its way is joined, not sent again.
+        for photo in photos(ref) where stagingTasks[photo.id] != nil || photo.needsStaging(connection: generations[ref.hostID]) {
+            guard await stage(photo.id, in: ref) else {
+                if photoNotices[ref.id] == nil {
+                    photoNotices[ref.id] = "A photo couldn’t reach \(name(ref.hostID)), so nothing was sent. Try again when it’s connected."
+                }
+                return nil
+            }
+        }
+        let current = photos(ref)
+        let staged = current.compactMap(\.staged)
+        return !staged.isEmpty && staged.count == current.count ? staged : nil
+    }
+    private func photo(_ id: UUID, in ref: ThreadRef) -> DraftPhoto? { draftPhotos[ref.id]?.first { $0.id == id } }
+    private func change(_ id: UUID, in ref: ThreadRef, _ edit: (inout DraftPhoto) -> Void) {
+        guard let index = draftPhotos[ref.id]?.firstIndex(where: { $0.id == id }) else { return }
+        edit(&draftPhotos[ref.id]![index])
+    }
+    private func dropPhoto(_ id: UUID, in ref: ThreadRef, reason: String) {
+        guard photo(id, in: ref) != nil else { return }
+        draftPhotos[ref.id]?.removeAll { $0.id == id }
+        if draftPhotos[ref.id]?.isEmpty == true { draftPhotos[ref.id] = nil }
+        photoNotices[ref.id] = reason
+    }
+    /// One large request at a time on each computer: it refuses a second image, either way, while one is on
+    /// its way. Each waits for the one before it, whether that one worked or not.
+    private func largeRequest<T: Sendable>(on hostID: String, _ work: @escaping @MainActor (HostConnection) async throws -> T) async throws -> T {
+        let previous = largeRequests[hostID]
+        let task = Task<T, Error> { [weak self] in
+            await previous?.value
+            guard let self, self.online(hostID), let connection = self.connections[hostID] else { throw ClientError.disconnected }
+            return try await work(connection)
+        }
+        largeRequests[hostID] = Task { _ = try? await task.value }
+        return try await task.value
+    }
+    /// A sent photo's bytes from the computer that keeps it. It waits its turn behind other large requests to
+    /// that computer, and is never made if nothing on screen still `wanted` it by then.
+    func sentPhoto(_ ref: ThreadRef, messageID: String, attachmentID: String, wanted: @escaping @MainActor () -> Bool) async -> Data? {
+        let operation = Photos.preview(threadID: ref.threadID, messageID: messageID, attachmentID: attachmentID)
+        guard let url = try? await largeRequest(on: ref.hostID, { connection -> String? in
+            guard wanted() else { return nil }
+            return try await connection.call(operation, as: Optional<PhotoPreview>.self)?.dataUrl
+        }) else { return nil }
+        return await Photos.bytes(fromDataURL: url)
     }
     /// Answers a request from the open thread's sheet, after rechecking the computer's authority.
     func answer(_ request: AgentRequest, in ref: ThreadRef, choice: String? = nil, text: String = "", answers: [String: QuestionAnswer] = [:]) async {
@@ -662,7 +866,8 @@ struct Live {
         do {
             let command = try Commands.answer(threadID: ref.threadID, request: request, currentRequests: thread.requests, choice: choice, text: text, answers: answers)
             let operation = PendingOperation(hostID: ref.hostID, clientID: computer.pairing.clientId, threadID: ref.threadID, requestID: request.id, kind: "answer")
-            try remember(operation); await dispatch(command, operation: operation)
+            try remember(operation)
+            await dispatch(command, operation: operation)
         } catch { feedback = error.localizedDescription }
     }
     func interrupt(_ ref: ThreadRef) async {
@@ -679,7 +884,8 @@ struct Live {
         let next = pending + [operation]; try keychain.write(next, account: ComputerStore.pendingAccount); pending = next
     }
     private func forgetMarker(_ id: String) throws {
-        let next = pending.filter { $0.id != id }; try keychain.write(next, account: ComputerStore.pendingAccount); pending = next; submitted.removeValue(forKey: id)
+        let next = pending.filter { $0.id != id }; try keychain.write(next, account: ComputerStore.pendingAccount); pending = next
+        submitted.removeValue(forKey: id); submittedPhotos.removeValue(forKey: id)
     }
     @discardableResult private func dispatch(_ command: JSONValue, operation: PendingOperation) async -> Shell? {
         let hostID = operation.hostID, current = generations[hostID]
@@ -765,13 +971,20 @@ struct Live {
     }
     private func rejectOperation(_ operation: PendingOperation) throws {
         if let text = submitted[operation.id], operation.kind == "reply" {
-            failedReplies[ThreadRef(hostID: operation.hostID, threadID: operation.threadID).id] = text
+            let ref = ThreadRef(hostID: operation.hostID, threadID: operation.threadID)
+            failedReplies[ref.id] = text
+            failedPhotos[ref.id] = submittedPhotos[operation.id]
         }
         try forgetMarker(operation.id)
     }
     func restoreReply(_ ref: ThreadRef) {
-        guard (drafts[ref.id] ?? "").isEmpty, let text = failedReplies[ref.id] else { return }
+        guard (drafts[ref.id] ?? "").isEmpty, photos(ref).isEmpty, let text = failedReplies[ref.id] else { return }
         drafts[ref.id] = text; failedReplies.removeValue(forKey: ref.id)
+        // Its photos come back too; any the computer may have let go are staged again when it is sent.
+        // Staged again when sent: the computer may have refused it because it no longer kept a photo.
+        if let photos = failedPhotos.removeValue(forKey: ref.id), !photos.isEmpty {
+            draftPhotos[ref.id] = photos.map { var photo = $0; photo.staged = nil; photo.stagedAt = nil; return photo }
+        }
     }
     func acknowledgeUnknown(_ id: String) {
         do { try forgetMarker(id); feedback = "Unconfirmed action dismissed. Nothing was resent." }
