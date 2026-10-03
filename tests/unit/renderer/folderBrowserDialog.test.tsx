@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import type { AgentCommand, AgentState } from '../../../src/shared/agents'
+import { PROJECT_FOLDER_MISSING, type AgentCommand, type AgentState } from '../../../src/shared/agents'
 import type { HostFoldersClientRequest, HostFoldersResult } from '../../../src/shared/hostFolders'
 import { browsableHosts, FolderBrowserDialog } from '../../../src/renderer/src/agents/FolderBrowserDialog'
 import { useAddProject } from '../../../src/renderer/src/agents/addProject'
@@ -268,6 +268,53 @@ describe('Add project', () => {
     const [first, second] = command.mock.calls.filter(([request]) => request.type === 'create-project').map(([request]) => request)
     expect(first).not.toHaveProperty('useExisting')
     expect(second).toMatchObject({ path: '/home/zach/code/voice-lab', useExisting: true })
+  })
+
+  it('makes a new folder after all when the check finds its unanswered first try made nothing', async () => {
+    stubBridge()
+    const state = twoHosts()
+    const answers: (AgentState | null)[] = [null, { ...state, error: PROJECT_FOLDER_MISSING }, state]
+    const command = vi.fn<(request: AgentCommand) => Promise<AgentState | null>>(async request => request.type === 'create-project' && answers.length ? answers.shift()! : state)
+    const user = userEvent.setup()
+    render(<Harness state={state} command={command} />)
+    await user.click(screen.getByRole('button', { name: 'Add project' }))
+    await user.click(screen.getByRole('button', { name: /forge/ }))
+    await user.click(await screen.findByRole('button', { name: 'code' }))
+    await screen.findByRole('button', { name: /forge-ml/ })
+    await user.click(screen.getByRole('button', { name: 'New folder' }))
+    await user.type(screen.getByRole('textbox', { name: 'New folder name' }), 'voice-lab{Enter}')
+    await user.click(screen.getByRole('button', { name: 'Use this folder' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not confirm the new project.')
+    await user.click(screen.getByRole('button', { name: 'Use this folder' }))
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Use this folder' })).toBeNull())
+    const sent = command.mock.calls.map(([request]) => request).filter(request => request.type === 'create-project')
+    expect(sent.map(request => 'useExisting' in request)).toEqual([false, true, false])
+  })
+
+  it('forgets an unanswered new folder when Add project is opened again', async () => {
+    stubBridge()
+    const state = twoHosts()
+    const answers: (AgentState | null)[] = [null, state]
+    const command = vi.fn<(request: AgentCommand) => Promise<AgentState | null>>(async request => request.type === 'create-project' && answers.length ? answers.shift()! : state)
+    const user = userEvent.setup()
+    render(<Harness state={state} command={command} />)
+    const nameVoiceLab = async (): Promise<void> => {
+      await user.click(screen.getByRole('button', { name: 'Add project' }))
+      await user.click(await screen.findByRole('button', { name: /forge/ }))
+      await user.click(await screen.findByRole('button', { name: 'code' }))
+      await screen.findByRole('button', { name: /forge-ml/ })
+      await user.click(screen.getByRole('button', { name: 'New folder' }))
+      await user.type(screen.getByRole('textbox', { name: 'New folder name' }), 'voice-lab{Enter}')
+      await user.click(screen.getByRole('button', { name: 'Use this folder' }))
+    }
+    await nameVoiceLab()
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not confirm the new project.')
+    await user.click(screen.getByRole('button', { name: 'Close' }))
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Use this folder' })).toBeNull())
+    await nameVoiceLab()
+    await waitFor(() => expect(command.mock.calls.filter(([request]) => request.type === 'create-project')).toHaveLength(2))
+    const sent = command.mock.calls.map(([request]) => request).filter(request => request.type === 'create-project')
+    expect(sent.map(request => 'useExisting' in request)).toEqual([false, false])
   })
 
   it('opens the project a folder already is, on that computer', async () => {

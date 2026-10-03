@@ -1,5 +1,5 @@
 import React, { useRef, useState, type ReactNode } from 'react'
-import { defaultThreadModelId, hostForThread, isSubscriptionReasoning, type AgentState } from '../../../shared/agents'
+import { defaultThreadModelId, hostForThread, isSubscriptionReasoning, PROJECT_FOLDER_MISSING, type AgentState } from '../../../shared/agents'
 import { resolveModel } from '../../../shared/modelCatalog'
 import type { AgentConnection } from './AgentContext'
 import { FolderBrowserDialog, type FolderChoice } from './FolderBrowserDialog'
@@ -23,6 +23,8 @@ export function useAddProject(state: AgentState, command: AgentConnection['comma
   const unansweredNew = useRef(new Set<string>())
   const add = async (): Promise<void> => {
     if (adding) return
+    // Reopened, the browser lists the host's folders afresh: a folder an unanswered try made shows as a folder, not a new name.
+    unansweredNew.current.clear()
     setError(null); setDialogError(null); setOpen(true)
   }
   const use = async (choice: FolderChoice): Promise<void> => {
@@ -46,11 +48,16 @@ export function useAddProject(state: AgentState, command: AgentConnection['comma
       const defaultModelId = defaultThreadModelId(current.configuration, host.models, current.reasoningAccounts)
       const provider = isSubscriptionReasoning(current.configuration.reasoning) ? current.configuration.reasoning
         : resolveModel(host.models, defaultModelId)?.providerId
-      // A new folder whose first try went unanswered may have been made, so the next try attaches it as existing.
+      const send = (asNew: boolean): Promise<AgentState | null> =>
+        command({ type: 'create-project', title: choice.name, path: choice.path, ...(asNew ? {} : { useExisting: true }), ...(provider ? { provider } : {}) })
+      // A new folder whose first try went unanswered may have been made, so the next try checks for it as existing.
+      // When the check finds nothing there, that try made nothing, and the folder is made now.
       const unanswered = `${choice.hostId}:${choice.path}`
-      const asNew = choice.isNew && !unansweredNew.current.has(unanswered)
+      const checking = choice.isNew === true && unansweredNew.current.has(unanswered)
+      let asNew = choice.isNew === true && !checking
       if (asNew) unansweredNew.current.add(unanswered)
-      const result = await command({ type: 'create-project', title: choice.name, path: choice.path, ...(asNew ? {} : { useExisting: true }), ...(provider ? { provider } : {}) })
+      let result = await send(asNew)
+      if (checking && result?.error === PROJECT_FOLDER_MISSING) { asNew = true; result = await send(true) }
       if (asNew && result !== null) unansweredNew.current.delete(unanswered)
       if (result === null || result.error !== null) { setDialogError(result?.error ?? 'Could not confirm the new project. Choose the folder again to check; it will not be added twice.'); return }
       setOpen(false)
