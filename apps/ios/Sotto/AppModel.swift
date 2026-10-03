@@ -122,6 +122,8 @@ struct Live {
                     ["id": "release-permission", "kind": "permission", "text": "Allow reading the release checklist?", "options": []]]
             }
             if id == "wiring" { row["backgroundWork"] = [["type": "agent"]] }
+            // Finished while nothing showed it, so Recent marks it until it is opened (ADR-0046).
+            if id == "shortcuts" { row["finishedUnread"] = true }
             if id == "settings" || id == "notes" { row["settledAt"] = date }
             threads[host, default: []].append(row)
             fixtureDetails[host + "/" + id] = decode(ThreadDetail.self, ["threadId": id, "revision": 1,

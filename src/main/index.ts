@@ -661,6 +661,15 @@ async function createRuntime(): Promise<NativeRuntimeController> {
     claudeSettingsLog: event => { logOperational(event) },
   }) : await inactiveLocalHost(userDataPath)
   const { agentHost, agentControl, threadRegistry, turns, hostService } = localRuntime
+  // The window's panes show their threads only while it has the focus (ADR-0046). The widget taking the focus is the
+  // window losing it, as is another app, minimising or hiding to the tray.
+  const windowFocusChanged = (): void => {
+    const focused = BrowserWindow.getFocusedWindow()
+    hostService.setWindowFocused(focused !== null && focused.webContents === windows.getMainWebContents())
+  }
+  app.on('browser-window-focus', windowFocusChanged)
+  app.on('browser-window-blur', windowFocusChanged)
+  windowFocusChanged()
   const quitHandles: HostQuitHandles = { localRuntime }
   registerHostQuitDrain(app, quitHandles, () => console.error('[Sotto] host-shutdown-failed'), () => logOperational('phone-access-close-failed'))
   let browserService: BrowserService | undefined

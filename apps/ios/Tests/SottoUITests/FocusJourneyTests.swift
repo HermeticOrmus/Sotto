@@ -178,6 +178,11 @@ import XCTest
         XCTAssertTrue(app.textFields["thread-search"].isHittable, "Search stays above the scrolling thread list")
         XCTAssertTrue(row("wiring").label.contains("Working"), "Background work must not read Done")
         capture("working-threads")
+        reveal(row("shortcuts"))
+        reveal(row("drives"))
+        XCTAssertTrue(row("shortcuts").label.contains("just finished, not opened yet"), "A thread that finished out of sight says so until it is opened")
+        XCTAssertFalse(row("drives").label.contains("just finished"), "A read row is unchanged")
+        capture("recent-unread-finished")
         reveal(app.textFields["thread-search"], swipingDown: true)
 
         let search = app.textFields["thread-search"]

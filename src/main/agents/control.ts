@@ -40,6 +40,7 @@ import { resolveFilesBinding } from '../files/binding'
 import { THREAD_SCOPED_COMMAND_TYPES } from '../../shared/threadLanes'
 import type { FilesBinding } from '../files/service'
 import { isSottoRequest, withSottoRequests, type SottoThreadRequests } from './sottoRequests'
+import { FinishedUnread } from './finishedUnread'
 
 /** One shared empty array stands in for every shell thread's history; the clone that follows copies nothing. */
 const EMPTY_MESSAGES: AgentMessage[] = []
@@ -85,6 +86,8 @@ const savedSchema = z.object({
   pendingRequest: z.string().max(20_000).default(''),
   contextSavedAt: z.number().default(0),
   coordinatorConversation: z.boolean().default(false),
+  /** The threads that finished while no client showed them, oldest first (ADR-0046). */
+  finishedUnread: z.array(z.string()).default([]),
   composing: z.boolean(), outbox: z.array(z.object({
     id: z.string(), type: z.enum(['send', 'steer', 'create-project', 'create-thread', 'configure-thread', 'answer', 'interrupt', 'compact-thread']),
     provider: providerIdSchema.optional(),
@@ -259,6 +262,8 @@ export class AgentControl {
   private answeredRequests: Saved['answeredRequests'] = []
   /** Ephemeral view interest; never persisted, selected or granted assignment authority. */
   private viewedThreadIds: readonly string[] = []
+  /** Threads that finished while no client showed them; what a client shows is what it observes (ADR-0046). */
+  private finishedUnread = new FinishedUnread()
   private readonly dispatchTurns = new Map<string, ActiveTurn>()
   private readonly feedbackReady = new Set<ActiveTurn>()
   private broadcastCancel: (() => void) | null = null
@@ -369,8 +374,9 @@ export class AgentControl {
     this.persistedDrafts = this.draftSignatures(images.threadDrafts)
     await this.attachmentPreviews.load(this.stageInline)
     this.contextActivityAt = saved.contextSavedAt
-    const { outbox, contextSavedAt, coordinatorConversation, manualDraftId, deliveredPromptDigests, answeredRequests, ...restored } = saved
+    const { outbox, contextSavedAt, coordinatorConversation, manualDraftId, deliveredPromptDigests, answeredRequests, finishedUnread, ...restored } = saved
     this.coordinatorConversation = coordinatorConversation
+    this.finishedUnread.restore(finishedUnread)
     this.queueSelectionPinned = coordinatorConversation
     this.deliveredPromptDigests = deliveredPromptDigests
     this.answeredRequests = answeredRequests
@@ -481,6 +487,17 @@ export class AgentControl {
   private withSottoRequests(snapshot: AgentHostSnapshot): AgentHostSnapshot {
     return this.sottoRequests ? withSottoRequests(snapshot, this.sottoRequests.requests()) : snapshot
   }
+  /**
+   * The threads some client shows now (ADR-0046). The host service says which: every client's observed threads, the
+   * desktop window's only while it has the focus. Showing a thread is what reads its finish, on every client at once,
+   * and the cleared mark is saved so a restart keeps it read. True when a mark was cleared.
+   */
+  showThreads(threadIds: readonly string[]): boolean {
+    if (!this.finishedUnread.show(threadIds)) return false
+    this.publish()
+    void this.persist().catch(() => undefined)
+    return true
+  }
   hasPendingThreadWork(threadId: string): boolean {
     return this.pendingThreadWorkReason(threadId) !== null
   }
@@ -512,6 +529,7 @@ export class AgentControl {
    */
   get(): AgentState {
     const state = structuredClone(this.state)
+    state.host.threads = state.host.threads.map(thread => this.finishedUnread.publish(thread))
     state.hostId = state.host.hostId
     state.threadDraftPersistence = this.draftPersistence()
     state.historyEnabled = this.dependencies.historyEnabled?.() !== false
@@ -552,7 +570,7 @@ export class AgentControl {
   }
   shell(): AgentState {
     const threads = this.state.host.threads
-    const bare = { ...this.state, host: { ...this.state.host, threads: threads.map(thread => ({
+    const bare = { ...this.state, host: { ...this.state.host, threads: threads.map(thread => this.finishedUnread.publish({
       ...thread, messages: EMPTY_MESSAGES,
       ...(thread.activities === undefined ? {} : { activities: EMPTY_ACTIVITIES }),
       summary: threadSummaryOf(thread),
@@ -757,6 +775,7 @@ export class AgentControl {
       activeThreadId, activeProjectId, draft, draftThreadId, draftRequestId, draftAttachments: this.state.draftAttachments ?? [], composing, pendingRequest: retainContext ? pendingRequest : '',
       contextSavedAt: this.contextActivityAt, outbox: this.outbox, manualDraftId: this.manualDraftId, deliveredDrafts: this.state.deliveredDrafts ?? [],
       coordinatorConversation: this.coordinatorConversation,
+      finishedUnread: this.finishedUnread.saved(),
       deliveredPromptDigests: this.deliveredPromptDigests,
       answeredRequests: this.answeredRequests,
       threadDrafts: this.state.threadDrafts ?? [], deliveries: this.state.deliveries ?? [] })
@@ -2957,6 +2976,8 @@ export class AgentControl {
     this.processedAssignmentThreads = new Set()
     const previousThreads = new Map(this.state.host.threads.map(thread => [thread.id, thread]))
     this.state.host = snapshot
+    // Saved with the persist below; a disconnected snapshot changes no mark, so its early return loses nothing.
+    this.finishedUnread.track(snapshot)
     this.scheduleProviderReconnects()
     if (this.state.activeProjectId) this.state.activeProjectId = this.dependencies.host.resolveProjectId?.(this.state.activeProjectId) ?? this.state.activeProjectId
     if (this.state.configuration.defaultModelId) this.state.configuration.defaultModelId = this.dependencies.host.resolveModelId?.(this.state.configuration.defaultModelId) ?? this.state.configuration.defaultModelId

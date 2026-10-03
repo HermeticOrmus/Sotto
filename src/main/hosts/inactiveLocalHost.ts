@@ -49,7 +49,7 @@ export async function inactiveLocalHost(directory: string): Promise<Awaited<Retu
   return {
     agentControl: refuseMissing(control), agentHost: refuseMissing(host), threadRegistry: null,
     turns: { path: () => join(directory, 'turns.jsonl'), recent: async () => [] },
-    hostService: { state: shell, shell, events: () => [], subscribe: unsubscribe, threadDetail: () => null, command: async () => unavailable() },
+    hostService: { state: shell, shell, events: () => [], subscribe: unsubscribe, threadDetail: () => null, command: async () => unavailable(), setWindowFocused: () => undefined },
     // With the local host off there is no thread here whose provider could write anything.
     shortTextWriter: new ShortTextWriter({ write: async () => null }),
     // No worktrees are owned here, so the cleanup has nothing to sweep and every call does nothing.

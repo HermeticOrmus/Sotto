@@ -5,7 +5,6 @@ import { isThreadArchived } from '../../../shared/threadActivity'
 import { ThreadNameField } from './ThreadName'
 import { describeWorkingCopy, useSettleThread } from './ThreadWorkingCopy'
 import type { AgentConnection } from './AgentContext'
-import { showThreads, useFinishedUnseen } from './finishedThreads'
 import { ProjectSettleAction, SidebarFrame, type SidebarMode } from './SidebarFrame'
 import { workingLabel, type ProjectFolder, type ThreadRow, type WorkspaceOrganization } from './threadFacts'
 import { THREAD_DRAG_TYPE } from './splitLayout'
@@ -62,19 +61,18 @@ export interface PaneActions {
  * row whose thread the update did not touch keeps every prop it had and does not re-render. Its props stay
  * cheap to compare — no object or array is built for it here.
  */
-const ThreadNavRow = memo(function ThreadNavRow({ row, current, open, busy, unseen, liveClock, onOpen, command, panes, settle }: {
+const ThreadNavRow = memo(function ThreadNavRow({ row, current, open, busy, liveClock, onOpen, command, panes, settle }: {
   readonly row: ThreadRow; readonly current: boolean; readonly open: boolean; readonly onOpen: (threadId: string) => void; readonly command: Command
   /** This thread's own lane is running a command. Another thread's work leaves this row's actions live. */
   readonly busy: boolean
-  /** The thread finished while you were elsewhere and you have not opened it since. */
-  readonly unseen: boolean
   readonly liveClock: boolean
   readonly panes: PaneActions
   readonly settle: ReturnType<typeof useSettleThread>['settle']
 }): ReactNode {
   const title = row.thread.title
   const label = row.settledBy === 'provider' ? row.stateLabel : row.state === 'done' && row.settledBy !== null ? 'Settled' : row.stateLabel
-  const finished = unseen && label === 'Done'
+  // The host marks a thread that finished while no client showed it, until one does (ADR-0046).
+  const finished = row.thread.finishedUnread === true && label === 'Done'
   const status = finished ? 'Just finished' : label
   const besideAvailable = panes.currentThreadId !== null && !current
   const [renaming, setRenaming] = useState(false)
@@ -140,12 +138,12 @@ const ThreadNavRow = memo(function ThreadNavRow({ row, current, open, busy, unse
 const folderKey = (section: Section, folderId: string): string => `${section}:${folderId}`
 
 /** One project folder and its rows. Memoised for the same reason a row is: its folder is shared across updates. */
-const FolderView = memo(function FolderView({ folder, section, panes, activeProjectId, expanded, unseen, liveClock, onToggle, onOpen, onNewThread, command, settle, globalLaneBusy, busyThreadIds, host, newThreadShortcut }: {
+const FolderView = memo(function FolderView({ folder, section, panes, activeProjectId, expanded, liveClock, onToggle, onOpen, onNewThread, command, settle, globalLaneBusy, busyThreadIds, host, newThreadShortcut }: {
   readonly folder: ProjectFolder; readonly section: Section; readonly panes: PaneActions; readonly activeProjectId: string | null
   /** The host the project is on, once a remote host is connected; its badge tells same-named projects apart. */
   readonly host?: ListedHost | undefined
   readonly expanded: boolean; readonly onToggle: (key: string) => void; readonly onOpen: (threadId: string) => void
-  readonly unseen: ReadonlySet<string>; readonly liveClock: boolean
+  readonly liveClock: boolean
   readonly onNewThread: (projectId: string) => void; readonly command: Command
   readonly settle: ReturnType<typeof useSettleThread>['settle']
   /** Settling or restoring a whole project moves every thread of it at once, so it waits on the global lane. */
@@ -178,7 +176,7 @@ const FolderView = memo(function FolderView({ folder, section, panes, activeProj
     </div>
     {expanded ? <ul className="thread-folder__rows" id={listId}>
       {folder.rows.map(row => <ThreadNavRow key={row.thread.id} row={row} current={panes.currentThreadId === row.thread.id} open={panes.openThreadIds.includes(row.thread.id)} busy={isThreadBusy({ busyThreadIds }, row.thread.id)}
-        unseen={unseen.has(row.thread.id)} liveClock={liveClock} onOpen={onOpen} command={command} panes={panes} settle={settle} />)}
+        liveClock={liveClock} onOpen={onOpen} command={command} panes={panes} settle={settle} />)}
       {!folder.rows.length ? <li className="thread-nav__empty">{section === 'open' ? 'No open threads.' : 'No threads yet.'}</li> : null}
     </ul> : null}
   </div>
@@ -213,10 +211,6 @@ export function ThreadSidebar({ state, command, organization, query, liveClock =
   // One object for the whole list, rebuilt only when a pane action actually changes: every row compares it.
   const panes = useMemo<PaneActions>(() => ({ currentThreadId, openThreadIds, onOpenBeside, onDragThread }),
     [currentThreadId, openThreadIds, onOpenBeside, onDragThread])
-  // Opaque client keys can contain any separator; the list boundary is encoded explicitly.
-  const onScreenKey = JSON.stringify(currentThreadId === null ? openThreadIds : [...openThreadIds, currentThreadId])
-  useEffect(() => { showThreads(JSON.parse(onScreenKey) as string[]); return () => showThreads([]) }, [onScreenKey])
-  const unseen = useFinishedUnseen()
   const searching = query.trim() !== ''
   const toggle = useCallback((key: string): void => setCollapsed(previous => {
     const next = new Set(previous)
@@ -228,7 +222,7 @@ export function ThreadSidebar({ state, command, organization, query, liveClock =
   const folderView = (section: Section) => (folder: ProjectFolder): ReactNode => {
     const key = folderKey(section, folder.id)
     const hostId = hosts.length ? hostIdOf(folder.project) ?? hostIdOf({ id: folder.id }) ?? folder.rows[0]?.thread.hostId : undefined
-    return <FolderView key={key} folder={folder} section={section} panes={panes} activeProjectId={state.activeProjectId} unseen={unseen} liveClock={liveClock}
+    return <FolderView key={key} folder={folder} section={section} panes={panes} activeProjectId={state.activeProjectId} liveClock={liveClock}
       host={hosts.find(item => item.hostId === hostId)} newThreadShortcut={newThreadShortcut}
       expanded={searching || !collapsed.has(key)} onToggle={toggle} onOpen={onOpen} onNewThread={onNewThread} command={command} settle={settle} globalLaneBusy={state.globalLaneBusy} busyThreadIds={state.busyThreadIds} />
   }

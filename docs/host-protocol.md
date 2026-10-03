@@ -95,6 +95,8 @@ Shell pushes are also paced to what the client reads. While output to a client i
 
 Every shell returned by hello, a read or a command, and every shell push, may include `clientCapabilities: { mayAnswer }`. This is the receiving client's current host policy, read when that shell is sent. Changing Can answer publishes a new shell even if no thread changed. Older hosts omit the field; those clients retain the authority from hello until reconnecting. The field reports authority and never grants it.
 
+A thread in the shell may carry `finishedUnread: true`: it finished while no client observed it, and no client has observed it since (ADR-0046). The host sets and clears it and saves it across a restart. Observing the thread, with `observe` or the `observe-threads` command, is what clears it, for every client, and the next shell says so. Older hosts never send it, and a client that does not know it ignores it.
+
 ### Model catalog revisions
 
 A client that includes `model-catalog-revision` in hello's `accepts` is sent every shell with `host.modelsRevision`: a positive number naming the host's model catalog, which moves on only when the catalog's content changes. That holds for the shell in hello, a `shell` read, a command's answer and every shell push alike. Such a shell carries `host.models` only when no frame on this connection has carried that revision whole yet, and otherwise leaves `models` out. A revision counts as sent only once a frame carrying it was written, not when a `too_large` error went in its place. Hello always carries the catalog whole, and a new connection starts with nothing sent.
