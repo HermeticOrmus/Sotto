@@ -103,7 +103,14 @@ import XCTest
         XCTAssertEqual(result, .completed,
                        "The rendered screenshot must finish rotating with the window")
     }
-    private func back() { app.navigationBars.buttons.element(boundBy: 0).tap() }
+    private func back() {
+        let button = app.navigationBars.buttons.element(boundBy: 0)
+        XCTAssertTrue(button.waitForExistence(timeout: 5))
+        let ready = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in button.isHittable }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 5), .completed,
+                       "Back must be hittable after a request sheet closes")
+        button.tap()
+    }
 
     func testCreateThreadInAKnownProject() {
         app.buttons["new-thread"].tap()
@@ -234,7 +241,9 @@ import XCTest
         reveal(app.buttons["Not now"])
         app.buttons["Not now"].tap()
         back()
-        app.tabBars.buttons["Computers"].tap()
+        let computers = app.tabBars.buttons["Computers"]
+        XCTAssertTrue(computers.waitForExistence(timeout: 5), "Back restores the main tabs")
+        computers.tap()
         XCTAssertTrue(app.staticTexts["Studio Mac"].waitForExistence(timeout: 5))
         capture("computers")
     }
@@ -243,7 +252,7 @@ import XCTest
         let scenarios = [
             ("request-gone", "That request is no longer waiting."),
             ("markers-unreadable", "Saved unconfirmed actions could not be read. Check your threads before sending again. Nothing was resent."),
-            ("computer-unreadable", "Recovered the saved computer list. Pair computer 22222222-2222-4222-8222-222222222222 again. Its saved connection details could not be read.")
+            ("computer-unreadable", "Recovered the saved computer list. 1 saved computer needs pairing again.")
         ]
         for (scenario, words) in scenarios {
             app.terminate()

@@ -6,12 +6,13 @@ import SottoCore
     static var items: [String: Data] = [:]
     static var locked = false
     static var unreadableAccount: String?
+    static var unwritableAccount: String?
     static var store: KeychainStore {
         KeychainStore(readData: { account in
             if locked || account == unreadableAccount { throw KeychainStore.failure }
             return items[account]
         }, writeData: { data, account in
-            if locked { throw KeychainStore.failure }
+            if locked || account == unwritableAccount { throw KeychainStore.failure }
             items[account] = data
         }, removeItem: { account in
             if locked { throw KeychainStore.failure }
@@ -33,6 +34,11 @@ struct HostRefusal: Error, LocalizedError {
     static var failDetail = false
     static var failConnect = false
     static var revokeFailure: ClientError?
+    static var revokeHandler: ((Pairing) async throws -> Void)?
+    static var foundHealth: Health?
+    static var freshPairing: Pairing?
+    static var pairCalls = 0
+    static var revoked: [String] = []
     static var holdDetail = false
     static var shell: JSONValue = .null
     static var detail: JSONValue = .null
@@ -106,9 +112,11 @@ struct HostRefusal: Error, LocalizedError {
     }
     func disconnect() { disconnects += 1 }
     func close() { disconnect() }
-    func health(endpoint: HostEndpoint) async throws -> Health { throw ClientError.disconnected }
-    func pair(endpoint: HostEndpoint, expectedHostID: String, code: String) async throws -> Pairing { throw ClientError.disconnected }
+    func health(endpoint: HostEndpoint) async throws -> Health { guard let health = Self.foundHealth else { throw ClientError.disconnected }; return health }
+    func pair(endpoint: HostEndpoint, expectedHostID: String, code: String) async throws -> Pairing { Self.pairCalls += 1; guard let pairing = Self.freshPairing else { throw ClientError.disconnected }; return pairing }
     func revoke(endpoint: HostEndpoint, pairing: Pairing) async throws {
+        Self.revoked.append(pairing.clientId)
         if let failure = Self.revokeFailure { throw failure }
+        try await Self.revokeHandler?(pairing)
     }
 }

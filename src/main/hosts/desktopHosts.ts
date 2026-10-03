@@ -701,12 +701,17 @@ export class DesktopHosts {
     }
   }
   private async pairOverTunnel(host: SavedHost, active: LiveHost): Promise<void> {
+    if (!this.options.credentials.available()) throw new FinalHostError('Secure credential storage is unavailable. Unlock it before connecting again.')
     const code = await active.tunnel!.showHostPairingCode()
     const pairing = await SocketHostService.pair(active.tunnel!.url, code.code, 'Sotto desktop')
     // Cancelled or quit while pairing: keep no credential. The record the host made stays revocable there.
     if (this.live.get(host.id) !== active) throw new Error('The connection was closed while this computer paired.')
     if (pairing.hostId !== active.tunnel!.hostId || host.hostId && pairing.hostId !== host.hostId) throw new Error('This is a different host. Check the address before pairing.')
-    await this.options.credentials.set(`remote-host:${host.id}`, pairing.token)
+    try { await this.options.credentials.set(`remote-host:${host.id}`, pairing.token) }
+    catch (error) {
+      await active.tunnel!.revokeClient(pairing.clientId).catch(() => false)
+      throw error
+    }
     host.hostId = pairing.hostId; host.clientId = pairing.clientId
     if (this.saved.includes(host)) await this.save()
   }
@@ -770,6 +775,7 @@ export class DesktopHosts {
     host.hostId = hello.hostId; host.clientId = hello.clientId
     if (this.saved.includes(host)) await this.save()
     if (this.live.get(host.id) !== active) { await socket.close(); return }
+    if (!connected) throw new Error('The host disconnected while connecting. Try connecting again.')
     const connection: DesktopHostConnection = { hostId: hello.hostId, name: host.name, kind: 'remote', service: socket,
       detail: id => socket.readThreadDetail(id), preview: request => socket.attachmentPreview(request), observe: ids => socket.observe(ids),
       stage: image => socket.stageAttachment(image), content: digest => socket.attachmentContent(digest),
