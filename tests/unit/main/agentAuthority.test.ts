@@ -187,7 +187,7 @@ describe('authority at dispatch', () => {
     expect(recordAnswer).not.toHaveBeenCalled()
   })
   it.each([false, true])('preserves command client context when permitted is %s', async allowed => {
-    const client: ClientIdentity = { clientId: 'fixture-client', user: 'Fixture client', transport: 'socket' }
+    const client: ClientIdentity = { clientId: 'fixture-client', user: 'Fixture client', transport: 'socket', selectedThreadId: 'workshop' }
     const f = await fixture({ authorizes: () => ({ allowed: false, reason: 'no-policy' }),
       mayGrant: identity => identity.transport === 'ipc' ? { allowed: true, reason: 'local-window' }
         : { allowed, reason: allowed ? 'paired-client' : 'no-policy' } })
@@ -199,15 +199,31 @@ describe('authority at dispatch', () => {
     const result = await f.control.commandShell({ type: 'send' }, client)
     if (allowed) {
       expect(result.error).toBeNull()
-      expect(recordAnswer).toHaveBeenCalledWith('workshop', expect.objectContaining({ attribution: client }))
+      expect(recordAnswer).toHaveBeenCalledWith('workshop', expect.objectContaining({ attribution: { clientId: client.clientId, user: client.user, transport: client.transport } }))
     } else {
       expect(result.error).toBe(UNPAIRED_CLIENT_ERROR)
       expect(f.host.executed.filter(command => command.type === 'answer')).toEqual([])
       expect(recordAnswer).not.toHaveBeenCalled()
     }
   })
+  it.each([false, true])('retains an ordinary selected draft binding when answer permission is %s', async allowed => {
+    const client: ClientIdentity = { clientId: 'fixture-client', user: 'Fixture client', transport: 'socket', selectedThreadId: 'workshop' }
+    const f = await fixture({ authorizes: () => ({ allowed: false, reason: 'no-policy' }),
+      mayGrant: identity => identity.transport === 'ipc' ? { allowed: true, reason: 'local-window' }
+        : { allowed, reason: allowed ? 'paired-client' : 'no-policy' } })
+    await f.control.commandShell({ type: 'compose', text: 'Ordinary prompt' }, client)
+    f.host.event({ type: 'question', threadId: 'workshop', requestId: 'choice', text: 'Which color?' })
+    await vi.waitFor(() => expect(f.control.get().queue.some(item => item.requestId === 'choice')).toBe(true))
+    const edited = await f.control.commandShell({ type: 'compose', text: 'Edited prompt' }, client)
+    expect(edited.error).toBeNull()
+    expect(edited.threadDrafts?.find(draft => draft.threadId === 'workshop')).toMatchObject({ text: 'Edited prompt', requestId: null })
+    const sent = await f.control.commandShell({ type: 'send' }, client)
+    expect(sent.error).toContain('Answer the pending question')
+    expect(f.host.executed.filter(command => command.type === 'answer')).toEqual([])
+  })
+
   it('keeps the compose client check consistent with send', async () => {
-    const client: ClientIdentity = { clientId: 'fixture-client', user: 'Fixture client', transport: 'socket' }
+    const client: ClientIdentity = { clientId: 'fixture-client', user: 'Fixture client', transport: 'socket', selectedThreadId: 'workshop' }
     const f = await fixture({ authorizes: () => ({ allowed: false, reason: 'no-policy' }),
       mayGrant: identity => identity.transport === 'ipc' ? { allowed: true, reason: 'local-window' }
         : { allowed: false, reason: 'no-policy' } })

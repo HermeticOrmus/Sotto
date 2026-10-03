@@ -24,8 +24,8 @@ struct Live {
 @MainActor final class AppModel: ObservableObject {
     private static let requestNoLongerWaiting = "That request is no longer waiting."
     private static let markersUnreadable = "Saved unconfirmed actions could not be read. Check your threads before sending again. Nothing was resent."
-    private static func pairingWarning(_ hostID: String) -> String {
-        "Pair computer \(hostID) again. Its saved connection details could not be read."
+    private static func pairingWarning(_ count: Int) -> String {
+        count == 1 ? "1 saved computer needs pairing again." : "\(count) saved computers need pairing again."
     }
     /// In the order they were added. Credentials live in the Keychain, one item per host ID.
     @Published private(set) var computers: [SavedComputer] = []
@@ -69,6 +69,11 @@ struct Live {
     /// Requests to connect a computer that was already connecting, each waiting for that attempt to end.
     private var connectWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
     private var active = false
+    private var activationConnection: Task<Void, Never>?
+    private var retries: [String: Task<Void, Never>] = [:]
+    private var retryAttempts: [String: Int] = [:]
+    private let retryJitter: @Sendable () -> Double
+    private let retrySleep: @Sendable (UInt64) async throws -> Void
     private var pairGeneration = UUID()
     private var detailVersion = 0
     private var detailReload: Task<Void, Never>?
@@ -117,6 +122,8 @@ struct Live {
                     ["id": "release-permission", "kind": "permission", "text": "Allow reading the release checklist?", "options": []]]
             }
             if id == "wiring" { row["backgroundWork"] = [["type": "agent"]] }
+            // Finished while nothing showed it, so Recent marks it until it is opened (ADR-0046).
+            if id == "shortcuts" { row["finishedUnread"] = true }
             if id == "settings" || id == "notes" { row["settledAt"] = date }
             threads[host, default: []].append(row)
             fixtureDetails[host + "/" + id] = decode(ThreadDetail.self, ["threadId": id, "revision": 1,
@@ -141,7 +148,7 @@ struct Live {
         let arguments = ProcessInfo.processInfo.arguments
         if arguments.contains("--ui-feedback-request-gone") { feedback = Self.requestNoLongerWaiting }
         if arguments.contains("--ui-feedback-markers-unreadable") { feedback = Self.markersUnreadable }
-        if arguments.contains("--ui-feedback-computer-unreadable") { feedback = "Recovered the saved computer list. " + Self.pairingWarning(studio) }
+        if arguments.contains("--ui-feedback-computer-unreadable") { feedback = "Recovered the saved computer list. " + Self.pairingWarning(1) }
     }
     #endif
 
@@ -195,8 +202,12 @@ struct Live {
 
     // MARK: Starting and stopping
 
-    init(keychain: KeychainStore = KeychainStore()) {
+    init(keychain: KeychainStore = KeychainStore(),
+         retryJitter: @escaping @Sendable () -> Double = { Double.random(in: 0.8...1.2) },
+         retrySleep: @escaping @Sendable (UInt64) async throws -> Void = { try await Task.sleep(nanoseconds: $0) }) {
         self.keychain = keychain
+        self.retrySleep = retrySleep
+        self.retryJitter = retryJitter
         #if DEBUG && os(iOS)
         if ProcessInfo.processInfo.arguments.contains("--ui-fixture") {
             loadUIFixture()
@@ -211,6 +222,21 @@ struct Live {
         let storageProblem = "Secure connection details could not be read. Unlock this iPhone and return to Sotto."
         do {
             var warnings: [String] = []
+            let noticesAccount = "recovery-notices"
+            let previousNotices: [String]
+            var resetNotices = false
+            do { previousNotices = try keychain.read([String].self, account: noticesAccount) ?? [] }
+            catch is KeychainStore.UndecodableItem {
+                // This is only notice bookkeeping. Healthy pairings must still load; actual
+                // Keychain access failures keep refusing the load through the outer catch.
+                previousNotices = []; resetNotices = true
+            }
+            var notices = Set(previousNotices)
+            var unreadableComputers = 0
+            func unreadableComputer(_ account: String) {
+                if notices.insert(account).inserted { unreadableComputers += 1 }
+            }
+            var announceRecovery = false
             var index: [String]?
             var indexAccount: String? = ComputerStore.indexAccount
             var recoveredIndex = false
@@ -219,6 +245,7 @@ struct Live {
                 // Preserve the original bytes. A separate index keeps the recovered order on later
                 // launches and is the one pairing and removal may update from now on.
                 recoveredIndex = true; indexAccount = ComputerStore.recoveredIndexAccount
+                announceRecovery = !(try keychain.accounts()).contains(ComputerStore.recoveredIndexAccount)
                 do { index = try keychain.read([String].self, account: ComputerStore.recoveredIndexAccount) }
                 catch is KeychainStore.UndecodableItem { index = nil; indexAccount = nil }
                 let accounts = try keychain.accounts()
@@ -227,7 +254,7 @@ struct Live {
             }
             var legacy: SavedComputer?
             do { legacy = try readComputer(ComputerStore.legacyAccount) }
-            catch is KeychainStore.UndecodableItem { warnings.append("The computer saved by an earlier version needs pairing again.") }
+            catch is KeychainStore.UndecodableItem { unreadableComputer(ComputerStore.legacyAccount) }
             let plan = ComputerStore.plan(index: index, legacy: legacy)
             var kept: [SavedComputer] = []
             for hostID in plan.index {
@@ -235,25 +262,27 @@ struct Live {
                     let computer = try plan.adopt.flatMap { $0.hostID == hostID ? $0 : nil }
                         ?? readComputer(ComputerStore.account(hostID))
                     if let computer, computer.hostID == hostID { kept.append(computer) }
-                    else { warnings.append(Self.pairingWarning(hostID)) }
+                    else { unreadableComputer(ComputerStore.account(hostID)) }
                 } catch is KeychainStore.UndecodableItem {
-                    warnings.append(Self.pairingWarning(hostID))
+                    unreadableComputer(ComputerStore.account(hostID))
                 }
             }
             var markers: [PendingOperation] = []
             do { markers = try keychain.read([PendingOperation].self, account: ComputerStore.pendingAccount) ?? [] }
             catch is KeychainStore.UndecodableItem {
-                warnings.append(Self.markersUnreadable)
+                if notices.insert(ComputerStore.pendingAccount).inserted { warnings.append(Self.markersUnreadable) }
             }
             // All reads must succeed before migration writes: a locked item never looks missing.
             if let adopt = plan.adopt { try keychain.write(adopt, account: ComputerStore.account(adopt.hostID)) }
             if let indexAccount, recoveredIndex || plan.index != index { try keychain.write(plan.index, account: indexAccount) }
             if plan.removeLegacy { try keychain.remove(account: ComputerStore.legacyAccount) }
+            if resetNotices || notices != Set(previousNotices) { try keychain.write(notices.sorted(), account: noticesAccount) }
             pending = markers.filter { marker in kept.contains { marker.matches(hostID: $0.hostID, clientID: $0.pairing.clientId) } }
             computers = kept; computerIndexAccount = indexAccount
             for computer in kept { live[computer.hostID] = Live() }
             storageReady = true
-            if recoveredIndex { warnings.insert(kept.isEmpty ? "The saved computer list could not be recovered." : "Recovered the saved computer list.", at: 0) }
+            if unreadableComputers > 0 { warnings.append(Self.pairingWarning(unreadableComputers)) }
+            if announceRecovery { warnings.insert(kept.isEmpty ? "The saved computer list could not be recovered." : "Recovered the saved computer list.", at: 0) }
             if !warnings.isEmpty { feedback = warnings.joined(separator: " "); pairFeedback = feedback }
             else {
                 if feedback == storageProblem { feedback = nil }
@@ -278,15 +307,19 @@ struct Live {
             let wasStorageReady = storageReady
             loadComputers()
             guard !active || (!wasStorageReady && storageReady) else { return }; active = true
-            Task { await reconnectAll() }
+            guard storageReady else { return }
+            activationConnection = Task { await reconnectAll() }
         } else if phase == .background {
             cancelDetailReload()
+            retries.values.forEach { $0.cancel() }; retries.removeAll(); retryAttempts.removeAll()
             active = false; pairGeneration = UUID(); working = false; openDetail = nil
             for (hostID, connection) in connections { generations[hostID] = UUID(); connection.disconnect() }
             connecting.removeAll()
             live = live.mapValues { (state: Live) -> Live in var next = state; next.status = .connecting; next.mayAnswer = false; return next }
         }
     }
+    /// Wait for the connection work scheduled by activation, including delivery checks.
+    func waitForActivation() async { await activationConnection?.value }
     func reconnectAll() async {
         let ids = computers.map(\.hostID)
         await withTaskGroup(of: Void.self) { group in
@@ -317,6 +350,7 @@ struct Live {
             await withCheckedContinuation { connectWaiters[hostID, default: []].append($0) }
             return
         }
+        retries.removeValue(forKey: hostID)?.cancel()
         let current = UUID(); generations[hostID] = current; connecting.insert(hostID)
         shellSequences[hostID] = 0
         defer { if generations[hostID] == current { connecting.remove(hostID) } }
@@ -338,12 +372,33 @@ struct Live {
             guard generations[hostID] == current else { return }
             update(hostID) { $0.status = .unreachable; $0.mayAnswer = false; $0.problem = error.localizedDescription }
             connections[hostID]?.disconnect()
+            if let error = error as? ClientError {
+                switch error {
+                case .invalidIdentity, .invalidProtocol, .invalidHost, .rejected: return
+                default: break
+                }
+            }
+            scheduleRetry(hostID)
             return
         }
+        retries.removeValue(forKey: hostID)?.cancel()
         // A refused or slow thread read does not mean the computer's connection was lost.
         do { try await observeAndRead(hostID) }
         catch { if generations[hostID] == current { detailProblem = "This thread could not be loaded. Nothing was lost. Try again." } }
         await checkDelivery(hostID)
+    }
+    private func scheduleRetry(_ hostID: String) {
+        guard active, computer(hostID) != nil, retries[hostID] == nil else { return }
+        let attempt = retryAttempts[hostID] ?? 0
+        retryAttempts[hostID] = min(attempt + 1, 5)
+        let delay = UInt64(min(30, Double(1 << min(attempt, 5)) * retryJitter()) * 1_000_000_000)
+        let sleep = retrySleep
+        retries[hostID] = Task { [weak self] in
+            do { try await sleep(delay) } catch { return }
+            guard !Task.isCancelled, let self, self.active, self.computer(hostID) != nil else { return }
+            self.retries[hostID] = nil
+            await self.connect(hostID)
+        }
     }
     /// An attempt ends when its computer leaves `connecting`: it finished, or a disconnect, removal or
     /// the app going to the background ended it early.
@@ -355,11 +410,13 @@ struct Live {
     private func connection(_ hostID: String) -> HostConnection {
         if let existing = connections[hostID] { return existing }
         let made = HostConnection()
+        made.onLiveness = { [weak self] in self?.retryAttempts[hostID] = nil }
         made.onPush = { [weak self] frame, sequence in self?.push(frame, from: hostID, sequence: sequence) }
         made.onDisconnect = { [weak self] in
             self?.generations[hostID] = UUID(); self?.connecting.remove(hostID)
             if self?.selected?.hostID == hostID { self?.cancelDetailReload() }
             self?.update(hostID) { $0.status = .unreachable; $0.mayAnswer = false; $0.problem = ClientError.disconnected.localizedDescription }
+            self?.scheduleRetry(hostID)
         }
         connections[hostID] = made
         return made
@@ -405,15 +462,29 @@ struct Live {
         let current = pairGeneration
         do {
             let code = try PairingCode.normalized(typed)
+            try keychain.checkWritable()
             // Kept even if the sheet closed or the app went to the background meanwhile: the code is spent
             // and the computer holds this client.
             let pairing = try await finder.pair(endpoint: found.endpoint, expectedHostID: found.health.hostId, code: code)
             let computer = SavedComputer(address: found.endpoint.url.absoluteString, pairing: pairing, reportedName: found.health.computerName)
-            try keychain.write(computer, account: ComputerStore.account(computer.hostID))
-            if let computerIndexAccount { try keychain.write(computers.map(\.hostID).filter { $0 != computer.hostID } + [computer.hostID], account: computerIndexAccount) }
             // Markers from an earlier pairing with this computer must never attach to the new client.
             let markers = pending.filter { $0.hostID != computer.hostID }
-            try keychain.write(markers, account: ComputerStore.pendingAccount)
+            var savedCredential = false
+            do {
+                try keychain.write(computer, account: ComputerStore.account(computer.hostID))
+                savedCredential = true
+                if let computerIndexAccount { try keychain.write(computers.map(\.hostID).filter { $0 != computer.hostID } + [computer.hostID], account: computerIndexAccount) }
+                try keychain.write(markers, account: ComputerStore.pendingAccount)
+            } catch {
+                // Roll back before the network wait: Cancel can open another Add flow while
+                // revocation waits, and that flow may save a newer pairing for this computer.
+                if savedCredential {
+                    try? keychain.remove(account: ComputerStore.account(computer.hostID))
+                    if let computerIndexAccount { try? keychain.write(computers.map(\.hostID), account: computerIndexAccount) }
+                }
+                try? await finder.revoke(endpoint: found.endpoint, pairing: pairing)
+                throw error
+            }
             pending = markers
             computers = computers.filter { $0.hostID != computer.hostID } + [computer]
             live[computer.hostID] = Live()
@@ -447,8 +518,9 @@ struct Live {
         defer { removing = nil }
         var outcome = Revocation.confirmed
         if let endpoint = saved.endpoint {
-            do { try await connection(hostID).revoke(endpoint: endpoint, token: saved.pairing.token) }
+            do { try await connection(hostID).revoke(endpoint: endpoint, pairing: saved.pairing) }
             catch is URLError { outcome = .unreachable }
+            catch ClientError.hostUnreachable(_) { outcome = .unreachable }
             catch { outcome = .unconfirmed }
         } else { outcome = .unconfirmed }
         // The item goes first: an index entry without its item is skipped at launch, and markers for a
@@ -458,6 +530,7 @@ struct Live {
         let markers = pending.filter { $0.hostID != hostID }
         if let computerIndexAccount { try? keychain.write(rest.map(\.hostID), account: computerIndexAccount) }
         try? keychain.write(markers, account: ComputerStore.pendingAccount)
+        retries.removeValue(forKey: hostID)?.cancel(); retryAttempts[hostID] = nil
         generations[hostID] = UUID(); connecting.remove(hostID)
         connections[hostID]?.close(); connections[hostID] = nil
         let gone = Set(pending.filter { $0.hostID == hostID }.map(\.id))
@@ -515,8 +588,7 @@ struct Live {
         // observe sends the initial detail before acknowledging. Do not download it twice.
         if openDetail?.threadId == ref.threadID { return }
         let version = detailVersion
-        let result = try await connection.call(["op": .string("detail"), "threadId": .string(ref.threadID)])
-        let next = try await Wire.readValue(result, as: Optional<ThreadDetail>.self)
+        let next = try await connection.call(["op": .string("detail"), "threadId": .string(ref.threadID)], as: Optional<ThreadDetail>.self)
         try applyDetail(next, ref: ref, epoch: current, versionAtRead: version)
     }
     private func cancelDetailReload() {
@@ -537,8 +609,7 @@ struct Live {
                 }
             }
             do {
-                let result = try await connection.call(["op": .string("detail"), "threadId": .string(ref.threadID)])
-                let next = try await Wire.readValue(result, as: Optional<ThreadDetail>.self)
+                let next = try await connection.call(["op": .string("detail"), "threadId": .string(ref.threadID)], as: Optional<ThreadDetail>.self)
                 guard !Task.isCancelled else { return }
                 try applyDetail(next, ref: ref, epoch: epoch, versionAtRead: version)
                 // A newer delta may have arrived during the read/decode. Do not lose the final
@@ -616,10 +687,9 @@ struct Live {
         defer { dispatchingAnswers.remove(operation.id) }
         guard let connection = connections[hostID] else { operationFeedback(ClientError.uncertain.localizedDescription, operations: [operation.id]); return nil }
         do {
-            let result = try await connection.callReceived(["op": .string("command"), "command": command], id: operation.id)
+            let result = try await connection.callReceived(["op": .string("command"), "command": command], as: Shell.self, id: operation.id)
             guard generations[hostID] == current else { return nil }
-            let next = try await Wire.readValue(result.value, as: Shell.self)
-            guard generations[hostID] == current else { return nil }
+            let next = result.value
             try applyShell(next, from: hostID, sequence: result.sequence, reconcileAnswers: false)
             await checkDelivery(hostID)
             guard generations[hostID] == current else { return nil }
@@ -647,13 +717,12 @@ struct Live {
         deliveryChecks[hostID, default: 0] += 1
         defer { deliveryChecks[hostID, default: 0] -= 1 }
         do {
-            let fresh = try await connection.callReceived(["op": .string("shell")])
+            let fresh = try await connection.callReceived(["op": .string("shell")], as: Shell.self)
             guard generations[hostID] == current else { return }
-            let next = try await Wire.readValue(fresh.value, as: Shell.self)
-            guard generations[hostID] == current else { return }
+            let next = fresh.value
             try applyShell(next, from: hostID, sequence: fresh.sequence, reconcileAnswers: false)
             for item in scoped(hostID) {
-                let receipt = try await connection.call(["op": .string("receipt"), "commandId": .string(item.id)]).decode(Receipt.self)
+                let receipt = try await connection.call(["op": .string("receipt"), "commandId": .string(item.id)], as: Receipt.self)
                 guard generations[hostID] == current else { return }
                 guard scoped(hostID).contains(where: { $0.id == item.id }) else { continue }
                 try settle(item, receipt: receipt, shell: live[hostID]?.shell)
@@ -675,8 +744,8 @@ struct Live {
         let thread = shell?.host.threads.first { $0.id == item.threadID }
         // Only this command's own receipt confirms the phone's answer. A request can also leave
         // after a desktop answer, a stopped turn or provider cancellation.
-        let noLongerWaiting = item.kind == "answer" && item.requestID != nil && thread != nil
-            && thread?.requests.contains(where: { $0.id == item.requestID }) == false
+        let noLongerWaiting = item.kind == "answer" && item.requestID != nil && shell != nil
+            && (thread == nil || thread?.requests.contains(where: { $0.id == item.requestID }) == false)
         if item.kind == "answer" {
             let confirmed = receipt?.confirmsAnswer == true
             guard confirmed || noLongerWaiting else { return }
@@ -733,6 +802,7 @@ struct Live {
     func folders(_ hostID: String, path: JSONValue? = nil) async throws -> FolderResult {
         #if DEBUG && os(iOS)
         if isUIFixture {
+            if ProcessInfo.processInfo.arguments.contains("--ui-folder-timeout") { throw ClientError.readTimedOut }
             let target = path?.string ?? "D:\\Engineering"
             let top = path == .null
             let children: [[String: Any]] = top ? [["name": "D:", "path": "D:\\", "git": false]]
@@ -746,9 +816,9 @@ struct Live {
         guard canBrowseFolders(hostID), let connection = connections[hostID], let epoch = generations[hostID] else {
             throw ClientError.rejected("Folder browsing is unavailable. Reconnect or update Sotto on this computer.")
         }
-        let result = try await connection.call(NewThreads.folderRequest(path: path))
+        let result = try await connection.call(NewThreads.folderRequest(path: path), as: FolderResult.self)
         guard generations[hostID] == epoch, online(hostID) else { throw ClientError.disconnected }
-        return try await Wire.readValue(result, as: FolderResult.self)
+        return result
     }
     /// Registration and creation are separate commands. Neither is replayed after a lost acknowledgement.
     func createThread(on hostID: String, projectID: String?, folder: FolderListing?, modelID: String,

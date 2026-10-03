@@ -4,6 +4,7 @@ import tseslint from 'typescript-eslint'
 export default tseslint.config(
   {
     ignores: [
+      'artifacts/pkg-17-hostconnection/**',
       'artifacts/pkg-34-workspace-git/**',
       'artifacts/main-infra-bundle/**',
       'artifacts/pkg-18-e2e/**',
@@ -22,6 +23,7 @@ export default tseslint.config(
       'artifacts/codex-questions-thread-agents/**',
       'artifacts/agent-browser/**',
       'artifacts/browser-grant/**',
+      'artifacts/test-iphone/**',
       'artifacts/new-thread-setup/**',
       'artifacts/host-folder-browser-run/**',
       'artifacts/command-receipt/**',

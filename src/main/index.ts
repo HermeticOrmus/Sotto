@@ -1,5 +1,5 @@
 import { cleanSettingsHistory } from './settings/privacyCleanup'
-import { registerQuitDrain } from './app/quitDrain'
+import { registerHostQuitDrain, type HostQuitHandles } from './app/hostQuitDrain'
 import { HOSTS_CHANGED } from '../shared/hosts'
 import { parseHostEntityKey } from '../shared/clientIdentity'
 import { DesktopHostRouter } from './hosts/desktopHostRouter'
@@ -210,7 +210,6 @@ if (e2eConfiguration === null) {
   delete process.env.SOTTO_E2E
   delete process.env.SOTTO_E2E_SCENARIO
   delete process.env.SOTTO_E2E_USER_DATA
-  migrateLegacyUserData(app.getPath('userData'))
 } else if (e2eConfiguration !== null) {
   app.setPath('userData', e2eConfiguration.userDataPath)
 }
@@ -662,6 +661,17 @@ async function createRuntime(): Promise<NativeRuntimeController> {
     claudeSettingsLog: event => { logOperational(event) },
   }) : await inactiveLocalHost(userDataPath)
   const { agentHost, agentControl, threadRegistry, turns, hostService } = localRuntime
+  // The window's panes show their threads only while it has the focus (ADR-0046). The widget taking the focus is the
+  // window losing it, as is another app, minimising or hiding to the tray.
+  const windowFocusChanged = (): void => {
+    const focused = BrowserWindow.getFocusedWindow()
+    hostService.setWindowFocused(focused !== null && focused.webContents === windows.getMainWebContents())
+  }
+  app.on('browser-window-focus', windowFocusChanged)
+  app.on('browser-window-blur', windowFocusChanged)
+  windowFocusChanged()
+  const quitHandles: HostQuitHandles = { localRuntime }
+  registerHostQuitDrain(app, quitHandles, () => console.error('[Sotto] host-shutdown-failed'), () => logOperational('phone-access-close-failed'))
   let browserService: BrowserService | undefined
   const browserAgentServer = createBrowserAgentServer(() => browserService)
   agentHost.useBrowserTools(browserAgentServer)
@@ -669,6 +679,7 @@ async function createRuntime(): Promise<NativeRuntimeController> {
   // computer; with it off the inactive host's cleanup does nothing, and no terminal check is wired.
   const worktreeCleanup = startupSettings.localHostEnabled ? localRuntime.worktreeCleanup : null
   const hostRouter = new DesktopHostRouter(() => emptyDesktopState(agentControl.get().hostId))
+  quitHandles.hostRouter = hostRouter
   if (startupSettings.localHostEnabled) hostRouter.add({
     hostId: agentControl.get().hostId!, name: 'This computer', kind: 'local', service: hostService,
     detail: id => agentControl.threadDetail(id), preview: request => agentControl.attachmentPreview(request),
@@ -690,6 +701,7 @@ async function createRuntime(): Promise<NativeRuntimeController> {
     ...(sshStandIn ? { launcher: () => new SshHostLauncher({ spawn: sshStandIn }) } : {}),
     openExternal: async url => { if (e2eConfiguration === null) await shell.openExternal(url); else openedExternalLink = url },
   })
+  quitHandles.desktopHosts = desktopHosts
   await desktopHosts.start()
   // Have my agent set this up (ADR-0035): a host setup thread on this computer, with the host setup tools while it
   // runs. The thread reaches the device through this computer's SSH setup, so it needs the local host.
@@ -706,6 +718,9 @@ async function createRuntime(): Promise<NativeRuntimeController> {
       attempt: id => desktopHosts.attempt(id), cancelAttempt: id => desktopHosts.cancelAttempt(id), savedAs: (target, port) => desktopHosts.savedAs(target, port) },
     threads: agentJobThreads, busy: (): string | undefined => providerJobs.busySentence() })
   const hostSetupTools = new HostSetupToolServer(agentJobTools(hostSetup, providerJobs))
+  quitHandles.providerJobs = providerJobs
+  quitHandles.hostSetup = hostSetup
+  quitHandles.hostSetupTools = hostSetupTools
   hostSetup.useTools(threadId => hostSetupTools.revoke(threadId))
   providerJobs.useTools(threadId => hostSetupTools.revoke(threadId))
   agentHost.useHostSetupTools(hostSetupTools)
@@ -724,6 +739,7 @@ async function createRuntime(): Promise<NativeRuntimeController> {
       subscribe: listener => hostRouter.subscribe(() => listener()),
     } })
   desktopHosts.useUpdates(hostUpdates)
+  quitHandles.hostUpdates = hostUpdates
   // Phone access serves the local host's own threads to paired phones over the tailnet (ADR-0033). Its
   // Tailscale checks can take seconds, so they run beside startup rather than in front of the window.
   const phoneAccess = new PhoneAccess({ directory: userDataPath,
@@ -733,6 +749,7 @@ async function createRuntime(): Promise<NativeRuntimeController> {
     openExternal: async url => { if (e2eConfiguration === null) await shell.openExternal(url) },
     log: logOperational,
   })
+  quitHandles.phoneAccess = phoneAccess
   void phoneAccess.start().catch(() => logOperational('phone-access-start-failed'))
   const testPersonalChatHosts = e2eConfiguration ? {
     codex: new E2EPersonalChatHost(userDataPath), claude: new E2EPersonalChatHost(userDataPath, 'claude'), grok: new E2EPersonalChatHost(userDataPath, 'grok'),
@@ -741,6 +758,7 @@ async function createRuntime(): Promise<NativeRuntimeController> {
     ...(app.isPackaged ? { claudeHistoryModulePath: join(process.resourcesPath, 'claude-sdk', 'sdk.mjs') } : {}), bindRequestDraftDecision: (target, decisionId, answers) => requestDrafts.bindDecision(target, decisionId, answers), configuration: () => agentControl.configuration(),
     ...(memoryProfile && agentMemoryEnabled ? { preferences: memoryProfile } : {}), historyEnabled: () => agentHistoryEnabled,
     ...(testPersonalChatHosts ? { hosts: testPersonalChatHosts } : {}) })
+  quitHandles.personalChats = personalChats
   await personalChats.start()
   personalClients.updated = provider => personalChats.clientUpdated(provider)
   const promptSubscriptions = {
@@ -795,21 +813,10 @@ async function createRuntime(): Promise<NativeRuntimeController> {
   const unsubscribeAgents = hostRouter.subscribe(state => agentStatePublisher.publish(state))
   const unsubscribeAgentDetail = hostRouter.subscribeThreadDetail(detail => agentDetailPublisher.publish(detail))
   // Quitting drops the held state with its timer: the windows it would reach are going away.
-  registerQuitDrain(app, async () => {
+  quitHandles.stopPublishing = () => {
     unsubscribePersonalChats(); unsubscribeAgents(); unsubscribeAgentDetail()
     agentStatePublisher.dispose(); agentDetailPublisher.dispose()
-    // Closing the local runtime drains a worktree cleanup sweep in progress before its host closes (ADR-0041).
-    // Phones go first: the listener closes and Sotto's Serve setting is removed before the host it serves closes.
-    await phoneAccess.close().catch(() => logOperational('phone-access-close-failed'))
-    // A setup running now ends as Stop setup would, before the hosts it checks and adds close.
-    await hostSetup.close().catch(() => undefined)
-    providerJobs.close()
-    hostUpdates.dispose()
-    const results = await Promise.allSettled([desktopHosts.close(), localRuntime.close(), personalChats.close(), hostSetupTools.close()])
-    hostRouter.dispose()
-    const failure = results.find(result => result.status === 'rejected')
-    if (failure?.status === 'rejected') throw failure.reason
-  }, () => console.error('[Sotto] host-shutdown-failed'))
+  }
   const showTurnRecords = (): void => {
     void (async () => {
       await writeFile(turns.path(), '', { flag: 'wx' }).catch(() => undefined)
@@ -1011,20 +1018,21 @@ async function createRuntime(): Promise<NativeRuntimeController> {
       if (grantDefaultChanged) browserService?.settingChanged()
       agentHistoryEnabled = settings.historyEnabled
       agentVoiceCoordinatorEnabled = settings.voiceCoordinatorEnabled
-      await cleanSettingsHistory(agentControl, personalChats)
-      showWidgetWhenIdle = settings.showWidgetWhenIdle
-      widgetPresentation = widgetPresentationFor(settings)
-      if (!dictationLifecycle.isIdle()) {
-        await dictationLifecycle.repaint()
-      } else if (settings.onboardingComplete) {
-        // Re-seed the resting sliver so theme/shortcut changes repaint it and
-        // the idle-visibility reveal/conceal decision is re-evaluated.
-        await publishIdleWidgetState(settings)
-      } else if (!settings.showWidgetWhenIdle) {
-        windows.hideWidget()
-      }
-      const delivered = await messageDelivery.sendToMain(SETTINGS_CHANGED, settings)
-      if (!delivered) logOperational('native-main-send-failed')
+      await cleanSettingsHistory(agentControl, personalChats, async () => {
+        showWidgetWhenIdle = settings.showWidgetWhenIdle
+        widgetPresentation = widgetPresentationFor(settings)
+        if (!dictationLifecycle.isIdle()) {
+          await dictationLifecycle.repaint()
+        } else if (settings.onboardingComplete) {
+          // Re-seed the resting sliver so theme/shortcut changes repaint it and
+          // the idle-visibility reveal/conceal decision is re-evaluated.
+          await publishIdleWidgetState(settings)
+        } else if (!settings.showWidgetWhenIdle) {
+          windows.hideWidget()
+        }
+        const delivered = await messageDelivery.sendToMain(SETTINGS_CHANGED, settings)
+        if (!delivered) logOperational('native-main-send-failed')
+      })
     },
   })
   const trayController = new TrayController(trayAdapter, {
@@ -1342,7 +1350,9 @@ app.setAppUserModelId(APP_ID)
 // Electron's unhandled default does exactly that.
 app.on('window-all-closed', () => undefined)
 
-void bootstrapSotto({ app, initialize: createRuntime, log: logOperational }).catch(() => {
+void bootstrapSotto({ app, initialize: createRuntime, log: logOperational,
+  ...(e2eConfiguration === null ? { prepareUserData: () => migrateLegacyUserData(app.getPath('userData')) } : {}),
+}).catch(() => {
   logOperational('bootstrap-terminal-failed')
   app.quit()
 })

@@ -197,6 +197,8 @@ export class WorkspaceHost implements AgentHost {
   private storeUnavailable = false
   /** What the store already holds for a thread, so a publish appends the difference rather than the history. */
   private readonly known = new Map<string, { epoch: string | undefined; messages: MessageMark[] }>()
+  /** Legacy snapshots may replay private messages after retention resumes. Keep their identities alone. */
+  private readonly privateLegacyMessages = new Map<string, Set<string>>()
   /** The threads a window is looking at, each with how many turns of its history it has been given. */
   private readonly watched = new Map<string, number>()
   /** False until a window has said what it is looking at. Until then no thread's history is put away. */
@@ -222,6 +224,8 @@ export class WorkspaceHost implements AgentHost {
   private readonly pendingEvents = new Map<string, ThreadEvent[]>()
   /** A failed privacy transition must not later promote these pending words to durable history. */
   private pendingEventsPrivate = false
+  /** Turning history back on cannot cancel a durable redaction that has not finished. */
+  private historyRedactionPending = false
   /** Failed batches stay ahead of later events; organization saves cannot acknowledge their warning. */
   private readonly failedEventThreads = new Set<string>()
   private readonly invalidEventThreads = new Set<string>()
@@ -952,7 +956,7 @@ export class WorkspaceHost implements AgentHost {
         return messages.length ? [{ threadId: thread.id, messages, ...(thread.activities ? { activities: thread.activities.slice(-MAX_AGENT_ACTIVITIES) } : {}), ...(thread.historyEpoch ? { historyEpoch: thread.historyEpoch } : {}) }] : []
       }))
       this.ready = true
-      await this.privacyChanged()
+      await this.applyHistoryPrivacy(false)
     })().catch(error => { this.loading = undefined; throw error })
     return this.loading
   }
@@ -1026,8 +1030,12 @@ export class WorkspaceHost implements AgentHost {
       this.saveError = 'Thread activity could not be saved. Saved activity remains available. Restore local storage and restart Sotto.'
     }
   }
+  private historyWritable(): boolean {
+    return !this.storeUnavailable && (this.threadStore.ephemeral
+      || (this.historyEnabled() && !this.pendingEventsPrivate && !this.historyRedactionPending))
+  }
   private saveActivities(): void {
-    if (this.storeUnavailable || this.activityStoreUnavailable) return
+    if (!this.historyWritable() || this.activityStoreUnavailable) return
     for (const thread of this.state.snapshot.threads) {
       if (thread.activities !== undefined) this.threadStore.syncActivities(thread.id, retainedActivities(thread.activities), thread.historyEpoch)
     }
@@ -1101,7 +1109,7 @@ export class WorkspaceHost implements AgentHost {
     if (this.pendingEvents.size === 0 || !this.ready || this.storeUnavailable) return
     // Another store may have stopped privacyChanged before this connection could be replaced.
     // The setting already forbids durable text, including a timer or shutdown retry.
-    if (!this.threadStore.ephemeral && (!this.historyEnabled() || this.pendingEventsPrivate)) return
+    if (!this.historyWritable()) return
     for (const [threadId, pending] of this.pendingEvents) {
       const events: ThreadEvent[] = []
       for (const event of pending) {
@@ -1197,7 +1205,7 @@ export class WorkspaceHost implements AgentHost {
    * loaded window while a pane is looking at it, nothing at all while none is.
    */
   private record(thread: AgentThread, messages: readonly AgentMessage[], previousEpoch: string | undefined): AgentMessage[] {
-    if (this.storeUnavailable) return [...messages]
+    if (!this.historyWritable()) return [...messages]
     const events = this.differences(thread.id, messages, thread.historyEpoch, previousEpoch)
     if (events.length) {
       try { this.threadStore.appendMany(thread.id, events); this.noteWritten(thread.id, events) }
@@ -1213,6 +1221,18 @@ export class WorkspaceHost implements AgentHost {
     const hidden = Math.min(this.hidden.get(thread.id) ?? 0, messages.length)
     if (hidden > 0) thread.earlierAvailable = true
     return hidden > 0 ? messages.slice(hidden) : [...messages]
+  }
+  private legacyMessages(thread: AgentThread, messages: readonly AgentMessage[]): readonly AgentMessage[] {
+    let privateMessages = this.privateLegacyMessages.get(thread.id)
+    if (!this.historyEnabled()) {
+      if (!privateMessages) {
+        privateMessages = new Set()
+        this.privateLegacyMessages.set(thread.id, privateMessages)
+      }
+      for (const message of messages) privateMessages.add(message.id)
+      return messages
+    }
+    return privateMessages ? messages.filter(message => !privateMessages.has(message.id)) : messages
   }
   /** Puts this thread's current window into memory: what the pane draws, and how much sits before it. */
   private loadWindow(threadId: string): void {
@@ -1583,8 +1603,9 @@ export class WorkspaceHost implements AgentHost {
         merged.messages = old?.messages ?? []
         merged.summary = old?.summary ?? this.threadSummary(merged)
       } else {
-        merged.messages = this.record(merged, thread.messages, old?.historyEpoch)
-        merged.summary = this.threadSummary(merged, this.storeUnavailable ? merged.messages : thread.messages)
+        const messages = this.legacyMessages(merged, thread.messages)
+        merged.messages = this.record(merged, messages, old?.historyEpoch)
+        merged.summary = this.threadSummary(merged, this.storeUnavailable ? merged.messages : messages)
       }
       threads.set(thread.id, merged)
     }
@@ -1676,7 +1697,7 @@ export class WorkspaceHost implements AgentHost {
               await this.store.write(saved)
               this.savedOrganization = saved
             }
-            if (!this.activityStoreUnavailable) this.saveError = undefined
+            if (!this.storeUnavailable && !this.subagentUnavailable && !this.activityStoreUnavailable) this.saveError = undefined
           }
           catch (error) { this.dirty = true; throw error }
         }
@@ -1691,14 +1712,26 @@ export class WorkspaceHost implements AgentHost {
    * back on hands the file over from here, and what was not kept is gone.
    */
   async privacyChanged(): Promise<void> {
-    try { await this.changeHistoryPrivacy() }
+    await this.applyHistoryPrivacy(true)
+  }
+  private async applyHistoryPrivacy(retryUnavailable: boolean): Promise<void> {
+    try { await this.changeHistoryPrivacy(retryUnavailable) }
     finally { await this.checkpointHooks?.privacyChanged?.() }
   }
-  private async changeHistoryPrivacy(): Promise<void> {
+  private async changeHistoryPrivacy(retryUnavailable: boolean): Promise<void> {
     this.activityInputs.clear()
     if (!this.historyEnabled()) {
       this.activityJsonFallbackAllowed = false
       this.pendingEventsPrivate = true
+      this.historyRedactionPending ||= !this.threadStore.ephemeral
+      if (!this.eventSourced) {
+        for (const thread of this.state.snapshot.threads) {
+          this.legacyMessages(thread, thread.messages)
+          const known = this.known.get(thread.id)
+          const privateMessages = this.privateLegacyMessages.get(thread.id)!
+          if (known && known.epoch === thread.historyEpoch) for (const message of known.messages) privateMessages.add(message.id)
+        }
+      }
     } else if (this.pendingEventsPrivate) {
       // Clear before either store switches: an earlier failed redaction may have left this one durable.
       this.pendingEvents.clear()
@@ -1727,25 +1760,44 @@ export class WorkspaceHost implements AgentHost {
         }
       } catch { this.saveError = 'Saved agent history could not be removed. Restore access to local storage and try again.'; throw new Error(this.saveError) }
     }
-    if (!this.storeUnavailable) {
+    // Startup keeps its unavailable-store fallback; the coordinator retries once it exists.
+    if (!this.storeUnavailable || (retryUnavailable && this.historyRedactionPending)) {
       const wanted = this.historyEnabled()
-      if (wanted === this.threadStore.ephemeral) {
+      if (wanted === this.threadStore.ephemeral || this.historyRedactionPending) {
+        const redacting = !wanted || this.historyRedactionPending
         try {
           // Events held while history was off must never cross into the durable connection.
           // Turning history off instead carries failed durable events into this run's memory store.
           clearTimeout(this.historyRetryTimer)
           this.historyRetryTimer = undefined
           this.historyRetryDelay = 1_000
-          if (wanted) {
-            this.saveActivities()
-            this.threadStore.becomeDurable()
-          } else {
+          if (redacting) {
+            // A failed switch may have closed the connection. Reopen before retrying identity cleanup.
+            if (this.storeUnavailable) this.threadStore.open()
             // Identity suppression needs no output validation. Even if it fails, erase the durable text.
             try {
               for (const thread of this.state.snapshot.threads) this.threadStore.redactActivityIdentities(thread.id, (thread.activities ?? []).map(activity => activity.id))
             } finally { this.threadStore.becomeEphemeral() }
+            this.historyRedactionPending = false
+            this.storeUnavailable = false
+            this.activityStoreUnavailable = false
           }
-        } catch { this.storeUnavailable = true; this.saveError = HISTORY_OPEN_ERROR }
+          if (wanted) {
+            this.saveActivities()
+            this.threadStore.becomeDurable()
+          }
+        } catch {
+          const redactionFailed = redacting && this.historyRedactionPending
+          // A failed reopen can leave no connection. Keep the workspace usable until restart.
+          this.storeUnavailable = true
+          const failure = redactionFailed ? 'Thread messages could not be removed. Restore access to local storage and try again.' : HISTORY_OPEN_ERROR
+          // Keep the transition retryable by the coordinator's privacy maintenance.
+          // Scrub pending request words from workspace.json even while SQLite cleanup must retry.
+          this.dirty = true
+          await this.flush()
+          this.saveError = failure
+          throw new Error(failure)
+        }
         // The switch emptied the store either way, so what mirrored it is no longer true.
         this.known.clear()
         this.hidden.clear()
@@ -1755,6 +1807,10 @@ export class WorkspaceHost implements AgentHost {
     }
     this.dirty = true
     await this.flush()
+    if (retryUnavailable && this.storeUnavailable) {
+      this.saveError = HISTORY_OPEN_ERROR
+      throw new Error(HISTORY_OPEN_ERROR)
+    }
   }
   async connect(provider?: ProviderId): Promise<AgentHostSnapshot> {
     await this.initialize(); this.accept(await this.inner.connect(provider)); await this.flush(); return this.workspaceSnapshot()
@@ -2052,6 +2108,7 @@ export class WorkspaceHost implements AgentHost {
       try { await this.flush() }
       catch (error) {
         this.state.snapshot.threads = this.state.snapshot.threads.filter(item => item.id !== thread.id)
+        this.privateLegacyMessages.delete(thread.id)
         this.state.creations = this.state.creations.filter(item => item.threadId !== thread.id)
         const currentProject = this.state.snapshot.projects.find(item => item.id === command.projectId)
         if (currentProject && projectSettledAt !== null) currentProject.workspaceSettledAt = projectSettledAt

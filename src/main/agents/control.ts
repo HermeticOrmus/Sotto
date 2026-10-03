@@ -1,4 +1,5 @@
 import { CheckoutSendRefusal, type CheckoutPendingWork } from './checkoutMutations'
+import type { ShortTextPurpose, ShortTextFailureReason } from '../llm/shortTextWriter'
 import type { AgentSkillReference } from '../../shared/agentSkills'
 import type { AgentFileReference } from '../../shared/agentFiles'
 import type { AgentActivity } from '../../shared/agentActivity'
@@ -10,7 +11,7 @@ import { isAbsolute, join, resolve } from 'node:path'
 import { z } from 'zod'
 import {
   agentAssignmentSchema, agentConfigurationSchema, agentQueueItemSchema, agentAttachmentHandlesSchema, agentAttachmentHandleSchema, agentAttachmentSchema, attachmentDigestSchema, AGENT_MAX_ATTACHMENTS, agentThreadOptionsSchema, agentThreadDraftSchema, agentDeliverySchema,
-  providerUpgradeSchema, defaultAgentConfiguration, PROVIDER_REJECTED_ACTION, PROVIDER_RESULT_UNCONFIRMED, THREAD_SETTINGS_UNRECONCILED, EMPTY_AGENT_HOST, PROVIDER_LABELS, supportsAgentSupervision, isSubscriptionReasoning, agentDeliveryReceiptsSchema, MAX_DELIVERED_DRAFTS, enabledThreadProviders, defaultNewThreadModelId, capabilitiesForThread, isThreadProviderConnected, providerIdSchema, threadSummaryOf, lastUserMessageIdOf, noProviderRefusal,
+  providerUpgradeSchema, defaultAgentConfiguration, PROVIDER_REJECTED_ACTION, PROVIDER_RESULT_UNCONFIRMED, PROJECT_FOLDER_MISSING, THREAD_SETTINGS_UNRECONCILED, EMPTY_AGENT_HOST, PROVIDER_LABELS, supportsAgentSupervision, isSubscriptionReasoning, agentDeliveryReceiptsSchema, MAX_DELIVERED_DRAFTS, enabledThreadProviders, defaultNewThreadModelId, capabilitiesForThread, isThreadProviderConnected, providerIdSchema, threadSummaryOf, lastUserMessageIdOf, noProviderRefusal,
   type AgentMessage, type AgentThreadDetail, type AgentThreadDetailDelta, type AgentThreadDetailUpdate, type ProviderId, type AgentModel, type AgentRuntimeMode, type AgentAttachmentHandle, type AgentAttachmentUpload, type AgentAttachmentContent, type AgentAttachmentPreviewRequest, type AgentAttachmentPreviewResult, type AgentAssignment, type AgentCommand, type AgentConfiguration, type AgentDelivery, type AgentThreadDraft, type AgentHostSnapshot, type AgentProject, type AgentQueueItem, type AgentState, type AgentThread, type ProviderClientUpdate, type SubscriptionProvider,
 } from '../../shared/agents'
 import { nearestReasoningEffort, resolveNewThreadPermission } from '../../shared/newThreadDefaults'
@@ -39,6 +40,7 @@ import { resolveFilesBinding } from '../files/binding'
 import { THREAD_SCOPED_COMMAND_TYPES } from '../../shared/threadLanes'
 import type { FilesBinding } from '../files/service'
 import { isSottoRequest, withSottoRequests, type SottoThreadRequests } from './sottoRequests'
+import { FinishedUnread } from './finishedUnread'
 
 /** One shared empty array stands in for every shell thread's history; the clone that follows copies nothing. */
 const EMPTY_MESSAGES: AgentMessage[] = []
@@ -84,6 +86,8 @@ const savedSchema = z.object({
   pendingRequest: z.string().max(20_000).default(''),
   contextSavedAt: z.number().default(0),
   coordinatorConversation: z.boolean().default(false),
+  /** The threads that finished while no client showed them, oldest first (ADR-0046). */
+  finishedUnread: z.array(z.string()).default([]),
   composing: z.boolean(), outbox: z.array(z.object({
     id: z.string(), type: z.enum(['send', 'steer', 'create-project', 'create-thread', 'configure-thread', 'answer', 'interrupt', 'compact-thread']),
     provider: providerIdSchema.optional(),
@@ -149,6 +153,17 @@ function outcomeOf(before: ProviderClientUpdate): Partial<ProviderClientUpdate> 
   for (const key of ['error', 'ranAt', 'step', 'failure', 'printed'] as const) if (before[key] !== undefined) Object.assign(kept, { [key]: before[key] })
   return kept
 }
+/**
+ * Whether a client's last update still describes a new reading of it: the same version installed, measured against the
+ * same release. A newer release makes the client behind again, and "is now 2.1.287" would hide 2.1.288. A registry that
+ * could not be read moves nothing.
+ */
+const outcomeHolds = (before: ProviderClientUpdate, reading: ProviderClientUpdate): boolean =>
+  before.installed === reading.installed && (reading.published === undefined || reading.published === before.published)
+/** A new reading with a client's last update on it. A registry not read this time leaves the release that update was measured against. */
+const withOutcome = (reading: ProviderClientUpdate, before: ProviderClientUpdate): ProviderClientUpdate => ({
+  ...reading, ...reading.published === undefined && before.published !== undefined ? { published: before.published } : {}, ...outcomeOf(before),
+})
 
 /** Owns assignment authority, queue ordering and durable dispatch intent across all host adapters. */
 import type { GitRefsPage, GitRefsRequest } from '../../shared/gitRefs'
@@ -209,7 +224,7 @@ export class AgentControl {
   private readonly clientWaiters = new Map<ProviderId, { resolve: () => void; reject: (error: unknown) => void }[]>()
   private clientLineRunning = false
   /** Where each waiting client stood before it joined the line, so Cancel update puts it back. */
-  private readonly clientLineBefore = new Map<ProviderId, Partial<ProviderClientUpdate>>()
+  private readonly clientLineBefore = new Map<ProviderId, ProviderClientUpdate>()
   private serial: Promise<unknown> = Promise.resolve()
   private unsubscribe: (() => void) | null = null
   private reconnect: ReturnType<typeof setTimeout> | null = null
@@ -247,6 +262,8 @@ export class AgentControl {
   private answeredRequests: Saved['answeredRequests'] = []
   /** Ephemeral view interest; never persisted, selected or granted assignment authority. */
   private viewedThreadIds: readonly string[] = []
+  /** Threads that finished while no client showed them; what a client shows is what it observes (ADR-0046). */
+  private finishedUnread = new FinishedUnread()
   private readonly dispatchTurns = new Map<string, ActiveTurn>()
   private readonly feedbackReady = new Set<ActiveTurn>()
   private broadcastCancel: (() => void) | null = null
@@ -290,7 +307,7 @@ export class AgentControl {
      */
     writeThreadTitle?: (threadId: string, exchange: ThreadTitleExchange) => Promise<string | null>
     /** Local record of a silent failure; never a banner, never shown to the user. */
-    logFailure?: (code: string, detail: string) => void
+    logFailure?: (code: 'client-update-handoff-failed' | 'thread-title-failed' | 'thread-answer-attribution-failed' | 'short-writing-failed', detail: ProviderId | 'failed' | `${ShortTextPurpose} ${ShortTextFailureReason}`) => void
     /** Defers a coalesced broadcast; injectable so tests own the clock. */
     schedule?: PublishScheduler
     /** What each installed client publishes, and the press that installs it. */
@@ -357,8 +374,9 @@ export class AgentControl {
     this.persistedDrafts = this.draftSignatures(images.threadDrafts)
     await this.attachmentPreviews.load(this.stageInline)
     this.contextActivityAt = saved.contextSavedAt
-    const { outbox, contextSavedAt, coordinatorConversation, manualDraftId, deliveredPromptDigests, answeredRequests, ...restored } = saved
+    const { outbox, contextSavedAt, coordinatorConversation, manualDraftId, deliveredPromptDigests, answeredRequests, finishedUnread, ...restored } = saved
     this.coordinatorConversation = coordinatorConversation
+    this.finishedUnread.restore(finishedUnread)
     this.queueSelectionPinned = coordinatorConversation
     this.deliveredPromptDigests = deliveredPromptDigests
     this.answeredRequests = answeredRequests
@@ -373,6 +391,8 @@ export class AgentControl {
     if (this.dependencies.host.workspaceSnapshot) this.state.host = this.withSottoRequests(this.dependencies.host.workspaceSnapshot())
     const cutoff = Date.now() - 7 * 86_400_000
     const historyDisabled = this.dependencies.historyEnabled?.() === false
+    // Startup can defer a failed history-store open until this coordinator can run maintenance.
+    this.privacyCleanupPending ||= historyDisabled
     for (const assignment of this.state.assignments) {
       assignment.seenMessageIds = assignment.seenMessageIds.slice(-MAX_SEEN_MESSAGE_IDS)
       if (assignment.contextUpdatedAt < cutoff || historyDisabled) {
@@ -467,6 +487,17 @@ export class AgentControl {
   private withSottoRequests(snapshot: AgentHostSnapshot): AgentHostSnapshot {
     return this.sottoRequests ? withSottoRequests(snapshot, this.sottoRequests.requests()) : snapshot
   }
+  /**
+   * The threads some client shows now (ADR-0046). The host service says which: every client's observed threads, the
+   * desktop window's only while it has the focus. Showing a thread is what reads its finish, on every client at once,
+   * and the cleared mark is saved so a restart keeps it read. True when a mark was cleared.
+   */
+  showThreads(threadIds: readonly string[]): boolean {
+    if (!this.finishedUnread.show(threadIds)) return false
+    this.publish()
+    void this.persist().catch(() => undefined)
+    return true
+  }
   hasPendingThreadWork(threadId: string): boolean {
     return this.pendingThreadWorkReason(threadId) !== null
   }
@@ -498,6 +529,7 @@ export class AgentControl {
    */
   get(): AgentState {
     const state = structuredClone(this.state)
+    state.host.threads = state.host.threads.map(thread => this.finishedUnread.publish(thread))
     state.hostId = state.host.hostId
     state.threadDraftPersistence = this.draftPersistence()
     state.historyEnabled = this.dependencies.historyEnabled?.() !== false
@@ -538,7 +570,7 @@ export class AgentControl {
   }
   shell(): AgentState {
     const threads = this.state.host.threads
-    const bare = { ...this.state, host: { ...this.state.host, threads: threads.map(thread => ({
+    const bare = { ...this.state, host: { ...this.state.host, threads: threads.map(thread => this.finishedUnread.publish({
       ...thread, messages: EMPTY_MESSAGES,
       ...(thread.activities === undefined ? {} : { activities: EMPTY_ACTIVITIES }),
       summary: threadSummaryOf(thread),
@@ -743,6 +775,7 @@ export class AgentControl {
       activeThreadId, activeProjectId, draft, draftThreadId, draftRequestId, draftAttachments: this.state.draftAttachments ?? [], composing, pendingRequest: retainContext ? pendingRequest : '',
       contextSavedAt: this.contextActivityAt, outbox: this.outbox, manualDraftId: this.manualDraftId, deliveredDrafts: this.state.deliveredDrafts ?? [],
       coordinatorConversation: this.coordinatorConversation,
+      finishedUnread: this.finishedUnread.saved(),
       deliveredPromptDigests: this.deliveredPromptDigests,
       answeredRequests: this.answeredRequests,
       threadDrafts: this.state.threadDrafts ?? [], deliveries: this.state.deliveries ?? [] })
@@ -931,7 +964,8 @@ export class AgentControl {
   /**
    * What every connected client publishes, against what it is running. A provider that is not
    * connected has no known installed version, so nothing is claimed about it. Findings from an
-   * update already run are kept, so "is now 2.1.278" survives the next check.
+   * update already run are kept, so "is now 2.1.278" survives the next check, until a newer
+   * release is published: then the client is behind again and the old finding would hide it.
    */
   private async checkClientUpdates(fresh = false): Promise<void> {
     if (!this.state.configuration.checkClientUpdates) { delete this.state.clientUpdates; return }
@@ -946,15 +980,17 @@ export class AgentControl {
       // A client in the update line keeps where it stands there, even through a fresh check.
       const lined = this.inClientLine(provider.id)
       const before = fresh && !lined ? undefined : previous.find(item => item.id === provider.id)
-      readings.push(before && (lined || (before.state !== 'idle' && before.installed === reading.installed)) ? { ...reading, ...outcomeOf(before) } : reading)
+      readings.push(before && (lined || (before.state !== 'idle' && outcomeHolds(before, reading))) ? withOutcome(reading, before) : reading)
     }
     if (this.disposed) return
     // The update line runs while this check waits on the registry and the disk: whatever it said about a client
-    // meanwhile (its step, how it ended) is newer than what the check started from, and wins.
+    // meanwhile (its step, how it ended) is newer than what the check started from, and wins. How it ended gives way to
+    // a newer release the check found, while waiting or running never does.
     const latest = this.state.clientUpdates ?? []
     for (const [index, reading] of readings.entries()) {
       const now = latest.find(item => item.id === reading.id)
-      if (now && now !== previous.find(item => item.id === reading.id)) readings[index] = { ...reading, ...outcomeOf(now) }
+      if (now && now !== previous.find(item => item.id === reading.id)
+        && (now.state === 'queued' || now.state === 'updating' || reading.published === undefined || reading.published === now.published)) readings[index] = withOutcome(reading, now)
     }
     // A client that updated, failed or did not change still has something to say after its provider
     // drops: losing the record here would take the sentence about it off the card with it.
@@ -1006,7 +1042,7 @@ export class AgentControl {
       if (refusal) { refusals.push(refusal); continue }
       this.clientLine.push(provider)
       const record = this.state.clientUpdates?.find(item => item.id === provider)
-      if (record) this.clientLineBefore.set(provider, outcomeOf(record))
+      if (record) this.clientLineBefore.set(provider, record)
       this.setClientUpdate(provider, { state: 'queued' }, false)
       added += 1
     }
@@ -1023,8 +1059,10 @@ export class AgentControl {
       const at = this.clientLine.indexOf(provider)
       if (at < 0) continue
       this.clientLine.splice(at, 1)
-      // Back as it was before it joined the line: behind, or with the failure it had.
-      this.setClientUpdate(provider, this.clientLineBefore.get(provider) ?? { state: 'idle' }, false)
+      // Back as it was before it joined the line: behind, or with the failure it had, unless a newer release came out meanwhile.
+      const before = this.clientLineBefore.get(provider)
+      const record = this.state.clientUpdates?.find(item => item.id === provider)
+      this.setClientUpdate(provider, before && record && outcomeHolds(before, record) ? outcomeOf(before) : { state: 'idle' }, false)
       this.clientLineBefore.delete(provider)
       const waiting = this.clientWaiters.get(provider) ?? []
       this.clientWaiters.delete(provider)
@@ -1445,9 +1483,9 @@ export class AgentControl {
       if (!thread || thread.titleSource === 'user' || isThreadArchived(thread) || thread.title === title) return
       this.acceptSnapshot(await this.dependencies.host.renameThread!(threadId, title, 'generated'))
       await this.persist()
-    } catch (error) {
+    } catch {
       // A name Sotto offered to write is never worth an error banner: the thread keeps the name it has.
-      this.dependencies.logFailure?.('thread-title-failed', error instanceof Error ? error.message : 'unknown')
+      this.dependencies.logFailure?.('thread-title-failed', 'failed')
     }
   }
   /** Ask again for a thread's name, replacing a generated or stand-in one on explicit request. */
@@ -1668,9 +1706,9 @@ export class AgentControl {
       await this.finishTurn(turn, unconfirmedAnswer?.delivered ? undefined : failure)
       // Completion can settle during persistence or diagnostics, after the catch observed uncertainty.
       if (unconfirmedAnswer?.delivered) failure = undefined
-      // The socket receipt needs this answer's outcome, not a shared error another lane can change.
+      // Socket replies and receipts keep the command's outcome, including Send answering a question draft.
       // Keep the published shell and desktop response as they are.
-      return command.type === 'answer' && client.transport === 'socket'
+      return (command.type === 'answer' || command.type === 'send') && client.transport === 'socket'
         ? { ...this.shell(), error: failure ?? null } : this.shell()
     })
     if (independent) {
@@ -1958,6 +1996,26 @@ export class AgentControl {
   private async execute(command: AgentCommand, turn?: ActiveTurn, manualRetryId?: string, selectionRevision = this.selectionRevision,
     client: ClientIdentity = this.localClient): Promise<void> {
     if (this.disposed) throw new Error('Sotto is stopping. Your draft is saved.')
+    if (client.transport === 'socket' && ['compose', 'send', 'cancel-draft', 'pause-draft', 'cancel-request'].includes(command.type)) {
+      const thread = this.thread(client.selectedThreadId ?? null)
+      const saved = this.state.threadDrafts?.find(draft => draft.threadId === thread.id)
+      if (command.type === 'compose') {
+        const requestId = saved ? saved.requestId : this.state.queue.find(item => item.threadId === thread.id && item.kind === 'question')?.requestId ?? null
+        if (requestId) this.guardClientGrant(client)
+        await this.saveThreadDraft({ type: 'save-thread-draft', threadId: thread.id, draftId: randomUUID(), text: command.text,
+          attachments: command.attachments ?? saved?.attachments ?? [], skills: saved?.skills, files: saved?.files, requestId })
+      } else if (command.type === 'send') {
+        await this.sendDraft(turn, undefined, selectionRevision, client, thread.id)
+      } else if (command.type === 'cancel-draft') {
+        if (this.state.draftThreadId === thread.id) this.clearDraft()
+        else this.state.threadDrafts = (this.state.threadDrafts ?? []).filter(draft => draft.threadId !== thread.id)
+      } else if (command.type === 'pause-draft' && this.state.draftThreadId === thread.id) {
+        this.syncLegacyDraft()
+        this.manualDraftId = null; this.state.draft = ''; this.state.draftAttachments = []
+        this.state.draftThreadId = null; this.state.draftRequestId = null; this.state.composing = false
+      } else if (command.type === 'cancel-request' && this.state.activeThreadId === thread.id) this.state.pendingRequest = ''
+      return
+    }
     // Explicit targets survive host observations and queue-driven selection changes.
     if (turn && 'threadId' in command) {
       turn.threadId = command.threadId
@@ -2114,8 +2172,9 @@ export class AgentControl {
         if (!target || !isAbsolute(target)) throw new Error('Choose an absolute project folder or configure a default projects directory.')
         const path = resolve(target)
         const existing = await stat(path).catch((error: NodeJS.ErrnoException) => { if (error.code !== 'ENOENT') throw error; return null })
-        if (existing && (!existing.isDirectory() || !command.useExisting)) throw new Error('That folder already exists. Select “Use existing folder” to attach it without overwriting its contents.')
-        if (command.useExisting && !existing) throw new Error('That folder no longer exists. Nothing was added. Choose another folder.')
+        if (existing && !existing.isDirectory()) throw new Error('A file with that name is already there. Nothing was added. Choose another name.')
+        if (existing && !command.useExisting) throw new Error('That folder already exists. Nothing was added. Choose another folder, or add this one with Add project to use it as it is.')
+        if (command.useExisting && !existing) throw new Error(PROJECT_FOLDER_MISSING)
         const folderKey = (value: string): string => process.platform === 'win32' ? resolve(value).toLowerCase() : resolve(value)
         const known = command.useExisting ? this.state.host.projects.find(project => folderKey(project.path) === folderKey(path) && (!project.providerId || project.providerId === provider)) : undefined
         if (known) {
@@ -2447,7 +2506,7 @@ export class AgentControl {
       })
     } catch {
       // Never the user's problem and never a lost answer; the log says so by a stable name alone.
-      this.dependencies.logFailure?.('thread-answer-attribution-failed', command.threadId)
+      this.dependencies.logFailure?.('thread-answer-attribution-failed', 'failed')
     }
   }
   private guardAuthority(command: DispatchCommand, turn?: ActiveTurn): void {
@@ -2705,35 +2764,42 @@ export class AgentControl {
     this.say(`Sent to ${thread.title}.`)
     this.observe()
   }
-  private async sendDraft(turn?: ActiveTurn, retryId?: string, selectionRevision = this.selectionRevision, client = this.localClient): Promise<void> {
-    const pendingId = retryId ?? this.outbox.find(item => item.threadId === this.state.draftThreadId)?.id
+  private async sendDraft(turn?: ActiveTurn, retryId?: string, selectionRevision = this.selectionRevision, client = this.localClient, selectedThreadId?: string): Promise<void> {
+    const scoped = selectedThreadId !== undefined
+    const draftThreadId = selectedThreadId ?? this.state.draftThreadId
+    if (!scoped || this.state.draftThreadId === draftThreadId) this.syncLegacyDraft()
+    const pickedDraft = this.state.threadDrafts?.find(draft => draft.threadId === draftThreadId)
+    const draftText = scoped ? pickedDraft?.text ?? '' : this.state.draft
+    const draftAttachments = scoped ? pickedDraft?.attachments ?? [] : this.state.draftAttachments
+    const draftRequestId = scoped ? pickedDraft?.requestId : this.state.draftRequestId
+    const pickedDraftId = scoped ? pickedDraft?.draftId : this.manualDraftId ?? undefined
+    const pendingId = retryId ?? this.outbox.find(item => item.threadId === draftThreadId)?.id
     if (pendingId) {
       this.canAct()
-      this.observe(); this.acceptSnapshot(await this.readThread(this.state.draftThreadId ?? undefined))
+      this.observe(); this.acceptSnapshot(await this.readThread(draftThreadId ?? undefined))
       if (this.outbox.some(item => item.id === pendingId)) throw new Error('An earlier action has an unknown result. Reconnect and inspect the provider before retrying; Sotto will not send it twice.')
       this.say('Reconciled the earlier action. No new prompt was sent.')
       return
     }
     if (turn) {
-      turn.threadId = this.state.draftThreadId
-      turn.projectId = this.state.host.threads.find(thread => thread.id === this.state.draftThreadId)?.projectId ?? null
+      turn.threadId = draftThreadId
+      turn.projectId = this.state.host.threads.find(thread => thread.id === draftThreadId)?.projectId ?? null
     }
     this.canAct()
     this.observe()
-    this.acceptSnapshot(await this.readThread(this.state.draftThreadId ?? undefined, undefined, { beforeSend: true }))
-    const thread = this.thread(this.state.draftThreadId)
-    if (!this.hasDraft()) throw new Error('There is no prompt to send.')
-    const attachments = validatePromptAttachments(this.state.host, thread.modelId, this.state.draftAttachments)
+    this.acceptSnapshot(await this.readThread(draftThreadId ?? undefined, undefined, { beforeSend: true }))
+    const thread = this.thread(draftThreadId)
+    if (!draftText.trim() && !draftAttachments?.length) throw new Error('There is no prompt to send.')
+    const attachments = validatePromptAttachments(this.state.host, thread.modelId, draftAttachments)
     const assignment = this.assignment(thread.id)
-    const text = this.state.draft.trim()
-    this.syncLegacyDraft()
-    const draftId = this.manualDraftId ?? undefined
+    const text = draftText.trim()
+    const draftId = pickedDraftId
     const savedDraft = this.state.threadDrafts?.find(item => item.threadId === thread.id && item.draftId === draftId)
     const skills = savedDraft?.skills
     const files = savedDraft?.files
-    if (this.state.draftRequestId) {
+    if (draftRequestId) {
       if (attachments.length) throw new Error('Images cannot answer a pending question. Remove the images and answer it explicitly.')
-      const requestId = this.state.draftRequestId
+      const requestId = draftRequestId
       if (!thread.requests.some(request => request.id === requestId && request.kind === 'question')) throw new Error('This question is no longer pending. Your answer is saved; review it before starting a new prompt.')
       await this.execute({ type: 'answer', threadId: thread.id, requestId, answer: text }, turn, undefined, selectionRevision, client)
       return
@@ -2747,10 +2813,11 @@ export class AgentControl {
     assignment.stopReason = 'none'; assignment.stoppedAt = ''
     assignment.contextUpdatedAt = Date.now()
     await this.dispatch({ type: 'send', commandId: randomUUID(), threadId: thread.id, messageId, text, ...(skills ? { skills } : {}), ...(files ? { files } : {}), ...(attachments.length ? { attachments } : {}), expectedLastUserMessageId: lastUserMessageIdOf(thread) }, turn, undefined, draftId)
-    if (this.manualDraftId === draftId) this.clearDraft()
+    if (this.manualDraftId === draftId && this.state.draftThreadId === thread.id) this.clearDraft()
+    else this.state.threadDrafts = (this.state.threadDrafts ?? []).filter(draft => draft.threadId !== thread.id || draft.draftId !== draftId)
     this.state.queue = this.state.queue.filter(q => q.threadId !== thread.id || q.kind === 'permission' || q.kind === 'question')
     this.say(`Sent to ${thread.title}.`)
-    this.presentQueue(true, selectionRevision)
+    if (!scoped) this.presentQueue(true, selectionRevision)
   }
   private draftRequestId(threadId: string | null): string | null {
     const thread = this.thread(threadId)
@@ -2909,6 +2976,8 @@ export class AgentControl {
     this.processedAssignmentThreads = new Set()
     const previousThreads = new Map(this.state.host.threads.map(thread => [thread.id, thread]))
     this.state.host = snapshot
+    // Saved with the persist below; a disconnected snapshot changes no mark, so its early return loses nothing.
+    this.finishedUnread.track(snapshot)
     this.scheduleProviderReconnects()
     if (this.state.activeProjectId) this.state.activeProjectId = this.dependencies.host.resolveProjectId?.(this.state.activeProjectId) ?? this.state.activeProjectId
     if (this.state.configuration.defaultModelId) this.state.configuration.defaultModelId = this.dependencies.host.resolveModelId?.(this.state.configuration.defaultModelId) ?? this.state.configuration.defaultModelId

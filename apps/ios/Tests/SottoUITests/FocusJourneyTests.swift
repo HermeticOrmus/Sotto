@@ -103,7 +103,14 @@ import XCTest
         XCTAssertEqual(result, .completed,
                        "The rendered screenshot must finish rotating with the window")
     }
-    private func back() { app.navigationBars.buttons.element(boundBy: 0).tap() }
+    private func back() {
+        let button = app.navigationBars.buttons.element(boundBy: 0)
+        XCTAssertTrue(button.waitForExistence(timeout: 5))
+        let ready = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in button.isHittable }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 5), .completed,
+                       "Back must be hittable after a request sheet closes")
+        button.tap()
+    }
 
     func testCreateThreadInAKnownProject() {
         app.buttons["new-thread"].tap()
@@ -171,6 +178,11 @@ import XCTest
         XCTAssertTrue(app.textFields["thread-search"].isHittable, "Search stays above the scrolling thread list")
         XCTAssertTrue(row("wiring").label.contains("Working"), "Background work must not read Done")
         capture("working-threads")
+        reveal(row("shortcuts"))
+        reveal(row("drives"))
+        XCTAssertTrue(row("shortcuts").label.contains("just finished, not opened yet"), "A thread that finished out of sight says so until it is opened")
+        XCTAssertFalse(row("drives").label.contains("just finished"), "A read row is unchanged")
+        capture("recent-unread-finished")
         reveal(app.textFields["thread-search"], swipingDown: true)
 
         let search = app.textFields["thread-search"]
@@ -234,7 +246,9 @@ import XCTest
         reveal(app.buttons["Not now"])
         app.buttons["Not now"].tap()
         back()
-        app.tabBars.buttons["Computers"].tap()
+        let computers = app.tabBars.buttons["Computers"]
+        XCTAssertTrue(computers.waitForExistence(timeout: 5), "Back restores the main tabs")
+        computers.tap()
         XCTAssertTrue(app.staticTexts["Studio Mac"].waitForExistence(timeout: 5))
         capture("computers")
     }
@@ -243,7 +257,7 @@ import XCTest
         let scenarios = [
             ("request-gone", "That request is no longer waiting."),
             ("markers-unreadable", "Saved unconfirmed actions could not be read. Check your threads before sending again. Nothing was resent."),
-            ("computer-unreadable", "Recovered the saved computer list. Pair computer 22222222-2222-4222-8222-222222222222 again. Its saved connection details could not be read.")
+            ("computer-unreadable", "Recovered the saved computer list. 1 saved computer needs pairing again.")
         ]
         for (scenario, words) in scenarios {
             app.terminate()
@@ -267,6 +281,34 @@ import XCTest
             reveal(dismiss, swipingDown: true)
             dismiss.tap()
             XCTAssertFalse(message.exists)
+        }
+    }
+
+    func testFolderReadTimeoutInBothAppearances() {
+        app.terminate()
+        app.launchArguments = ["--ui-fixture", "--reset-ui-preferences", "--ui-folder-timeout"]
+        app.launch()
+        for appearance in ["dark", "light"] {
+            if appearance == "light" {
+                app.tabBars.buttons["Settings"].tap()
+                app.buttons["setting-light"].tap()
+                let larger = app.switches["setting-larger-text"]
+                reveal(larger); larger.tap()
+                app.tabBars.buttons["Threads"].tap()
+            }
+            app.buttons["new-thread"].tap()
+            app.buttons["new-thread-computer-\(laptop)"].tap()
+            let browse = app.buttons["browse-project-folder"]
+            reveal(browse); browse.tap()
+            let problem = app.staticTexts["Sotto did not answer in time. Try again."]
+            XCTAssertTrue(problem.waitForExistence(timeout: 5))
+            reveal(problem)
+            XCTAssertFalse(app.staticTexts["Delivery is unconfirmed. Check the thread before sending again."].exists)
+            capture("folder-read-timeout-" + appearance)
+            app.buttons["Home"].tap()
+            XCTAssertTrue(problem.waitForExistence(timeout: 5))
+            app.buttons["Back"].tap()
+            app.buttons["Cancel"].tap()
         }
     }
 

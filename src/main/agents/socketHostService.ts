@@ -24,6 +24,7 @@ export class HostConnectionError extends Error {
 export interface SocketHostServiceOptions {
   url: string; token: string; expectedHostId?: string
   onConnectionChange?: (connected: boolean) => void
+  getSelectedThreadId?: () => string | null
   /** A push the host could not send, such as a thread too large for one frame. The message is plain copy. */
   onPushError?: (message: string) => void
   /** What the last push error was about has since arrived: the thread it named, or the shell when it named none. */
@@ -91,6 +92,7 @@ export class SocketHostService implements HostService {
     return task
   }
   private async open(): Promise<HostHello> {
+    const selectedThreadId = this.cached?.activeThreadId
     const generation = ++this.generation
     this.opening?.abort()
     const opening = new AbortController(); this.opening = opening
@@ -122,12 +124,13 @@ export class SocketHostService implements HostService {
       const request = (url.protocol === 'https:' ? httpsRequest : httpRequest)(url, { signal: opening.signal, headers: { Upgrade: 'websocket', Connection: 'Upgrade', 'Sec-WebSocket-Version': '13', 'Sec-WebSocket-Key': key, Authorization: 'Bearer ' + session.session } })
       request.setTimeout(15000, () => request.destroy(new Error('Host connection timed out.')))
       request.on('error', () => reject(new HostConnectionError('The host connection could not be opened.', 'disconnected')))
-      request.on('response', response => { response.resume(); reject(new HostConnectionError('The host refused this connection. Connect again.', 'unauthenticated')) })
+      request.on('response', response => { response.resume(); reject(refusal(response.statusCode ?? 503, 'The host refused this connection. Connect again.', 'unavailable')) })
       request.on('upgrade', (response, stream, head) => {
         if (response.headers['sec-websocket-accept'] !== expected) { stream.destroy(); reject(new HostConnectionError('The host did not accept this protocol.', 'invalid_request')); return }
         stream.setTimeout(0)
         const frames = new SocketFrames(stream, true, text => this.receive(text))
         frames.onClose(() => this.disconnected(frames))
+        frames.startHeartbeat()
         frames.feed(head)
         resolve(frames)
       })
@@ -135,7 +138,7 @@ export class SocketHostService implements HostService {
     })
     if (generation !== this.generation) { this.frames.close(); throw new HostConnectionError('This host connection was closed.', 'disconnected') }
     try {
-      const accepted = (['detail-delta', 'message-aliases', 'client-updates'] as const).filter(feature => this.features.includes(feature))
+      const accepted = (['client-liveness', 'detail-delta', 'message-aliases', 'client-updates'] as const).filter(feature => this.features.includes(feature))
       const accepts = { accepts: [...accepted] }
       const hello = this.read(hostHelloSchema, await this.call({ op: 'hello', afterSeq: this.catchesUp ? this.latestSeq : NO_EVENTS_AFTER, ...accepts }))
       if (hello.hostId !== session.hostId) throw new HostConnectionError('The host identity changed. Connect again.', 'unauthenticated')
@@ -147,9 +150,12 @@ export class SocketHostService implements HostService {
         while (page.hasMore) page = await this.readEvents(this.latestSeq)
       }
       await this.observe(this.observed)
-      // A thread too large to send is reported and left out, the way a push of it is, so it cannot fail
-      // the connection and have the reconnect that follows read it whole again, and again.
-      for (const id of this.observed) await this.readThreadDetail(id).catch((error: unknown) => { if (!this.reportedTooLarge(id, error)) throw error })
+      const pickedThreadId = this.options.getSelectedThreadId ? this.options.getSelectedThreadId() : selectedThreadId
+      if (pickedThreadId && hello.shell.host.threads.some(thread => thread.id === pickedThreadId)) {
+        const selected = this.read(protocolAgentStateSchema, await this.call({ op: 'command', command: { type: 'select-thread', threadId: pickedThreadId } }))
+        this.sameGeneration(generation)
+        this.publish(selected)
+      }
       this.options.onConnectionChange?.(true)
       return hello
     } catch (error) { this.frames?.close(); throw error }
@@ -303,7 +309,7 @@ export class SocketHostService implements HostService {
   async readShell(): Promise<AgentState> { const generation = this.generation; const state = this.read(protocolAgentStateSchema, await this.call({ op: 'shell' })); this.sameGeneration(generation); this.publish(state); return this.shell() }
   async readThreadDetail(threadId: string): Promise<AgentThreadDetail | null> { const generation = this.generation; const detail = this.read(agentThreadDetailResultSchema, await this.call({ op: 'detail', threadId })); this.sameGeneration(generation); this.cacheDetail(threadId, detail); return this.threadDetail(threadId) }
   async readEvents(afterSeq: number, threadId?: string): Promise<HostEventPage> { const page = this.read(hostEventPageSchema, await this.call({ op: 'events', afterSeq, ...(threadId ? { threadId } : {}) })); this.cacheEvents(page, threadId === undefined); return page }
-  /** Observing a thread again lets one the host found too large be tried again: the host sends each observed thread whole. */
+  /** Observing a thread again lets one the host found too large be tried again: the host sends whole each observed thread this client does not hold. */
   async observe(threadIds: string[]): Promise<void> { this.observed = [...threadIds]; for (const id of threadIds) this.tooLarge.delete(id); await this.call({ op: 'observe', threadIds }) }
   async command(command: AgentCommand, _client?: ClientIdentity, commandId?: string): Promise<AgentState> {
     if (command.type === 'observe-threads') { await this.observe(command.threadIds); return this.state() }
@@ -325,7 +331,9 @@ export class SocketHostService implements HostService {
         }
       }
     }
-    return generation === this.generation ? this.state() : acknowledged
+    const refreshed = generation === this.generation ? this.state() : acknowledged
+    // State refreshes cannot settle this command's private answer outcome.
+    return command.type === 'answer' || command.type === 'send' ? { ...refreshed, error: state.error } : refreshed
   }
   async receipt(commandId: string): Promise<HostReceipt> { return this.read(hostReceiptSchema, await this.call({ op: 'receipt', commandId })) }
   attachmentPreview(request: AgentAttachmentPreviewRequest): Promise<AgentAttachmentPreviewResult> {

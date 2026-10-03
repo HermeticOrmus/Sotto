@@ -10,8 +10,12 @@ let modelSources = ["Sotto/AppModel.swift", "Sotto/KeychainStore.swift", "Tests/
 let appDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Sotto")
 let otherAppFiles = (try? FileManager.default.contentsOfDirectory(atPath: appDirectory.path)) ?? []
 modelTests = [.testTarget(name: "SottoAppModelTests", dependencies: ["SottoCore"], path: ".",
-    exclude: ["Sources", "Scripts", "Sotto.xcodeproj", "README.md", "ExportOptions.example.plist", "Tests/SottoCoreTests", "Tests/SottoUITests"]
+    exclude: ["Sources", "Scripts", "Sotto.xcodeproj", "README.md", "ExportOptions.example.plist", "Tests/SottoCoreTests", "Tests/SottoUITests", "Tests/SottoConnectionTests"]
         + otherAppFiles.filter { $0 != "AppModel.swift" && $0 != "KeychainStore.swift" }.map { "Sotto/" + $0 }, sources: modelSources)]
+modelTests.append(.testTarget(name: "SottoConnectionTests", dependencies: ["SottoCore"], path: ".",
+    exclude: ["Sources", "Scripts", "Sotto.xcodeproj", "README.md", "ExportOptions.example.plist", "Tests/SottoCoreTests", "Tests/SottoUITests", "Tests/SottoAppModelTests"]
+        + otherAppFiles.filter { $0 != "HostConnection.swift" }.map { "Sotto/" + $0 },
+    sources: ["Sotto/HostConnection.swift", "Tests/SottoConnectionTests"]))
 #endif
 let package = Package(name: "SottoCore", platforms: [.iOS(.v17), .macOS(.v13)],
     products: [.library(name: "SottoCore", targets: ["SottoCore"])],

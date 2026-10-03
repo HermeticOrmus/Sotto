@@ -20,6 +20,7 @@ export interface ClientIdentity {
   readonly clientId: string
   readonly user: string
   readonly transport: 'ipc' | 'socket'
+  readonly selectedThreadId?: string | null
 }
 
 /**
@@ -100,6 +101,8 @@ export interface LocalHostControl {
   gitChangedFiles?(request: GitChangedFilesRequest): Promise<GitChangedFiles>
   /** One pull request of a thread's, for the Pull request surface and its dialogs (ADR-0027). */
   gitPullRequest?(request: GitPullRequestRequest): Promise<GitPullRequestDetail | null>
+  /** The threads some client shows now, for the finished-unread mark (ADR-0046); true when a mark was cleared. */
+  showThreads?(threadIds: readonly string[]): boolean
 }
 
 /**
@@ -109,6 +112,12 @@ export interface LocalHostControl {
  */
 export class LocalHostService implements HostService {
   private readonly observations = new Map<string, string[]>()
+  /**
+   * Whether this computer's own window has the focus. Its panes show their threads only while it does (ADR-0046): a
+   * thread that finishes behind another app, minimised or hidden to the tray is finished unread. A host with no window
+   * to ask leaves it true, and a host without a screen has no window client at all.
+   */
+  private windowFocused = true
   private readonly control: LocalHostControl
   private readonly eventSource: ThreadEventSource | undefined
 
@@ -148,12 +157,22 @@ export class LocalHostService implements HostService {
   // The folder browser reads this machine, not the coordinator, so it goes straight to the filesystem
   // rather than through `LocalHostControl`.
   hostFolders(request: HostFoldersRequest): Promise<HostFoldersResult> { return listHostFolders(request) }
-  command(command: AgentCommand, client: ClientIdentity): Promise<AgentState> {
-    if (command.type === 'observe-threads') {
-      if (command.threadIds.length) this.observations.set(client.clientId, command.threadIds)
-      else this.observations.delete(client.clientId)
-      command = { type: 'observe-threads', threadIds: [...new Set([...this.observations.values()].flat())] }
-    }
-    return this.control.commandShell(command, client)
+  async command(command: AgentCommand, client: ClientIdentity): Promise<AgentState> {
+    if (command.type !== 'observe-threads') return this.control.commandShell(command, client)
+    if (command.threadIds.length) this.observations.set(client.clientId, command.threadIds)
+    else this.observations.delete(client.clientId)
+    // What every client observes is what the host loads and streams, focused or not; only showing waits on the focus.
+    const state = await this.control.commandShell({ type: 'observe-threads', threadIds: [...new Set([...this.observations.values()].flat())] }, client)
+    return this.control.showThreads?.(this.shownThreads()) ? this.control.shell() : state
+  }
+  /** Main reports the window's focus as it moves; gaining it shows the window's panes again, which reads their finish. */
+  setWindowFocused(focused: boolean): void {
+    if (focused === this.windowFocused) return
+    this.windowFocused = focused
+    this.control.showThreads?.(this.shownThreads())
+  }
+  /** The threads some client shows: every client's observed threads, the window's only while it has the focus. */
+  private shownThreads(): string[] {
+    return [...new Set([...this.observations].flatMap(([clientId, ids]) => clientId === DESKTOP_WINDOW_CLIENT_ID && !this.windowFocused ? [] : ids))]
   }
 }

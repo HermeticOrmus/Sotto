@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, vi } from 'vitest'
 import { it } from 'vitest'
 import { startHeadlessHost } from '../../src/host'
 import { HostCredentialEncryption } from '../../src/host/credentials'
+import { AtomicJsonStore } from '../../src/main/storage/atomicJsonStore'
 import { AgentCredentials } from '../../src/main/agents/credentials'
 import { desktopWindowClient } from '../../src/main/agents/hostService'
 import { DesktopHosts, reconnectDelayMs } from '../../src/main/hosts/desktopHosts'
@@ -114,6 +115,51 @@ async function add(target = 'forge'): Promise<Connection> {
   return remote
 }
 describe('desktop remote host management over a real socket', () => {
+  it('retries a socket that drops while the connected host identity is saved', async () => {
+    const remote = await add()
+    await manager.command({ type: 'set-enabled', id: remote.id, enabled: false })
+    retryDelay = () => 60_000
+    const sockets: SocketHostService[] = []
+    const connect = SocketHostService.prototype.connect
+    const opening = vi.spyOn(SocketHostService.prototype, 'connect').mockImplementation(function (this: SocketHostService) {
+      sockets.push(this)
+      return connect.call(this)
+    })
+    const write = AtomicJsonStore.prototype.write
+    let dropped = false
+    const saving = vi.spyOn(AtomicJsonStore.prototype, 'write').mockImplementation(async function (this: AtomicJsonStore<unknown>, value) {
+      const socket = sockets.at(-1)
+      if (!dropped && socket && Array.isArray(value) && value.some(item => item.id === remote.id)) {
+        dropped = true
+        await socket.close()
+      }
+      return write.call(this, value)
+    })
+    try {
+      await manager.command({ type: 'set-enabled', id: remote.id, enabled: true })
+      await vi.waitFor(() => expect(scheduled).toEqual([0]))
+    } finally { opening.mockRestore(); saving.mockRestore() }
+    expect(dropped).toBe(true)
+    expect(manager.get().hosts[0]).toMatchObject({ phase: 'connecting', reconnecting: true })
+    expect(scheduled).toEqual([0])
+    expect(router.shell().connections).not.toContainEqual(expect.objectContaining({ hostId: reportedHostId, connected: true }))
+  })
+
+  it('refuses pairing before spending a code when secure storage is unavailable', async () => {
+    const available = vi.spyOn(credentials, 'available').mockReturnValue(false)
+    try { await add() } finally { available.mockRestore() }
+    expect(host.pairing.list()).toHaveLength(0)
+    expect(manager.get().adding).toMatchObject({ phase: 'error', error: expect.stringContaining('Secure credential storage is unavailable') })
+  })
+
+  it('revokes a fresh pairing when saving its credential fails', async () => {
+    const saving = vi.spyOn(credentials, 'set').mockRejectedValueOnce(new Error('Fixture storage failure'))
+    try { await add() } finally { saving.mockRestore() }
+    expect(host.pairing.list()).toHaveLength(0)
+    expect(await savedFile()).toEqual([])
+    expect(manager.get().adding).toMatchObject({ phase: 'error' })
+  })
+
   it('lets a new SSH desktop change permission modes immediately, leaves phone pairing unprivileged, and preserves revocation on reconnect', async () => {
     const remote = await add()
     const local = desktopWindowClient('desktop-test')
@@ -390,19 +436,21 @@ describe('desktop remote host management over a real socket', () => {
   it('keeps retrying when pairing again meets a busy host, instead of calling it a failed pairing', async () => {
     const remote = await add()
     await host.pairing.revoke(host.pairing.verifyToken(credentials.get('remote-host:' + remote.id))!)
-    // Spend the host's pairing budget for the minute, the way a loop guessing codes would.
-    const guess = () => fetch('http://127.0.0.1:' + host.descriptor!.port + '/v1/pair', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ v: 1, code: 'WRONG', name: 'Guess' }) })
-    let response = await guess()
-    for (let index = 0; response.status !== 429 && index < 20; index++) response = await guess()
-    expect(response.status).toBe(429)
-    retryDelay = attempt => attempt === 0 ? 0 : 60_000
-    launchers[0]!.callbacks!.onDisconnected!('dropped')
-    // The session is refused, pairing again is refused as busy, and a second retry is scheduled after it.
-    await vi.waitFor(() => expect(scheduled).toEqual([0, 1]))
-    expect(manager.get().hosts[0]).toMatchObject({ phase: 'connecting', reconnecting: true })
-    await manager.command({ type: 'disconnect', id: remote.id })
-    await manager.command({ type: 'connect', id: remote.id })
-    expect(manager.get().hosts[0]).toMatchObject({ phase: 'error', error: HOST_BUSY })
+    const fetchOriginal = globalThis.fetch
+    const pairingResponse = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      if (String(input).endsWith('/v1/pair')) return Promise.resolve(new Response(JSON.stringify({ v: 1, error: { code: 'busy', message: HOST_BUSY } }), { status: 429 }))
+      return fetchOriginal(input, init)
+    })
+    try {
+      retryDelay = attempt => attempt === 0 ? 0 : 60_000
+      launchers[0]!.callbacks!.onDisconnected!('dropped')
+      // The session is refused, pairing again is refused as busy, and a second retry is scheduled after it.
+      await vi.waitFor(() => expect(scheduled).toEqual([0, 1]))
+      expect(manager.get().hosts[0]).toMatchObject({ phase: 'connecting', reconnecting: true })
+      await manager.command({ type: 'disconnect', id: remote.id })
+      await manager.command({ type: 'connect', id: remote.id })
+      expect(manager.get().hosts[0]).toMatchObject({ phase: 'error', error: HOST_BUSY })
+    } finally { pairingResponse.mockRestore() }
   })
   it('cancels a pending retry when the user disconnects', async () => {
     const remote = await add()
@@ -773,6 +821,9 @@ describe('updating a host from the Threads page (ADR-0040)', () => {
     expect(row(thread)!.clientReconnecting).toBeUndefined()
     // The same thread, still selected, on a fresh connection, with no retry left behind.
     expect(router.shell().activeThreadId).toBe(thread)
+    const composed = await router.command({ type: 'compose', text: 'Draft after restart' }, desktopWindowClient('desktop-test'))
+    expect(composed.error).toBeNull()
+    expect(composed.threadDrafts).toContainEqual(expect.objectContaining({ threadId: thread, text: 'Draft after restart' }))
     expect(launchers).toHaveLength(2)
     expect(scheduled).toEqual([])
     expect(manager.updateCandidates()[0]!.version).toBe(packageVersion)

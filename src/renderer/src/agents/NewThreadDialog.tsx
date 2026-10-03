@@ -42,6 +42,7 @@ export function NewThreadDialog({ state, command, onClose, onCreated, onCreating
   // The managed form's own chosen project or folder; the instant flow never sets these; and its own fields.
   const [project, setProject] = useState<AgentProject | null>(null)
   const [folder, setFolder] = useState<string | null>(null)
+  const [folderIsNew, setFolderIsNew] = useState(false)
   const [title, setTitle] = useState('')
   // With threads from more than one host listed, New thread starts by choosing the host; its projects follow.
   const hosts = listedHosts(state)
@@ -83,7 +84,7 @@ export function NewThreadDialog({ state, command, onClose, onCreated, onCreating
     if (creationInFlight.current || completed.current) return
     setError(null)
     if (managed) {
-      if (choice.project) { setProject(choice.project); setFolder(null) } else { setProject(null); setFolder(choice.folder) }
+      if (choice.project) { setProject(choice.project); setFolder(null) } else { setProject(null); setFolder(choice.folder); setFolderIsNew(choice.isNew === true) }
       return
     }
     creationInFlight.current = true
@@ -93,7 +94,7 @@ export function NewThreadDialog({ state, command, onClose, onCreated, onCreating
     setCreating(true)
     void (async () => {
       if (chosenHost && chosenHost.hostId !== latestState.current.hostId) await window.sotto?.hosts?.command({ type: 'select', hostId: chosenHost.hostId })
-      const found = await projectForFolder({ folder: choice.folder, command, latest: () => latestState.current, attempted: attemptedFolders.current, providerId: provider, hostId: chosenHost?.hostId })
+      const found = await projectForFolder({ folder: choice.folder, isNew: choice.isNew === true, command, latest: () => latestState.current, attempted: attemptedFolders.current, providerId: provider, hostId: chosenHost?.hostId })
       if (found.project === null) { creationInFlight.current = false; setCreating(false); setError(found.error); return }
       startThread(found.project)
     })()
@@ -142,7 +143,7 @@ export function NewThreadDialog({ state, command, onClose, onCreated, onCreating
       if (!selectedProject && folder) {
         // A new folder becomes a project on the host chosen above: main adds it to the host selected for new work.
         if (chosenHost && chosenHost.hostId !== latestState.current.hostId) await window.sotto?.hosts?.command({ type: 'select', hostId: chosenHost.hostId })
-        const found = await projectForFolder({ folder, command, latest: () => latestState.current, attempted: attemptedFolders.current, providerId: selectedModel?.providerId ?? state.configuration.provider, hostId: chosenHost?.hostId })
+        const found = await projectForFolder({ folder, isNew: folderIsNew, command, latest: () => latestState.current, attempted: attemptedFolders.current, providerId: selectedModel?.providerId ?? state.configuration.provider, hostId: chosenHost?.hostId })
         if (found.project === null) { setError(found.error); return }
         selectedProject = found.project
         setProject(selectedProject)

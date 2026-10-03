@@ -243,8 +243,7 @@ export class DesktopHostRouter {
       } else {
         this.selectedProjectId = command.projectId ? hostEntityKey(connection.hostId, command.projectId) : null; this.selectedThreadId = null
       }
-      // The window's selection is client-local, but the owning host keeps its own active thread:
-      // without the forward, compose and send would still target the previous one.
+      // Forward selection so the remote peer can target its own picked thread.
       if (connection.available?.() !== false) {
         const result = await connection.service.command(command, client)
         if (result.error) this.notice = this.refusal(connection, result.error)

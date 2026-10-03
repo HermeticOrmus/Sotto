@@ -335,6 +335,9 @@ export const agentThreadSchema = z.object({
   messages: z.array(agentMessageSchema), requests: z.array(agentRequestSchema),
   /** Present on the shell stream, where `messages` is empty; absent when the messages themselves are here. */
   summary: agentThreadSummarySchema.optional(),
+  /** The thread finished its work while no client showed it, and no client has shown it since (ADR-0046). The host's
+   * coordinator sets and clears it; absent otherwise, and from hosts that predate it. */
+  finishedUnread: z.literal(true).optional(),
   /** The newest message of the user's the provider's adapter has recorded, whether or not `messages` still
    * holds it. A send names it back so the adapter can refuse one that raced the user's own input; a window
    * the adapter put away and took back up carries none of the older messages, so it cannot say. */
@@ -392,6 +395,8 @@ export type AgentProviderStatus = z.infer<typeof agentProviderStatusSchema>
 export const PROVIDER_REJECTED_ACTION = 'The provider rejected this action. Check its current permissions and account status.'
 /** What main answers when the provider did not say whether it took an action; Sotto keeps it and checks it later. */
 export const PROVIDER_RESULT_UNCONFIRMED = 'The provider did not confirm the result. Sotto will reconcile the existing action when reconnected; it will not resend it.'
+/** What main answers when a folder sent as existing is not there, so nothing was added and no folder was made. */
+export const PROJECT_FOLDER_MISSING = 'That folder no longer exists. Nothing was added. Choose another folder.'
 /** What main answers when the provider took a settings change its thread does not show yet; Sotto keeps it and checks it later. */
 export const THREAD_SETTINGS_UNRECONCILED = 'The provider has not confirmed these thread settings in its state. Refresh to reconcile the existing save; it will not be replayed.'
 /** What main answers when Restore branch needs the user's word first; the pane opens its confirmation on this exact sentence. */

@@ -20,7 +20,7 @@ struct MainTabs: View {
                 ThreadsView(openCreated: { ref in threadPath.append(ThreadRoute(ref: ref)) }).threadDestination()
             }
                 .tabItem { Label("Threads", systemImage: "list.bullet") }
-                .badge(waitingCount)
+                .badge(waitingCount + unreadFinishedCount)
                 .tag(Tab.threads)
             NavigationStack { ComputersView() }
                 .tabItem { Label("Computers", systemImage: "laptopcomputer") }
@@ -33,6 +33,8 @@ struct MainTabs: View {
         .sheet(isPresented: $model.adding, onDismiss: { model.closeAdding() }) { AddComputerSheet() }
     }
     private var waitingCount: Int { ThreadGroups.waiting(model.lists).count }
+    /// Recent threads that finished while nothing showed them and have not been opened on either device (ADR-0046).
+    private var unreadFinishedCount: Int { FocusThreads(model.lists, opened: model.selected).unreadFinishedCount }
 }
 
 /// A thread, named with its computer: two computers can hold the same thread ID.
