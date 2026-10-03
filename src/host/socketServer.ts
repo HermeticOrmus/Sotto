@@ -186,15 +186,31 @@ export async function startSocketServer(options: SocketServerOptions) {
   // The peer's event cursor moves only once the events have gone or the client has been told to fetch them:
   // a page too large to ride along is left behind and the shell says there is more, so the client reads
   // the events itself from its own cursor instead of never being sent them.
+  // A shell goes to a peer only once its socket has drained what it was last sent (#698). A phone on a slow
+  // link still reading one shell is owed the next instead, and sent the newest, built then, once it drains:
+  // one shell can be a megabyte, and twenty a second would fill the socket until it closed. Its cursor has
+  // not moved, so that shell's event page holds every event the skipped ones would have carried. Whole
+  // details that follow the shell wait with it, the newest standing for any skipped; detail-delta pushes
+  // and responses are never held, so no delta loses the revision it applies to.
+  const owedShell = new WeakSet<Peer>()
+  const sendShell = (peer: Peer): void => {
+    if (!authenticated(peer)) { peer.frames.close(); return }
+    if (peer.frames.backlogged) {
+      if (owedShell.has(peer)) return
+      owedShell.add(peer)
+      void track(peer.frames.drained().then(() => { owedShell.delete(peer); if (!closing && !peer.frames.isClosed) sendShell(peer) }))
+      return
+    }
+    const state = shell(peer), eventPage = events(peer, peer.afterSeq)
+    const full = JSON.stringify({ v: 1, event: 'shell', state, eventPage })
+    if (fits(full)) { peer.frames.sendText(full); peer.afterSeq = eventPage.latestSeq }
+    else if (push(peer, { v: 1, event: 'shell', state, eventPage: { events: [], latestSeq: peer.afterSeq, hasMore: true } })) peer.afterSeq = eventPage.latestSeq
+    if (detailsFollowShell) for (const threadId of peer.observed) detail(peer, threadId)
+  }
   const shellPublisher = coalesceAgentStatePublishes(() => {
     for (const peer of peers) {
       if (!authenticated(peer)) { peer.frames.close(); continue }
-      if (!peer.ready) continue
-      const state = shell(peer), eventPage = events(peer, peer.afterSeq)
-      const full = JSON.stringify({ v: 1, event: 'shell', state, eventPage })
-      if (fits(full)) { peer.frames.sendText(full); peer.afterSeq = eventPage.latestSeq }
-      else if (push(peer, { v: 1, event: 'shell', state, eventPage: { events: [], latestSeq: peer.afterSeq, hasMore: true } })) peer.afterSeq = eventPage.latestSeq
-      if (detailsFollowShell) for (const threadId of peer.observed) detail(peer, threadId)
+      if (peer.ready) sendShell(peer)
     }
   })
   // Each observed thread's update goes out as the service published it: a whole detail as one, and a delta
