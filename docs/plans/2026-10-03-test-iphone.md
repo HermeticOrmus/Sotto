@@ -56,6 +56,42 @@ On the existing `sotto_browser` endpoint, so no provider wiring changes:
 
 ADR-0045; `CONTEXT.md` (Test iPhone, Phone player, the Tools panel's seven surfaces, the browser grant reaching the phone); `README.md` and `docs/guide.md`; `docs/agent-control.md` for the tools; a verification note with screenshots.
 
-## Phase 2: a cloud iPhone
+## Phase 2: a cloud iPhone (#711)
 
-Native apps on a cloud device service. It adds a host and a key, so ADR-0046 and the README's Privacy and cost line come before any code. The provider is chosen in `docs/research/2026-10-03-cloud-ios-devices.md`. Not started in this branch.
+Native apps on a run.cloud iOS simulator (ADR-0047, `docs/research/2026-10-03-cloud-ios-devices.md`, `docs/research/2026-10-03-run-cloud-api.md`).
+
+What Zach decided on October 3, 2026:
+- An agent passes the path of a simulator build it made in the thread's folder.
+- Each session asks before it starts; taps and typing inside it do not.
+- A monthly minute cap, 750 by default.
+- Prototype variant **C** (`docs/prototypes/cloud-iphone-prototype.html`): a Cloud iPhone page in Settings, the request as a card in the thread, the phone once the session runs.
+
+### Main
+
+- `src/shared/cloudIphone.ts` is the contract: a **cloud iPhone session** per thread at most, its states (asking, starting, active, ended, denied, failed, refused), its steps, and the bridge.
+- `runCloudClient.ts` is the one adapter: Node's `fetch`, every run.cloud route in one file, a base URL tests can point at a local fake.
+- `CloudIphoneService` owns sessions:
+  - It checks the build path is inside the thread's working copy and the month's minutes are under the cap.
+  - It waits up to 5 minutes for the user's answer.
+  - Once answered, it uploads the build, starts the session and shows run.cloud's viewer in its own native view.
+  - It runs the agent's actions, counts minutes into `cloud-iphone-usage.json`, ends a session idle for the set minutes or at the cap, and releases everything when Sotto quits.
+- The key lives in the credential store's `runcloud` slot, set through the cloud iPhone bridge, so it never touches the agents state.
+- Settings: `cloudIphoneMonthlyMinutes` (750) and `cloudIphoneIdleMinutes` (5), on the patch allow-list.
+- Agent tools on `sotto_browser`:
+  - `iphone_cloud_open {buildPath, description}`
+  - `iphone_cloud_action {action}`: tap, swipe, type, key, button, open a URL, inspect, screenshot, in iOS points
+  - `iphone_cloud_status`
+  - `iphone_cloud_finish {summary, unchecked}`
+
+### Renderer
+
+- Settings > Cloud iPhone: the key (Save, Replace, Remove, checked against run.cloud), the cap, the idle minutes, this month's minutes and recent sessions.
+- The thread's request card, in the transcript after its permission requests: **Start cloud iPhone** or **Deny**, with the build, the device, the price and this month's minutes. It also says when a session is refused, starting or failed.
+- The phone player shows a running cloud session in preference to the test iPhone, with its minutes and **End session**.
+- Tools > iPhone has a Cloud iPhone card.
+
+### Verification
+
+- The adapter and service are tested against a local fake of run.cloud's API.
+- An e2e spec runs the whole journey against the fake.
+- A live run needs Zach's run.cloud key.

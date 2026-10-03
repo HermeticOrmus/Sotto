@@ -1,10 +1,13 @@
 import React, { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
-import { RotateCw, Share2, Smartphone, X } from 'lucide-react'
+import { RotateCw, Settings as SettingsIcon, Share2, Smartphone, Square, X } from 'lucide-react'
 import { TEST_IPHONE, type BrowserBridge } from '../../../shared/browser'
+import { CLOUD_IPHONE_PRICE_PER_MINUTE_USD } from '../../../shared/cloudIphone'
 import { resolveModel } from '../../../shared/modelCatalog'
 import { useOptionalAgents } from '../agents/AgentContext'
+import { useOptionalApp } from '../state/AppContext'
 import { BrowserTaskDetails } from './BrowserTaskDetails'
 import { normalizeAddress, phonePage, useBrowserTasks, useThreadBrowser, type BrowserStore } from './browserStore'
+import { bridgeCloudIphone, cloudIphoneStore, useCloudSession, useCloudStatus, type CloudIphoneBridgeLike, type CloudIphoneStore } from './cloudIphoneStore'
 import { phonePlayerStore, usePhonePlayerOpen, type PhonePlayerStore } from './phonePlayerStore'
 import { ToolsChrome } from './ToolsChrome'
 import './iphoneSurface.css'
@@ -14,6 +17,46 @@ export interface IPhoneSurfaceProps {
   readonly store: BrowserStore
   readonly bridge: BrowserBridge | undefined
   readonly phoneStore?: PhonePlayerStore
+  readonly cloudStore?: CloudIphoneStore
+  readonly cloudBridge?: CloudIphoneBridgeLike
+}
+
+/** A thread's cloud iPhone card: the build, device, this month's minutes and this session's, with End session. */
+function CloudIphoneCard({ threadId, bridge, store }: { readonly threadId: string; readonly bridge: CloudIphoneBridgeLike; readonly store: CloudIphoneStore }): ReactNode {
+  useEffect(() => { store.watch(bridge, threadId); void store.loadStatus(bridge) }, [store, bridge, threadId])
+  const session = useCloudSession(threadId, store)
+  const status = useCloudStatus(store)
+  const app = useOptionalApp()
+  const [ending, setEnding] = useState(false)
+  if (!session || session.status === 'denied' || session.status === 'refused') {
+    if (!status?.keySaved) return <section className="iphone-surface__card iphone-surface__cloud-pointer">
+      <p>Native builds can run on a cloud iPhone. Add a run.cloud key in Settings &gt; Cloud iPhone.</p>
+      <button type="button" className="tt-button tt-button--secondary tt-focusable" onClick={() => app?.actions.navigate('settings')}><SettingsIcon size={14} aria-hidden="true" />Open Settings</button>
+    </section>
+    return null
+  }
+  const live = session.status === 'active' || session.status === 'starting'
+  const monthMinutes = status?.monthMinutes ?? 0
+  const capMinutes = status?.capMinutes ?? 0
+  const idleMinutes = app?.settings?.cloudIphoneIdleMinutes ?? 5
+  const end = (): void => { setEnding(true); void store.end(bridge, session).finally(() => setEnding(false)) }
+  return <section className="iphone-surface__card" aria-label="Cloud iPhone">
+    <h3>Cloud iPhone{live ? <span className="iphone-surface__cloud-badge">Running</span> : null}</h3>
+    <dl className="iphone-surface__facts">
+      <dt>Build</dt><dd>{session.buildPath}</dd>
+      <dt>Device</dt><dd>{session.device ?? 'Starting…'} · run.cloud</dd>
+      <dt>This month</dt><dd>{monthMinutes} of {capMinutes} minutes
+        <div className="iphone-surface__cloud-meter" role="meter" aria-label="Cloud iPhone minutes used this month" aria-valuenow={monthMinutes} aria-valuemin={0} aria-valuemax={capMinutes}>
+          <i style={{ width: `${capMinutes > 0 ? Math.min(100, Math.round(monthMinutes / capMinutes * 100)) : 0}%` }} />
+        </div></dd>
+      {live ? <><dt>This session</dt><dd>{session.minutes} min · ends after {idleMinutes} minutes idle</dd></> : null}
+    </dl>
+    {live ? <button type="button" className="tt-button tt-button--secondary tt-focusable" disabled={ending} onClick={end}><Square size={13} aria-hidden="true" />End session</button> : null}
+    {session.steps.length > 0 ? <ol className="iphone-surface__cloud-steps">
+      {session.steps.map(step => <li key={step.id} data-status={step.status}>{step.action}{step.detail ? `: ${step.detail}` : ''}</li>)}
+    </ol> : null}
+    <p className="iphone-surface__facts-note">About ${CLOUD_IPHONE_PRICE_PER_MINUTE_USD.toFixed(2)} a minute. A simulator, not a device.</p>
+  </section>
 }
 
 /**
@@ -21,9 +64,12 @@ export interface IPhoneSurfaceProps {
  * the phone player, so this surface never draws the page; it loads a web build, shares it with the agent, and
  * shows what the agent did there and anything waiting for an answer.
  */
-export function IPhoneSurface({ threadId, store, bridge, phoneStore = phonePlayerStore }: IPhoneSurfaceProps): ReactNode {
+export function IPhoneSurface({ threadId, store, bridge, phoneStore = phonePlayerStore, cloudStore = cloudIphoneStore, cloudBridge = bridgeCloudIphone() }: IPhoneSurfaceProps): ReactNode {
   const browser = useThreadBrowser(store, threadId)
   const tasks = useBrowserTasks(store)
+  // A running cloud iPhone is what the thread is testing on; the test iPhone's empty state would only contradict it.
+  const cloudSession = useCloudSession(threadId, cloudStore)
+  const cloudLive = cloudSession?.status === 'active' || cloudSession?.status === 'starting'
   const agents = useOptionalAgents()
   const owningThread = agents?.state?.host.threads.find(item => item.id === threadId)
   const owningModel = resolveModel(agents?.state?.host.models ?? [], owningThread?.modelId)
@@ -87,7 +133,7 @@ export function IPhoneSurface({ threadId, store, bridge, phoneStore = phonePlaye
     </div> : null}
 
     <div className="iphone-surface__body">
-      {!page ? <div className="iphone-surface__empty">
+      {!page && !cloudLive ? <div className="iphone-surface__empty">
         <Smartphone size={18} aria-hidden="true" />
         <strong>No app on the test iPhone</strong>
         <p>An agent opens your app here when it tests it. You can also load a web build yourself, such as the address <code>npx expo start --web</code> prints.</p>
@@ -124,6 +170,8 @@ export function IPhoneSurface({ threadId, store, bridge, phoneStore = phonePlaye
       {task ? <section className="iphone-surface__card" aria-label="What the agent did on the test iPhone">
         <BrowserTaskDetails key={task.id} task={task} store={store} bridge={bridge} />
       </section> : null}
+
+      <CloudIphoneCard threadId={threadId} bridge={cloudBridge} store={cloudStore} />
     </div>
   </div>
 }
