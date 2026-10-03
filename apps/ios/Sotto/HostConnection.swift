@@ -31,7 +31,12 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
     private var socket: URLSessionWebSocketTask?
     private var reader: Task<Void, Never>?
     private var heartbeat: Task<Void, Never>?
-    private var pending: [String: CheckedContinuation<Received<Data>, Error>] = [:]
+    private var pending: [String: CheckedContinuation<Received<Reply>, Error>] = [:]
+    /// A reply's bytes, and the model catalog this connection held when it arrived, which its shell may name.
+    private struct Reply: Sendable { let data: Data; let catalog: ModelCatalogCache }
+    /// The last model catalog this connection was sent whole. It is kept as frames arrive, so every shell is
+    /// read against the catalog that was current at its place in the socket, and a reconnect empties it.
+    private var catalog = ModelCatalogCache()
     private var received = 0
     private var deadlines: [String: Task<Void, Never>] = [:]
     private var session = ""
@@ -135,6 +140,7 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
     }
     func disconnect() {
         generation = UUID(); liveness = LivenessProgress(); received = 0; answeredPing = nil; reader?.cancel(); reader = nil
+        catalog = ModelCatalogCache()
         heartbeat?.cancel(); heartbeat = nil
         socket?.cancel(with: .goingAway, reason: nil); socket = nil; session = ""
         let waiting = pending; pending.removeAll()
@@ -148,11 +154,24 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
         try await callReceived(operation, as: type, id: id).value
     }
     func callReceived<T: Decodable & Sendable>(_ operation: [String: JSONValue], as type: T.Type, id: String = UUID().uuidString) async throws -> Received<T> {
+        let current = generation
         let reply = try await request(operation, id: id)
-        let value = try await Wire.readReply(reply.value, as: type)
-        return Received(value, sequence: reply.sequence)
+        let value = try await Wire.readReply(reply.value.data, as: type)
+        return Received(try whole(value, catalog: reply.value.catalog, generation: current), sequence: reply.sequence)
     }
-    private func request(_ operation: [String: JSONValue], id: String) async throws -> Received<Data> {
+    /// A shell or hello with its model catalog put back from what this connection held when the reply arrived.
+    /// One naming a catalog this connection was never sent cannot be shown whole, and must not read as a
+    /// computer with no models, so the connection starts again: the host sends a new connection's hello whole.
+    private func whole<T>(_ value: T, catalog: ModelCatalogCache, generation current: UUID) throws -> T {
+        let restored: T?
+        if let shell = value as? Shell { restored = catalog.whole(shell).flatMap { $0 as? T } }
+        else if let hello = value as? Hello { restored = catalog.whole(hello).flatMap { $0 as? T } }
+        else { return value }
+        if let restored { return restored }
+        if generation == current { disconnect(); onDisconnect?() }
+        throw ClientError.disconnected
+    }
+    private func request(_ operation: [String: JSONValue], id: String) async throws -> Received<Reply> {
         guard let socket, !session.isEmpty else { throw ClientError.disconnected }
         let data = try Wire.request(id: id, session: session, operation: operation)
         guard data.count <= Wire.maximumFrameBytes else { throw ClientError.invalidRequest }
@@ -174,12 +193,19 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
     private func receive(_ frame: IncomingFrame) {
         received += 1
         switch frame {
-        case .reply(let id, let data): finish(id: id, result: .success(Received(data, sequence: received)))
+        case .reply(let id, let data, let carried):
+            if let carried { catalog.hold(carried) }
+            finish(id: id, result: .success(Received(Reply(data: data, catalog: catalog), sequence: received)))
         case .refusal(let id, let failure): finish(id: id, result: .failure(HostRefusal(failure: failure)))
+        case .shell(let shell):
+            catalog.hold(shell)
+            // A shell naming a catalog this connection was never sent: start again rather than show no models.
+            guard let restored = catalog.whole(shell) else { disconnect(); onDisconnect?(); return }
+            onPush?(.shell(restored), received)
         default: onPush?(frame, received)
         }
     }
-    private func finish(id: String, result: Result<Received<Data>, Error>) {
+    private func finish(id: String, result: Result<Received<Reply>, Error>) {
         liveness.finishRequest(id: id)
         deadlines.removeValue(forKey: id)?.cancel(); pending.removeValue(forKey: id)?.resume(with: result)
     }

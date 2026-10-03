@@ -120,12 +120,14 @@ public struct Receipt: Decodable, Sendable {
     public var confirmsAnswer: Bool { status == "completed" && error == nil && answerDelivered == true }
 }
 public struct Hello: Decodable, Sendable {
-    public let hostId: String; public let clientId: String; public let shell: Shell; public let capabilities: Capabilities
+    /// `shell` is a `var` only so the connection can put back a catalog the host named by revision (`ModelCatalogCache`).
+    public let hostId: String; public let clientId: String; public var shell: Shell; public let capabilities: Capabilities
     public let features: [String]?
     public struct Capabilities: Decodable, Sendable { public let mayAnswer: Bool }
 }
 public struct Shell: Decodable, Sendable {
-    public let hostId: String?; public let host: HostSnapshot; public let deliveries: [Delivery]?; public let deliveredDrafts: [DeliveryReceipt]?
+    /// `host` is a `var` only so the connection can put back a catalog the host named by revision (`ModelCatalogCache`).
+    public let hostId: String?; public var host: HostSnapshot; public let deliveries: [Delivery]?; public let deliveredDrafts: [DeliveryReceipt]?
     public let globalLaneBusy: Bool?; public let busyThreadIds: [String]?; public let error: String?
     /// Authority for this paired client, refreshed with the shell. Older hosts send it only in hello.
     public let clientCapabilities: Hello.Capabilities?
@@ -138,7 +140,11 @@ public struct Shell: Decodable, Sendable {
 public struct HostSnapshot: Decodable, Sendable {
     public let hostId: String?; public let name: String; public let threads: [ThreadSummary]
     public let projects: [Project]; public let providers: [Provider]?
-    public let models: [ThreadModel]?
+    /// Always whole once a shell leaves `HostConnection`: a catalog the host named by revision is put back there.
+    public var models: [ThreadModel]?
+    /// The catalog's revision, from a host that offers `model-catalog-revision`. Such a host leaves `models` out
+    /// of a shell when this connection was already sent that revision whole.
+    public let modelsRevision: Int?
     public let capabilities: ProviderCapabilities
 }
 public struct Project: Decodable, Identifiable, Sendable {
