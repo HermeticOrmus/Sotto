@@ -15,8 +15,11 @@ import './folderBrowser.css'
 /** A computer a project can live on: this one, or a paired host. A host that is not connected is listed but cannot be browsed. */
 export interface BrowsableHost { readonly hostId: string; readonly name: string; readonly kind: 'local' | 'remote'; readonly connected: boolean; readonly off?: boolean }
 
-/** A folder chosen in the browser: its path as the host that will run the project spells it, and its name there. */
-export interface FolderChoice { readonly hostId: string; readonly path: string; readonly name: string }
+/**
+ * A folder chosen in the browser: its path as the host that will run the project spells it, and its name there. `isNew`
+ * marks one named with New folder, which does not exist until adding the project makes it.
+ */
+export interface FolderChoice { readonly hostId: string; readonly path: string; readonly name: string; readonly isNew?: true }
 
 /**
  * Every paired computer, this one first. Unlike the Threads page's host badges, this counts this computer alone as one
@@ -193,7 +196,7 @@ export function FolderBrowserDialog({ state, hostId: givenHostId, heading, busy 
   }
   const use = (): void => {
     if (!host || busy || loading || chosenPath === null || !current) return
-    onUse({ hostId: host.hostId, path: chosenPath, name: current.name })
+    onUse({ hostId: host.hostId, path: chosenPath, name: current.name, ...(namedFolder ? { isNew: true as const } : {}) })
   }
   const nameFolder = (): void => {
     if (!listing || listing.path === null || draftName === null) return

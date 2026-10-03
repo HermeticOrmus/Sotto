@@ -84,6 +84,8 @@ A question draft sent through `send` keeps an uncertain answer outcome in its co
 
 A push has `event` in place of `id`. The host coalesces them the way the desktop's IPC does: the shell, and each thread's detail, go out at most once every 50 ms. A shell push carries the state as it is when it is sent; deltas waiting for one thread are folded into one where they can be and otherwise sent in order.
 
+Shell pushes are also paced to what the client reads. While output to a client is still backed up in the host's side of its socket, the host sends it no further shell; once that output drains, the host sends the newest shell, built then, with an event page from the client's own place in the event stream. A slow link therefore gets shells as fast as it reads them, with never more than about one waiting in the host's buffer, and a shell it is not sent loses no event. The `detail` and `detail-delta` pushes a thread's own changes make, and answers, are never held back for this, so a delta still follows the revision it applies to. The host still closes a client whose unread output would pass 32 MiB, twice the frame limit.
+
 | `event` | Fields | Sent |
 | --- | --- | --- |
 | `shell` | `state`, `eventPage?` | When the shell changes, after a successful hello reply has been delivered. A v1 client that never sends hello receives no shell pushes. `eventPage` is `{ events, latestSeq, hasMore }` after this client's place in the event stream; `hasMore` means read the rest with `events`. |

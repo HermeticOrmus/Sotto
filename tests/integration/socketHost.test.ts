@@ -563,6 +563,55 @@ it('keeps a client’s place in the event stream when a shell and its events are
   } finally { await client.close(); await server.close() }
 })
 
+it('paces shells to what a client drains: one that stops reading is owed the newest shell instead of being closed, and loses no event (#698)', async () => {
+  const rows: import('../../src/shared/threadEvents').StoredThreadEvent[] = []
+  const rounds = 16
+  let round = 0, publish = (): void => undefined
+  // About 4 MB of model catalog in every shell, standing in for a large one. Sixteen of them queued for a
+  // client that has stopped reading would pass the socket's hard cap of twice the frame limit.
+  const catalog = Array.from({ length: 4000 }, (_, index) => ({ id: 'catalog-' + index, provider: 'Fixture', name: 'Catalog model ' + index + ' ' + 'x'.repeat(1000), ready: true }))
+  const service: HostService = {
+    shell: () => { const state = host.service.shell(); return { ...state, host: { ...state.host, models: [...state.host.models, ...catalog, { id: 'round-' + round, provider: 'Fixture', name: 'Round', ready: true }] } } },
+    state: () => host.service.state(), threadDetail: id => host.service.threadDetail(id),
+    command: (command, identity) => host.service.command(command, identity),
+    events: (afterSeq, threadId, limit) => rows.filter(row => row.seq > afterSeq && (!threadId || row.threadId === threadId)).slice(0, limit),
+    subscribe: listener => { publish = () => listener(host.service.shell()); return () => undefined },
+  }
+  const server = await startSocketServer({ service, pairing: host.pairing })
+  const paired = await host.pairing.redeem(host.pairing.issuePairingCode().code, 'Slow link')
+  const session = host.pairing.signSession(paired.clientId)
+  const slow = await rawPeer(server.descriptor.port, session), steady = await rawPeer(server.descriptor.port, session)
+  const roundOf = (message: Record<string, unknown>): string | undefined => message.event === 'shell'
+    ? (message.state as { host: { models: { id: string }[] } }).host.models.find(model => model.id.startsWith('round-'))?.id : undefined
+  try {
+    await slow.call('hello', { op: 'hello', afterSeq: 0 }); await steady.call('hello', { op: 'hello', afterSeq: 0 })
+    slow.stream.pause()
+    for (round = 1; round <= rounds; round++) {
+      rows.push({ seq: round, threadId: 'synthetic', event: { kind: 'messages-reset', at: new Date().toISOString() } })
+      publish()
+      // A client that keeps reading is sent this round's shell, so the host has run this publish for every peer.
+      await expect.poll(() => steady.messages.some(message => roundOf(message) === 'round-' + round)).toBe(true)
+      steady.messages.length = 0
+    }
+    round = rounds
+    slow.stream.resume()
+    // The client that stopped reading is still connected, and once it reads again it is sent the newest shell.
+    await expect.poll(() => slow.messages.some(message => roundOf(message) === 'round-' + rounds)).toBe(true)
+    expect(await slow.call('still-open', { op: 'receipt', commandId: 'none' })).toMatchObject({ ok: true, result: { status: 'unknown' } })
+    const shells = slow.messages.filter(message => message.event === 'shell')
+    // What was already on its way when it stopped, then the newest it was owed: not a shell a round, and
+    // none older after a newer one. How many were on their way depends on the system's socket buffers.
+    expect(shells.length).toBeLessThan(rounds / 2)
+    const received = shells.map(message => Number(roundOf(message)!.slice('round-'.length)))
+    expect(received).toEqual([...received].sort((a, b) => a - b))
+    expect(received.at(-1)).toBe(rounds)
+    // Its cursor moved only with what was sent, so the shells it did get carry every event, once, in order.
+    expect(shells.flatMap(message => (message.eventPage as { events: { seq: number }[] }).events.map(row => row.seq)))
+      .toEqual(Array.from({ length: rounds }, (_, index) => index + 1))
+    expect(slow.frames.isClosed).toBe(false)
+  } finally { slow.frames.close(); steady.frames.close(); await server.close() }
+})
+
 it('frees a permission mode by what it allows, not by being listed first', async () => {
   // Devin lists only the modes its CLI reports. Without Accept edits there is no Ask first, and Smart,
   // which lets Devin edit unasked, comes first; it still needs the answer policy.
