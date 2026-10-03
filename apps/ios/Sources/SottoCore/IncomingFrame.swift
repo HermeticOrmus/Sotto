@@ -10,7 +10,8 @@ public struct Received<Value: Sendable>: Sendable {
 /// Decode pushes directly into the fields the phone displays. In particular, shell event pages
 /// and unused activity bodies never become recursive JSONValue trees on the UI actor.
 public enum IncomingFrame: Sendable {
-    case reply(id: String, data: Data)
+    /// `catalog` is the model catalog the reply's shell carries whole under a revision, read here in socket order.
+    case reply(id: String, data: Data, catalog: CarriedCatalog?)
     case refusal(id: String, failure: WireFailure)
     case shell(Shell)
     case detail(threadID: String, value: ThreadDetail?)
@@ -20,7 +21,7 @@ public enum IncomingFrame: Sendable {
 
 /// Route replies without materializing their result. Their caller supplies its expected type.
 private enum FrameEnvelope: Decodable {
-    case reply(String)
+    case reply(String, CarriedCatalog?)
     case frame(IncomingFrame)
     private enum Keys: String, CodingKey { case v, id, ok, result, error, event, state, threadId, detail, delta }
     init(from decoder: Decoder) throws {
@@ -38,7 +39,8 @@ private enum FrameEnvelope: Decodable {
             let id = try c.decode(String.self, forKey: .id)
             if try c.decode(Bool.self, forKey: .ok) {
                 guard c.contains(.result) else { throw ClientError.invalidProtocol }
-                self = .reply(id)
+                // Any result that is not a shell or a hello, null included, carries no catalog.
+                self = .reply(id, (try? c.decode(ReplyCatalog.self, forKey: .result))?.carried)
             } else { self = .frame(.refusal(id: id, failure: try c.decode(WireFailure.self, forKey: .error))) }
         }
     }
@@ -58,14 +60,14 @@ private struct ReplyValue<Value: Decodable>: Decodable {
 public extension Wire {
     /// The phone reads snapshots, not event history. Match the desktop's v1 snapshot-only hello.
     static let snapshotHello: [String: JSONValue] = ["op": .string("hello"), "afterSeq": .number(9_007_199_254_740_991),
-        "accepts": .array([.string("detail-delta"), .string("client-liveness")])]
+        "accepts": .array([.string("detail-delta"), .string("client-liveness"), .string("model-catalog-revision")])]
 
     // Nonisolated async functions run on the generic executor in this package's Swift 5 mode.
     // Awaiting each frame before receiving the next keeps pushes and replies in socket order.
     static func readFrame(_ data: Data) async throws -> IncomingFrame {
         guard data.count <= maximumFrameBytes else { throw ClientError.invalidProtocol }
         switch try JSONDecoder().decode(FrameEnvelope.self, from: data) {
-        case .reply(let id): return .reply(id: id, data: data)
+        case .reply(let id, let catalog): return .reply(id: id, data: data, catalog: catalog)
         case .frame(let frame): return frame
         }
     }

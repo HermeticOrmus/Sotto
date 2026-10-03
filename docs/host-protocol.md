@@ -15,7 +15,7 @@ Nothing v1 carries is renamed, removed or given a new meaning. A change that nee
 Every host advertises two things beside `v`:
 
 - `sottoVersion`: the Sotto release the host runs, such as `0.1.16`. It says which build answered; it is not a compatibility rule by itself.
-- `features`: the host features it offers. This build offers ten: `client-liveness` for client-owned keep-alive pings, `message-aliases` for native message identity repairs, `detail-delta`, `git-refs` for the branch picker's request, `git-changed-files` for the commit dialog's, `git-pull-request` for the Pull request surface's, `attachment-staging` for the `stage-attachment` and `attachment-content` requests (ADR-0031), `host-folders` for the folder browser's request (ADR-0025, September 26 amendment), `provider-sign-in` for the four sign-in requests (ADR-0037), and `client-updates` for the `queue-client-updates` and `cancel-client-updates` commands (ADR-0042, September 29 amendment). A headless host lists all ten; the desktop's phone listener lists all but `provider-sign-in` and `client-updates`.
+- `features`: the host features it offers. This build offers eleven: `client-liveness` for client-owned keep-alive pings, `message-aliases` for native message identity repairs, `detail-delta`, `git-refs` for the branch picker's request, `git-changed-files` for the commit dialog's, `git-pull-request` for the Pull request surface's, `attachment-staging` for the `stage-attachment` and `attachment-content` requests (ADR-0031), `host-folders` for the folder browser's request (ADR-0025, September 26 amendment), `provider-sign-in` for the four sign-in requests (ADR-0037), `client-updates` for the `queue-client-updates` and `cancel-client-updates` commands (ADR-0042, September 29 amendment), and `model-catalog-revision` for shells that name the model catalog by its revision instead of resending it ([below](#model-catalog-revisions), ADR-0028, October 3 amendment). A headless host lists all eleven; the desktop's phone listener lists all but `provider-sign-in` and `client-updates`.
 
 A client reads `/v1/health` before it opens a session, and uses a feature only when the host lists it. It never finds out by sending a request and reading the refusal. Feature names it does not know are ignored.
 
@@ -92,6 +92,14 @@ A push has `event` in place of `id`. The host coalesces them the way the desktop
 | `error` | `threadId?`, `error` | In place of a push that would not fit in one frame (`too_large`). `threadId` names the thread whose detail or delta it replaced. |
 
 Every shell returned by hello, a read or a command, and every shell push, may include `clientCapabilities: { mayAnswer }`. This is the receiving client's current host policy, read when that shell is sent. Changing Can answer publishes a new shell even if no thread changed. Older hosts omit the field; those clients retain the authority from hello until reconnecting. The field reports authority and never grants it.
+
+### Model catalog revisions
+
+A client that includes `model-catalog-revision` in hello's `accepts` is sent every shell with `host.modelsRevision`: a positive number naming the host's model catalog, which moves on only when the catalog's content changes. That holds for the shell in hello, a `shell` read, a command's answer and every shell push alike. Such a shell carries `host.models` only when no frame on this connection has carried that revision whole yet, and otherwise leaves `models` out. A revision counts as sent only once a frame carrying it was written, not when a `too_large` error went in its place. Hello always carries the catalog whole, and a new connection starts with nothing sent.
+
+The client keeps the last catalog this connection carried whole, with its revision, and puts it back into every shell that names that revision before anything reads the shell. It keeps it in the order frames arrive, so a reply read after a later push is still matched with the catalog that was current when the reply arrived. A shell that names a revision the client does not hold should not happen. The iPhone then drops the connection and connects again, and that connection's hello carries the catalog, rather than show the computer with no models.
+
+A revision means something only on its own connection to its own listener; a client never compares one across connections. Only `host.models` is named this way. A client that does not accept the feature, such as every iPhone build before it and the desktop's own host client, is sent `models` whole in every shell and no `modelsRevision`, exactly as before.
 
 ### Detail deltas
 

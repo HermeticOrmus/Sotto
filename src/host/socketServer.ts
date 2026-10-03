@@ -6,9 +6,10 @@ import { z } from 'zod'
 import type { HostService, ClientIdentity } from '../main/agents/hostService'
 import { PairedClients, originAllowed, SESSION_LIFETIME_MS } from '../main/agents/pairing'
 import { coalesceAgentStatePublishes, coalesceAgentThreadDetailPublishes } from '../main/agents/control'
+import { ModelCatalogRevisions } from '../main/agents/agentStateBroadcast'
 import { RefusedImage } from '../main/agents/attachmentStore'
-import { shellForProtocolV1, clientUpdateForOlderClient, HOST_BUSY, HOST_EVENT_PAGE_SIZE, HOST_FEATURES, HOST_MAX_FRAME_BYTES, HOST_SESSION_REJECTED, hostRequestEnvelopeSchema, hostRequestSchema, type HostDescriptor, type HostErrorCode, type HostPush, type HostReceipt, type HostRequest, type HostResponse } from '../shared/hostProtocol'
-import type { AgentCommand, AgentThreadDetail } from '../shared/agents'
+import { shellForProtocolV1, clientUpdateForOlderClient, HOST_BUSY, HOST_EVENT_PAGE_SIZE, HOST_FEATURES, HOST_MAX_FRAME_BYTES, HOST_SESSION_REJECTED, hostRequestEnvelopeSchema, hostRequestSchema, type HostDescriptor, type HostErrorCode, type HostPush, type HostReceipt, type HostRequest, type HostResponse, type HostClientShell, type HostWireShell } from '../shared/hostProtocol'
+import { hostCatalogKey, type AgentCommand, type AgentThreadDetail } from '../shared/agents'
 import { isAgentThreadDetailDelta } from '../shared/agentThreadDetail'
 import { resolveModel } from '../shared/modelCatalog'
 import { version as packageVersion } from '../../package.json'
@@ -42,8 +43,12 @@ class Refusal extends Error { constructor(readonly code: HostErrorCode, message 
 /**
  * `deltas` is set by the client's hello: only a client that accepts `detail-delta` is sent one. `clientUpdates` likewise:
  * only a client that accepts `client-updates` is sent the mise channel and the waiting state in its shell's client updates.
+ * `catalogRevisions` too: only a client that accepts `model-catalog-revision` is sent a shell without its model catalog,
+ * and `catalogSent` is the catalog revision a frame written to this connection last carried whole, or null.
  */
-interface Peer { frames: SocketFrames; client: ClientIdentity; session: string; observed: Set<string>; inFlight: number; window: number; count: number; pageWindow: number; pages: number; preview: boolean; ready: boolean; afterSeq: number; selectedThreadId: string | null; selectedProjectId: string | null; editingThreadId: string | null; deltas: boolean; messageAliases: boolean; clientUpdates: boolean }
+interface Peer { frames: SocketFrames; client: ClientIdentity; session: string; observed: Set<string>; inFlight: number; window: number; count: number; pageWindow: number; pages: number; preview: boolean; ready: boolean; afterSeq: number; selectedThreadId: string | null; selectedProjectId: string | null; editingThreadId: string | null; deltas: boolean; messageAliases: boolean; clientUpdates: boolean; catalogRevisions: boolean; catalogSent: number | null }
+/** A shell ready to write to one peer, and the catalog revision it carries whole, if any, to record once it is written. */
+interface WireShell { state: HostWireShell; carries: number | null }
 export interface SocketServerOptions {
   service: HostService; pairing: PairedClients; port?: number; origins?: readonly string[]
   mayAnswer?: (client: ClientIdentity) => boolean
@@ -153,6 +158,26 @@ export async function startSocketServer(options: SocketServerOptions) {
     // does not know would make it refuse the whole shell: it is sent them as it knew them.
     return peer.clientUpdates || !state.clientUpdates ? own : { ...own, clientUpdates: state.clientUpdates.map(clientUpdateForOlderClient) }
   }
+  /**
+   * The catalog revisions this listener names to peers that accept `model-catalog-revision`. One counter for every
+   * peer, so a revision names one catalog for as long as the listener runs; what each peer was sent is its own.
+   */
+  const catalogRevisions = new ModelCatalogRevisions()
+  /**
+   * A shell as it goes to `peer`, at the moment it is written. A peer that does not accept `model-catalog-revision`
+   * gets it whole, as v1 has it. One that does is told the catalog's revision, and sent the catalog itself only when
+   * no frame written to this connection has carried that revision whole yet. The caller records `carries` as sent
+   * only once its frame was written, never when a too_large error went in its place.
+   */
+  const wireShell = (peer: Peer, state: HostClientShell): WireShell => {
+    if (!peer.catalogRevisions) return { state, carries: null }
+    const modelsRevision = catalogRevisions.revisionFor(hostCatalogKey(state.host.hostId), state.host.models)
+    const host: HostWireShell['host'] = { ...state.host, modelsRevision }
+    if (peer.catalogSent !== modelsRevision) return { state: { ...state, host }, carries: modelsRevision }
+    delete host.models
+    return { state: { ...state, host }, carries: null }
+  }
+  const recordCatalog = (peer: Peer, shell: WireShell): void => { if (shell.carries !== null) peer.catalogSent = shell.carries }
   const authenticated = (peer: Peer): boolean => pairing.verifySession(peer.session) === peer.client.clientId
   const fits = (text: string): boolean => Buffer.byteLength(text) <= HOST_MAX_FRAME_BYTES
   /**
@@ -190,10 +215,10 @@ export async function startSocketServer(options: SocketServerOptions) {
     for (const peer of peers) {
       if (!authenticated(peer)) { peer.frames.close(); continue }
       if (!peer.ready) continue
-      const state = shell(peer), eventPage = events(peer, peer.afterSeq)
+      const wire = wireShell(peer, shell(peer)), state = wire.state, eventPage = events(peer, peer.afterSeq)
       const full = JSON.stringify({ v: 1, event: 'shell', state, eventPage })
-      if (fits(full)) { peer.frames.sendText(full); peer.afterSeq = eventPage.latestSeq }
-      else if (push(peer, { v: 1, event: 'shell', state, eventPage: { events: [], latestSeq: peer.afterSeq, hasMore: true } })) peer.afterSeq = eventPage.latestSeq
+      if (fits(full)) { peer.frames.sendText(full); peer.afterSeq = eventPage.latestSeq; recordCatalog(peer, wire) }
+      else if (push(peer, { v: 1, event: 'shell', state, eventPage: { events: [], latestSeq: peer.afterSeq, hasMore: true } })) { peer.afterSeq = eventPage.latestSeq; recordCatalog(peer, wire) }
       if (detailsFollowShell) for (const threadId of peer.observed) detail(peer, threadId)
     }
   })
@@ -296,6 +321,7 @@ export async function startSocketServer(options: SocketServerOptions) {
         peer.messageAliases = request.accepts?.includes('message-aliases') ?? false
         peer.afterSeq = request.afterSeq ?? Number.MAX_SAFE_INTEGER; peer.deltas = request.accepts?.includes('detail-delta') ?? false
         peer.clientUpdates = request.accepts?.includes('client-updates') ?? false
+        peer.catalogRevisions = request.accepts?.includes('model-catalog-revision') ?? false
         return { hostId, clientId: peer.client.clientId, shell: shell(peer), capabilities: { mayAnswer: options.mayAnswer?.(peer.client) ?? false }, sottoVersion, features: [...features], ...events(peer, peer.afterSeq) }
       case 'shell': return shell(peer)
       case 'detail': return service.threadDetail(request.threadId)
@@ -385,15 +411,28 @@ export async function startSocketServer(options: SocketServerOptions) {
     track((async () => {
       if (wait > 0) await new Promise(resolve => setTimeout(resolve, wait))
       let response: HostResponse
-      try { response = { v: 1, id: request.id, ok: true, result: await dispatch(peer, request) } }
+      // The shell a hello, a shell read or a command answers with is encoded for this peer only here, just before it
+      // is written, so what this connection was sent of the model catalog follows the order its frames go out in.
+      let carried: WireShell | null = null
+      try {
+        let result = await dispatch(peer, request)
+        if (request.op === 'hello') {
+          // Hello starts the client's picture afresh, so it carries the catalog whole whatever this connection was sent before.
+          const hello = result as { shell: HostClientShell }
+          peer.catalogSent = null; carried = wireShell(peer, hello.shell); result = { ...hello, shell: carried.state }
+        } else if (request.op === 'shell' || request.op === 'command') { carried = wireShell(peer, result as HostClientShell); result = carried.state }
+        response = { v: 1, id: request.id, ok: true, result }
+      }
       catch (error) { const code = error instanceof Refusal ? error.code : 'unavailable'; response = { v: 1, id: request.id, ok: false, error: { code, message: error instanceof Refusal ? error.message : errors[code] } } }
       // A revocation while an operation was pending also denies its response.
       if (!authenticated(peer)) { peer.frames.send({ v: 1, id: request.id, ok: false, error: { code: 'unauthenticated', message: errors.unauthenticated } }); peer.frames.close() }
-      else if (deliver(peer, response, request.op === 'detail' ? 'thread' : request.op === 'preview' || request.op === 'attachment-content' ? 'preview' : 'list')
-        && response.ok && (request.op === 'hello' || (request.op === 'events' && !request.threadId))) {
-        if (request.op === 'hello') peer.ready = true
-        const latestSeq = (response.result as { latestSeq: number }).latestSeq
-        peer.afterSeq = peer.afterSeq === Number.MAX_SAFE_INTEGER ? latestSeq : Math.max(peer.afterSeq, latestSeq)
+      else if (deliver(peer, response, request.op === 'detail' ? 'thread' : request.op === 'preview' || request.op === 'attachment-content' ? 'preview' : 'list')) {
+        if (carried) recordCatalog(peer, carried)
+        if (response.ok && (request.op === 'hello' || (request.op === 'events' && !request.threadId))) {
+          if (request.op === 'hello') peer.ready = true
+          const latestSeq = (response.result as { latestSeq: number }).latestSeq
+          peer.afterSeq = peer.afterSeq === Number.MAX_SAFE_INTEGER ? latestSeq : Math.max(peer.afterSeq, latestSeq)
+        }
       }
     })().finally(() => { peer.inFlight-- }))
   }
@@ -471,7 +510,7 @@ export async function startSocketServer(options: SocketServerOptions) {
     const accept = createHash('sha1').update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64')
     stream.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' + accept + '\r\n\r\n')
     const frames = new SocketFrames(stream, false, text => onMessage(peer, text))
-    const peer: Peer = { frames, client: identity(clientId), session, observed: new Set(), inFlight: 0, window: Date.now(), count: 0, pageWindow: 0, pages: 0, preview: false, ready: false, afterSeq: Number.MAX_SAFE_INTEGER, selectedThreadId: null, selectedProjectId: null, editingThreadId: null, messageAliases: false, deltas: false, clientUpdates: false }
+    const peer: Peer = { frames, client: identity(clientId), session, observed: new Set(), inFlight: 0, window: Date.now(), count: 0, pageWindow: 0, pages: 0, preview: false, ready: false, afterSeq: Number.MAX_SAFE_INTEGER, selectedThreadId: null, selectedProjectId: null, editingThreadId: null, messageAliases: false, deltas: false, clientUpdates: false, catalogRevisions: false, catalogSent: null }
     peers.add(peer)
     frames.startHeartbeat()
     frames.onClose(() => { peers.delete(peer); if (!closing) { track(observe().catch(() => undefined)); options.onPeersChanged?.() } })

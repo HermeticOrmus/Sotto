@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { AGENT_IMAGE_MIME_TYPES, agentAttachmentDimensionsSchema, agentAttachmentPreviewRequestSchema, attachmentDigestSchema, agentCommandSchema, agentStateSchema, agentThreadDetailDeltaSchema, agentThreadDetailResultSchema, type AgentState, type AgentThreadDetail, type AgentThreadDetailDelta } from './agents'
+import { AGENT_IMAGE_MIME_TYPES, agentAttachmentDimensionsSchema, agentAttachmentPreviewRequestSchema, attachmentDigestSchema, agentCommandSchema, agentHostSnapshotSchema, agentStateSchema, agentThreadDetailDeltaSchema, agentThreadDetailResultSchema, type AgentModel, type AgentState, type AgentThreadDetail, type AgentThreadDetailDelta } from './agents'
 import { threadEventSchema, type StoredThreadEvent } from './threadEvents'
 import { gitRefsRequestSchema } from './gitRefs'
 import { gitChangedFilesRequestSchema } from './gitChangedFiles'
@@ -19,7 +19,13 @@ export function shellForProtocolV1<T extends AgentState>(state: T) {
   return { ...state, membership: { status: 'beta' as const, label: '', expiresAt: null },
     configuration: { ...state.configuration, membershipEndpoint: '' } }
 }
-const hostClientShellSchema = agentStateSchema.extend({ clientCapabilities: z.object({ mayAnswer: z.boolean() }).optional() })
+/**
+ * A shell as a client reads it. `host.modelsRevision` is sent only to a client that accepts
+ * `model-catalog-revision`, which the desktop's own client does not; it reads it as optional and ignores it,
+ * and `host.models` stays required, as v1 has it.
+ */
+const hostClientShellSchema = agentStateSchema.extend({ clientCapabilities: z.object({ mayAnswer: z.boolean() }).optional(),
+  host: agentHostSnapshotSchema.extend({ modelsRevision: z.number().int().positive().optional() }) })
 /** Older hosts carry retired fields; strip them before the strict domain schemas read them. */
 export const protocolAgentStateSchema = z.preprocess(value => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return value
@@ -49,8 +55,11 @@ export const protocolAgentStateSchema = z.preprocess(value => {
  * `client-updates`: the host's shell carries its client updates for the client to show, and the host takes the
  * `queue-client-updates` command, which updates its clients one at a time (ADR-0042, #480). Only a headless host offers
  * it, and a client shows a host's client updates only when the host lists it.
+ * `model-catalog-revision`: to a client that accepts it, every shell's `host` names its model catalog's revision
+ * (`modelsRevision`) and carries `models` only when this connection has not yet been sent that revision whole
+ * (ADR-0028, October 3 amendment). Every other client is sent the whole catalog in every shell.
  */
-export const HOST_FEATURES = ['client-liveness', 'message-aliases', 'detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders', 'provider-sign-in', 'client-updates'] as const
+export const HOST_FEATURES = ['client-liveness', 'message-aliases', 'detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders', 'provider-sign-in', 'client-updates', 'model-catalog-revision'] as const
 export type HostFeature = typeof HOST_FEATURES[number]
 /**
  * A client update as a client that does not accept `client-updates` can read it: the mise channel, which such a client
@@ -151,7 +160,15 @@ export interface HostProtocolError { code: HostErrorCode; message: string }
 export type HostResponse = { v: 1; id: string; ok: true; result: unknown } | { v: 1; id: string; ok: false; error: HostProtocolError }
 /** `error` stands in for a push that would not fit in one frame, instead of the host closing the socket. */
 export type HostClientShell = AgentState & { clientCapabilities?: { mayAnswer: boolean } | undefined }
-export type HostPush = { v: 1; event: 'shell'; state: HostClientShell; eventPage?: HostEventPage | undefined } | { v: 1; event: 'detail'; detail: AgentThreadDetail | null; threadId: string }
+/**
+ * A shell as it crosses the socket. To a client that accepts `model-catalog-revision` its `host` names the
+ * catalog's revision and leaves `models` out when this connection was already sent that revision; to every
+ * other client it is a `HostClientShell` as v1 has it.
+ */
+export type HostWireShell = Omit<HostClientShell, 'host'> & {
+  host: Omit<AgentState['host'], 'models'> & { models?: AgentModel[] | undefined; modelsRevision?: number | undefined }
+}
+export type HostPush = { v: 1; event: 'shell'; state: HostWireShell; eventPage?: HostEventPage | undefined } | { v: 1; event: 'detail'; detail: AgentThreadDetail | null; threadId: string }
   | { v: 1; event: 'detail-delta'; threadId: string; delta: AgentThreadDetailDelta }
   | { v: 1; event: 'error'; threadId?: string | undefined; error: HostProtocolError }
 export interface HostEventPage { events: StoredThreadEvent[]; latestSeq: number; hasMore: boolean }

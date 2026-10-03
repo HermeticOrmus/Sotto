@@ -13,10 +13,11 @@ import { startHeadlessHost } from '../../src/host'
 import { HostConnectionError, SocketHostService } from '../../src/main/agents/socketHostService'
 import { E2EAgentHost, e2eAgentReasoner } from '../../src/main/e2e/agentEffects'
 import { execFileSync } from 'node:child_process'
-import { SCREENSHOT_NOT_ITS_TYPE, type AgentCommand, type AgentThreadDetail, type AgentThreadDetailDelta, type AgentThreadDetailUpdate } from '../../src/shared/agents'
+import { SCREENSHOT_NOT_ITS_TYPE, type AgentCommand, type AgentModel, type AgentThreadDetail, type AgentThreadDetailDelta, type AgentThreadDetailUpdate } from '../../src/shared/agents'
 import { hostVersionMismatch } from '../../src/shared/hostProtocol'
 import { version as packageVersion } from '../../package.json'
 import { rawPeer } from '../fixtures/rawHostPeer'
+import { syntheticModelCatalog } from '../fixtures/modelCatalog'
 import { ThreadStore } from '../../src/main/agents/threadStore'
 import { TurnRecorder } from '../../src/main/agents/turns'
 import { HOST_BUSY, HOST_EVENT_PAGE_SIZE } from '../../src/shared/hostProtocol'
@@ -731,7 +732,7 @@ describe('thread detail over the socket', () => {
       // A client from before the freeze says nothing about deltas in its hello, and keeps getting whole threads.
       const legacy = await rawPeer(server.descriptor.port, session())
       try {
-        expect(await legacy.call('hello', { op: 'hello', afterSeq: 0 })).toMatchObject({ ok: true, result: { sottoVersion: packageVersion, features: ['client-liveness', 'message-aliases', 'detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders'] } })
+        expect(await legacy.call('hello', { op: 'hello', afterSeq: 0 })).toMatchObject({ ok: true, result: { sottoVersion: packageVersion, features: ['client-liveness', 'message-aliases', 'detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders', 'model-catalog-revision'] } })
         await legacy.call('observe', { op: 'observe', threadIds: ['streaming'] })
         stream.current = { threadId: 'streaming', revision: 3, messages: [message('Hello, world!')] }
         stream.emit(delta(2, 3, '!'))
@@ -882,11 +883,11 @@ describe('staged images over the socket (ADR-0031)', () => {
 describe('host version and features', () => {
   it('advertises the Sotto version and features in health, the listener file and the hello reply', async () => {
     const health = await (await fetch(url + '/v1/health')).json() as Record<string, unknown>
-    expect(health).toMatchObject({ v: 1, status: 'ready', sottoVersion: packageVersion, features: ['client-liveness', 'message-aliases', 'detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders', 'provider-sign-in', 'client-updates'] })
+    expect(health).toMatchObject({ v: 1, status: 'ready', sottoVersion: packageVersion, features: ['client-liveness', 'message-aliases', 'detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders', 'provider-sign-in', 'client-updates', 'model-catalog-revision'] })
     const listener = JSON.parse(await readFile(join(root, 'host-listener.json'), 'utf8')) as Record<string, unknown>
-    expect(listener).toMatchObject({ v: 1, sottoVersion: packageVersion, features: ['client-liveness', 'message-aliases', 'detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders', 'provider-sign-in', 'client-updates'] })
+    expect(listener).toMatchObject({ v: 1, sottoVersion: packageVersion, features: ['client-liveness', 'message-aliases', 'detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders', 'provider-sign-in', 'client-updates', 'model-catalog-revision'] })
     const { client } = await pair()
-    expect(await client.connect()).toMatchObject({ sottoVersion: packageVersion, features: ['client-liveness', 'message-aliases', 'detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders', 'provider-sign-in', 'client-updates'], capabilities: { mayAnswer: false } })
+    expect(await client.connect()).toMatchObject({ sottoVersion: packageVersion, features: ['client-liveness', 'message-aliases', 'detail-delta', 'git-refs', 'git-changed-files', 'git-pull-request', 'attachment-staging', 'host-folders', 'provider-sign-in', 'client-updates', 'model-catalog-revision'], capabilities: { mayAnswer: false } })
   })
 
   it('runs client updates only where it offers them: the headless host does, the phone listener does not (#480)', async () => {
@@ -979,6 +980,121 @@ describe('host version and features', () => {
       await expect(skewed.command(unreadable)).rejects.toMatchObject({ code: 'version_mismatch', message: hostVersionMismatch(packageVersion, '0.0.1', false) })
       expect(await skewed.receipt('still-open')).toEqual({ status: 'unknown' })
     } finally { await skewed.close(); await server.close() }
+  })
+})
+
+describe('model catalog revisions (#699)', () => {
+  /** A host whose shell lists `models()`, rebuilt into new arrays on every read the way the coordinator's shell is. */
+  function catalogHost(models: () => AgentModel[], large: () => boolean = () => false) {
+    let publish = (): void => undefined
+    const huge = [{ id: 'huge', role: 'assistant' as const, text: 'x'.repeat(17 * 1024 * 1024), createdAt: new Date().toISOString() }]
+    const service: HostService = {
+      shell: () => {
+        const state = host.service.shell()
+        const threads = large() ? [{ id: 'huge', projectId: 'project', title: 'Huge', modelId: 'fixture-model', status: 'idle' as const, messages: huge, requests: [] }] : state.host.threads
+        return { ...state, host: { ...state.host, threads, models: structuredClone(models()) } }
+      },
+      state: () => host.service.state(), threadDetail: id => host.service.threadDetail(id),
+      command: (command, identity) => host.service.command(command, identity), events: () => [],
+      subscribe: listener => { publish = () => listener(service.shell()); return () => undefined },
+    }
+    return { service, publish: () => publish() }
+  }
+  type Frame = Record<string, unknown> & { result?: { host?: Record<string, unknown>; shell?: { host: Record<string, unknown> } }; state?: { host: Record<string, unknown> } }
+  /** The host of the first shell push `peer` receives after `send`, or the error push sent in its place. */
+  async function nextShell(peer: Awaited<ReturnType<typeof rawPeer>>, send: () => void): Promise<Record<string, unknown>> {
+    const from = peer.messages.length
+    const arrived = () => peer.messages.slice(from).find(message => message.event === 'shell' || message.event === 'error') as Frame | undefined
+    send()
+    await expect.poll(arrived).toBeDefined()
+    const frame = arrived()!
+    return frame.event === 'shell' ? frame.state!.host : frame
+  }
+
+  it('sends an accepting client the catalog once per revision, again when it changes and on a fresh connection, and every other client the whole catalog', async () => {
+    let models = syntheticModelCatalog(5)
+    const { service, publish } = catalogHost(() => models)
+    const server = await startSocketServer({ service, pairing: host.pairing })
+    expect(server.descriptor.features).toContain('model-catalog-revision')
+    const paired = await host.pairing.redeem(host.pairing.issuePairingCode().code, 'iPhone')
+    const session = host.pairing.signSession(paired.clientId)
+    const phone = await rawPeer(server.descriptor.port, session), older = await rawPeer(server.descriptor.port, session)
+    let fresh: Awaited<ReturnType<typeof rawPeer>> | undefined
+    try {
+      const hello = await phone.call('hello', { op: 'hello', accepts: ['detail-delta', 'model-catalog-revision'] }) as Frame
+      expect(hello.result!.shell!.host).toMatchObject({ models, modelsRevision: expect.any(Number) })
+      const first = hello.result!.shell!.host.modelsRevision as number
+      const olderHello = await older.call('hello', { op: 'hello', accepts: ['detail-delta'] }) as Frame
+      expect(olderHello.result!.shell!.host.models).toEqual(models)
+      expect(olderHello.result!.shell!.host).not.toHaveProperty('modelsRevision')
+
+      // Unchanged: every shell names the revision and leaves the catalog out, push, read and command answer alike.
+      const pushed = await nextShell(phone, publish)
+      expect(pushed).toMatchObject({ modelsRevision: first }); expect(pushed).not.toHaveProperty('models')
+      const read = await phone.call('read', { op: 'shell' }) as Frame
+      expect(read.result!.host).toMatchObject({ modelsRevision: first }); expect(read.result!.host).not.toHaveProperty('models')
+      const answered = await phone.call('select', { op: 'command', command: { type: 'select-project', projectId: 'project' } }) as Frame
+      expect(answered).toMatchObject({ ok: true }); expect(answered.result!.host).toMatchObject({ modelsRevision: first })
+      expect(answered.result!.host).not.toHaveProperty('models')
+
+      // A client that did not accept the feature is sent exactly what v1 sends: the whole catalog, every time.
+      const olderPush = await nextShell(older, publish)
+      expect(olderPush.models).toEqual(models); expect(olderPush).not.toHaveProperty('modelsRevision')
+      const olderAnswer = await older.call('select', { op: 'command', command: { type: 'select-project', projectId: 'project' } }) as Frame
+      expect(olderAnswer.result!.host!.models).toEqual(models); expect(olderAnswer.result!.host).not.toHaveProperty('modelsRevision')
+
+      // A changed catalog goes whole once, under a new revision, then is named again.
+      models = syntheticModelCatalog(6)
+      const changed = await nextShell(phone, publish)
+      expect(changed.models).toEqual(models)
+      const second = changed.modelsRevision as number
+      expect(second).toBeGreaterThan(first)
+      const repeat = await nextShell(phone, publish)
+      expect(repeat).toMatchObject({ modelsRevision: second }); expect(repeat).not.toHaveProperty('models')
+
+      // A new connection starts with nothing recorded, so its hello carries the catalog whole.
+      fresh = await rawPeer(server.descriptor.port, session)
+      const again = await fresh.call('hello', { op: 'hello', accepts: ['model-catalog-revision'] }) as Frame
+      expect(again.result!.shell!.host).toMatchObject({ models, modelsRevision: second })
+    } finally { phone.frames.close(); older.frames.close(); fresh?.frames.close(); await server.close() }
+  })
+
+  it('records a catalog as sent only once a frame carrying it was written, not when too_large went in its place', async () => {
+    let models = syntheticModelCatalog(3), large = false
+    const { service, publish } = catalogHost(() => models, () => large)
+    const server = await startSocketServer({ service, pairing: host.pairing })
+    const paired = await host.pairing.redeem(host.pairing.issuePairingCode().code, 'iPhone')
+    const phone = await rawPeer(server.descriptor.port, host.pairing.signSession(paired.clientId))
+    try {
+      const hello = await phone.call('hello', { op: 'hello', accepts: ['model-catalog-revision'] }) as Frame
+      const first = hello.result!.shell!.host.modelsRevision as number
+      models = syntheticModelCatalog(4); large = true
+      expect(await nextShell(phone, publish)).toMatchObject({ event: 'error', error: { code: 'too_large' } })
+      expect(await phone.call('read', { op: 'shell' })).toMatchObject({ ok: false, error: { code: 'too_large' } })
+      large = false
+      const next = await nextShell(phone, publish)
+      expect(next.models).toEqual(models)
+      expect(next.modelsRevision).toBeGreaterThan(first)
+    } finally { phone.frames.close(); await server.close() }
+  })
+
+  it('keeps sending the desktop’s own client the whole catalog from a host that offers revisions', async () => {
+    const models = syntheticModelCatalog(4)
+    const { service, publish } = catalogHost(() => models)
+    const server = await startSocketServer({ service, pairing: host.pairing })
+    const paired = await host.pairing.redeem(host.pairing.issuePairingCode().code, 'Desktop')
+    const client = new SocketHostService({ url: 'http://127.0.0.1:' + server.descriptor.port, token: paired.token }); clients.push(client)
+    try {
+      await client.connect()
+      expect(client.shell().host.models).toEqual(models)
+      let shells = 0
+      client.subscribe(() => { shells++ })
+      publish()
+      await expect.poll(() => shells).toBe(1)
+      expect(client.shell().host.models).toEqual(models)
+      expect((await client.readShell()).host.models).toEqual(models)
+      expect((await client.command({ type: 'select-project', projectId: 'project' })).host.models).toEqual(models)
+    } finally { await client.close(); await server.close() }
   })
 })
 
