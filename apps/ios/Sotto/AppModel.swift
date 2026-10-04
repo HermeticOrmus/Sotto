@@ -19,6 +19,41 @@ struct Live {
     var problem: String?
 }
 
+/// Where a photo comes from: a name for it and its original bytes, read when its turn comes.
+struct PhotoSource: Sendable {
+    let name: String
+    let load: @Sendable () async throws -> Data
+}
+
+/// A photo in a thread's reply box. It is prepared on this iPhone, then staged on the thread's computer,
+/// and stays in memory until the reply is sent or the photo is removed. Nothing is written to disk.
+struct DraftPhoto: Identifiable {
+    let id = UUID()
+    var prepared: PreparedPhoto?
+    var staged: StagedImage?
+    var stagedAt: Date?
+    /// The connection generation it was staged over. A computer reached again may have restarted and let it go.
+    var stagedGeneration: UUID?
+    var staging = false
+    var preparing: Bool { prepared == nil }
+    /// Not yet on the computer, on it long enough that the computer may have let it go, or staged over a
+    /// connection that has since ended.
+    func needsStaging(generation: UUID?) -> Bool {
+        staged == nil || stagedGeneration != generation || stagedAt.map { Photos.needsRestaging(stagedAt: $0) } != false
+    }
+}
+
+/// A photo's original on its way: whichever of its arrival, its time limit or its removal comes first decides,
+/// and the others are ignored.
+@MainActor private final class PhotoLoad {
+    var continuation: CheckedContinuation<Data, Error>?
+    var tasks: [Task<Void, Never>] = []
+    func finish(_ result: Result<Data, Error>) {
+        continuation?.resume(with: result); continuation = nil
+        tasks.forEach { $0.cancel() }; tasks = []
+    }
+}
+
 /// Every paired computer, each with its own connection, session and state. A computer that can't be
 /// reached, or fails, never holds up the others. Everything that names a thread names its computer too.
 @MainActor final class AppModel: ObservableObject {
@@ -40,7 +75,6 @@ struct Live {
     /// What just happened on the tabs.
     @Published var feedback: String? { didSet { feedbackOperations = [] } }
     private var feedbackOperations: Set<String> = []
-    private var dispatchingAnswers: Set<String> = []
     /// More than one check can await the same computer; keep markers until every check returns.
     private var deliveryChecks: [String: Int] = [:]
     /// What went wrong while finding or pairing a computer.
@@ -49,6 +83,41 @@ struct Live {
     @Published var drafts: [String: String] = [:]
     @Published private(set) var submitted: [String: String] = [:]
     @Published private(set) var failedReplies: [String: String] = [:]
+    /// Photos in each thread's reply box, by `ThreadRef.id`, in the order they were chosen.
+    @Published private(set) var draftPhotos: [String: [DraftPhoto]] = [:]
+    /// Why the last photo chosen for a reply box wasn't added, by `ThreadRef.id`.
+    @Published var photoNotices: [String: String] = [:]
+    /// The photos of a reply on its way, by operation ID, and of a refused reply, by `ThreadRef.id`.
+    @Published private(set) var submittedPhotos: [String: [DraftPhoto]] = [:]
+    @Published private(set) var failedPhotos: [String: [DraftPhoto]] = [:]
+    /// Threads whose reply is having its photos staged again before it is sent. A second press finds it here.
+    @Published private(set) var preparingSends: Set<String> = []
+    /// Replies, answers and stops on their way: the computer hasn't answered yet, or says it is still
+    /// carrying the command out. They read as sending, not as unconfirmed.
+    /// Commands being dispatched, each with the connection generation it went out on.
+    @Published private var dispatchingOperations: [String: UUID?] = [:]
+    /// Who is reading each command's receipt, and over which connection. A newer connection takes over from an
+    /// older one, which then stops without touching what the newer one shows.
+    @Published private var receiptFollowers: [String: ReceiptFollower] = [:]
+    private struct ReceiptFollower { let token: UUID; let generation: UUID? }
+    /// The kinds that read as sending. A thread or project creation keeps its own sheet and its own wait.
+    private static let sendingKinds: Set<String> = ["reply", "answer", "interrupt"]
+    /// A receipt the computer says is still being carried out is read again this often, this many times: about ten minutes.
+    private static let receiptInterval: UInt64 = 2_000_000_000
+    private static let receiptReads = 300
+    private var stagingTasks: [UUID: Task<Bool, Never>] = [:]
+    /// The last large request queued for each computer, which refuses a second while one is on its way.
+    private var largeRequests: [String: Task<Void, Never>] = [:]
+    /// Photos are prepared one at a time, so several large photos are never decoded at once.
+    private var photoWork: Task<Void, Never>?
+    private let preparePhoto: @Sendable (Data, String) async throws -> PreparedPhoto
+    /// Waits out how long a photo's original may take to arrive, from iCloud for one not on this iPhone, before it
+    /// is left out: two minutes.
+    private let photoLoadLimit: @Sendable () async throws -> Void
+    private var photoLoads: [UUID: PhotoLoad] = [:]
+    /// Hands a sent reply's photos to whatever draws the thread, so it has them before their message arrives.
+    var photosSent: (([DraftPhoto], ThreadRef) -> Void)?
+    private let receiptSleep: @Sendable (UInt64) async throws -> Void
     /// The computer step 1 of adding found, waiting for its code in step 2.
     @Published private(set) var found: FoundHost?
     /// Whether the Add computer sheet is over the tabs.
@@ -190,6 +259,20 @@ struct Live {
         let source = provider(for: ref)
         return (capabilities(for: ref)?.submit ?? false) && (source == nil || source?.connection == "connected")
     }
+    /// Whether the reply box holds something to send and nothing still being made ready: words or photos,
+    /// every photo prepared, and none of them on a thread whose model can't take them.
+    func canSendReply(_ ref: ThreadRef) -> Bool {
+        let photos = self.photos(ref)
+        let written = !(drafts[ref.id] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return canSend(ref) && !preparingSends.contains(ref.id) && (written || !photos.isEmpty)
+            && !photos.contains(where: \.preparing) && (photos.isEmpty || photoSupport(ref) == .available)
+    }
+    func photos(_ ref: ThreadRef) -> [DraftPhoto] { draftPhotos[ref.id] ?? [] }
+    func photoSupport(_ ref: ThreadRef) -> PhotoSupport {
+        PhotoSupport(online: online(ref.hostID), thread: thread(ref), host: live[ref.hostID]?.shell?.host, features: live[ref.hostID]?.features ?? [])
+    }
+    /// A reply, answer or stop still on its way, as opposed to one its computer couldn't confirm.
+    func isSending(_ item: PendingOperation) -> Bool { dispatchingOperations.keys.contains(item.id) || receiptFollowers[item.id] != nil }
     func canInterrupt(_ ref: ThreadRef) -> Bool {
         online(ref.hostID) && pending(for: ref).allSatisfy { $0.kind == "reply" }
             && thread(ref)?.status == "running" && (capabilities(for: ref)?.interrupt ?? false)
@@ -204,10 +287,16 @@ struct Live {
 
     init(keychain: KeychainStore = KeychainStore(),
          retryJitter: @escaping @Sendable () -> Double = { Double.random(in: 0.8...1.2) },
-         retrySleep: @escaping @Sendable (UInt64) async throws -> Void = { try await Task.sleep(nanoseconds: $0) }) {
+         retrySleep: @escaping @Sendable (UInt64) async throws -> Void = { try await Task.sleep(nanoseconds: $0) },
+         preparePhoto: @escaping @Sendable (Data, String) async throws -> PreparedPhoto = { try await PhotoPipeline.prepare($0, name: $1) },
+         receiptSleep: @escaping @Sendable (UInt64) async throws -> Void = { try await Task.sleep(nanoseconds: $0) },
+         photoLoadLimit: @escaping @Sendable () async throws -> Void = { try await Task.sleep(nanoseconds: 120_000_000_000) }) {
         self.keychain = keychain
         self.retrySleep = retrySleep
         self.retryJitter = retryJitter
+        self.preparePhoto = preparePhoto
+        self.receiptSleep = receiptSleep
+        self.photoLoadLimit = photoLoadLimit
         #if DEBUG && os(iOS)
         if ProcessInfo.processInfo.arguments.contains("--ui-fixture") {
             loadUIFixture()
@@ -320,6 +409,11 @@ struct Live {
     }
     /// Wait for the connection work scheduled by activation, including delivery checks.
     func waitForActivation() async { await activationConnection?.value }
+    /// Wait until every photo chosen so far has been prepared and staged, or has left its reply box.
+    func waitForPhotos() async {
+        await photoWork?.value
+        for task in Array(stagingTasks.values) { _ = await task.value }
+    }
     func reconnectAll() async {
         let ids = computers.map(\.hostID)
         await withTaskGroup(of: Void.self) { group in
@@ -540,7 +634,13 @@ struct Live {
         let prefix = hostID + "/"
         drafts = drafts.filter { !$0.key.hasPrefix(prefix) }
         failedReplies = failedReplies.filter { !$0.key.hasPrefix(prefix) }
+        draftPhotos = draftPhotos.filter { !$0.key.hasPrefix(prefix) }
+        failedPhotos = failedPhotos.filter { !$0.key.hasPrefix(prefix) }
+        photoNotices = photoNotices.filter { !$0.key.hasPrefix(prefix) }
         submitted = submitted.filter { !gone.contains($0.key) }
+        submittedPhotos = submittedPhotos.filter { !gone.contains($0.key) }
+        gone.forEach { dispatchingOperations[$0] = nil; receiptFollowers[$0] = nil }
+        largeRequests[hostID] = nil
         let words = outcome.words(name: saved.name, clientID: saved.pairing.clientId)
         feedback = words
         // With nothing left paired the app goes back to the pairing steps, which show this instead.
@@ -646,15 +746,181 @@ struct Live {
 
     // MARK: Replies, answers and stops, each to its thread's own computer
 
+    /// Sends the reply box: its words, its photos, or both. The reply is marked before it goes, and from the
+    /// first press until then a second press finds nothing to send, so one reply is never sent twice.
     func send(_ ref: ThreadRef) async {
-        guard canSend(ref), let text = drafts[ref.id], let computer = self.computer(ref.hostID) else { return }
+        guard canSendReply(ref), computer(ref.hostID) != nil else { return }
+        // The words as pressed. The reply box is locked while its photos are staged, so nothing typed
+        // after the press joins a reply already on its way.
+        let text = drafts[ref.id] ?? ""
+        var images: [StagedImage] = []
+        if !photos(ref).isEmpty {
+            preparingSends.insert(ref.id)
+            let ready = await readyPhotos(ref)
+            preparingSends.remove(ref.id)
+            guard let ready else { return }
+            images = ready
+        }
+        // Nothing below waits until the marker is kept, so the checks hold when it is.
+        guard canSend(ref), images.isEmpty || photoSupport(ref) == .available, let computer = self.computer(ref.hostID) else {
+            if !images.isEmpty { photoNotices[ref.id] = "Your reply wasn’t sent. It’s still in the reply box." }
+            return
+        }
         let draft = UUID().uuidString
         do {
-            let command = try Commands.prompt(threadID: ref.threadID, text: text, draftID: draft)
+            let command = try Commands.prompt(threadID: ref.threadID, text: text, draftID: draft, images: images)
             let operation = PendingOperation(hostID: ref.hostID, clientID: computer.pairing.clientId, threadID: ref.threadID, draftID: draft, kind: "reply")
             try remember(operation); submitted[operation.id] = text; drafts[ref.id] = ""
+            if !images.isEmpty { submittedPhotos[operation.id] = photos(ref); photosSent?(photos(ref), ref); draftPhotos[ref.id] = nil }
+            photoNotices[ref.id] = nil
             await dispatch(command, operation: operation)
         } catch { feedback = error.localizedDescription }
+    }
+
+    // MARK: Photos in the reply box
+
+    /// Adds photos to a thread's reply box. Each is prepared off the main actor and staged on the thread's
+    /// computer in the order chosen, one at a time, so several large photos are never held decoded at once.
+    func attachPhotos(_ ref: ThreadRef, from sources: [PhotoSource]) {
+        guard !sources.isEmpty, photoSupport(ref) == .available, !preparingSends.contains(ref.id) else { return }
+        let room = PhotoLimits.count - photos(ref).count
+        guard room > 0 else { photoNotices[ref.id] = "A reply can carry \(PhotoLimits.count) photos."; return }
+        let added = sources.prefix(room).map { (photo: DraftPhoto(), source: $0) }
+        draftPhotos[ref.id, default: []] += added.map { $0.photo }
+        photoNotices[ref.id] = sources.count > room ? "A reply can carry \(PhotoLimits.count) photos. The others weren’t added." : nil
+        let previous = photoWork
+        photoWork = Task { [weak self] in
+            await previous?.value
+            for item in added { await self?.prepare(item.photo.id, in: ref, from: item.source) }
+        }
+    }
+    func removePhoto(_ id: UUID, from ref: ThreadRef) {
+        guard !preparingSends.contains(ref.id) else { return }
+        dropPhoto(id, in: ref, reason: nil)
+    }
+    private func prepare(_ id: UUID, in ref: ThreadRef, from source: PhotoSource) async {
+        // Removed while it waited its turn: nothing is read.
+        guard photo(id, in: ref) != nil else { return }
+        do {
+            let prepared = try await preparePhoto(try await loaded(source, for: id), source.name)
+            guard photo(id, in: ref) != nil else { return }
+            let others = photos(ref).filter { $0.id != id }.compactMap { $0.prepared?.byteCount }
+            guard Photos.fits(prepared.byteCount, with: others) else {
+                throw ClientError.rejected("These photos would take the reply over 20 MB, so this one wasn’t added. Send these first, or remove one.")
+            }
+            change(id, in: ref) { $0.prepared = prepared }
+            // Staged on its own, so a slow computer never holds up preparing photos for any other reply.
+            _ = staging(id, in: ref)
+        } catch {
+            // A photo the library couldn't hand over reads as one that couldn't be read.
+            let reason = (error as? PhotoPipelineError)?.errorDescription ?? (error as? ClientError)?.errorDescription
+            dropPhoto(id, in: ref, reason: reason ?? PhotoPipelineError.unreadable.errorDescription!)
+        }
+    }
+    /// A photo's original bytes, or `tooSlow` once the limit passes, so one that never arrives can't hold up the
+    /// photos chosen after it, and removing the photo ends the wait at once. A load that ignores cancellation is
+    /// left to finish on its own.
+    private func loaded(_ source: PhotoSource, for id: UUID) async throws -> Data {
+        let load = PhotoLoad()
+        photoLoads[id] = load
+        defer { photoLoads[id] = nil }
+        let limit = photoLoadLimit
+        return try await withCheckedThrowingContinuation { continuation in
+            load.continuation = continuation
+            load.tasks = [
+                Task { do { load.finish(.success(try await source.load())) } catch { load.finish(.failure(error)) } },
+                Task { do { try await limit(); load.finish(.failure(PhotoPipelineError.tooSlow)) } catch {} },
+            ]
+        }
+    }
+    /// A photo's staging, started now unless it is already under way: a photo is never staged twice at once.
+    private func staging(_ id: UUID, in ref: ThreadRef) -> Task<Bool, Never>? {
+        if let running = stagingTasks[id] { return running }
+        guard let prepared = photo(id, in: ref)?.prepared else { return nil }
+        change(id, in: ref) { $0.staging = true }
+        let task = Task { [weak self] () -> Bool in
+            let staged = await self?.requestStaging(prepared, as: id, in: ref) ?? false
+            self?.stagingTasks[id] = nil
+            self?.change(id, in: ref) { $0.staging = false }
+            return staged
+        }
+        stagingTasks[id] = task
+        return task
+    }
+    private func stage(_ id: UUID, in ref: ThreadRef) async -> Bool { await staging(id, in: ref)?.value ?? false }
+    /// Stages one prepared photo on its thread's computer. A photo that couldn't reach it stays in the box and
+    /// is staged when the reply is sent; one the computer refused for what it is leaves the box, with its reason.
+    private func requestStaging(_ prepared: PreparedPhoto, as id: UUID, in ref: ThreadRef) async -> Bool {
+        let over = generations[ref.hostID]
+        do {
+            let operation = try Photos.stage(name: prepared.name, mimeType: prepared.mimeType, base64: prepared.base64, dimensions: prepared.dimensions)
+            let handle = try await largeRequest(on: ref.hostID) { connection -> StagedImage in
+                let handle = try await connection.call(operation, as: StagedImage.self)
+                guard handle.valid else { throw ClientError.invalidProtocol }
+                return handle
+            }
+            change(id, in: ref) { $0.staged = handle; $0.stagedAt = Date(); $0.stagedGeneration = over }
+            return true
+        } catch let refusal as HostRefusal where refusal.failure.code == "invalid_request" {
+            dropPhoto(id, in: ref, reason: refusal.failure.message)
+        } catch {}
+        return false
+    }
+    /// Every photo in the reply box with a handle its computer still keeps: staged now if it never got there,
+    /// or again if it has been there long enough to be let go. Nil, with the reason, when one can't be.
+    private func readyPhotos(_ ref: ThreadRef) async -> [StagedImage]? {
+        // Only this reply's own photos are waited for: one still on its way is joined, not sent again.
+        // Each photo is read as it is now, not as it was when the loop began: one staged meanwhile is not staged again.
+        for id in photos(ref).map(\.id) {
+            // One that left the box while the reply waited, refused by the computer, makes it a reply the user
+            // didn't press: nothing is sent, and the box says why.
+            guard let photo = photo(id, in: ref) else { return nil }
+            guard stagingTasks[id] != nil || photo.needsStaging(generation: generations[ref.hostID]) else { continue }
+            guard await stage(id, in: ref) else {
+                if photoNotices[ref.id] == nil {
+                    photoNotices[ref.id] = "A photo couldn’t reach \(name(ref.hostID)), so nothing was sent. Try again when it’s connected."
+                }
+                return nil
+            }
+        }
+        let current = photos(ref)
+        let staged = current.compactMap(\.staged)
+        return !staged.isEmpty && staged.count == current.count ? staged : nil
+    }
+    private func photo(_ id: UUID, in ref: ThreadRef) -> DraftPhoto? { draftPhotos[ref.id]?.first { $0.id == id } }
+    private func change(_ id: UUID, in ref: ThreadRef, _ edit: (inout DraftPhoto) -> Void) {
+        guard let index = draftPhotos[ref.id]?.firstIndex(where: { $0.id == id }) else { return }
+        edit(&draftPhotos[ref.id]![index])
+    }
+    /// Takes a photo out of its reply box, saying why when it wasn't the user's choice.
+    private func dropPhoto(_ id: UUID, in ref: ThreadRef, reason: String?) {
+        guard photo(id, in: ref) != nil else { return }
+        photoLoads[id]?.finish(.failure(CancellationError()))
+        draftPhotos[ref.id]?.removeAll { $0.id == id }
+        if draftPhotos[ref.id]?.isEmpty == true { draftPhotos[ref.id] = nil }
+        photoNotices[ref.id] = reason
+    }
+    /// One large request at a time on each computer: it refuses a second image, either way, while one is on
+    /// its way. Each waits for the one before it, whether that one worked or not.
+    private func largeRequest<T: Sendable>(on hostID: String, _ work: @escaping @MainActor (HostConnection) async throws -> T) async throws -> T {
+        let previous = largeRequests[hostID]
+        let task = Task<T, Error> { [weak self] in
+            await previous?.value
+            guard let self, self.online(hostID), let connection = self.connections[hostID] else { throw ClientError.disconnected }
+            return try await work(connection)
+        }
+        largeRequests[hostID] = Task { _ = try? await task.value }
+        return try await task.value
+    }
+    /// A sent photo's bytes from the computer that keeps it. It waits its turn behind other large requests to
+    /// that computer, and is never made if nothing on screen still `wanted` it by then.
+    func sentPhoto(_ ref: ThreadRef, messageID: String, attachmentID: String, wanted: @escaping @MainActor () -> Bool) async -> Data? {
+        let operation = Photos.preview(threadID: ref.threadID, messageID: messageID, attachmentID: attachmentID)
+        guard let url = try? await largeRequest(on: ref.hostID, { connection -> String? in
+            guard wanted() else { return nil }
+            return try await connection.call(operation, as: Optional<PhotoPreview>.self)?.dataUrl
+        }) else { return nil }
+        return await Photos.bytes(fromDataURL: url)
     }
     /// Answers a request from the open thread's sheet, after rechecking the computer's authority.
     func answer(_ request: AgentRequest, in ref: ThreadRef, choice: String? = nil, text: String = "", answers: [String: QuestionAnswer] = [:]) async {
@@ -662,7 +928,8 @@ struct Live {
         do {
             let command = try Commands.answer(threadID: ref.threadID, request: request, currentRequests: thread.requests, choice: choice, text: text, answers: answers)
             let operation = PendingOperation(hostID: ref.hostID, clientID: computer.pairing.clientId, threadID: ref.threadID, requestID: request.id, kind: "answer")
-            try remember(operation); await dispatch(command, operation: operation)
+            try remember(operation)
+            await dispatch(command, operation: operation)
         } catch { feedback = error.localizedDescription }
     }
     func interrupt(_ ref: ThreadRef) async {
@@ -679,12 +946,15 @@ struct Live {
         let next = pending + [operation]; try keychain.write(next, account: ComputerStore.pendingAccount); pending = next
     }
     private func forgetMarker(_ id: String) throws {
-        let next = pending.filter { $0.id != id }; try keychain.write(next, account: ComputerStore.pendingAccount); pending = next; submitted.removeValue(forKey: id)
+        let next = pending.filter { $0.id != id }; try keychain.write(next, account: ComputerStore.pendingAccount); pending = next
+        submitted.removeValue(forKey: id); submittedPhotos.removeValue(forKey: id)
     }
     @discardableResult private func dispatch(_ command: JSONValue, operation: PendingOperation) async -> Shell? {
         let hostID = operation.hostID, current = generations[hostID]
-        if operation.kind == "answer" { dispatchingAnswers.insert(operation.id) }
-        defer { dispatchingAnswers.remove(operation.id) }
+        // From here, which follows its marker without a wait, until this returns, it reads as sending;
+        // a marker still kept after that is unconfirmed.
+        dispatchingOperations[operation.id] = .some(current)
+        defer { dispatchingOperations[operation.id] = nil }
         guard let connection = connections[hostID] else { operationFeedback(ClientError.uncertain.localizedDescription, operations: [operation.id]); return nil }
         do {
             let result = try await connection.callReceived(["op": .string("command"), "command": command], as: Shell.self, id: operation.id)
@@ -708,8 +978,43 @@ struct Live {
             if error.failure.code == "forbidden" { update(hostID) { $0.mayAnswer = false } }
             if error.failure.code == "unauthenticated" { update(hostID) { $0.status = .unreachable; $0.problem = error.localizedDescription } }
             feedback = error.localizedDescription
-        } catch { if generations[hostID] == current { operationFeedback("Delivery is unconfirmed. Reconnect and check the thread before sending again.", operations: [operation.id]) } }
+        } catch {
+            guard generations[hostID] == current else { return nil }
+            // A slow provider can outlast the acknowledgement's deadline. While the computer says it is still
+            // carrying the command out, it is still sending; either way it is never sent again.
+            if Self.sendingKinds.contains(operation.kind), let token = claimReceipt(operation.id, over: current) {
+                await followReceipt(operation, on: connection, epoch: current, token: token)
+            }
+            if generations[hostID] == current, pending.contains(where: { $0.id == operation.id }) {
+                operationFeedback("Delivery is unconfirmed. Reconnect and check the thread before sending again.", operations: [operation.id])
+            }
+        }
         return nil
+    }
+    /// Reads a command's receipt every two seconds while its computer says it is still carrying it out, and
+    /// settles it once it has finished. A computer that doesn't know the command, a changed connection or the last
+    /// read, about ten minutes on, leave it as it is: unconfirmed.
+    private func followReceipt(_ operation: PendingOperation, on connection: HostConnection, epoch: UUID?, token: UUID) async {
+        defer { if receiptFollowers[operation.id]?.token == token { receiptFollowers[operation.id] = nil } }
+        let hostID = operation.hostID
+        for _ in 0..<Self.receiptReads {
+            guard receiptFollowers[operation.id]?.token == token, generations[hostID] == epoch, online(hostID),
+                  pending.contains(where: { $0.id == operation.id }),
+                  let receipt = try? await connection.call(["op": .string("receipt"), "commandId": .string(operation.id)], as: Receipt.self),
+                  generations[hostID] == epoch else { return }
+            guard receipt.stillWorking else {
+                if receipt.status == "completed" { await checkDelivery(hostID) }
+                return
+            }
+            do { try await receiptSleep(Self.receiptInterval) } catch { return }
+        }
+    }
+    /// Claims a command's receipt for this connection generation, unless it is already followed over it.
+    private func claimReceipt(_ id: String, over generation: UUID?) -> UUID? {
+        guard receiptFollowers[id].map({ $0.generation != generation }) ?? true else { return nil }
+        let token = UUID()
+        receiptFollowers[id] = ReceiptFollower(token: token, generation: generation)
+        return token
     }
     func checkDelivery(_ hostID: String) async {
         guard online(hostID), !scoped(hostID).isEmpty, let connection = connections[hostID] else { return }
@@ -726,6 +1031,14 @@ struct Live {
                 guard generations[hostID] == current else { return }
                 guard scoped(hostID).contains(where: { $0.id == item.id }) else { continue }
                 try settle(item, receipt: receipt, shell: live[hostID]?.shell)
+                // Still being carried out after a reconnect: claimed now, so it reads as sending from here
+                // until its receipt settles it.
+                // A dispatch on an older connection doesn't hold it: its own follower stops once the connection changes.
+                if receipt.stillWorking, Self.sendingKinds.contains(item.kind), dispatchingOperations[item.id] != .some(current),
+                   scoped(hostID).contains(where: { $0.id == item.id }),
+                   let token = claimReceipt(item.id, over: current) {
+                    Task { [weak self] in await self?.followReceipt(item, on: connection, epoch: current, token: token) }
+                }
             }
         } catch { if generations[hostID] == current { operationFeedback("Delivery to \(name(hostID)) could not be checked. Nothing was resent. Reconnect to try again.", operations: Set(scoped(hostID).map(\.id))) } }
     }
@@ -765,13 +1078,20 @@ struct Live {
     }
     private func rejectOperation(_ operation: PendingOperation) throws {
         if let text = submitted[operation.id], operation.kind == "reply" {
-            failedReplies[ThreadRef(hostID: operation.hostID, threadID: operation.threadID).id] = text
+            let ref = ThreadRef(hostID: operation.hostID, threadID: operation.threadID)
+            failedReplies[ref.id] = text
+            failedPhotos[ref.id] = submittedPhotos[operation.id]
         }
         try forgetMarker(operation.id)
     }
     func restoreReply(_ ref: ThreadRef) {
-        guard (drafts[ref.id] ?? "").isEmpty, let text = failedReplies[ref.id] else { return }
+        guard (drafts[ref.id] ?? "").isEmpty, photos(ref).isEmpty, let text = failedReplies[ref.id] else { return }
         drafts[ref.id] = text; failedReplies.removeValue(forKey: ref.id)
+        // Its photos come back too; any the computer may have let go are staged again when it is sent.
+        // Staged again when sent: the computer may have refused it because it no longer kept a photo.
+        if let photos = failedPhotos.removeValue(forKey: ref.id), !photos.isEmpty {
+            draftPhotos[ref.id] = photos.map { var photo = $0; photo.staged = nil; photo.stagedAt = nil; return photo }
+        }
     }
     func acknowledgeUnknown(_ id: String) {
         do { try forgetMarker(id); feedback = "Unconfirmed action dismissed. Nothing was resent." }
@@ -926,7 +1246,7 @@ struct Live {
         for item in scoped(hostID) {
             // A connect, dispatch or solicited shell is followed by a receipt check. Keep its
             // answer markers through intervening pushes until their own receipts are read.
-            if item.kind == "answer", !reconcileAnswers || connecting.contains(hostID) || dispatchingAnswers.contains(item.id) || (deliveryChecks[hostID] ?? 0) > 0 { continue }
+            if item.kind == "answer", !reconcileAnswers || connecting.contains(hostID) || dispatchingOperations.keys.contains(item.id) || (deliveryChecks[hostID] ?? 0) > 0 { continue }
             do { try settle(item, shell: next) }
             catch { feedback = error.localizedDescription }
         }
