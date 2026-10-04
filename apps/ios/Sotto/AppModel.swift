@@ -94,7 +94,8 @@ struct DraftPhoto: Identifiable {
     @Published private(set) var preparingSends: Set<String> = []
     /// Replies, answers and stops on their way: the computer hasn't answered yet, or says it is still
     /// carrying the command out. They read as sending, not as unconfirmed.
-    @Published private var dispatchingOperations: Set<String> = []
+    /// Commands being dispatched, each with the connection generation it went out on.
+    @Published private var dispatchingOperations: [String: UUID?] = [:]
     /// Who is reading each command's receipt, and over which connection. A newer connection takes over from an
     /// older one, which then stops without touching what the newer one shows.
     @Published private var receiptFollowers: [String: ReceiptFollower] = [:]
@@ -271,7 +272,7 @@ struct DraftPhoto: Identifiable {
         PhotoSupport(online: online(ref.hostID), thread: thread(ref), host: live[ref.hostID]?.shell?.host, features: live[ref.hostID]?.features ?? [])
     }
     /// A reply, answer or stop still on its way, as opposed to one its computer couldn't confirm.
-    func isSending(_ item: PendingOperation) -> Bool { dispatchingOperations.contains(item.id) || receiptFollowers[item.id] != nil }
+    func isSending(_ item: PendingOperation) -> Bool { dispatchingOperations.keys.contains(item.id) || receiptFollowers[item.id] != nil }
     func canInterrupt(_ ref: ThreadRef) -> Bool {
         online(ref.hostID) && pending(for: ref).allSatisfy { $0.kind == "reply" }
             && thread(ref)?.status == "running" && (capabilities(for: ref)?.interrupt ?? false)
@@ -638,7 +639,7 @@ struct DraftPhoto: Identifiable {
         photoNotices = photoNotices.filter { !$0.key.hasPrefix(prefix) }
         submitted = submitted.filter { !gone.contains($0.key) }
         submittedPhotos = submittedPhotos.filter { !gone.contains($0.key) }
-        dispatchingOperations.subtract(gone); gone.forEach { receiptFollowers[$0] = nil }
+        gone.forEach { dispatchingOperations[$0] = nil; receiptFollowers[$0] = nil }
         largeRequests[hostID] = nil
         let words = outcome.words(name: saved.name, clientID: saved.pairing.clientId)
         feedback = words
@@ -871,7 +872,10 @@ struct DraftPhoto: Identifiable {
         // Only this reply's own photos are waited for: one still on its way is joined, not sent again.
         // Each photo is read as it is now, not as it was when the loop began: one staged meanwhile is not staged again.
         for id in photos(ref).map(\.id) {
-            guard let photo = photo(id, in: ref), stagingTasks[id] != nil || photo.needsStaging(generation: generations[ref.hostID]) else { continue }
+            // One that left the box while the reply waited, refused by the computer, makes it a reply the user
+            // didn't press: nothing is sent, and the box says why.
+            guard let photo = photo(id, in: ref) else { return nil }
+            guard stagingTasks[id] != nil || photo.needsStaging(generation: generations[ref.hostID]) else { continue }
             guard await stage(id, in: ref) else {
                 if photoNotices[ref.id] == nil {
                     photoNotices[ref.id] = "A photo couldn’t reach \(name(ref.hostID)), so nothing was sent. Try again when it’s connected."
@@ -949,8 +953,8 @@ struct DraftPhoto: Identifiable {
         let hostID = operation.hostID, current = generations[hostID]
         // From here, which follows its marker without a wait, until this returns, it reads as sending;
         // a marker still kept after that is unconfirmed.
-        dispatchingOperations.insert(operation.id)
-        defer { dispatchingOperations.remove(operation.id) }
+        dispatchingOperations[operation.id] = .some(current)
+        defer { dispatchingOperations[operation.id] = nil }
         guard let connection = connections[hostID] else { operationFeedback(ClientError.uncertain.localizedDescription, operations: [operation.id]); return nil }
         do {
             let result = try await connection.callReceived(["op": .string("command"), "command": command], as: Shell.self, id: operation.id)
@@ -1029,7 +1033,8 @@ struct DraftPhoto: Identifiable {
                 try settle(item, receipt: receipt, shell: live[hostID]?.shell)
                 // Still being carried out after a reconnect: claimed now, so it reads as sending from here
                 // until its receipt settles it.
-                if receipt.stillWorking, Self.sendingKinds.contains(item.kind), !dispatchingOperations.contains(item.id),
+                // A dispatch on an older connection doesn't hold it: its own follower stops once the connection changes.
+                if receipt.stillWorking, Self.sendingKinds.contains(item.kind), dispatchingOperations[item.id] != .some(current),
                    scoped(hostID).contains(where: { $0.id == item.id }),
                    let token = claimReceipt(item.id, over: current) {
                     Task { [weak self] in await self?.followReceipt(item, on: connection, epoch: current, token: token) }
@@ -1241,7 +1246,7 @@ struct DraftPhoto: Identifiable {
         for item in scoped(hostID) {
             // A connect, dispatch or solicited shell is followed by a receipt check. Keep its
             // answer markers through intervening pushes until their own receipts are read.
-            if item.kind == "answer", !reconcileAnswers || connecting.contains(hostID) || dispatchingOperations.contains(item.id) || (deliveryChecks[hostID] ?? 0) > 0 { continue }
+            if item.kind == "answer", !reconcileAnswers || connecting.contains(hostID) || dispatchingOperations.keys.contains(item.id) || (deliveryChecks[hostID] ?? 0) > 0 { continue }
             do { try settle(item, shell: next) }
             catch { feedback = error.localizedDescription }
         }

@@ -16,7 +16,9 @@ import SottoCore
         let cache = NSCache<NSString, Box>(); cache.countLimit = 150; cache.totalCostLimit = 64 * 1024 * 1024; return cache
     }()
     private var loading: [Key: Task<CGImage?, Never>] = [:]
+    /// How many thumbnails, and separately how many open viewers, show each photo now.
     private var shown: [Key: Int] = [:]
+    private var viewed: [Key: Int] = [:]
     /// The last photo opened full size, so swiping back to it doesn't fetch it again.
     private var opened: (key: Key, image: CGImage)?
     private var openingFull: [Key: Task<CGImage?, Never>] = [:]
@@ -33,6 +35,9 @@ import SottoCore
     }
     func appeared(_ key: Key) { shown[key, default: 0] += 1 }
     func disappeared(_ key: Key) { shown[key] = (shown[key] ?? 1) > 1 ? shown[key]! - 1 : nil }
+    /// A closed viewer's full-size photo is never fetched, even while its thumbnail is still in the thread.
+    func viewerOpened(_ key: Key) { viewed[key, default: 0] += 1 }
+    func viewerClosed(_ key: Key) { viewed[key] = (viewed[key] ?? 1) > 1 ? viewed[key]! - 1 : nil }
     func thumbnail(_ key: Key, model: AppModel) async -> CGImage? {
         if let hit = cached(key) { return hit }
         if let running = loading[key] { return await running.value }
@@ -56,7 +61,7 @@ import SottoCore
         if let running = openingFull[key] { return await running.value }
         let task = Task { [weak self] () -> CGImage? in
             guard let data = await model.sentPhoto(key.ref, messageID: key.messageID, attachmentID: key.attachmentID, wanted: {
-                (self?.shown[key] ?? 0) > 0
+                (self?.viewed[key] ?? 0) > 0
             }), let image = await PhotoPipeline.image(data, edge: PhotoPipeline.screenEdge) else { return nil }
             self?.opened = (key, image)
             return image
@@ -162,8 +167,8 @@ private struct FullPhoto: View {
             } else { ProgressView() }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onAppear { previews.appeared(key) }
-        .onDisappear { previews.disappeared(key) }
+        .onAppear { previews.viewerOpened(key) }
+        .onDisappear { previews.viewerClosed(key) }
         .task(id: key) { image = await previews.full(key, model: model); missing = image == nil && !Task.isCancelled }
     }
 }

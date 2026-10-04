@@ -111,6 +111,48 @@ final class PhotoReplyTests: XCTestCase {
         try XCTUnwrap(HostConnection.instances.last).push(.shell(try JSONValue.object(root).decode(Shell.self)))
         XCTAssertEqual(model.photoSupport(ref), .available)
     }
+    @MainActor func testAPhotoRefusedWhileTheReplyWaitsSendsNothing() async throws {
+        let (model, ref) = try await fixture()
+        let connection = try XCTUnwrap(HostConnection.instances.last)
+        let working = try XCTUnwrap(HostConnection.stageHandler)
+        HostConnection.stageHandler = { _ in throw ClientError.readTimedOut }
+        model.attachPhotos(ref, from: [source("Photo 1")])
+        await model.waitForPhotos()
+        // Photo 2's own staging is held, then refused; photo 1, staged again at Send, waits behind it.
+        let gate = Gate()
+        let refused = try refusal("invalid_request", "Each screenshot must be 10 MB or smaller.")
+        var calls = 0
+        HostConnection.stageHandler = { image in
+            calls += 1
+            if calls == 1 { await gate.hold(); throw refused }
+            return try await working(image)
+        }
+        model.attachPhotos(ref, from: [source("Photo 2")])
+        await gate.arrived()
+        let sending = Task { await model.send(ref) }
+        for _ in 0..<1_000 where !model.preparingSends.contains(ref.id) { await Task.yield() }
+        XCTAssertTrue(model.preparingSends.contains(ref.id))
+        gate.release()
+        await sending.value
+        XCTAssertTrue(sent(connection).isEmpty, "A reply missing a photo the user pressed Send with is not sent")
+        XCTAssertEqual(model.photos(ref).count, 1)
+        XCTAssertEqual(model.photoNotices[ref.id], "Each screenshot must be 10 MB or smaller.")
+    }
+    @MainActor func testAStalledStagingNeverHoldsUpPreparingTheNextPhoto() async throws {
+        let (model, ref) = try await fixture()
+        let gate = Gate()
+        let working = try XCTUnwrap(HostConnection.stageHandler)
+        HostConnection.stageHandler = { image in await gate.hold(); return try await working(image) }
+        model.attachPhotos(ref, from: [source("Photo 1")])
+        await gate.arrived()
+        model.attachPhotos(ref, from: [source("Photo 2")])
+        for _ in 0..<1_000 where model.photos(ref).contains(where: \.preparing) { await Task.yield() }
+        XCTAssertFalse(model.photos(ref).contains(where: \.preparing), "Photo 2 was prepared while photo 1's staging was held")
+        HostConnection.stageHandler = working
+        gate.release()
+        await model.waitForPhotos()
+        XCTAssertEqual(model.photos(ref).compactMap(\.staged).count, 2)
+    }
     @MainActor func testAPhotoThatNeverReachedTheComputerIsStagedWhenTheReplyIsSent() async throws {
         let (model, ref) = try await fixture()
         let connection = try XCTUnwrap(HostConnection.instances.last)
@@ -254,6 +296,38 @@ final class PhotoReplyTests: XCTestCase {
         let marker = try XCTUnwrap(model.pending.first)
         XCTAssertFalse(model.isSending(marker))
         XCTAssertEqual(model.feedback, "Delivery is unconfirmed. Reconnect and check the thread before sending again.")
+    }
+    @MainActor func testANewConnectionTakesOverFollowingAReceiptFromAnOldDispatch() async throws {
+        let box = Box()
+        let gate = Gate()
+        let (model, ref) = try await fixture(receiptSleep: { _ in
+            let first = await MainActor.run { () -> Bool in box.sleeps += 1; return box.sleeps == 1 }
+            if first { await gate.hold(); return }
+            // The new connection's follower: the computer finishes the command while it waits.
+            await MainActor.run {
+                guard let marker = box.model?.pending.first, case .object(var root) = HostConnection.shell else { return }
+                root["deliveries"] = .array([.object(["threadId": .string(marker.threadID), "draftId": .string(marker.draftID!), "status": .string("accepted")])])
+                HostConnection.shell = .object(root)
+                HostConnection.receipt = .object(["status": .string("completed")])
+            }
+        })
+        box.model = model
+        HostConnection.loseAcknowledgement = true
+        HostConnection.receipt = .object(["status": .string("pending")])
+        model.drafts[ref.id] = "Continue"
+        let sending = Task { await model.send(ref) }
+        await gate.arrived()
+        let marker = try XCTUnwrap(model.pending.first)
+        // The phone reconnects while the old dispatch's follower sleeps; the computer still says it is working.
+        await model.connect(ref.hostID)
+        XCTAssertTrue(model.isSending(marker), "The new connection's follower took over")
+        gate.release()
+        await sending.value
+        for _ in 0..<1_000 where !model.pending.isEmpty { await Task.yield() }
+        XCTAssertTrue(model.pending.isEmpty, "The new connection's follower settled it")
+        XCTAssertGreaterThanOrEqual(box.sleeps, 2)
+        XCTAssertEqual(HostConnection.instances.flatMap(\.commands).filter { $0["type"] == .string("manual-send") }.count, 1, "Nothing is sent again")
+        XCTAssertNil(model.feedback)
     }
     @MainActor func testAReconnectFindingTheCommandStillRunningShowsItAsSending() async throws {
         let box = Box()
