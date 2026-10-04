@@ -5,9 +5,11 @@ October 3, 2026, on `feat/frosted-window-and-pane-terminal` from `main` at 54f10
 ## Frosted window
 
 - **The system draws the material.** With `frostedWindow` on, Windows 11 (build 26200 on the development machine) reported `DWMWA_SYSTEMBACKDROP_TYPE` = 3, transient window (acrylic), for Sotto's main window, read with `DwmGetWindowAttribute` on the window's handle. With the setting off, it reported 2 and the black background was kept.
-- **The room lets it through.** In `tests/e2e/frosted-window.spec.ts`, the root carries `data-frost` and the body's canvas has alpha below 1 only where `window.sotto.windowFrost` is true. The Settings switch turns both off and back on without a restart. Where the system cannot frost, the switch is disabled and says "Needs Windows 11 version 22H2 or later."
+- **The room lets it through.** In `tests/e2e/frosted-window.spec.ts`, the root carries `data-frost` and the body's canvas has alpha below 1 only where `window.sotto.canFrostWindow` is true. The Settings switch turns both off and back on without a restart. Where the system cannot frost, the switch is disabled and says "Needs Windows 11 version 22H2 or later."
 - **Which surfaces are see-through.** With a bright gradient under the page in place of the desktop, Threads, Settings and Dictate all showed it through the room and the sidebar, in dark and light. The composer, inputs, message bubbles and the terminal kept their own surfaces. Those captures and the spec's screen captures show what is behind the window, so none is committed. `artifacts/frosted-window/` is git-ignored for that reason.
 - **Not verified automatically: the focused look.** A window launched by a test cannot take the foreground on Windows, and acrylic is drawn solid while a window is in the background. Every automated capture therefore showed the solid fallback. The owner checks the focused look by eye.
+- **Not verified at all: macOS, and acrylic's own tint.** Vibrancy is covered only by unit tests of the window options. Acrylic is tinted by Windows' own light or dark setting, which Sotto does not change (ADR-0009 keeps `nativeTheme` alone), so a light Sotto on a dark Windows, or the reverse, has not been seen. The room's own canvas, 60% at the default, sits over that tint.
+- **The drawer and the docked Tools panel frost too.** In the same spec, an open drawer paints a background more solid than the room and its terminal area is clear. The docked Tools panel sheet takes the sidebar's frosted colour; floating over the panes, it stays solid.
 
 ## Terminal drawer
 
@@ -19,7 +21,7 @@ October 3, 2026, on `feat/frosted-window-and-pane-terminal` from `main` at 54f10
 - Ctrl+J again brings the same shell back with focus in it, and Escape goes to the shell without hiding the drawer;
 - closing its last shell hides the drawer and ends the session.
 
-Captures, made with `SOTTO_PANE_TERMINAL_EVIDENCE=1` and a short prompt so no folder path shows:
+Captures. The first four were made with `SOTTO_PANE_TERMINAL_EVIDENCE=1` and a short prompt, so no folder path shows. The fifth was made by hand with a throwaway probe:
 
 - `artifacts/pane-terminal/drawer-dark-1600x1000.png`
 - `artifacts/pane-terminal/drawer-dark-1280x800.png`

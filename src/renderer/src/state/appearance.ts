@@ -357,7 +357,7 @@ export function useAppearancePreviewVersion(preview: AppearancePreview = appeara
 
 /** Whether the system asks for less transparency, kept current, so a frosted room turns solid (and back) at once. */
 export function useSystemReducesTransparency(): boolean {
-  const [reduced, setReduced] = useState(false)
+  const [reduced, setReduced] = useState(() => typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia(REDUCED_TRANSPARENCY_QUERY).matches)
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return
     const query = window.matchMedia(REDUCED_TRANSPARENCY_QUERY)

@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { paneTerminalChord, paneTerminalShortcutLabel, paneTerminalTarget, type PaneTerminalShortcut } from '../../../../src/renderer/src/tools/paneTerminalShortcut'
 
-const windows: PaneTerminalShortcut = { chord: 'mod+j', platform: 'win32', label: 'Ctrl+J' }
-const mac: PaneTerminalShortcut = { chord: 'mod+j', platform: 'darwin', label: 'Cmd+J' }
+const windows: PaneTerminalShortcut = { chord: 'mod+j', platform: 'win32', label: 'Ctrl+J', keys: 'Control+J' }
+const mac: PaneTerminalShortcut = { chord: 'mod+j', platform: 'darwin', label: 'Cmd+J', keys: 'Meta+J' }
 
 type ChordEvent = Parameters<typeof paneTerminalTarget>[0]
 const keydown = (patch: Partial<ChordEvent> = {}): ChordEvent =>
@@ -11,8 +11,8 @@ const keydown = (patch: Partial<ChordEvent> = {}): ChordEvent =>
 /** Two panes, as a split shows them: each with a composer, and a drawer terminal in the first. */
 function panes(): { readonly first: HTMLElement; readonly second: HTMLElement; readonly drawerTerminal: HTMLElement } {
   document.body.innerHTML = `
-    <section class="thread-pane" data-thread-id="first"><textarea></textarea><div class="pane-terminal"><div class="xterm"><textarea class="xterm-helper-textarea"></textarea></div></div></section>
-    <section class="thread-pane" data-thread-id="second"><textarea></textarea></section>`
+    <section class="thread-pane" data-thread-id="first"><button data-pane-terminal-toggle></button><textarea></textarea><div class="pane-terminal"><div class="xterm"><textarea class="xterm-helper-textarea"></textarea></div></div></section>
+    <section class="thread-pane" data-thread-id="second"><button data-pane-terminal-toggle></button><textarea></textarea></section>`
   const [first, second] = [...document.querySelectorAll<HTMLElement>('.thread-pane')] as [HTMLElement, HTMLElement]
   return { first, second, drawerTerminal: first.querySelector<HTMLElement>('.xterm-helper-textarea')! }
 }
@@ -44,6 +44,14 @@ describe('the Terminal drawer shortcut', () => {
     // No pane at all: Terminal mode or another page. The key is not the drawer's.
     document.body.innerHTML = ''
     expect(paneTerminalTarget(keydown(), windows, 'second')).toBeNull()
+  })
+
+  it('leaves the key alone in a pane with no drawer: Terminal mode’s panes, and a thread on a paired host', () => {
+    // Terminal mode lays its terminals out in the same pane grid, with no drawer button in their headers.
+    document.body.innerHTML = '<section class="thread-pane" data-thread-id="terminal-1"><button>Stop</button></section>'
+    const control = document.querySelector('button')!
+    expect(paneTerminalTarget(keydown({ target: control }), windows, 'terminal-1')).toBeNull()
+    expect(paneTerminalTarget(keydown(), windows, 'terminal-1')).toBeNull()
   })
 
   it('leaves the key to a terminal that is not a drawer, so Tools and Terminal mode shells still get Ctrl+J', () => {

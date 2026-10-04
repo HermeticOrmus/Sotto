@@ -1,12 +1,11 @@
 import React, { useCallback, useEffect, useRef, type ReactNode } from 'react'
 import { useToolsPanelChrome } from '../tools/toolsPanelStore'
 import { ToolsPanel, ToolsPanelToggle } from '../tools/ToolsPanel'
-import { PaneTerminalDrawer } from '../tools/PaneTerminalDrawer'
+import { hideDrawerFromInside, PaneTerminalDrawer } from '../tools/PaneTerminalDrawer'
 import { PaneTerminalToggle, usePaneTerminalShortcut } from '../tools/PaneTerminalToggle'
 import { paneTerminalTarget } from '../tools/paneTerminalShortcut'
 import { paneTerminalChromeStore } from '../tools/paneTerminalStore'
 import { useAgents } from './AgentContext'
-import { focusInPane } from './ThreadPanes'
 import { ThreadsView, type ThreadsViewProps } from './ThreadsView'
 import { ThreadWorkingCopy, ThreadWorkingCopyNotice } from './ThreadWorkingCopy'
 
@@ -48,10 +47,8 @@ export function ThreadWorkspace(props: Pick<ThreadsViewProps, 'onOpenAgents' | '
       if (threadId === null) return
       event.preventDefault()
       if (paneTerminalChromeStore.get(threadId).open) {
-        const insideDrawer = document.activeElement?.closest('.pane-terminal') != null
-        paneTerminalChromeStore.setOpen(threadId, false)
-        // After the drawer has left the page, so focus never lands on its terminal on the way out.
-        if (insideDrawer) requestAnimationFrame(() => focusInPane(threadId))
+        if (document.activeElement?.closest('.pane-terminal') != null) hideDrawerFromInside(threadId)
+        else paneTerminalChromeStore.setOpen(threadId, false)
       } else {
         paneTerminalChromeStore.requestFocus(threadId)
         paneTerminalChromeStore.setOpen(threadId, true)
@@ -64,10 +61,11 @@ export function ThreadWorkspace(props: Pick<ThreadsViewProps, 'onOpenAgents' | '
   return <ThreadsView {...props}
     tools={tools => <ToolsPanel {...tools} />}
     focusedPaneActions={<ToolsPanelToggle />}
-    paneActions={({ row }) => <PaneTerminalToggle threadId={row.thread.id} />}
+    // A thread on a paired host keeps its terminal on that machine, as Tools says, so its pane has no drawer.
+    paneActions={({ row }) => row.thread.remoteHost ? null : <PaneTerminalToggle threadId={row.thread.id} />}
     paneWorkingCopy={({ row, command: paneCommand }) => <ThreadWorkingCopy thread={row.thread} project={row.project} command={paneCommand} />}
     paneNotice={({ row, command: paneCommand, focusPrompt }) => <ThreadWorkingCopyNotice key={`working-copy-${row.thread.id}`} thread={row.thread} project={row.project} command={paneCommand} onRecovered={focusPrompt} />}
-    paneDrawer={({ row }) => <PaneTerminalDrawer key={`terminal-drawer-${row.thread.id}`} threadId={row.thread.id} thread={row.thread} project={row.project} />}
+    paneDrawer={({ row }) => row.thread.remoteHost ? null : <PaneTerminalDrawer key={`terminal-drawer-${row.thread.id}`} threadId={row.thread.id} thread={row.thread} project={row.project} />}
     onPaneThreadsChange={observe}
   />
 }

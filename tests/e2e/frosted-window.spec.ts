@@ -40,9 +40,9 @@ async function withProfile(settings: Partial<AppSettings>, run: (launched: Launc
   }
 }
 
-/** The alpha of the body's painted background: 1 for the solid room, less where the desktop shows through. */
-async function canvasAlpha(launched: LaunchedSotto): Promise<number> {
-  const painted = await launched.page.evaluate(() => getComputedStyle(document.body).backgroundColor)
+/** The alpha of a surface's painted background, the body's by default: 1 when solid, less where the desktop shows through. */
+async function canvasAlpha(launched: LaunchedSotto, selector = 'body'): Promise<number> {
+  const painted = await launched.page.evaluate(target => getComputedStyle(document.querySelector(target)!).backgroundColor, selector)
   const alpha = /\/\s*([\d.]+%?)\s*\)$/u.exec(painted)?.[1] ?? /^rgba\([^)]*,\s*([\d.]+)\)$/u.exec(painted)?.[1]
   if (alpha === undefined) return 1
   return alpha.endsWith('%') ? Number(alpha.slice(0, -1)) / 100 : Number(alpha)
@@ -86,6 +86,15 @@ test.describe('frosted window', () => {
         await expect(page.locator('html')).toHaveAttribute('data-frost', '')
         // The cached look paints first; the saved settings, frost included, arrive a moment later.
         await expect.poll(() => canvasAlpha(launched)).toBeLessThan(1)
+        // A pane's terminal drawer frosts too, more solid than the room, and its terminal lets that show.
+        await page.getByText('Docs', { exact: true }).first().click()
+        await page.locator('[data-pane-terminal-toggle]').first().click()
+        await expect(page.locator('.pane-terminal .terminal-view')).toBeVisible()
+        const room = await canvasAlpha(launched)
+        await expect.poll(() => canvasAlpha(launched, '.pane-terminal')).toBeLessThan(1)
+        expect(await canvasAlpha(launched, '.pane-terminal')).toBeGreaterThan(room)
+        expect(await canvasAlpha(launched, '.pane-terminal .terminal-view')).toBe(0)
+        await page.locator('[data-pane-terminal-toggle]').first().click()
       } else {
         await expect(page.locator('html')).not.toHaveAttribute('data-frost', /.*/u)
         await expect.poll(() => canvasAlpha(launched)).toBe(1)

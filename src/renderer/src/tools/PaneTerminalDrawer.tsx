@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react'
-import { GitBranch, X } from 'lucide-react'
+import { GitBranch, PanelBottomClose } from 'lucide-react'
 import type { AgentProject } from '../../../shared/agents'
 import type { TerminalBridge } from '../../../shared/terminal'
 import { focusInPane } from '../agents/ThreadPanes'
@@ -16,7 +16,7 @@ import './paneTerminal.css'
 const MIN_DRAWER_HEIGHT = 120
 /**
  * What the header, transcript and composer keep between them, whatever the drawer's height: roughly the
- * header's own 44px, the composer's own room, and the ~160px of conversation CONTEXT.md asks every pane to keep.
+ * header's own 44px, the composer's own room, and about 160px of conversation, so the thread stays readable.
  */
 const MIN_CONVERSATION_AREA = 320
 const RESIZE_STEP = 24
@@ -27,6 +27,15 @@ const CELL_HEIGHT = 17
 const CHROME_HEIGHT = 80
 const CHROME_WIDTH = 40
 
+
+/**
+ * Hides a pane's drawer from inside it and puts focus back in the pane once the drawer has left the page, so focus
+ * never lands on its terminal on the way out. The shells keep running.
+ */
+export function hideDrawerFromInside(threadId: string, chromeStore: PaneTerminalChromeStore = paneTerminalChromeStore): void {
+  chromeStore.setOpen(threadId, false)
+  requestAnimationFrame(() => focusInPane(threadId))
+}
 
 export interface PaneTerminalDrawerProps {
   readonly threadId: string
@@ -89,8 +98,8 @@ export function PaneTerminalDrawer({ threadId, thread, project, bridge, viewFact
     if (hadSessions.current) {
       hadSessions.current = false
       const focusInside = root.current?.contains(document.activeElement) === true || document.activeElement === document.body
-      chromeStore.setOpen(threadId, false)
-      if (focusInside) requestAnimationFrame(() => focusInPane(threadId))
+      if (focusInside) hideDrawerFromInside(threadId, chromeStore)
+      else chromeStore.setOpen(threadId, false)
     }
   }, [chrome.open, terminals, chromeStore, threadId])
   useLayoutEffect(() => { if (!chrome.open) hadSessions.current = false }, [chrome.open])
@@ -166,7 +175,7 @@ export function PaneTerminalDrawer({ threadId, thread, project, bridge, viewFact
           {branch ? <span className="pane-terminal__branch" title={`Branch ${branch}`}><GitBranch size={13} aria-hidden="true" /><bdi>{branch}</bdi></span> : null}
           {interrupt}
           <button type="button" className="files-icon tt-focusable" aria-label="Hide terminal drawer" title={shortcut ? `Hide terminal drawer (${shortcut.label})` : 'Hide terminal drawer'}
-            onClick={() => { chromeStore.setOpen(threadId, false); requestAnimationFrame(() => focusInPane(threadId)) }}><X size={16} aria-hidden="true" /></button>
+            aria-keyshortcuts={shortcut?.keys} onClick={() => hideDrawerFromInside(threadId, chromeStore)}><PanelBottomClose size={16} aria-hidden="true" /></button>
         </div>} />
     </div>
   </div>

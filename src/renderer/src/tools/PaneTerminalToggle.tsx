@@ -2,7 +2,7 @@ import React, { useMemo, type ReactNode } from 'react'
 import { PanelBottom } from 'lucide-react'
 import type { SottoPlatform } from '../../../shared/platform'
 import { useOptionalApp } from '../state/AppContext'
-import { paneTerminalChord, paneTerminalShortcutLabel, type PaneTerminalShortcut } from './paneTerminalShortcut'
+import { paneTerminalChord, paneTerminalShortcutKeys, paneTerminalShortcutLabel, type PaneTerminalShortcut } from './paneTerminalShortcut'
 import { paneTerminalChromeStore, usePaneTerminalChrome, type PaneTerminalChromeStore } from './paneTerminalStore'
 
 export interface PaneTerminalToggleProps {
@@ -15,7 +15,7 @@ export function usePaneTerminalShortcut(): PaneTerminalShortcut | null {
   const app = useOptionalApp()
   const platform: SottoPlatform = app?.platform ?? 'win32'
   const chord = paneTerminalChord(app?.settings?.hotkey, platform)
-  return useMemo(() => chord === null ? null : { chord, platform, label: paneTerminalShortcutLabel(platform) }, [chord, platform])
+  return useMemo(() => chord === null ? null : { chord, platform, label: paneTerminalShortcutLabel(platform), keys: paneTerminalShortcutKeys(platform) }, [chord, platform])
 }
 
 /**
@@ -29,7 +29,7 @@ export function PaneTerminalToggle({ threadId, store = paneTerminalChromeStore }
   const shortcut = usePaneTerminalShortcut()
   const does = chrome.open ? 'Hide terminal drawer' : 'Show terminal drawer'
   return <button type="button" className="pane-action tt-focusable" data-pane-terminal-toggle aria-pressed={chrome.open}
-    aria-label="Terminal drawer" title={shortcut ? `${does} (${shortcut.label})` : does}
+    aria-label="Terminal drawer" aria-keyshortcuts={shortcut?.keys} title={shortcut ? `${does} (${shortcut.label})` : does}
     onClick={() => store.setOpen(threadId, !chrome.open)}>
     <PanelBottom size={16} aria-hidden="true" />
   </button>
