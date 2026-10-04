@@ -13,9 +13,9 @@ Menu: `MENU.md`, rendered by ormus-stack `menu.py` (`MENU_BRANCH=ormus`). Never 
 ## Latest run: 2026-10-03
 
 - [2026-10-03-competitor-map.md](2026-10-03-competitor-map.md): the Sotto competitor map (15 peers, 14-column capabilities matrix)
-- X mine: not run yet
-- People mine: not run yet
-- Pantry queue: not run yet
+- [2026-10-03-x-mine.md](2026-10-03-x-mine.md): the X mine of praise and complaints. The X connector was out of credits, so this mine came from public posts.
+- [2026-10-03-people-mine.md](2026-10-03-people-mine.md): the people mine of what Sotto's users said in `millZach/Sotto`
+- [2026-10-03-pantry-queue.md](2026-10-03-pantry-queue.md): the pantry queue of Goal atoms with done predicates
 
 ## Rules
 
