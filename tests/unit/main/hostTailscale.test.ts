@@ -30,8 +30,20 @@ describe('reading tailscale status --json', () => {
       self: ['laptop-russh2j5.tail5728ca.ts.net', '100.64.0.1', 'fd7a:115c:a1e0::1'],
     })
   })
-  it('reads stopped, signed out and a service that is not answering as off, with no devices', () => {
-    for (const output of [TAILSCALE_STOPPED, TAILSCALE_NEEDS_LOGIN, TAILSCALE_NOT_ANSWERING, '', 'null']) expect(readTailscaleStatus(output)).toEqual({ summary: { state: 'off' }, peers: [] })
+  it('reads stopped and a service that is not answering as off, with no devices', () => {
+    for (const output of [TAILSCALE_STOPPED, TAILSCALE_NOT_ANSWERING, '', 'null']) expect(readTailscaleStatus(output)).toEqual({ summary: { state: 'off' }, peers: [] })
+    // A health sentence is not a state: stopped stays off even when the prose says logged out.
+    const prose = JSON.stringify({ BackendState: 'Stopped', Health: ['You are logged out.'], Peer: { a: { DNSName: 'forge.tail5728ca.ts.net.', HostName: 'forge', TailscaleIPs: ['100.64.0.4'], Online: true } } })
+    expect(readTailscaleStatus(prose)).toEqual({ summary: { state: 'off' }, peers: [] })
+    for (const state of ['NeedsMachineAuth', 'InUseOtherUser', 'Starting', 'NoState']) {
+      expect(readTailscaleStatus(JSON.stringify({ BackendState: state }))).toEqual({ summary: { state: 'off' }, peers: [] })
+    }
+  })
+  it('reads a signed-out node as logged out, and keeps any devices it prints out of the list', () => {
+    expect(readTailscaleStatus(TAILSCALE_NEEDS_LOGIN)).toEqual({ summary: { state: 'logged-out' }, peers: [] })
+    const hostile = JSON.stringify({ BackendState: 'NeedsLogin', Peer: { a: { DNSName: 'evil.tail.ts.net.', HostName: 'evil', TailscaleIPs: ['100.64.0.9'], Online: true, OS: 'linux' } } })
+    expect(readTailscaleStatus(hostile)).toEqual({ summary: { state: 'logged-out' }, peers: [] })
+    expect(readTailscaleStatus(JSON.stringify({ BackendState: 'NeedsLogin ' }))).toEqual({ summary: { state: 'off' }, peers: [] })
   })
   it('keeps a name that could carry anything but a DNS name out of the target', () => {
     const odd = JSON.stringify({ BackendState: 'Running', Peer: { a: { DNSName: 'evil host/path.', HostName: 'evil', TailscaleIPs: ['100.64.0.9', 'not an address'], Online: true } } })
@@ -79,10 +91,12 @@ describe('merging Tailscale with the SSH setup', () => {
     expect(omarchy[0]!.names).toEqual(expect.arrayContaining(['lab', 'lab-root']))
     expect(devices.some(device => device.name === 'lab-root')).toBe(false)
   })
-  it('lists the SSH setup alone when Tailscale is off or missing', () => {
-    const devices = mergeDevices(readTailscaleStatus(TAILSCALE_STOPPED), SSH)
-    expect(devices.map(device => device.name)).toEqual(['forge', 'pihole', 'spark', 'buildbox.example.net', 'omarchy'])
-    expect(devices.every(device => device.tailscale === undefined && device.unavailable === undefined)).toBe(true)
+  it('lists the SSH setup alone when Tailscale is off, signed out or missing', () => {
+    for (const output of [TAILSCALE_STOPPED, TAILSCALE_NEEDS_LOGIN]) {
+      const devices = mergeDevices(readTailscaleStatus(output), SSH)
+      expect(devices.map(device => device.name)).toEqual(['forge', 'pihole', 'spark', 'buildbox.example.net', 'omarchy'])
+      expect(devices.every(device => device.tailscale === undefined && device.unavailable === undefined)).toBe(true)
+    }
   })
 })
 
@@ -209,7 +223,12 @@ describe('Tailscale on this computer', () => {
     const missing = new HostTailscale({ invoke: async () => 'missing', suggestions: async () => SSH, openExternal: vi.fn() })
     expect(await missing.devices()).toMatchObject({ tailscale: { state: 'missing' }, devices: expect.arrayContaining([expect.objectContaining({ name: 'forge', sshConfiguration: true })]) })
     const unreadable = new HostTailscale({ invoke: cli({ 'status --json': done(1, TAILSCALE_NEEDS_LOGIN) }), suggestions: async () => { throw new Error('EACCES') }, openExternal: vi.fn() })
-    expect(await unreadable.devices()).toEqual({ tailscale: { state: 'off' }, devices: [] })
+    expect(await unreadable.devices()).toEqual({ tailscale: { state: 'logged-out' }, devices: [] })
+    const stopped = new HostTailscale({ invoke: cli({ 'status --json': done(1, TAILSCALE_STOPPED) }), suggestions: async () => SSH, openExternal: vi.fn() })
+    const stoppedList = await stopped.devices()
+    expect(stoppedList.tailscale).toEqual({ state: 'off' })
+    expect(stoppedList.devices.find(device => device.name === 'forge')).toMatchObject({ sshConfiguration: true })
+    expect(stoppedList.devices.find(device => device.name === 'forge')?.tailscale).toBeUndefined()
     const broken = new HostTailscale({ invoke: async () => { throw new Error('EPERM') }, suggestions: async () => [], openExternal: vi.fn() })
     expect(await broken.status()).toEqual({ state: 'off' })
   })

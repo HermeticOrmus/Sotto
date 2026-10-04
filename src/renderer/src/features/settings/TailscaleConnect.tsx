@@ -95,8 +95,8 @@ const devicesOnTailnet = (count: number): string => `${count} ${count === 1 ? 'd
  */
 function TailscaleAction({ control, summary, primary = false }: { readonly control: TailscaleControl; readonly summary: TailscaleSummary; readonly primary?: boolean }): ReactNode {
   if (summary.state === 'missing') return <Button variant="secondary" onClick={control.getTailscale}>Get Tailscale</Button>
-  if (summary.state !== 'off') return null
-  const label = control.phase === 'connecting' ? 'Connecting…' : control.phase === 'signing-in' ? 'Open sign-in page' : 'Connect to Tailscale'
+  if (summary.state !== 'off' && summary.state !== 'logged-out') return null
+  const label = control.phase === 'connecting' ? 'Connecting…' : control.phase === 'signing-in' ? 'Open sign-in page' : summary.state === 'logged-out' ? 'Sign in to Tailscale' : 'Connect to Tailscale'
   return <Button variant={primary ? 'primary' : 'secondary'} disabled={control.phase === 'connecting'} onClick={control.connect}>{label}</Button>
 }
 
@@ -109,6 +109,7 @@ export function TailscaleRow({ control }: { readonly control: TailscaleControl }
       <h4>Tailscale</h4>
       {summary === null ? <p>Checking Tailscale on this computer…</p>
         : summary.state === 'running' ? <p><span className="hosts-dot" data-online="true" aria-hidden="true" />Connected as {summary.user} · {devicesOnTailnet(summary.deviceCount)}</p>
+        : summary.state === 'logged-out' ? <p>Signed out. Sign in to reach your other machines.</p>
         : summary.state === 'off' ? <p>Off on this computer. Connect to reach your other machines.</p>
         : <p>Not installed. Any machine you reach over SSH works without it.</p>}
       {control.notice ? <p className="hosts-tailscale__notice" role="status">{control.notice}</p> : null}
@@ -122,9 +123,11 @@ export function TailscalePrompt({ control }: { readonly control: TailscaleContro
   const { summary } = control
   if (summary === null || summary.state === 'running') return control.notice ? <p className="hosts-tailscale-prompt__notice" role="status">{control.notice}</p> : null
   return <div className="hosts-tailscale-prompt">
-    <p>{summary.state === 'off'
-      ? <><b>Tailscale is off on this computer.</b> Connect to see the machines on your tailnet.</>
-      : <><b>Tailscale is not installed.</b> Any machine you reach over SSH works; Tailscale makes your other machines easy to reach.</>}</p>
+    <p>{summary.state === 'logged-out'
+      ? <><b>Tailscale is signed out on this computer.</b> Sign in to see the machines on your tailnet.</>
+      : summary.state === 'off'
+        ? <><b>Tailscale is off on this computer.</b> Connect to see the machines on your tailnet.</>
+        : <><b>Tailscale is not installed.</b> Any machine you reach over SSH works; Tailscale makes your other machines easy to reach.</>}</p>
     <TailscaleAction control={control} summary={summary} primary />
     {control.notice ? <p className="hosts-tailscale-prompt__notice" role="status">{control.notice}</p> : null}
   </div>

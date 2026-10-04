@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from 'vitest'
-import { parseServeStatus, parseTailscaleStatus, servePortOwner, serveTarget, tailscaleCandidates, TailscaleCli, type TailscaleRun } from '../../../src/main/phones/tailscale'
+import { parseServeStatus, parseTailscaleStatus, servePortOwner, serveTarget, tailscaleCandidates, tailscaleExecOptions, TailscaleCli, type TailscaleRun } from '../../../src/main/phones/tailscale'
 
 const running = JSON.stringify({ BackendState: 'Running', Self: { DNSName: 'laptop-russh2j5.tail5728ca.ts.net.', HostName: 'Laptop-RUSSH2J5' } })
 const web = (target: string, extra: Record<string, unknown> = {}) => ({ TCP: { 8443: { HTTPS: true } }, Web: { 'laptop.tail5728ca.ts.net:8443': { Handlers: { '/': { Proxy: target } } } }, ...extra })
@@ -50,8 +50,17 @@ describe('who holds port 8443', () => {
 describe('the CLI', () => {
   it('looks on the PATH first, then where each platform installs it', () => {
     expect(tailscaleCandidates('win32', { ProgramFiles: 'D:\\Programs' })).toEqual(['tailscale', 'D:\\Programs\\Tailscale\\tailscale.exe'])
-    expect(tailscaleCandidates('darwin', {})).toEqual(['tailscale', '/Applications/Tailscale.app/Contents/MacOS/Tailscale'])
+    // A Dock-launched app does not see /usr/local/bin or Homebrew. The app bundle comes before Homebrew
+    // so a leftover brew binary does not hide the App Store or standalone app.
+    expect(tailscaleCandidates('darwin', {})).toEqual(['tailscale', '/usr/local/bin/tailscale', '/Applications/Tailscale.app/Contents/MacOS/Tailscale', '/opt/homebrew/bin/tailscale'])
     expect(tailscaleCandidates('linux', {})).toEqual(['tailscale'])
+  })
+  it('runs the macOS app as a command, and keeps the rest of the environment', () => {
+    const options = tailscaleExecOptions({ timeoutMs: 10_000 }, { PATH: '/usr/bin:/bin', HOME: '/Users/me', TAILSCALE_BE_CLI: '0' })
+    expect(options).toMatchObject({ timeout: 10_000, windowsHide: true, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 })
+    expect(options.env).toEqual({ PATH: '/usr/bin:/bin', HOME: '/Users/me', TAILSCALE_BE_CLI: '1' })
+    const stop = new AbortController()
+    expect(tailscaleExecOptions({ timeoutMs: 5, signal: stop.signal }, {}).signal).toBe(stop.signal)
   })
   it('falls through to the next candidate when one is not there, and remembers the one that ran', async () => {
     const run = vi.fn<TailscaleRun>(async executable => { if (executable === 'tailscale') throw missing; return { code: 0, stdout: running, stderr: '' } })
