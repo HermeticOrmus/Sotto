@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted October 4, 2026. Amends [ADR-0033](0033-the-desktop-lets-paired-phones-reach-its-threads.md) and [ADR-0034](0034-add-host-lists-this-computers-tailnet.md).
+Accepted October 4, 2026. Amends [ADR-0033](0033-the-desktop-lets-paired-phones-reach-its-threads.md) and [ADR-0034](0034-add-host-lists-this-computers-tailnet.md). Numbered 0048: 0047 was taken by the cloud iPhone decision on `ormus` while this was in review.
 
 ## Context
 
