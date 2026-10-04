@@ -4,7 +4,7 @@ import type { AgentProject } from '../../../shared/agents'
 import type { TerminalBridge } from '../../../shared/terminal'
 import { focusInPane } from '../agents/ThreadPanes'
 import { describeWorkingCopy, type WorkingCopyThread } from '../agents/ThreadWorkingCopy'
-import { isPaneTerminalChord } from './paneTerminalShortcut'
+import { isDrawerShortcut, setDrawerShortcut } from './paneTerminalShortcut'
 import { usePaneTerminalShortcut } from './PaneTerminalToggle'
 import { paneTerminalChromeStore, paneTerminalStore, usePaneTerminalChrome, type PaneTerminalChromeStore } from './paneTerminalStore'
 import { TerminalSurface } from './TerminalSurface'
@@ -57,12 +57,11 @@ export function PaneTerminalDrawer({ threadId, thread, project, bridge, viewFact
   const chrome = usePaneTerminalChrome(threadId, chromeStore)
   const { factory: baseFactory, failed } = useTerminalViewFactory(viewFactory, chrome.open)
   const shortcut = usePaneTerminalShortcut()
-  const shortcutNow = useRef(shortcut)
-  shortcutNow.current = shortcut
+  useLayoutEffect(() => { setDrawerShortcut(shortcut) }, [shortcut])
   // A drawer's terminal leaves the drawer's chord to the page, and turns see-through with the frosted room.
   const factory = useMemo<TerminalViewFactory | null>(() => baseFactory && (handlers => baseFactory({
     ...handlers,
-    isPageShortcut: event => shortcutNow.current !== null && isPaneTerminalChord(event, shortcutNow.current),
+    isPageShortcut: isDrawerShortcut,
     followsFrost: true,
   })), [baseFactory])
   const root = useRef<HTMLDivElement>(null)

@@ -32,6 +32,23 @@ export function isPaneTerminalChord(event: Pick<KeyboardEvent, 'key' | 'ctrlKey'
 }
 
 /**
+ * The chord drawer terminals pass to the page, kept for the whole window: a terminal's view outlives the drawer
+ * that made it (the store keeps it while the drawer is off the page), so it reads this rather than a value captured
+ * when it was made. Every mounted drawer writes the current one, so a hotkey changed in Settings reaches a terminal
+ * made before the change.
+ */
+let drawerShortcut: PaneTerminalShortcut | null = null
+
+export function setDrawerShortcut(shortcut: PaneTerminalShortcut | null): void {
+  drawerShortcut = shortcut
+}
+
+/** Whether a keydown in a drawer's terminal is the drawer's chord, under the hotkey in force now. */
+export function isDrawerShortcut(event: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'shiftKey' | 'altKey' | 'metaKey'>): boolean {
+  return drawerShortcut !== null && isPaneTerminalChord(event, drawerShortcut)
+}
+
+/**
  * The thread whose drawer a keydown toggles, or null when it is not the drawer's to take: already handled or
  * repeating, a dialog is open, it landed in a terminal that is not a drawer (Tools and Terminal mode keep the
  * key for their shells), or no pane with a drawer is on screen (Terminal mode, another page, a pane hidden by

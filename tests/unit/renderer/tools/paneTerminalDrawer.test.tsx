@@ -7,6 +7,7 @@ import type { ToolsResult } from '../../../../src/shared/tools'
 import { PaneTerminalDrawer } from '../../../../src/renderer/src/tools/PaneTerminalDrawer'
 import { PaneTerminalToggle } from '../../../../src/renderer/src/tools/PaneTerminalToggle'
 import { PaneTerminalChromeStore } from '../../../../src/renderer/src/tools/paneTerminalStore'
+import { setDrawerShortcut } from '../../../../src/renderer/src/tools/paneTerminalShortcut'
 import { TerminalStore, type TerminalViewFactory, type TerminalViewHandlers } from '../../../../src/renderer/src/tools/terminalStore'
 
 const workspace = { threadId: 'thread-a', projectId: 'workshop', workingDirectory: 'D:\\work\\workshop', workspaceId: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }
@@ -122,6 +123,32 @@ describe('the pane terminal drawer', () => {
     const key = (patch: Partial<KeyboardEvent>) => ({ key: 'j', ctrlKey: true, shiftKey: false, altKey: false, metaKey: false, ...patch }) as KeyboardEvent
     expect(handlers.isPageShortcut?.(key({}))).toBe(true)
     expect(handlers.isPageShortcut?.(key({ key: 'k' }))).toBe(false)
+  })
+
+  it('lets a terminal kept from an earlier drawer follow the shortcut in force now, not the one it was made under', async () => {
+    const terminal = fakeTerminal([session(ID_1)])
+    const chromeStore = new PaneTerminalChromeStore(null)
+    const store = new TerminalStore('drawer')
+    const { views, factory } = fakeViews()
+    const drawer = () => <div className="thread-pane" id="thread-pane-thread-a" data-thread-id="thread-a">
+      <PaneTerminalDrawer threadId="thread-a" thread={thread} project={undefined} bridge={terminal.bridge} viewFactory={factory} store={store} chromeStore={chromeStore} />
+    </div>
+    const first = render(drawer())
+    act(() => chromeStore.setOpen('thread-a', true))
+    await screen.findByRole('tab', { name: 'PowerShell', selected: true })
+    await waitFor(() => expect(views).toHaveLength(1))
+    const keepsItsView = views[0]!.handlers
+    const ctrlJ = { key: 'j', ctrlKey: true, shiftKey: false, altKey: false, metaKey: false } as KeyboardEvent
+    // Dictation owned Ctrl+J while that drawer was on screen, so it went to the shell.
+    act(() => setDrawerShortcut(null))
+    expect(keepsItsView.isPageShortcut?.(ctrlJ)).toBe(false)
+    // Leaving for Settings unmounts the drawer; the store keeps the terminal's view for when it comes back.
+    first.unmount()
+    render(drawer())
+    await screen.findByRole('tab', { name: 'PowerShell', selected: true })
+    expect(views).toHaveLength(1)
+    // Back with dictation moved off Ctrl+J: the kept terminal hands the chord to the page again.
+    expect(keepsItsView.isPageShortcut?.(ctrlJ)).toBe(true)
   })
 
   it('keeps each pane of a split to its own drawer and its own shells', async () => {
