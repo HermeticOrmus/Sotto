@@ -35,31 +35,50 @@ describe('parseSshConfig', () => {
   it('expands %h in a HostName to the alias', () => {
     expect(parseSshConfig('Host lab\n  HostName %h.example.net\n').hosts).toEqual([{ alias: 'lab', hostname: 'lab.example.net' }])
   })
-  it('keeps a jump, and a ProxyCommand that forwards with ssh the same way, and lets the first one win', () => {
+  it('keeps a ProxyJump, and lets the first jump value win', () => {
     const parsed = parseSshConfig([
       'Host lan',
       '  HostName 192.168.1.10',
       '  ProxyJump bastion',
-      'Host forwarded',
-      '  ProxyCommand ssh -q -W %h:%p bastion',
-      'Host quoted',
-      '  ProxyCommand "ssh -J bastion %h"',
-      'Host path',
-      '  ProxyCommand /usr/bin/ssh -W %h:%p user@bastion',
-      'Host direct',
-      '  ProxyCommand nc -X connect %h %p',
-      '  ProxyJump bastion',
       'Host off',
       '  ProxyJump none',
       '  ProxyJump bastion',
+      'Host later-off',
+      '  ProxyCommand corkscrew proxy.example.com 8080 %h %p',
+      '  ProxyCommand none',
     ].join('\n'))
     expect(parsed.hosts).toEqual([
       { alias: 'lan', hostname: '192.168.1.10', jump: true },
-      { alias: 'forwarded', jump: true },
-      { alias: 'quoted', jump: true },
-      { alias: 'path', jump: true },
-      { alias: 'direct' },
       { alias: 'off' },
+      { alias: 'later-off', jump: true },
+    ])
+  })
+  it.each([
+    ['ssh -W', 'ssh -q -W %h:%p bastion'],
+    ['a quoted ssh -J', '"ssh -J bastion %h"'],
+    ['ssh on a path', '/usr/bin/ssh -W %h:%p user@bastion'],
+    ['cloudflared', 'cloudflared access ssh --hostname lab.example.com'],
+    ['cloudflared on a path', '"C:\\Program Files\\cloudflared.exe" access ssh --hostname lab.example.com'],
+    ['connect-proxy', 'connect-proxy -H proxy.example.com:8080 %h %p'],
+    ['connect', 'connect -H proxy.example.com:8080 %h %p'],
+    ['nc through a proxy', 'nc -X connect -x proxy.example.com:8080 %h %p'],
+    ['ncat through a proxy', 'ncat --proxy proxy.example.com:8080 --proxy-type http %h %p'],
+    ['socat', 'socat - PROXY:proxy.example.com:%h:%p,proxyport=8080'],
+    ['corkscrew', 'corkscrew proxy.example.com 8080 %h %p'],
+    ['another program', '/opt/jump/custom-tunnel %h %p'],
+  ])('treats a ProxyCommand that runs %s as a tunnel', (_name, command) => {
+    expect(parseSshConfig(`Host lab\n  HostName 192.168.1.10\n  ProxyCommand ${command}\n`).hosts).toEqual([
+      { alias: 'lab', hostname: '192.168.1.10', jump: true },
+    ])
+  })
+  it.each(['none', 'None', 'NONE', '"none"'])('does not treat ProxyCommand %s as a tunnel, and the first value wins', command => {
+    expect(parseSshConfig(`Host off\n  HostName 192.168.1.10\n  ProxyCommand ${command}\n  ProxyJump bastion\n`).hosts).toEqual([
+      { alias: 'off', hostname: '192.168.1.10' },
+    ])
+  })
+  it('does not treat ProxyCommand=none as a tunnel', () => {
+    expect(parseSshConfig('Host off\n  HostName 192.168.1.10\n  ProxyCommand=none\n  ProxyJump bastion\n').hosts).toEqual([
+      { alias: 'off', hostname: '192.168.1.10' },
     ])
   })
 })
@@ -131,6 +150,23 @@ describe('discoverSshHosts', () => {
   it('remembers a jump on the alias, and not a direct connection to the same address', async () => {
     home = await mkdtemp(join(tmpdir(), 'sotto-ssh-suggestions-'))
     await write('.ssh/config', 'Host lan\n  HostName 192.168.1.10\n  User zach\n  ProxyJump bastion\nHost desk\n  HostName 192.168.1.10\n')
+    expect(await discoverSshHosts({ home })).toEqual([
+      { alias: 'lan', source: 'config', detail: 'zach@192.168.1.10', hostname: '192.168.1.10', jump: true },
+      { alias: 'desk', source: 'config', detail: '192.168.1.10', hostname: '192.168.1.10' },
+    ])
+  })
+
+  it('remembers a ProxyCommand tunnel on the alias, and not ProxyCommand none', async () => {
+    home = await mkdtemp(join(tmpdir(), 'sotto-ssh-suggestions-'))
+    await write('.ssh/config', [
+      'Host lan',
+      '  HostName 192.168.1.10',
+      '  User zach',
+      '  ProxyCommand cloudflared access ssh --hostname lab.example.com',
+      'Host desk',
+      '  HostName 192.168.1.10',
+      '  ProxyCommand none',
+    ].join('\n'))
     expect(await discoverSshHosts({ home })).toEqual([
       { alias: 'lan', source: 'config', detail: 'zach@192.168.1.10', hostname: '192.168.1.10', jump: true },
       { alias: 'desk', source: 'config', detail: '192.168.1.10', hostname: '192.168.1.10' },
