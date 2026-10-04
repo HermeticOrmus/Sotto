@@ -24,6 +24,7 @@ export default tseslint.config(
       'artifacts/agent-browser/**',
       'artifacts/browser-grant/**',
       'artifacts/test-iphone/**',
+      'artifacts/cloud-iphone/**',
       'artifacts/new-thread-setup/**',
       'artifacts/host-folder-browser-run/**',
       'artifacts/command-receipt/**',

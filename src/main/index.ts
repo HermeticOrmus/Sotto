@@ -180,6 +180,11 @@ import { TerminalService } from './tools/terminal'
 import { BrowserService } from './tools/browser'
 import { createBrowserAgentServer } from './tools/browserAgentTools'
 import { GitChangesService } from './tools/gitChanges'
+import { CloudIphoneService } from './tools/cloudIphone/service'
+import { CloudUsageLedger } from './tools/cloudIphone/usageLedger'
+import { RunCloudClient } from './tools/cloudIphone/runCloudClient'
+import { registerCloudIphoneIpc } from './tools/cloudIphoneIpc'
+import { CLOUD_IPHONE_EVENT } from '../shared/cloudIphone'
 import { TERMINAL_EVENT } from '../shared/terminal'
 import { TERMINALS_EVENT } from '../shared/terminalWorkspace'
 import { TerminalWorkspaceService } from './terminals/service'
@@ -524,6 +529,8 @@ async function createRuntime(): Promise<NativeRuntimeController> {
   await history.initialize()
   const credentials = new AgentCredentials(userDataPath, safeStorage, notice => recoveryNotices.publish(notice))
   await credentials.load()
+  const cloudIphoneLedger = new CloudUsageLedger(userDataPath)
+  await cloudIphoneLedger.load()
   const grokSpeech = new GrokSpeechService({ credentials, ...(e2eConfiguration === null ? {} : { fetchFn: e2eGrokSpeechFetch }) })
   const kokoroSpeech = new KokoroSpeechService({ credentials, ...(e2eConfiguration === null ? {} : { fetchFn: e2eKokoroSpeechFetch }) })
   const settings = new SecureSettings(plainSettings, credentials)
@@ -673,7 +680,8 @@ async function createRuntime(): Promise<NativeRuntimeController> {
   const quitHandles: HostQuitHandles = { localRuntime }
   registerHostQuitDrain(app, quitHandles, () => console.error('[Sotto] host-shutdown-failed'), () => logOperational('phone-access-close-failed'))
   let browserService: BrowserService | undefined
-  const browserAgentServer = createBrowserAgentServer(() => browserService)
+  let cloudIphoneService: CloudIphoneService | undefined
+  const browserAgentServer = createBrowserAgentServer(() => browserService, () => cloudIphoneService)
   agentHost.useBrowserTools(browserAgentServer)
   // The runtime builds the worktree cleanup (ADR-0041). Only the local host has worktrees on this
   // computer; with it off the inactive host's cleanup does nothing, and no terminal check is wired.
@@ -1150,6 +1158,20 @@ async function createRuntime(): Promise<NativeRuntimeController> {
         openExternal: url => shell.openExternal(url),
         byDefault: () => workingCopySettings.browserWithoutAsking,
       })
+      cloudIphoneService = new CloudIphoneService({
+        files, credentials,
+        settings: () => ({ monthlyMinutes: workingCopySettings.cloudIphoneMonthlyMinutes, idleMinutes: workingCopySettings.cloudIphoneIdleMinutes }),
+        ledger: cloudIphoneLedger,
+        threadTitle: threadId => agentControl.get().host.threads.find(thread => thread.id === threadId)?.title ?? threadId,
+        getWindow: () => BrowserWindow.getAllWindows().find(window => window.webContents === windows.getMainWebContents()) ?? null,
+        emit: event => { windows.sendToMain(CLOUD_IPHONE_EVENT, event) },
+        provider: key => new RunCloudClient(key),
+      })
+      const cleanupCloudIphone = registerCloudIphoneIpc(ipcMain, cloudIphoneService, () => windows.getTrustedRenderers())
+      // Quit waits for this (ADR-0047: run.cloud is never left billing), the same way it waits for other async shutdown.
+      quitHandles.cloudIphone = { close: () => cloudIphoneService?.dispose() ?? Promise.resolve() }
+      // Resumes any release or deletion a previous run could not finish, using the key already in the credential store.
+      void cloudIphoneService.resumeCleanup()
       const terminalService = new TerminalService({ files, directory: userDataPath, emit: event => { windows.sendToMain(TERMINAL_EVENT, event) } })
       // A folder with a shell still running in it is not reclaimed under that shell.
       if (worktreeCleanup) {
@@ -1266,6 +1288,9 @@ async function createRuntime(): Promise<NativeRuntimeController> {
         worktreeCleanup?.dispose()
         cleanupTools()
         browserService = undefined
+        // The quit drain already awaited this service's own dispose (ADR-0047); this just drops its IPC handlers.
+        void cleanupCloudIphone()
+        cloudIphoneService = undefined
         void browserAgentServer.close()
         cleanupThemes()
         cleanupMemory()

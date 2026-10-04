@@ -28,4 +28,4 @@ In `artifacts/test-iphone/`, which `.gitignore` keeps out of a run's commit; the
 
 - The permission path with the setting off is the browser's own, covered by `tests/unit/main/testIphone.test.ts`: a tap and a key press wait with "Tap at … on the test iPhone" and "Press Enter …", and a swipe never asks.
 - No real provider ran a turn against the phone; that is `SOTTO_*_LIVE` territory, and the tool definitions reach each provider the way the browser's do (`tests/integration/browserProviders.test.ts`).
-- A native iOS app is phase 2 (ADR-0046, not yet written).
+- A native iOS app is phase 2 (ADR-0047).

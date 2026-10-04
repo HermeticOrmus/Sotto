@@ -20,6 +20,7 @@ import { IPhoneSurface } from './IPhoneSurface'
 import { PhonePlayer } from './PhonePlayer'
 import { phonePlayerStore, type PhonePlayerStore } from './phonePlayerStore'
 import { useBrowserTasks } from './browserStore'
+import { bridgeCloudIphone, cloudIphoneStore, useCloudSession, type CloudIphoneBridgeLike, type CloudIphoneStore } from './cloudIphoneStore'
 import { ChangesSurface } from './ChangesSurface'
 import { PullRequestSurface } from './PullRequestSurface'
 import { useThreadChanges } from './changesStore'
@@ -58,6 +59,8 @@ export interface ToolsPanelProps {
   readonly store?: ToolsPanelStore
   readonly playerStore?: BrowserPlayerStore
   readonly phoneStore?: PhonePlayerStore
+  readonly cloudStore?: CloudIphoneStore
+  readonly cloudBridge?: CloudIphoneBridgeLike
 }
 
 function bridgeFiles(): FilesBridge | undefined {
@@ -197,8 +200,9 @@ function ToolsRailTabs({ value, live, onChange }: { readonly value: ToolSurfaceI
 }
 
 /** What is live on each surface of one thread, in the words a screen reader hears for its dot. */
-function useLiveSurfaces(store: ToolsPanelStore, thread: AgentThread | undefined, agentsThread: AgentThread | undefined, changed: { readonly count: number; readonly truncated: boolean } | null, changesOpen: boolean): Partial<Record<ToolSurfaceId, string>> {
+function useLiveSurfaces(store: ToolsPanelStore, thread: AgentThread | undefined, agentsThread: AgentThread | undefined, changed: { readonly count: number; readonly truncated: boolean } | null, changesOpen: boolean, cloudStore: CloudIphoneStore): Partial<Record<ToolSurfaceId, string>> {
   const tasks = useBrowserTasks(store.browser)
+  const cloudSession = useCloudSession(thread?.id ?? null, cloudStore)
   const live: Partial<Record<ToolSurfaceId, string>> = {}
   if (thread) {
     const threadTasks = tasks.filter(task => task.threadId === thread.id && !task.device)
@@ -207,6 +211,8 @@ function useLiveSurfaces(store: ToolsPanelStore, thread: AgentThread | undefined
     const phoneTasks = tasks.filter(task => task.threadId === thread.id && task.device === 'iphone')
     if (phoneTasks.some(task => task.pendingAction !== null)) live.iphone = 'A test iPhone request is waiting for your answer'
     else if (phoneTasks.some(task => task.status === 'working')) live.iphone = 'An agent is working on the test iPhone'
+    else if (cloudSession?.status === 'asking') live.iphone = 'A cloud iPhone request is waiting for your answer'
+    else if (cloudSession?.status === 'active' || cloudSession?.status === 'starting') live.iphone = 'A cloud iPhone session is running'
     // Changes reads Git only while it is open. Elsewhere the working copy's own dirty mark is fresher.
     const dirty = thread.worktree?.status === 'ready' ? thread.worktree.dirty : undefined
     if (!changesOpen && dirty !== undefined) { if (dirty) live.changes = 'Has uncommitted changes' }
@@ -232,7 +238,7 @@ function useTransientStatus(): [string, (message: string) => void] {
  * The shared tools panel beside the thread panes. Agents follows the focused thread; the working-copy surfaces
  * follow the pin when set. The panel docks only while the panes keep a readable width; otherwise it overlays them.
  */
-export function ToolsPanel({ focusedThreadId, state, command, files: filesBridge, gitChanges, terminal, browser, subagents, terminalView, store = toolsPanelStore, playerStore = browserPlayerStore, phoneStore = phonePlayerStore }: ToolsPanelProps): ReactNode {
+export function ToolsPanel({ focusedThreadId, state, command, files: filesBridge, gitChanges, terminal, browser, subagents, terminalView, store = toolsPanelStore, playerStore = browserPlayerStore, phoneStore = phonePlayerStore, cloudStore = cloudIphoneStore, cloudBridge = bridgeCloudIphone() }: ToolsPanelProps): ReactNode {
   const chrome = useToolsPanelChrome(store)
   const { factory: viewFactory, failed: viewFailed } = useTerminalViewFactory(terminalView, chrome.open && chrome.surface === 'terminal')
   const bridge = filesBridge ?? bridgeFiles()
@@ -338,14 +344,14 @@ export function ToolsPanel({ focusedThreadId, state, command, files: filesBridge
   useProactiveChanges(state, focusedThreadId, store)
 
   const changedFiles = workingCopyChanges?.list.status === 'ready' ? { count: workingCopyChanges.list.files.length, truncated: workingCopyChanges.list.truncated } : null
-  const live = useLiveSurfaces(store, workingCopyThread, selectedThread, changedFiles, open && chrome.surface === 'changes')
+  const live = useLiveSurfaces(store, workingCopyThread, selectedThread, changedFiles, open && chrome.surface === 'changes', cloudStore)
   // Whether Browser here shows the focused thread's own page and that thread has a task the player could show:
   // the "Float the browser over the thread" control's own condition, computed once for the surface below.
   const browserTasks = useBrowserTasks(store.browser)
 
   const player = <>
     <BrowserPlayer state={state} focusedThreadId={focusedThreadId} bridge={browserBridge} store={store} autoShow={autoShowBrowser} playerStore={playerStore} />
-    <PhonePlayer state={state} focusedThreadId={focusedThreadId} bridge={browserBridge} store={store} autoShow={autoShowBrowser} phoneStore={phoneStore} />
+    <PhonePlayer state={state} focusedThreadId={focusedThreadId} bridge={browserBridge} store={store} autoShow={autoShowBrowser} phoneStore={phoneStore} cloudStore={cloudStore} cloudBridge={cloudBridge} />
   </>
   if (!open) return player
   const measured = available !== null && available > 0 ? available : null
@@ -410,7 +416,7 @@ export function ToolsPanel({ focusedThreadId, state, command, files: filesBridge
   else if (chrome.surface === 'pull-request') body = <PullRequestSurface key={thread.id} thread={thread} command={command} onStatus={showStatus} />
   else if (thread.remoteHost) body = <><ToolsChrome title={surfaceLabel} /><div className="files-problem files-problem--root" role="status"><strong>{surfaceLabel} is on the host machine.</strong><p>Use this tool on the host. Replies and permission answers remain available here.</p></div></>
   else if (chrome.surface === 'agents') body = <AgentsSurface key={thread.id} threadId={thread.id} store={store.subagents} bridge={subagentsBridge} />
-  else if (chrome.surface === 'iphone') body = <IPhoneSurface key={thread.id} threadId={thread.id} store={store.browser} bridge={browserBridge} phoneStore={phoneStore} />
+  else if (chrome.surface === 'iphone') body = <IPhoneSurface key={thread.id} threadId={thread.id} store={store.browser} bridge={browserBridge} phoneStore={phoneStore} cloudStore={cloudStore} cloudBridge={cloudBridge} />
   else if (chrome.surface === 'browser') body = <BrowserSurface key={thread.id} threadId={thread.id} store={store.browser} bridge={browserBridge} onStatus={showStatus} onFloat={canFloat ? floatBrowser : undefined} />
   else if (chrome.surface === 'terminal') body = <TerminalSurface key={thread.id} threadId={thread.id} store={store.terminals} bridge={terminalBridge} viewFactory={viewFactory} viewFailed={viewFailed} />
   else if (chrome.surface === 'changes') body = <ChangesSurface key={thread.id} threadId={thread.id} store={store.changes} bridge={changesBridge} platform={platform} onStatus={showStatus}

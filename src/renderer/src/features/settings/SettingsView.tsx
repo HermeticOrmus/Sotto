@@ -2,7 +2,7 @@ import { HostsSettings } from './HostsSettings'
 import { PhonesSettings } from './PhonesSettings'
 import { useRevisionDraft } from './useRevisionDraft'
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
-import { ArrowUpRight, AudioLines, ChevronRight, Command, GitBranch, Mic, Palette, Server, Settings2, Smartphone, Sparkles, Workflow } from 'lucide-react'
+import { ArrowUpRight, AudioLines, ChevronRight, Cloud, Command, GitBranch, Mic, Palette, Server, Settings2, Smartphone, Sparkles, Workflow } from 'lucide-react'
 
 import {
   TRANSCRIPTION_PRIVACY_NOTICE,
@@ -39,6 +39,7 @@ import { ProvidersSettings } from '../../agents/ProvidersSettings'
 import { SidebarFoot, SidebarTop } from '../../agents/SidebarFrame'
 import { PageWindowControls } from '../../components/WindowControls'
 import { AppearanceSettings } from './AppearanceSettings'
+import { CloudIphoneSettings } from './CloudIphoneSettings'
 import { GitSettings } from './GitSettings'
 import { ProjectThreadDefaults } from './ProjectThreadDefaults'
 import { VoiceWave } from '../../components/VoiceWave'
@@ -83,6 +84,7 @@ const SETTINGS_SECTIONS = [
   { id: 'settings-providers', label: 'Providers', icon: Command },
   { id: 'settings-hosts', label: 'Hosts', icon: Server },
   { id: 'settings-phones', label: 'Phones', icon: Smartphone },
+  { id: 'settings-cloud-iphone', label: 'Cloud iPhone', icon: Cloud },
   { id: 'settings-agents', label: 'Agents', icon: Workflow },
   { id: 'settings-output', label: 'Output', icon: ArrowUpRight },
   { id: 'settings-appearance', label: 'Appearance', icon: Palette },
@@ -550,6 +552,9 @@ export function SettingsView({
 
               <Card className="settings-section" id="settings-phones" {...panelProps('settings-phones')}><div className="settings-section__heading"><h2>Phones</h2><p>Sotto on your iPhone, reaching this computer</p></div><PhonesSettings phoneAccess={settings.phoneAccess} phoneAccessName={settings.phoneAccessName} onUpdateSettings={onUpdateSettings}
                 onOpenHosts={() => { selectSection('settings-hosts'); document.getElementById('tab-settings-hosts')?.focus() }} /></Card>
+
+              <Card className="settings-section" id="settings-cloud-iphone" {...panelProps('settings-cloud-iphone')}><div className="settings-section__heading"><h2>Cloud iPhone</h2><p>Native iOS builds on a run.cloud simulator</p></div>
+                <CloudIphoneSettings settings={settings} onUpdateSettings={onUpdateSettings} /></Card>
 
               <Card className="settings-section" id="settings-agents" {...panelProps('settings-agents')}><div className="settings-section__heading"><h2>Agents</h2><p>{settings.voiceCoordinatorEnabled ? 'Reasoning, voice, new threads & projects' : 'Reasoning, new threads & projects'}</p></div><AgentSetupFields /></Card>
 

@@ -13,6 +13,7 @@ final class AppModelTests: XCTestCase {
         HostConnection.mayAnswer = false; HostConnection.receipt = .object(["status": .string("unknown")])
         HostConnection.loseAcknowledgement = false
         HostConnection.shells = [:]; HostConnection.commandHandler = nil; HostConnection.folderHandler = nil
+        HostConnection.stageHandler = nil; HostConnection.previewHandler = nil
         HostConnection.receipts = [:]; HostConnection.features = ["host-folders"]
         let host = "00000000-0000-4000-8000-000000000001"
         let pairing = try JSONDecoder().decode(Pairing.self, from: Data(#"{"v":1,"hostId":"\#(host)","clientId":"phone","token":"fixture"}"#.utf8))
@@ -602,7 +603,8 @@ final class AppModelTests: XCTestCase {
         XCTAssertTrue(model.canSend(ref))
         XCTAssertNil(model.feedback, "Only this marker's delivery message is cleared")
         XCTAssertEqual(connection.operations.filter { $0 == "command" }.count, 1)
-        XCTAssertEqual(connection.operations.filter { $0 == "receipt" }.count, 0)
+        // One read asks whether the computer is still carrying the command out; it didn't know it, so nothing more.
+        XCTAssertEqual(connection.operations.filter { $0 == "receipt" }.count, 1)
         XCTAssertEqual(try TestKeychain.store.read([PendingOperation].self, account: ComputerStore.pendingAccount), [])
     }
     @MainActor func testLiveShellSettlesAnAnswerAndRestoresAFailedReply() async throws {
