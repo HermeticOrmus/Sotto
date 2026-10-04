@@ -38,6 +38,7 @@ export function deviceDetails(device: HostDevice): string {
 /** The sentence at the foot of the list. */
 function footnote(tailscale: TailscaleSummary | null): string | null {
   if (tailscale?.state === 'running') return `Don't see your machine? Install Tailscale on it and sign in as ${tailscale.loginName || tailscale.user}.`
+  if (tailscale?.state === 'logged-out') return 'Sign in to Tailscale to see the machines on your tailnet here.'
   if (tailscale?.state === 'off') return 'Connect to Tailscale to see the machines on your tailnet here.'
   if (tailscale?.state === 'missing') return 'Get Tailscale to see the machines on your tailnet here.'
   return null

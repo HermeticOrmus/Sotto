@@ -28,17 +28,46 @@ export interface TailscaleRunOptions {
 /** Runs one CLI command. Rejects with an `ENOENT` error when the executable is not there. */
 export type TailscaleRun = (executable: string, args: readonly string[], options: TailscaleRunOptions) => Promise<TailscaleRunResult>
 
-/** Where the CLI lives when it is not on the PATH: the Windows installer's folder and the macOS app bundle. */
+/**
+ * Where the CLI lives when it is not on the PATH.
+ *
+ * A Mac app started from the Dock does not see `/usr/local/bin` or Homebrew's bin. The standalone
+ * client's CLI launcher is the first of those; the App Store app and the standalone app are the same
+ * binary inside `Tailscale.app`, tried before Homebrew so a leftover `brew` install does not hide the
+ * app the user runs. On Windows the installer puts `tailscale.exe` under Program Files.
+ */
 export function tailscaleCandidates(platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env): string[] {
   const found = ['tailscale']
   if (platform === 'win32') found.push(win32.join(env.ProgramFiles ?? 'C:\\Program Files', 'Tailscale', 'tailscale.exe'))
-  if (platform === 'darwin') found.push('/Applications/Tailscale.app/Contents/MacOS/Tailscale')
+  if (platform === 'darwin') {
+    found.push('/usr/local/bin/tailscale', '/Applications/Tailscale.app/Contents/MacOS/Tailscale', '/opt/homebrew/bin/tailscale')
+  }
   return found
+}
+
+/**
+ * How one CLI run is started. `TAILSCALE_BE_CLI=1` forces the macOS app to answer as a command.
+ * Without it, that same binary opens the Tailscale window, because a Dock-launched app has none of
+ * the terminal variables Tailscale uses to decide. The flag is set on every platform; Windows and
+ * Linux ignore it. The rest of the environment is kept, so the command can still find its local service.
+ */
+export function tailscaleExecOptions(options: TailscaleRunOptions, env: NodeJS.ProcessEnv = process.env): {
+  readonly timeout: number
+  readonly windowsHide: true
+  readonly maxBuffer: number
+  readonly encoding: 'utf8'
+  readonly env: NodeJS.ProcessEnv
+  readonly signal?: AbortSignal
+} {
+  return {
+    timeout: options.timeoutMs, windowsHide: true, maxBuffer: 4 * 1024 * 1024, encoding: 'utf8',
+    env: { ...env, TAILSCALE_BE_CLI: '1' }, ...(options.signal ? { signal: options.signal } : {}),
+  }
 }
 
 export const runTailscale: TailscaleRun = (executable, args, options) => new Promise((resolve, reject) => {
   let stopped = false
-  const child = execFile(executable, [...args], { timeout: options.timeoutMs, windowsHide: true, maxBuffer: 4 * 1024 * 1024, encoding: 'utf8', ...(options.signal ? { signal: options.signal } : {}) }, (error, stdout, stderr) => {
+  const child = execFile(executable, [...args], tailscaleExecOptions(options), (error, stdout, stderr) => {
     const code = (error as NodeJS.ErrnoException | null)?.code
     if (code === 'ENOENT') { reject(error); return }
     const exit = error === null ? 0 : stopped || typeof (error as { code?: unknown }).code !== 'number' ? null : (error as unknown as { code: number }).code
