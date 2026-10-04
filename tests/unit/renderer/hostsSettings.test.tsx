@@ -35,7 +35,7 @@ const DEVICES: HostDevice[] = [
   { target: 'iphone-15-pro.tail5728ca.ts.net', name: 'iphone-15-pro', os: 'iOS', tailscale: { online: true, ssh: false }, unavailable: 'phone', names: ['iphone-15-pro.tail5728ca.ts.net', 'iphone-15-pro', 'localhost'] },
 ]
 const RUNNING: TailscaleSummary = { state: 'running', user: 'millZach', loginName: 'millZach@github', deviceCount: 5 }
-/** The SSH setup alone, as main lists it while Tailscale is off or missing. */
+/** The SSH setup alone, as main lists it while Tailscale is off, signed out or missing. */
 const sshOnly = (devices: HostDevice[]): HostDevice[] => devices.filter(item => item.sshConfiguration || item.knownHost)
   .map(({ target, name, names, detail, port, sshConfiguration, knownHost }) => ({ target, name, names, ...(detail ? { detail } : {}), ...(port ? { port } : {}), ...(sshConfiguration ? { sshConfiguration } : {}), ...(knownHost ? { knownHost } : {}) }))
 function host(patch: Partial<HostStatus> = {}): HostStatus {
@@ -417,6 +417,24 @@ it('says in words when Tailscale does not connect, and offers Get Tailscale when
   // SSH configuration entries still list.
   expect(within(dialog).getByRole('option', { name: /^forge/ }).textContent).toBe('forgeSSH configuration')
   expect(within(dialog).getByText('Get Tailscale to see the machines on your tailnet here.')).toBeTruthy()
+})
+
+it('says when Tailscale is signed out, offers Sign in, and still lists the SSH setup', async () => {
+  const user = userEvent.setup()
+  const signedOut = fixture([], undefined, { tailscale: { state: 'logged-out' }, connect: async () => 'sign-in-opened' })
+  settings(signedOut.bridge)
+  const row = await screen.findByRole('region', { name: 'Tailscale' })
+  await waitFor(() => expect(row.textContent).toContain('Signed out. Sign in to reach your other machines.'))
+  expect(within(row).getByRole('button', { name: 'Sign in to Tailscale' }).className).toContain('tt-button--secondary')
+  const { dialog } = await openAddHost(user)
+  expect(within(dialog).getByText(/Tailscale is signed out on this computer\./)).toBeTruthy()
+  expect(within(dialog).getByRole('button', { name: 'Sign in to Tailscale' }).className).toContain('tt-button--primary')
+  expect(within(dialog).getByText('Sign in to Tailscale to see the machines on your tailnet here.')).toBeTruthy()
+  expect(within(dialog).getAllByRole('option').map(option => option.querySelector('b')?.textContent)).toEqual(['forge', 'spark', 'buildbox.example.net', 'Another SSH host…'])
+  await user.click(within(dialog).getByRole('button', { name: 'Sign in to Tailscale' }))
+  expect(signedOut.connectTailscale).toHaveBeenCalledTimes(1)
+  expect((await within(dialog).findByRole('status')).textContent).toBe('Sign in to Tailscale in your browser. Sotto lists your devices once you have.')
+  expect(within(dialog).getByRole('button', { name: 'Open sign-in page' })).toBeTruthy()
 })
 
 it('turns Add host into the setup checklist once pressed, asks SSH questions on their step, and says when the host is connected', async () => {

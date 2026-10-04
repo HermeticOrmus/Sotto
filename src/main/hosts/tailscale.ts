@@ -63,14 +63,17 @@ function peer(value: unknown): TailscalePeer | null {
 }
 
 /**
- * Reads `tailscale status --json`. Only a node whose backend says Running lists devices; a stopped or
- * signed-out node, and output that is not a status at all (the service not answering), read as off.
+ * Reads `tailscale status --json`. Only a node whose backend says Running lists devices. `NeedsLogin`
+ * is signed out, and nothing it prints is taken as a device. Stopped, any other backend state, and
+ * output that is not a status at all (the service not answering) read as off. The health sentences are
+ * not read: they are prose, and a sentence is not a state.
  */
 export function readTailscaleStatus(output: string): TailscaleReading {
   let value: unknown
   try { value = JSON.parse(output) } catch { return OFF }
   if (typeof value !== 'object' || value === null) return OFF
   const status = value as { BackendState?: unknown; Self?: { UserID?: unknown }; User?: Record<string, { LoginName?: unknown; DisplayName?: unknown } | undefined>; Peer?: Record<string, unknown> }
+  if (status.BackendState === 'NeedsLogin') return { summary: { state: 'logged-out' }, peers: [] }
   if (status.BackendState !== 'Running') return OFF
   const peers = Object.values(status.Peer ?? {}).map(peer).filter((item): item is TailscalePeer => item !== null)
   const self = status.User?.[String(status.Self?.UserID)]
@@ -200,7 +203,7 @@ export class HostTailscale {
   async read(): Promise<TailscaleReading> {
     try {
       const result = await this.invoke(['status', '--json'], { timeoutMs: 10_000 })
-      // A stopped or signed-out node still prints its status, with exit 1.
+      // A stopped or signed-out node still prints its status, with exit 1. Signed out is its own state.
       return result === 'missing' ? { summary: { state: 'missing' }, peers: [] } : readTailscaleStatus(result.stdout)
     } catch { return OFF }
   }

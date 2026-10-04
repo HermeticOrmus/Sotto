@@ -8,6 +8,8 @@ Amended September 30, 2026: an SSH entry that goes to this computer, and one for
 
 Amended October 1, 2026: a jump is not this computer just because its `HostName` matches an address here. `ProxyJump`, and a `ProxyCommand` that forwards with `ssh` the same way (`ssh -W %h:%p bastion`), connects to that address from the jump host, so the alias stays selectable; a direct alias to this computer is still greyed. The full tailnet name still means this computer, jump or not. A Git service is the host SSH connects to, the `HostName` or the name itself when there is none, so an alias named `github.com` whose `HostName` is an ordinary computer stays selectable.
 
+Amended October 4, 2026: a signed-out node is its own state, not off. See [ADR-0047](0047-sotto-runs-the-tailscale-app-as-a-command.md).
+
 ## Context
 
 Add host asked for an SSH host or alias as text, with suggestions from the SSH configuration and known hosts. On September 27, adding `forge` meant knowing its tailnet name and that SSH would reach it. This computer's own Tailscale already knows every device on the tailnet, whether it is online, its operating system and whether Tailscale SSH is on. Phone access already runs the `tailscale` CLI (ADR-0033) with fixed arguments through `execFile`, and the CLI talks only to the local Tailscale service.

@@ -13,12 +13,14 @@ export const HOSTS_TAILSCALE_DOWNLOAD = 'hosts:tailscale-download'
 export const TAILSCALE_DOWNLOAD_URL = 'https://tailscale.com/download'
 
 /**
- * Tailscale on this computer. `off` covers stopped, signed out and a Tailscale service that is not
- * answering: each is put right by Connect to Tailscale or by the Tailscale app.
+ * Tailscale on this computer. `off` is stopped, or a service that is not answering. `logged-out` is a
+ * node whose backend says `NeedsLogin`: signed out, not merely stopped. Both are put right by the same
+ * `tailscale up`; the window names them apart. Anything else that is not running stays `off`.
  */
 export type TailscaleSummary =
   | { readonly state: 'missing' }
   | { readonly state: 'off' }
+  | { readonly state: 'logged-out' }
   | {
       readonly state: 'running'
       /** The tailnet user's display name, such as `millZach`. */
