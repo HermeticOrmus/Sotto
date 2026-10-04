@@ -43,6 +43,9 @@ class FakeWindow implements BrowserWindowLike {
   readonly showInactive = vi.fn()
   readonly setAlwaysOnTop = vi.fn()
   readonly setVisibleOnAllWorkspaces = vi.fn()
+  readonly setBackgroundColor = vi.fn()
+  readonly setBackgroundMaterial = vi.fn()
+  readonly setVibrancy = vi.fn()
   bounds: Rectangle = { x: 0, y: 0, width: 124, height: 54 }
   readonly setBoundsCalls: Rectangle[] = []
   readonly setPositionCalls: Array<readonly [number, number]> = []
@@ -317,6 +320,63 @@ describe('WindowManager construction', () => {
         },
       },
     ])
+  })
+
+  it('opens a frosted main window clear over acrylic and tells only its renderer that it can frost', async () => {
+    const { manager, options } = createHarness({ windowFrost: 'acrylic', frostedWindow: () => true })
+
+    await manager.createMainWindow()
+    await manager.createWidgetWindow()
+
+    expect(options[0]).toMatchObject({ backgroundColor: '#00000000', backgroundMaterial: 'acrylic' })
+    expect(options[0]?.webPreferences.additionalArguments).toContain('--sotto-window-frost')
+    expect(options[1]?.webPreferences.additionalArguments).not.toContain('--sotto-window-frost')
+  })
+
+  it('keeps the black window where the user has not asked for frost, still telling the renderer it could', async () => {
+    const { manager, options } = createHarness({ windowFrost: 'acrylic', frostedWindow: () => false })
+
+    await manager.createMainWindow()
+
+    expect(options[0]).toMatchObject({ backgroundColor: '#000000' })
+    expect(options[0]).not.toHaveProperty('backgroundMaterial')
+    expect(options[0]?.webPreferences.additionalArguments).toContain('--sotto-window-frost')
+  })
+
+  it('never frosts where the system has no material, whatever the setting says', async () => {
+    const { manager, options, windows } = createHarness({ windowFrost: null, frostedWindow: () => true })
+
+    await manager.createMainWindow()
+    manager.setMainWindowFrosted(true)
+
+    expect(options[0]).toMatchObject({ backgroundColor: '#000000' })
+    expect(options[0]?.webPreferences.additionalArguments).not.toContain('--sotto-window-frost')
+    expect(windows[0]?.setBackgroundMaterial).not.toHaveBeenCalled()
+    expect(windows[0]?.setBackgroundColor).not.toHaveBeenCalled()
+  })
+
+  it('turns acrylic on and off in place when the setting changes', async () => {
+    const { manager, windows } = createHarness({ windowFrost: 'acrylic', frostedWindow: () => false })
+    await manager.createMainWindow()
+
+    manager.setMainWindowFrosted(true)
+    expect(windows[0]?.setBackgroundMaterial).toHaveBeenLastCalledWith('acrylic')
+    expect(windows[0]?.setBackgroundColor).toHaveBeenLastCalledWith('#00000000')
+
+    manager.setMainWindowFrosted(false)
+    expect(windows[0]?.setBackgroundMaterial).toHaveBeenLastCalledWith('none')
+    expect(windows[0]?.setBackgroundColor).toHaveBeenLastCalledWith('#000000')
+  })
+
+  it('uses window vibrancy on macOS', async () => {
+    const { manager, options, windows } = createHarness({ platform: 'darwin', chrome: platformProfile('darwin'), windowFrost: 'vibrancy', frostedWindow: () => true })
+
+    await manager.createMainWindow()
+    expect(options[0]).toMatchObject({ backgroundColor: '#00000000', vibrancy: 'under-window', visualEffectState: 'followWindow' })
+
+    manager.setMainWindowFrosted(false)
+    expect(windows[0]?.setVibrancy).toHaveBeenLastCalledWith(null)
+    expect(windows[0]?.setBackgroundMaterial).not.toHaveBeenCalled()
   })
 
   it('passes the complete non-focusing widget options to the real constructor seam', async () => {

@@ -75,6 +75,8 @@ export interface ThreadPaneProps {
   readonly actions?: ReactNode
   /** Placed directly above the composer. */
   readonly notice?: ReactNode
+  /** Placed directly after the composer, full pane width: the pane's own terminal drawer. */
+  readonly drawer?: ReactNode
   /** Opens this thread in a second pane. The More menu leaves the item out where the page cannot split. */
   readonly onOpenBeside?: (() => void) | undefined
   /** A fixed clock where the page holds one still (a capture run); the held ornament reads from it. */
@@ -85,7 +87,7 @@ export interface ThreadPaneProps {
  * One thread's view: header and controls, its own transcript position and its own composer.
  * Everything here acts on `row.thread.id`; a split workspace mounts one per open thread.
  */
-export function ThreadPane({ row, state, command, store, focused, promptId, error, onOpenThread, onClose, onFocusPane, onOpenBeside, workingCopy, actions, notice, now }: ThreadPaneProps): ReactNode {
+export function ThreadPane({ row, state, command, store, focused, promptId, error, onOpenThread, onClose, onFocusPane, onOpenBeside, workingCopy, actions, notice, drawer, now }: ThreadPaneProps): ReactNode {
   const [followSignal, setFollowSignal] = useState(0)
   const [handingOff, setHandingOff] = useState(false)
   const [renaming, setRenaming] = useState(false)
@@ -299,5 +301,6 @@ export function ThreadPane({ row, state, command, store, focused, promptId, erro
           connected={rowConnected && !closed} blocked={threadBusy || handingOff} command={command} />
       </div>
     </div>
+    {drawer}
   </>
 }

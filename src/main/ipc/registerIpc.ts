@@ -80,6 +80,8 @@ const settingKeys = [
   'darkTheme',
   'appearanceContrast',
   'glassOpacity',
+  'frostedWindow',
+  'frostSeeThrough',
   'effortColor',
   'customThemes',
   'reducedMotion',
