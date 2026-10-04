@@ -19,7 +19,7 @@ const SUGGESTION_LIMIT = 200
 /** One Include pattern expands to at most this many files, however many folders its wildcards match. */
 const EXPANSION_LIMIT = 256
 
-/** An alias from one configuration file. `jump` means SSH reaches its `HostName` through a jump host. */
+/** An alias from one configuration file. `jump` means SSH reaches its `HostName` through a jump or a ProxyCommand tunnel. */
 export interface SshConfigHost { readonly alias: string; readonly hostname?: string; readonly user?: string; readonly jump?: boolean }
 /** `includes` are the `Include` patterns in order; `includeAt` says how many of `hosts` were written before each. */
 export interface ParsedSshConfig { readonly hosts: readonly SshConfigHost[]; readonly includes: readonly string[]; readonly includeAt: readonly number[] }
@@ -41,24 +41,13 @@ function directive(line: string): { key: string; args: string[] } | null {
 const jumpOff = (value: string): boolean => value.toLowerCase() === 'none'
 
 /**
- * A `ProxyCommand` of the same shape as the command `ProxyJump` builds: `ssh` forwarding with `-W`
- * (`ssh -W %h:%p bastion`) or jumping with `-J`. Anything else, such as `nc %h %p`, runs on this computer.
- */
-function jumpCommand(args: readonly string[]): boolean {
-  const tokens = args.length === 1 && /\s/u.test(args[0]!)
-    ? [...args[0]!.matchAll(/"([^"]*)"|(\S+)/gu)].map(item => item[1] ?? item[2]!).filter(Boolean)
-    : [...args]
-  const program = tokens[0]?.split(/[/\\]/u).pop()?.toLowerCase()
-  if (program !== 'ssh' && program !== 'ssh.exe') return false
-  return tokens.slice(1).some(token => token === '-W' || token === '-J' || /^-[WJ]\S/u.test(token))
-}
-
-/**
  * One configuration file's aliases and the `Include` patterns it names, in order. A `Host` line's
  * `HostName`, `User` and jump are kept for the aliases it names, the first value winning as it does in
- * OpenSSH. A jump is `ProxyJump` to a host, or a `ProxyCommand` that forwards with `ssh` the same way;
- * whichever of the two is written first wins, and `none` is not a jump. A `Match` block names no alias,
- * so the lines under it are not attributed to the one before.
+ * OpenSSH. A jump is `ProxyJump` to a host, or any `ProxyCommand` other than `none`: SSH runs that
+ * command instead of connecting from this computer, so the `HostName` is reached through the tunnel,
+ * whether the command is `ssh -W`, `cloudflared access ssh`, `connect`, `nc` through a proxy, `socat`,
+ * `corkscrew` or another program. Whichever of the two is written first wins. A `Match` block names no
+ * alias, so the lines under it are not attributed to the one before.
  */
 export function parseSshConfig(text: string): ParsedSshConfig {
   const hosts = new Map<string, { alias: string; hostname?: string; user?: string; jump?: boolean; jumpSeen?: boolean }>()
@@ -78,8 +67,10 @@ export function parseSshConfig(text: string): ParsedSshConfig {
     const value = entry.args[0]
     if (!value) continue
     if (entry.key === 'proxyjump' || entry.key === 'proxycommand') {
-      // The destination of a jump is reached from the jump host, so an address there is not one on this computer.
-      const jump = entry.key === 'proxyjump' ? !jumpOff(value) : jumpCommand(entry.args)
+      // Reached through a jump or a tunnel, so an address there is not one on this computer.
+      // `none` is a direct connection. Any other ProxyCommand is a tunnel, whichever program it runs.
+      const command = (entry.key === 'proxyjump' ? value : entry.args.join(' ')).trim()
+      const jump = command.length > 0 && !jumpOff(command)
       for (const alias of current) {
         const host = hosts.get(alias)!
         if (host.jumpSeen) continue
