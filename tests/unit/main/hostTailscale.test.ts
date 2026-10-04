@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from 'vitest'
+import { parseSshConfig } from '../../../src/main/hosts/sshSuggestions'
 import { HostTailscale, mergeDevices, readTailscaleStatus } from '../../../src/main/hosts/tailscale'
 import type { TailscaleInvoke, TailscaleRunOptions } from '../../../src/main/phones/tailscale'
 import type { SshHostSuggestion } from '../../../src/shared/hosts'
@@ -126,6 +127,30 @@ describe('what Add host cannot use: this computer and Git services', () => {
       { alias: '::1', source: 'known-hosts' },
     ], ['127.0.0.1', '::1', 'localhost'])
     expect(devices.map(device => device.unavailable)).toEqual([undefined, undefined, undefined])
+  })
+  it('keeps a local address selectable when a ProxyCommand tunnel reaches it, and greys ProxyCommand none', () => {
+    const suggestions = parseSshConfig([
+      'Host lab',
+      '  HostName 192.168.1.10',
+      '  ProxyCommand cloudflared access ssh --hostname lab.example.com',
+      'Host via-nc',
+      '  HostName 192.168.1.10',
+      '  ProxyCommand nc -X connect -x proxy.example.com:8080 %h %p',
+      'Host desk',
+      '  HostName 192.168.1.10',
+      '  ProxyCommand none',
+    ].join('\n')).hosts.map((host): SshHostSuggestion => ({
+      alias: host.alias,
+      source: 'config',
+      ...(host.hostname ? { hostname: host.hostname } : {}),
+      ...(host.jump ? { jump: true } : {}),
+    }))
+    const devices = mergeDevices(readTailscaleStatus(TAILSCALE_RUNNING), suggestions, ['192.168.1.10'])
+    expect(['lab', 'via-nc', 'desk'].map(target => [target, devices.find(device => device.target === target)?.unavailable])).toEqual([
+      ['lab', undefined],
+      ['via-nc', undefined],
+      ['desk', 'this-computer'],
+    ])
   })
   it('keeps a jump to an address on this computer selectable, and still greys a direct alias to this computer', () => {
     const devices = mergeDevices(readTailscaleStatus(TAILSCALE_RUNNING), [
