@@ -412,6 +412,7 @@ describe('typed preload bridge', () => {
         'themes',
         'transcribe',
         'updateSettings',
+        'canFrostWindow',
       ].sort(),
     )
     expect(bridge).not.toHaveProperty('send')

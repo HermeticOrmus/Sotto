@@ -169,6 +169,7 @@ describe('main-window theme tokens', () => {
       'src/renderer/src/styles/global.css',
       'src/renderer/src/styles/crossing-settings.css',
       'src/renderer/src/styles/glass.css',
+      'src/renderer/src/styles/frost.css',
       'src/renderer/src/agents/agents.css',
       'src/renderer/src/agents/modelPicker.css',
       'src/renderer/src/agents/effortPicker.css',
@@ -198,6 +199,7 @@ describe('main-window theme tokens', () => {
       'src/renderer/src/tools/pullRequestSurface.css',
       'src/renderer/src/tools/tools.css',
       'src/renderer/src/tools/toolsRail.css',
+      'src/renderer/src/tools/paneTerminal.css',
     ]
     for (const path of owned) {
       const css = readFileSync(join(process.cwd(), path), 'utf8').replace(/\/\*[\s\S]*?\*\//gu, '')

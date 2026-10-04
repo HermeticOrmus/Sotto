@@ -30,7 +30,7 @@ import { useProactiveChanges } from './proactivePanels'
 import type { PathAction } from './filesBrowser'
 import { TerminalSurface } from './TerminalSurface'
 import { ToolsChrome } from './ToolsChrome'
-import type { TerminalViewFactory } from './terminalStore'
+import { windowTerminalBridge, type TerminalViewFactory } from './terminalStore'
 import { useTerminalViewFactory } from './terminalViewLoader'
 import {
   TOOL_SURFACES, TOOLS_PANEL_MAX_WIDTH, TOOLS_PANEL_MIN_PANE_WIDTH, TOOLS_PANEL_MIN_WIDTH, toolsPanelStore, toolsTarget,
@@ -73,10 +73,6 @@ function bridgeChanges(): GitChangesBridge | undefined {
 
 function bridgeBrowser(): BrowserBridge | undefined {
   return (window.sotto as { browser?: BrowserBridge } | undefined)?.browser
-}
-
-function bridgeTerminal(): TerminalBridge | undefined {
-  return (window.sotto as { terminal?: TerminalBridge } | undefined)?.terminal
 }
 
 function bridgePlatform(): string | undefined {
@@ -243,7 +239,7 @@ export function ToolsPanel({ focusedThreadId, state, command, files: filesBridge
   const { factory: viewFactory, failed: viewFailed } = useTerminalViewFactory(terminalView, chrome.open && chrome.surface === 'terminal')
   const bridge = filesBridge ?? bridgeFiles()
   const changesBridge = gitChanges ?? bridgeChanges()
-  const terminalBridge = terminal ?? bridgeTerminal()
+  const terminalBridge = terminal ?? windowTerminalBridge()
   const browserBridge = browser ?? bridgeBrowser()
   const subagentsBridge = subagents ?? (window.sotto as { subagents?: SubagentsBridge } | undefined)?.subagents
   // showBrowserPreviews keeps its settings key (ADR-0020); in the player it decides whether a new page opens the player on its own.

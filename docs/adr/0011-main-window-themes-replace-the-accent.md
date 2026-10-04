@@ -42,4 +42,4 @@ The selected light and dark palettes also colour the Sotto mark, the voice spher
 
 ## Consequences
 
-The accent capture tuples in the design gate became one tuple per built-in theme in each room. Other workers' E2E specs that still pass `accent` keep working because the key is ignored. The window's native `backgroundColor` is still black, as ADR-0009 notes. Any new surface must take its colours from `--tt-*` tokens, or the theme and contrast settings will skip it.
+The accent capture tuples in the design gate became one tuple per built-in theme in each room. Other workers' E2E specs that still pass `accent` keep working because the key is ignored. The window's native `backgroundColor` is still black, as ADR-0009 notes, except while the Frosted window setting is on (ADR-0048). Any new surface must take its colours from `--tt-*` tokens, or the theme and contrast settings will skip it.

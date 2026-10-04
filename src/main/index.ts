@@ -59,6 +59,7 @@ import {
 } from 'electron'
 import { spawn } from 'node:child_process'
 import { appendFile, rename, stat, writeFile } from 'node:fs/promises'
+import { release as osRelease } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 
 import {
@@ -94,7 +95,7 @@ import { TranscriptPolishService } from './llm/transcriptPolishService'
 import { OpenRouterTranscriptionService } from './asr/openRouterTranscriptionService'
 import { createElectronUpdaterAdapter } from './updates/electronUpdaterAdapter'
 import { UpdateService } from './updates/updateService'
-import { platformProfile, type WidgetAlwaysOnTopLevel } from './platformProfile'
+import { platformProfile, windowFrostFor, type WidgetAlwaysOnTopLevel } from './platformProfile'
 import { RecoveryNoticeCenter } from './storage/recoveryNoticeCenter'
 import { createStorageRepositories } from './storage/repositories'
 import { migrateLegacyUserData } from './storage/migrateLegacyUserData'
@@ -364,6 +365,18 @@ class ElectronBrowserWindowAdapter implements BrowserWindowLike {
     this.window.setIgnoreMouseEvents(ignore, options)
   }
 
+  setBackgroundColor(color: string): void {
+    this.window.setBackgroundColor(color)
+  }
+
+  setBackgroundMaterial(material: 'acrylic' | 'none'): void {
+    this.window.setBackgroundMaterial(material)
+  }
+
+  setVibrancy(type: 'under-window' | null): void {
+    this.window.setVibrancy(type)
+  }
+
   onNavigation(
     event: NavigationEventName,
     listener: (event: { preventDefault(): void }, details: { readonly url: string }) => void,
@@ -599,6 +612,8 @@ async function createRuntime(): Promise<NativeRuntimeController> {
       widgetPlacement = { kind: 'edge', ...placement }
       void widgetPlacementStore.save(placement)
     },
+    windowFrost: windowFrostFor(profile.platform, osRelease()),
+    frostedWindow: () => workingCopySettings.frostedWindow,
   })
   // This explicit development-only path drives the real adapter through a scripted ACP child.
   const devinFixtureRoot = e2eConfiguration !== null && !app.isPackaged ? process.env['SOTTO_E2E_DEVIN_ROOT'] : undefined
@@ -1020,6 +1035,7 @@ async function createRuntime(): Promise<NativeRuntimeController> {
     },
     async onSettingsChanged(settings): Promise<void> {
       const grantDefaultChanged = settings.browserWithoutAsking !== workingCopySettings.browserWithoutAsking
+      if (settings.frostedWindow !== workingCopySettings.frostedWindow) windows.setMainWindowFrosted(settings.frostedWindow)
       workingCopySettings = settings
       worktreeCleanup?.settingsChanged()
       phoneAccess.settingsChanged()

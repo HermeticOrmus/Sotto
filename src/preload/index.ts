@@ -88,6 +88,7 @@ import {
 import { historyEntrySchema } from '../shared/history'
 import {
   PLATFORM_ARGUMENT_PREFIX,
+  WINDOW_FROST_ARGUMENT,
   resolvePlatform,
   type SottoPlatform,
 } from '../shared/platform'
@@ -304,6 +305,7 @@ function createAgentBridge(renderer: IpcRendererAdapter, role: 'main' | 'widget'
 export function createSottoBridge(
   renderer: IpcRendererAdapter,
   platform: SottoPlatform,
+  canFrostWindow = false,
 ): SottoBridge {
   const onDictationCommand = createBufferedSubscription(
     renderer,
@@ -369,6 +371,7 @@ export function createSottoBridge(
       check: target => invokeParsed(renderer, REQUEST_DRAFT_CHECK, requestDraftSchema.nullable(), requestDraftTargetSchema.parse(target)),
     }),
     platform,
+    canFrostWindow,
 
     listRecoveryNotices: () =>
       invokeParsed(renderer, RECOVERY_NOTICE_LIST, recoveryNoticesSchema),
@@ -506,7 +509,7 @@ export function exposeRendererBridge(
   const rendererRole = parseRendererRoleArgument(arguments_)
   const platform = parsePlatformArgument(arguments_)
   if (rendererRole === 'main') {
-    context.exposeInMainWorld('sotto', createSottoBridge(renderer, platform))
+    context.exposeInMainWorld('sotto', createSottoBridge(renderer, platform, arguments_.includes(WINDOW_FROST_ARGUMENT)))
     return true
   }
   if (rendererRole === 'widget') {
