@@ -365,6 +365,7 @@ describe('typed preload bridge', () => {
         'checkForUpdates',
         'checkTranscriptionKey',
         'clearHistory',
+        'cloudIphone',
         'downloadUpdate',
         'deleteHistory',
         'deliverOutput',

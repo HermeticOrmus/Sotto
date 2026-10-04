@@ -8,7 +8,7 @@ import { useAgents } from '../../../src/renderer/src/agents/AgentContext'
 import { AgentView } from '../../../src/renderer/src/agents/AgentView'
 import { ThreadsView } from '../../../src/renderer/src/agents/ThreadsView'
 import { describeThreads, groupThreads, listThreads, providerKey } from '../../../src/renderer/src/agents/threadFacts'
-import { liveAgentState } from './liveAgentState'
+import { liveAgentState, openSidebarFolders } from './liveAgentState'
 import { paneMenuItem } from './paneMenu'
 import { ThreadDraftStore } from '../../../src/renderer/src/agents/threadDraftStore'
 import { draftThreads } from '../../../src/renderer/src/agents/draftThreads'
@@ -52,7 +52,7 @@ let connectionStores = new WeakMap<ReturnType<typeof useAgents>['command'], Thre
 function connection(state: AgentState | null, command = vi.fn(async () => state)): ReturnType<typeof useAgents> {
   let threadDrafts = connectionStores.get(command)
   if (!threadDrafts) { threadDrafts = new ThreadDraftStore(command); connectionStores.set(command, threadDrafts) }
-  if (state) threadDrafts.receive(state)
+  if (state) { threadDrafts.receive(state); openSidebarFolders(state) }
   return { ...agentContextFixture(state, command), threadDrafts }
 }
 

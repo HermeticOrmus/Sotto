@@ -230,6 +230,10 @@ export interface AppSettings {
    * the beta; the store and its code stay in place.
    */
   memoryEnabled: boolean
+  /** The cloud iPhone's (ADR-0047) monthly minute cap, about run.cloud's free $15 at its default. */
+  cloudIphoneMonthlyMinutes: number
+  /** Minutes of neither an agent action nor the user's input before a cloud iPhone session ends (ADR-0047). */
+  cloudIphoneIdleMinutes: number
 }
 
 export type SettingsPatch = Partial<
@@ -313,6 +317,8 @@ const fieldSchemas = {
   phoneAccessName: z.string().trim().max(63),
   voiceCoordinatorEnabled: z.boolean(),
   memoryEnabled: z.boolean(),
+  cloudIphoneMonthlyMinutes: z.number().int().min(10).max(100_000),
+  cloudIphoneIdleMinutes: z.number().int().min(1).max(60),
 } satisfies { [Key in keyof AppSettings]: z.ZodType<AppSettings[Key]> }
 
 export const settingsSchema = z.object(fieldSchemas)
@@ -404,6 +410,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   voiceCoordinatorEnabled: false,
   // Off for the beta: memory does not ship in the first one.
   memoryEnabled: false,
+  // About run.cloud's free $15 a month at its $0.02-a-minute price (ADR-0047).
+  cloudIphoneMonthlyMinutes: 750,
+  cloudIphoneIdleMinutes: 5,
 }
 
 /**
@@ -501,5 +510,7 @@ export function parseSettings(input: unknown, defaults: AppSettings = DEFAULT_SE
     phoneAccessName: parseField(persisted, 'phoneAccessName', defaults),
     voiceCoordinatorEnabled: parseField(persisted, 'voiceCoordinatorEnabled', defaults),
     memoryEnabled: parseField(persisted, 'memoryEnabled', defaults),
+    cloudIphoneMonthlyMinutes: parseField(persisted, 'cloudIphoneMonthlyMinutes', defaults),
+    cloudIphoneIdleMinutes: parseField(persisted, 'cloudIphoneIdleMinutes', defaults),
   }
 }

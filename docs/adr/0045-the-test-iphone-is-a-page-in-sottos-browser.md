@@ -36,5 +36,5 @@ ADR-0029 makes the browser grant a deliberate exception to "the user answers eve
 
 - Testing a web build on a phone needs nothing new from the user: no key, no host, no download. The README's hosts are unchanged.
 - The phone player and the Browser player can both be open. Each steps aside only where the other overlaps it.
-- A native app, the second half of what Zach asked for, needs a cloud device service. That adds a host and a key, so it is ADR-0046 and a README change before any code. The candidates are compared in `docs/research/2026-10-03-cloud-ios-devices.md`.
+- A native app, the second half of what Zach asked for, needs a cloud device service. That adds a host and a key, so it is ADR-0047 and a README change before any code. The candidates are compared in `docs/research/2026-10-03-cloud-ios-devices.md`.
 - Virtual iPhone's AirPlay receiver is not brought in. It cannot be driven, and its firewall changes are more than Sotto asks of anyone.

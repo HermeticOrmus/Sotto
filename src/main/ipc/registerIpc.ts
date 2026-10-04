@@ -133,6 +133,8 @@ const settingKeys = [
   'browserWithoutAsking',
   'voiceCoordinatorEnabled',
   'memoryEnabled',
+  'cloudIphoneMonthlyMinutes',
+  'cloudIphoneIdleMinutes',
 ] as const satisfies readonly (keyof SettingsPatch)[]
 
 const looseSettingsPatchSchema = settingsSchema

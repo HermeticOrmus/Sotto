@@ -10,7 +10,7 @@ Amended October 1, 2026: a jump is not this computer just because its `HostName`
 
 Amended October 4, 2026: any `ProxyCommand` other than `none` is a tunnel, the same as `ProxyJump`. SSH runs that command instead of connecting from this computer, so an alias whose `HostName` is an address here stays selectable whether the command is `ssh -W`, `cloudflared access ssh`, `connect` or `connect-proxy`, `nc` or `ncat` through a proxy, `socat`, `corkscrew`, or another program. `ProxyCommand none` leaves a direct connection, and a direct alias to this computer stays greyed. The full tailnet name still means this computer.
 
-Amended October 4, 2026: a signed-out node is its own state, not off. See [ADR-0047](0047-sotto-runs-the-tailscale-app-as-a-command.md).
+Amended October 4, 2026: a signed-out node is its own state, not off. See [ADR-0048](0048-sotto-runs-the-tailscale-app-as-a-command.md).
 
 ## Context
 

@@ -38,6 +38,19 @@ function browserAction(action: Frame): string {
   return 'work in the page'
 }
 
+/** The cloud iPhone (ADR-0047) drives the same session the user already started by answering iphone_cloud_open. */
+function cloudAction(action: Frame): string {
+  if (action.type === 'inspect') return 'look at the cloud iPhone’s screen'
+  if (action.type === 'screenshot') return 'take a picture of the cloud iPhone’s screen'
+  if (action.type === 'tap') return 'tap on the cloud iPhone'
+  if (action.type === 'swipe') return 'swipe on the cloud iPhone'
+  if (action.type === 'type') return 'type on the cloud iPhone'
+  if (action.type === 'key') return 'press ' + (text(action.key) || 'a key') + ' on the cloud iPhone'
+  if (action.type === 'button') return 'press ' + (text(action.button) || 'a button') + ' on the cloud iPhone'
+  if (action.type === 'openUrl') { const url = text(action.url); return url ? 'open ' + url + ' on the cloud iPhone' : 'open a link on the cloud iPhone' }
+  return 'work on the cloud iPhone'
+}
+
 /** The card for one of Sotto's browser tools, or undefined for a tool Sotto does not own. */
 export function browserRequestText(name: string, input: unknown, server?: string): string | undefined {
   const tool = sottoBrowserTool(name, server)
@@ -51,7 +64,11 @@ export function browserRequestText(name: string, input: unknown, server?: string
           : tool === 'iphone_open' ? url ? 'open ' + url + ' on the test iPhone' : 'open a page on the test iPhone'
           : tool === 'browser_action' ? browserAction(frame(args.action))
             : tool === 'browser_finish' ? 'finish its browser task as ' + (args.status === 'failed' ? 'failed' : 'done')
-              : ''
+              : tool === 'iphone_cloud_open' ? 'start a cloud iPhone with ' + (text(args.buildPath) || 'a build')
+                : tool === 'iphone_cloud_action' ? cloudAction(frame(args.action))
+                  : tool === 'iphone_cloud_status' ? 'check how its cloud iPhone session is going'
+                    : tool === 'iphone_cloud_finish' ? 'finish its cloud iPhone session as ' + (args.status === 'failed' ? 'failed' : 'done')
+                      : ''
   if (!said) return undefined
   const why = text(args.description).trim() ? '\n“' + text(args.description).trim() + '”' : ''
   // Answering here only lets it reach the browser. Page actions ask again in Tools unless a browser grant covers them (ADR-0029).

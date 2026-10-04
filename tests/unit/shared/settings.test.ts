@@ -83,6 +83,8 @@ const customSettings = {
   phoneAccessName: 'Studio',
   voiceCoordinatorEnabled: true,
   memoryEnabled: true,
+  cloudIphoneMonthlyMinutes: 1_000,
+  cloudIphoneIdleMinutes: 10,
 } satisfies AppSettings
 
 describe('settings', () => {
@@ -302,6 +304,8 @@ describe('settings', () => {
       localHostEnabled: true,
       phoneAccess: false,
       phoneAccessName: '',
+      cloudIphoneMonthlyMinutes: 750,
+      cloudIphoneIdleMinutes: 5,
     })
   })
 

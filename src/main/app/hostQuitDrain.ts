@@ -13,6 +13,8 @@ export interface HostQuitHandles {
   hostUpdates?: { dispose(): void }
   hostRouter?: { dispose(): void }
   stopPublishing?: () => void
+  /** Releases every live cloud iPhone session (ADR-0047) before Sotto exits, so run.cloud is never left billing. */
+  cloudIphone?: AsyncClose
 }
 
 export function registerHostQuitDrain(app: Parameters<typeof registerQuitDrain>[0], handles: HostQuitHandles, failed: () => void, phoneFailed: () => void): void {
@@ -28,6 +30,7 @@ export function registerHostQuitDrain(app: Parameters<typeof registerQuitDrain>[
     const results = await Promise.allSettled([
       handles.desktopHosts?.close(), handles.localRuntime?.close(),
       handles.personalChats?.close(), handles.hostSetupTools?.close(),
+      handles.cloudIphone?.close(),
     ])
     handles.hostRouter?.dispose()
     const failure = results.find(result => result.status === 'rejected')

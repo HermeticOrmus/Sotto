@@ -45,7 +45,7 @@ test('Phones: sets up through the checklist, pairs a phone with a code, and clos
   try {
     await openPage(page, 'Settings')
     const tabs = page.getByRole('tablist', { name: 'Settings sections' })
-    await expect(tabs.getByRole('tab')).toHaveText(['Dictation', 'Transcription', 'Cleanup', 'Providers', 'Hosts', 'Phones', 'Agents', 'Output', 'Appearance', 'Application', 'Git'])
+    await expect(tabs.getByRole('tab')).toHaveText(['Dictation', 'Transcription', 'Cleanup', 'Providers', 'Hosts', 'Phones', 'Cloud iPhone', 'Agents', 'Output', 'Appearance', 'Application', 'Git'])
     // The keyboard reaches Phones from Hosts with one arrow.
     await tabs.getByRole('tab', { name: 'Hosts', exact: true }).click()
     await page.keyboard.press('ArrowDown')
