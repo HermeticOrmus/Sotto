@@ -69,3 +69,10 @@ The phone marked every reply, answer and stop unconfirmed from the press until t
 ## October 4 amendment: the macOS app runs as a command
 
 [ADR-0048](0048-sotto-runs-the-tailscale-app-as-a-command.md) amends how the `tailscale` binary is started. On a Mac the window and the command are the same executable; started from Sotto it would open the window unless `TAILSCALE_BE_CLI` is set. Sotto sets that on every run, and also looks in `/usr/local/bin` and Homebrew's bin, which a Dock-launched app does not have on its PATH. Nothing else here changes.
+
+## October 4 amendment: port 10000 when another app holds 8443
+
+On the development machine for the Android client, another app's Tailscale Serve setting already held 8443, so phone access stopped at `port-taken` and phones could not reach the computer at all. Sotto still never touches another app's setting, but it no longer stops there: it tries 8443, then 10000, the other HTTPS port Tailscale Serve offers besides 443, and setup fails with `port-taken` only when other apps hold both. A setting that is already Sotto's wins over a free port, so a restart keeps the port its phones were using. Port 443 is still left alone.
+
+The cleanup record names the port: `servePort` is written only when it is 10000, so every record from before this amendment still reads as 8443. Removal touches only the recorded port. With an unreadable record Sotto checks both ports, removes any setting it can still recognise as its own, and keeps cleanup pending while either port holds a setting it cannot attribute, as before. The Phones page names the port in use and why. The Android client (on the HermeticOrmus fork) tries 8443, then 10000, then 443, and accepts a typed address on any of the three. The iPhone client still accepts only 443 and 8443; giving it 10000 changes its search order and tests, which need a Mac to build and run.
+
