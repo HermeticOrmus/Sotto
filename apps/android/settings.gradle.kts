@@ -14,3 +14,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "sotto-android"
 include(":app")
+include(":tsprobe")

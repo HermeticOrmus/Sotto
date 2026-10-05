@@ -4,3 +4,5 @@ local.properties
 *.jks
 *.keystore
 .kotlin/
+# gomobile output, rebuilt by `gomobile bind` in tsprobe/go
+tsprobe/libs/
